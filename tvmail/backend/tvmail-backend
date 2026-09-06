@@ -1,0 +1,335 @@
+#!/bin/sh
+''''exec "$(command -v python3 || command -v python3.9 || command -v python3.8 || command -v python || echo python3)" "$0" "$@" #'''
+"""tvmail-backend - mail-format helper for the tvmail Turbo Vision client.
+
+All the mbox / MIME / send grunt work lives here so the C++ front-end can stay
+small.  Stdlib only.
+
+Sub-commands (mailbox defaults to $MAIL or /var/mail/$USER):
+
+  list  [MBOX]              one line per message, TAB-separated:
+                            idx <TAB> flags <TAB> date <TAB> from <TAB> subject
+                            (idx = 0-based position; flags: 'N' new/unread, '.' seen)
+  show  IDX [MBOX]          decoded headers + best-effort text/plain body on stdout
+  raw   IDX [MBOX]          the raw RFC822 message on stdout
+  parts IDX [MBOX]          list MIME parts: partno <TAB> content-type <TAB> filename <TAB> bytes
+  save  IDX PARTNO DEST [MBOX]   write one MIME part's decoded payload to DEST
+  delete IDX [IDX...] [--mbox MBOX]   remove message(s); a .bak is kept
+  mark  IDX (read|unread) [MBOX]
+  send  [--from ADDR]       read an RFC822 message (or a bare body with --to/--subject)
+        [--to ADDR ...]     from stdin and hand it to the local sendmail
+        [--subject TEXT]
+  compose-template [--to A] [--subject S] [--in-reply-to IDX] [MBOX]
+                            print a draft skeleton (for $EDITOR) on stdout
+  pull                      run 'pop-pull' if it exists (on-demand fetch)
+
+Exit status: 0 ok, 1 usage/not-found, 2 runtime error.
+"""
+
+import sys, os, json, argparse, subprocess, tempfile, shutil, email, email.utils
+import email.policy
+from mailbox import mbox
+from email.header import decode_header, make_header
+
+SENDMAIL = "/usr/sbin/sendmail"
+
+
+def _me():
+    for k in ("USER", "LOGNAME"):
+        if os.environ.get(k):
+            return os.environ[k]
+    try:
+        import pwd
+        return pwd.getpwuid(os.getuid()).pw_name
+    except Exception:
+        return "nobody"
+
+
+def mbox_path(p=None):
+    """Resolve a mailbox argument.  Bare 'spool'/'mbox' are shorthands."""
+    if p in (None, "", "spool"):
+        return os.environ.get("MAIL") or "/var/mail/" + _me()
+    if p == "mbox":
+        return os.path.expanduser("~/mbox")
+    return os.path.expanduser(p)
+
+
+def _hdr(msg, name, default=""):
+    v = msg.get(name)
+    if not v:
+        return default
+    try:
+        return str(make_header(decode_header(v)))
+    except Exception:
+        return v
+
+
+def _clean(s, maxlen=0):
+    s = "".join(ch if ch >= " " and ch != "\x7f" else " " for ch in (s or ""))
+    s = s.replace("\t", " ").strip()
+    if maxlen and len(s) > maxlen:
+        s = s[: maxlen - 1] + "…"
+    return s
+
+
+def _short_from(raw):
+    name, addr = email.utils.parseaddr(raw)
+    return _clean(name or addr or raw)
+
+
+def _short_date(raw):
+    dt = email.utils.parsedate_to_datetime(raw) if raw else None
+    if not dt:
+        return _clean(raw, 16)
+    try:
+        return dt.astimezone().strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return dt.strftime("%Y-%m-%d %H:%M")
+
+
+def open_box(path, create=False):
+    if not create and not os.path.exists(path):
+        sys.exit("tvmail-backend: no such mailbox: " + path)
+    return mbox(path, factory=None, create=True)
+
+
+def cmd_list(a):
+    box = open_box(mbox_path(a.mbox))
+    box.lock()
+    try:
+        for i, msg in enumerate(box):
+            status = (msg.get("Status", "") or "") + (msg.get("X-Status", "") or "")
+            flags = "." if "R" in status else "N"
+            line = "\t".join((
+                str(i),
+                flags,
+                _short_date(msg.get("Date", "")),
+                _clean(_short_from(msg.get("From", "")), 28),
+                _clean(_hdr(msg, "Subject", "(no subject)"), 200),
+            ))
+            print(line)
+    finally:
+        box.unlock()
+    return 0
+
+
+def _get_msg(a):
+    box = open_box(mbox_path(a.mbox))
+    try:
+        return box, box[a.idx]
+    except (IndexError, KeyError):
+        sys.exit("tvmail-backend: no message at index %d" % a.idx)
+
+
+def _best_body(msg):
+    """Return decoded text/plain, falling back to a de-tagged text/html."""
+    plain = html = None
+    for part in msg.walk():
+        ct = part.get_content_type()
+        if part.is_multipart():
+            continue
+        disp = (part.get("Content-Disposition") or "").lower()
+        if "attachment" in disp:
+            continue
+        try:
+            payload = part.get_payload(decode=True) or b""
+            charset = part.get_content_charset() or "utf-8"
+            text = payload.decode(charset, "replace")
+        except Exception:
+            continue
+        if ct == "text/plain" and plain is None:
+            plain = text
+        elif ct == "text/html" and html is None:
+            html = text
+    if plain is not None:
+        return plain
+    if html is not None:
+        import re
+        t = re.sub(r"(?is)<(script|style).*?</\1>", "", html)
+        t = re.sub(r"(?s)<[^>]+>", "", t)
+        return email.utils.unquote(t)
+    return "(no text/plain part)"
+
+
+def cmd_show(a):
+    _, msg = _get_msg(a)
+    out = []
+    for h in ("Date", "From", "To", "Cc", "Subject"):
+        v = _hdr(msg, h)
+        if v:
+            out.append("%-8s %s" % (h + ":", v))
+    atts = [p.get_filename() for p in msg.walk()
+            if p.get_filename() and "attachment" in
+            (p.get("Content-Disposition") or "").lower()]
+    if atts:
+        out.append("%-8s %s" % ("Attach:", ", ".join(a for a in atts if a)))
+    out.append("")
+    out.append(_best_body(msg).replace("\r\n", "\n").rstrip() + "\n")
+    sys.stdout.write("\n".join(out))
+    return 0
+
+
+def cmd_raw(a):
+    _, msg = _get_msg(a)
+    sys.stdout.buffer.write(msg.as_bytes())
+    return 0
+
+
+def cmd_parts(a):
+    _, msg = _get_msg(a)
+    for n, part in enumerate(msg.walk()):
+        if part.is_multipart():
+            continue
+        payload = part.get_payload(decode=True) or b""
+        print("\t".join((str(n), part.get_content_type(),
+                          _clean(part.get_filename() or ""), str(len(payload)))))
+    return 0
+
+
+def cmd_save(a):
+    _, msg = _get_msg(a)
+    parts = [p for p in msg.walk() if not p.is_multipart()]
+    if not (0 <= a.partno < len(parts)):
+        sys.exit("tvmail-backend: no part %d" % a.partno)
+    with open(a.dest, "wb") as f:
+        f.write(parts[a.partno].get_payload(decode=True) or b"")
+    print("wrote", a.dest)
+    return 0
+
+
+def cmd_delete(a):
+    path = mbox_path(a.mbox)
+    box = open_box(path)
+    box.lock()
+    try:
+        keys = list(box.keys())
+        victims = sorted(set(a.idx))
+        if any(not (0 <= v < len(keys)) for v in victims):
+            sys.exit("tvmail-backend: index out of range")
+        shutil.copy2(path, path + ".bak")
+        for v in victims:
+            box.remove(keys[v])
+        box.flush()
+    finally:
+        box.unlock()
+    print("deleted %d message(s); backup at %s.bak" % (len(victims), path))
+    return 0
+
+
+def cmd_mark(a):
+    path = mbox_path(a.mbox)
+    box = open_box(path)
+    box.lock()
+    try:
+        msg = box[a.idx]
+        status = "".join(c for c in (msg.get("Status", "") or "") if c in "ROU")
+        if a.state == "read":
+            status = "".join(sorted(set(status + "RO")))
+        else:
+            status = status.replace("R", "")
+        del msg["Status"]
+        if status:
+            msg["Status"] = status
+        box[a.idx] = msg
+        box.flush()
+    finally:
+        box.unlock()
+    return 0
+
+
+def cmd_compose_template(a):
+    frm = a.getfrom or (os.environ.get("USER") or os.environ.get("LOGNAME")
+                        or "nobody") + "@" + os.uname().nodename
+    to = ", ".join(a.to) if a.to else ""
+    subj = a.subject or ""
+    body = ""
+    if a.in_reply_to is not None:
+        box = open_box(mbox_path(a.mbox))
+        try:
+            src = box[a.in_reply_to]
+        except (IndexError, KeyError):
+            sys.exit("tvmail-backend: no message at index %d" % a.in_reply_to)
+        if not to:
+            to = _hdr(src, "Reply-To") or _hdr(src, "From")
+        if not subj:
+            s = _hdr(src, "Subject", "")
+            subj = s if s.lower().startswith("re:") else "Re: " + s
+        who = _short_from(src.get("From", "someone"))
+        quoted = "\n".join("> " + ln for ln in _best_body(src).splitlines())
+        body = "\nOn %s, %s wrote:\n%s\n" % (_short_date(src.get("Date", "")), who, quoted)
+    sys.stdout.write(
+        "From: %s\nTo: %s\nSubject: %s\n\n%s" % (frm, to, subj, body))
+    return 0
+
+
+def cmd_send(a):
+    data = sys.stdin.buffer.read()
+    looks_rfc822 = data[:200].lstrip().lower().startswith((
+        b"from:", b"to:", b"subject:", b"date:", b"cc:", b"mime-version:",
+        b"content-type:", b"reply-to:", b"message-id:"))
+    argv = [SENDMAIL, "-oi"]
+    if looks_rfc822 and not a.to:
+        argv.append("-t")                       # take recipients from the headers
+    else:
+        msg = email.message_from_bytes(data if looks_rfc822 else b"")
+        if not looks_rfc822:
+            msg = email.message.EmailMessage()
+            msg.set_content(data.decode("utf-8", "replace"))
+        if a.getfrom:
+            msg["From"] = a.getfrom
+        if a.subject and "Subject" not in msg:
+            msg["Subject"] = a.subject
+        for t in a.to:
+            msg["To"] = t
+        if not a.to and "To" not in msg:
+            sys.exit("tvmail-backend send: no recipients (use --to or supply a To: header)")
+        argv += a.to
+        data = msg.as_bytes()
+    if not os.path.exists(SENDMAIL):
+        sys.exit("tvmail-backend: %s not found - run configure-sendmail-relay.sh" % SENDMAIL)
+    p = subprocess.run(argv, input=data)
+    if p.returncode != 0:
+        sys.exit("tvmail-backend: sendmail exited %d" % p.returncode)
+    print("sent")
+    return 0
+
+
+def cmd_pull(a):
+    exe = shutil.which("pop-pull") or os.path.expanduser("~/bin/pop-pull")
+    if not os.path.exists(exe):
+        sys.exit("tvmail-backend: pop-pull not found - run configure-mail-pull.sh")
+    return subprocess.run([exe, "-v"]).returncode
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="tvmail-backend", add_help=True)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    p = sub.add_parser("list");  p.add_argument("mbox", nargs="?"); p.set_defaults(fn=cmd_list)
+    p = sub.add_parser("show");  p.add_argument("idx", type=int); p.add_argument("mbox", nargs="?"); p.set_defaults(fn=cmd_show)
+    p = sub.add_parser("raw");   p.add_argument("idx", type=int); p.add_argument("mbox", nargs="?"); p.set_defaults(fn=cmd_raw)
+    p = sub.add_parser("parts"); p.add_argument("idx", type=int); p.add_argument("mbox", nargs="?"); p.set_defaults(fn=cmd_parts)
+    p = sub.add_parser("save");  p.add_argument("idx", type=int); p.add_argument("partno", type=int)
+    p.add_argument("dest"); p.add_argument("mbox", nargs="?"); p.set_defaults(fn=cmd_save)
+    p = sub.add_parser("delete"); p.add_argument("idx", type=int, nargs="+"); p.add_argument("--mbox", dest="mbox"); p.set_defaults(fn=cmd_delete)
+    p = sub.add_parser("mark");  p.add_argument("idx", type=int); p.add_argument("state", choices=("read", "unread")); p.add_argument("mbox", nargs="?"); p.set_defaults(fn=cmd_mark)
+    p = sub.add_parser("compose-template")
+    p.add_argument("--from", dest="getfrom"); p.add_argument("--to", action="append", default=[])
+    p.add_argument("--subject"); p.add_argument("--in-reply-to", type=int); p.add_argument("mbox", nargs="?")
+    p.set_defaults(fn=cmd_compose_template)
+    p = sub.add_parser("send")
+    p.add_argument("--from", dest="getfrom"); p.add_argument("--to", action="append", default=[])
+    p.add_argument("--subject"); p.set_defaults(fn=cmd_send)
+    p = sub.add_parser("pull"); p.set_defaults(fn=cmd_pull)
+
+    a = ap.parse_args()
+    try:
+        sys.exit(a.fn(a))
+    except BrokenPipeError:
+        sys.exit(0)
+    except KeyboardInterrupt:
+        sys.exit(130)
+
+
+if __name__ == "__main__":
+    main()
