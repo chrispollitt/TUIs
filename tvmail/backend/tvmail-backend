@@ -1,5 +1,7 @@
 #!/bin/sh
-''''exec "$(command -v python3 || command -v python3.9 || command -v python3.8 || command -v python || echo python3)" "$0" "$@" #'''
+''''exec "$(command -v python3 || command -v python3.9 || command -v python3.8 || command -v python3.7 || echo python3)" "$0" "$@" #'''
+# ^ POSIX-sh line: re-exec under the first python3 found (portable, and works
+#   even where /usr/bin/python3 is a broken symlink).  Python sees a string.
 """tvmail-backend - mail-format helper for the tvmail Turbo Vision client.
 
 All the mbox / MIME / send grunt work lives here so the C++ front-end can stay
@@ -31,8 +33,6 @@ import email.policy
 from mailbox import mbox
 from email.header import decode_header, make_header
 
-SENDMAIL = "/usr/sbin/sendmail"
-
 
 def _me():
     for k in ("USER", "LOGNAME"):
@@ -45,14 +45,43 @@ def _me():
         return "nobody"
 
 
+def _sendmail():
+    """Find a sendmail-compatible MTA.  Overridable with $SENDMAIL."""
+    env = os.environ.get("SENDMAIL")
+    if env:
+        return env
+    for c in ("/usr/sbin/sendmail", "/usr/lib/sendmail",
+              "/usr/local/sbin/sendmail", "/usr/local/bin/sendmail",
+              "/run/current-system/sw/bin/sendmail"):   # NixOS
+        if os.path.exists(c):
+            return c
+    for name in ("sendmail", "msmtp"):
+        p = shutil.which(name)
+        if p:
+            return p
+    return "/usr/sbin/sendmail"                          # last resort; will error
+
+
+def _spool():
+    for d in ("/var/mail", "/var/spool/mail"):
+        cand = os.path.join(d, _me())
+        if os.path.exists(cand) or os.path.isdir(d):
+            return cand
+    return "/var/mail/" + _me()
+
+
+def _data_home():
+    return os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+
+
 def mbox_path(p=None):
     """Resolve a mailbox argument.  Shorthands: spool/mbox/trash/drafts/dead."""
     if p in (None, "", "spool"):
-        return os.environ.get("MAIL") or "/var/mail/" + _me()
+        return os.environ.get("MAIL") or _spool()
     if p == "mbox":
         return os.path.expanduser("~/mbox")
     if p == "trash":
-        d = os.path.expanduser("~/.local/share/tvmail")
+        d = os.path.join(_data_home(), "tvmail")
         os.makedirs(d, exist_ok=True)
         return os.path.join(d, "trash.mbox")
     if p == "drafts":
@@ -459,11 +488,13 @@ def cmd_send(a):
     if not rcpts:
         sys.exit("tvmail-backend send: no recipients (--to or a To: header)")
 
-    if not os.path.exists(SENDMAIL):
-        sys.exit("tvmail-backend: %s not found - run configure-sendmail-relay.sh" % SENDMAIL)
-    p = subprocess.run([SENDMAIL, "-oi"] + rcpts, input=msg.as_bytes())
+    sm = _sendmail()
+    if not (os.path.exists(sm) or shutil.which(sm)):
+        sys.exit("tvmail-backend: no sendmail MTA found "
+                 "(looked for /usr/sbin/sendmail, msmtp, ...; set $SENDMAIL)")
+    p = subprocess.run([sm, "-oi"] + rcpts, input=msg.as_bytes())
     if p.returncode != 0:
-        sys.exit("tvmail-backend: sendmail exited %d" % p.returncode)
+        sys.exit("tvmail-backend: %s exited %d" % (os.path.basename(sm), p.returncode))
     print("sent")
     return 0
 

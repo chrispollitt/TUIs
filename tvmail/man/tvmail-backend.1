@@ -166,8 +166,20 @@ and
 The delivery agent used by
 .BR send .
 .SH ENVIRONMENT
-.B MAIL ", " DEAD ", " MAILRC
+.B MAIL ", " DEAD ", " MAILRC ", " SENDMAIL ", " XDG_DATA_HOME
 override the corresponding defaults.
+The spool falls back from
+.I /var/mail
+to
+.IR /var/spool/mail ;
+.B send
+looks for
+.BR sendmail (8)
+then
+.BR msmtp (1)
+if
+.B SENDMAIL
+is unset.
 .SH "SEE ALSO"
 .BR tvmail (1),
 .BR mail (1),

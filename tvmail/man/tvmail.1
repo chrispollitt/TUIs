@@ -217,6 +217,10 @@ The trash mailbox.
 .TP
 .B MAIL
 Overrides the inbox path.
+Otherwise
+.I /var/mail/$USER
+is tried, then
+.IR /var/spool/mail/$USER .
 .TP
 .B DEAD
 Overrides
@@ -225,6 +229,19 @@ Overrides
 .B MAILRC
 Overrides
 .IR ~/.mailrc .
+.TP
+.B SENDMAIL
+Path to the mail transport agent used for outgoing mail.
+Otherwise
+.BR sendmail (8)
+is searched for in the usual places, then
+.BR msmtp (1).
+.TP
+.B XDG_DATA_HOME
+Base for the trash mailbox
+.RI ( $XDG_DATA_HOME/tvmail/trash.mbox ,
+default
+.IR ~/.local/share ).
 .TP
 .B PATH
 Must contain

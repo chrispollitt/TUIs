@@ -15,9 +15,10 @@ if(CYGWIN)
     add_compile_definitions(SA_NOCLDWAIT=0)
 endif()
 
-# Path to a Cygwin `bash` the built .exe should call for all mail operations.
-# build.sh fills this in; harmless/ignored on a native Linux build.
-set(TVMAIL_BASH "bash" CACHE STRING "bash used to run tvmail-backend")
+# POSIX shell the app runs its little helper scripts through.  /bin/sh is right
+# everywhere native; the mingw cross-build (build.sh --mingw) overrides it with
+# a Cygwin shell, since a native Windows .exe cannot exec a Unix /bin/sh.
+set(TVMAIL_SH "/bin/sh" CACHE STRING "shell used to run tvmail-backend")
 
 # --- locate Turbo Vision (magiblot/tvision) -----------------------------
 find_package(tvision QUIET)
@@ -39,7 +40,7 @@ endif()
 
 add_executable(tvmail src/tvmail.cpp)
 target_link_libraries(tvmail PRIVATE tvision)
-target_compile_definitions(tvmail PRIVATE TVMAIL_BASH="${TVMAIL_BASH}")
+target_compile_definitions(tvmail PRIVATE TVMAIL_SH="${TVMAIL_SH}")
 
 if(WIN32)
     # self-contained .exe: no libstdc++-6/libgcc_s/libwinpthread next to it

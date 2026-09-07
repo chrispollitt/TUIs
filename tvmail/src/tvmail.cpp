@@ -1,10 +1,12 @@
 // tvmail - a Turbo Vision front-end for a local mbox + the tvmail-backend helper.
 //
-// On Cygwin this builds as a native ncurses app (build.sh patches tvision for
-// the missing FIONREAD &c).  `build.sh --mingw` instead makes a static .exe
-// for a real Windows console.  Either way, every mail operation is emitted as a
-// small bash script and run via the Cygwin `bash` in TVMAIL_BASH; the C++ side
-// just orchestrates windows.
+// Portable: builds natively on Linux (incl. Raspberry Pi / WSL), macOS and the
+// BSDs.  On Cygwin, build.sh first patches tvision for the missing FIONREAD &c;
+// `build.sh --mingw` makes a static native .exe for a real Windows console.
+//
+// Every mail operation is emitted as a tiny POSIX-sh script and run via the
+// shell in TVMAIL_SH (default /bin/sh; the mingw build points it at a Cygwin
+// shell).  The C++ side just orchestrates windows.
 //
 // Build: ../build.sh
 
@@ -59,8 +61,8 @@
 #  include <unistd.h>
 #endif
 
-#ifndef TVMAIL_BASH
-#  define TVMAIL_BASH "bash"
+#ifndef TVMAIL_SH
+#  define TVMAIL_SH "/bin/sh"
 #endif
 
 // ---------------------------------------------------------------- commands ---
@@ -169,10 +171,12 @@ static ushort tvmailEditDialog(int dialog, ...)
 }
 
 // -------------------------------------------------------- shell plumbing ----
-// Everything the backend needs runs inside one bash script so we never fight
-// cmd.exe quoting.  The preamble fixes PATH so tvmail-backend is found.
+// Everything the backend needs runs inside one small POSIX-sh script (one
+// script per call keeps us clear of cmd.exe quoting on the mingw build).  The
+// preamble widens PATH so tvmail-backend is found wherever it was installed.
 static const char *kPreamble =
-    "export PATH=\"$HOME/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH\"\n";
+    "export PATH=\"$HOME/bin:$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin"
+    ":/opt/local/bin:/usr/pkg/bin:/usr/bin:/bin:$PATH\"\n";
 
 static std::string tempDir()
 {
@@ -209,7 +213,7 @@ static std::string writeScript(const std::string &body)
     return path;
 }
 
-// a plain temp file (e.g. an RFC822 draft) - path is fine for Cygwin bash
+// a plain temp file (e.g. an RFC822 draft); the path is handed to the shell
 static std::string writeTemp(const std::string &content, const char *suffix)
 {
     static int seq = 0;
@@ -223,15 +227,15 @@ static std::string writeTemp(const std::string &content, const char *suffix)
 }
 
 static std::string q(const std::string &s) { return "\"" + s + "\""; }
-static std::string bashInvoke(const std::string &script)
+static std::string shInvoke(const std::string &script)
 {
-    return q(TVMAIL_BASH) + " " + q(script);
+    return q(TVMAIL_SH) + " " + q(script);
 }
 
 static std::string shCapture(const std::string &body)
 {
     std::string sp = writeScript(body), out;
-    if (FILE *p = popen(bashInvoke(sp).c_str(), "r")) {
+    if (FILE *p = popen(shInvoke(sp).c_str(), "r")) {
         char buf[8192]; size_t n;
         while ((n = fread(buf, 1, sizeof buf, p)) > 0) out.append(buf, n);
         pclose(p);
@@ -245,7 +249,7 @@ static int shInteractive(const std::string &body)
     std::string sp = writeScript(body);
     TProgram::application->suspend();
     std::fputs("\n", stdout);
-    int rc = std::system(bashInvoke(sp).c_str());
+    int rc = std::system(shInvoke(sp).c_str());
     std::fputs("\n[tvmail] done - press Enter to return ", stdout);
     std::fflush(stdout);
     for (int c; (c = std::getchar()) != '\n' && c != EOF; ) {}

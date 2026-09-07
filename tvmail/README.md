@@ -46,22 +46,33 @@ repo, under `configure/` and `backend/`):
 - **Send** goes through `/usr/sbin/sendmail` → exim → smarthost.
 - No credentials live anywhere in this project.
 
+## Platforms
+
+Builds and runs natively on **Linux** (including Raspberry Pi and WSL),
+**macOS** and the **BSDs**; the app is a normal ncurses program and the backend
+is pure‑stdlib Python 3. **Cygwin** works too, with a small tvision patch (see
+*Build*). The exim/`pop-pull` scripts under `configure/` are Cygwin‑host
+specific — everything else is portable.
+
 ## Requirements
 
-- Cygwin with `cmake`, `libncurses-devel`, a C++17 `g++`
-  (`setup-x86_64.exe -q -P cmake libncurses-devel gcc-g++`)
-- a `python3` / `python3.9` / `python3.8` on `PATH` (the backend has an
-  sh/python polyglot shebang, so a broken `/usr/bin/python3` alternatives link
-  is fine)
-- for `--mingw` builds only: `mingw64-x86_64-gcc-g++`
+- `cmake`, a C++17 compiler, `ncurses(w)` headers, `git`
+  - Debian/Ubuntu/Pi: `apt install cmake g++ libncursesw5-dev git`
+  - Fedora: `dnf install cmake gcc-c++ ncurses-devel git`
+  - macOS: Xcode Command Line Tools + `brew install cmake`
+  - Cygwin: `setup-x86_64.exe -q -P cmake libncurses-devel gcc-g++ git`
+- a working **Python 3** (≥ 3.6) somewhere on `PATH` — `python3`, or a
+  versioned `python3.x`; the backend's sh/python polyglot shebang copes with a
+  broken `/usr/bin/python3` symlink
+- an MTA for sending: `sendmail`, or `msmtp`, or set `$SENDMAIL`
+- Cygwin `--mingw` builds only: `mingw64-x86_64-gcc-g++`
 
 ## Build
 
-Turbo Vision has no Cygwin target (its Unix backend assumes Linux/BSD:
-`FIONREAD` on pipes, `SA_NOCLDWAIT`, XSI `wcwidth`, C-linkage `strupr`).
-`patches/cygwin_patch.py` fixes those in the cloned tree; `build.sh` runs it
-automatically and then builds a normal Cygwin **ncurses** app — the right thing
-for mintty.
+On Linux/macOS/BSD `./build.sh` just builds. On **Cygwin** only, Turbo Vision
+needs a small compatibility patch first (its Unix backend assumes Linux/BSD:
+`FIONREAD` on pipes, `SA_NOCLDWAIT`, XSI `wcwidth`, C‑linkage `strupr`) —
+`patches/cygwin_patch.py`, which `build.sh` applies automatically.
 
 ```bash
 ./build.sh                # clones + patches tvision into third_party/, builds
