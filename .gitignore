@@ -6,3 +6,4 @@ _inst/
 *.bak
 *.pyc
 __pycache__/
+tmp/
