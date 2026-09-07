@@ -7,6 +7,10 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
+# Before add_subdirectory(tvision), so the bundled build also gets a
+# CTestTestfile.cmake and `ctest` doesn't warn about a missing include.
+enable_testing()
+
 # Cygwin's newlib hides XSI symbols (wcwidth, SA_NOCLDWAIT, ...) that tvision's
 # Unix backend expects; _GNU_SOURCE exposes them. Must precede add_subdirectory.
 if(CYGWIN)
@@ -45,6 +49,37 @@ target_compile_definitions(tvmail PRIVATE TVMAIL_SH="${TVMAIL_SH}")
 if(WIN32)
     # self-contained .exe: no libstdc++-6/libgcc_s/libwinpthread next to it
     target_link_options(tvmail PRIVATE -static -static-libgcc -static-libstdc++)
+endif()
+
+# --- tests (ctest) -------------------------------------------------------
+# backend_unit : stdlib unittest over tvmail-backend (mbox parsing, delete,
+#                aliases, lock-sweep, serve framing) - no build needed
+# backend_pipe : `tvmail --selftest` - the C++ side forks the serve
+#                co-process, handshakes, round-trips a request, spawnLogged
+# e2e_tui      : drives the built tvmail in a pty (launch, panes, Tab, body
+#                scroll, background F3); exits 77 = skipped where no pty
+find_program(TVMAIL_PYTHON
+    NAMES python3 python3.13 python3.12 python3.11 python3.10 python3.9 python)
+
+if(TVMAIL_PYTHON)
+    add_test(NAME backend_unit
+             COMMAND ${TVMAIL_PYTHON} -m unittest discover
+                     -s "${CMAKE_CURRENT_SOURCE_DIR}/tests" -p "test_*.py")
+endif()
+
+if(NOT WIN32)
+    add_test(NAME backend_pipe COMMAND tvmail --selftest)
+    set_tests_properties(backend_pipe PROPERTIES
+        ENVIRONMENT "PATH=${CMAKE_CURRENT_SOURCE_DIR}/backend:$ENV{PATH}"
+        PASS_REGULAR_EXPRESSION "served=1 status=0")
+    if(TVMAIL_PYTHON)
+        add_test(NAME e2e_tui
+                 COMMAND ${TVMAIL_PYTHON}
+                         "${CMAKE_CURRENT_SOURCE_DIR}/tests/e2e_tui.py"
+                         --bin $<TARGET_FILE:tvmail>
+                         --backend-dir "${CMAKE_CURRENT_SOURCE_DIR}/backend")
+        set_tests_properties(e2e_tui PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
+    endif()
 endif()
 
 include(GNUInstallDirs)

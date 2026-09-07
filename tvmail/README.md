@@ -108,6 +108,26 @@ tvmail
 step above puts it on `PATH`. Otherwise:
 `PATH="$PWD/backend:$PATH" ./build/tvmail`.
 
+## Tests
+
+```bash
+./test.sh                 # build, then ctest all three layers
+./test.sh -R backend_unit # just one
+```
+
+- **`backend_unit`** — stdlib `unittest` over `tvmail-backend`: mbox parsing,
+  flags, `delete` → trash + backup, `~/.mailrc` aliases, lock sweeping,
+  `save-draft`, and the `serve` frame protocol. No build needed
+  (`python3 -m unittest discover -s tests`).
+- **`backend_pipe`** — `tvmail --selftest`: the C++ side forks the `serve`
+  co-process, handshakes, round-trips a request, exercises `spawnLogged`.
+- **`e2e_tui`** — drives the built binary in a pty: launch, panes populate,
+  `Tab` walks the active-pane marker, the body scrolls, `F3` pulls in the
+  background. Reports *skipped* where there's no usable terminal.
+
+Details in [tests/README.md](tests/README.md). No dependencies beyond a
+Python 3 and (for `e2e_tui`) a pty.
+
 ## The three panes
 
 | pane | what |
@@ -116,9 +136,12 @@ step above puts it on `PATH`. Otherwise:
 | **Messages** (top right) | the selected folder's messages |
 | **Message body** (bottom right) | decoded headers + text of the highlighted message |
 
-`Tab` / `Shift-Tab` move between panes. Arrows / `PgUp` / `PgDn` move within
-one. Moving the highlight in **Folders** reloads the message list; moving it in
-**Messages** loads the body. `Enter` on a message jumps focus to the body pane.
+`Tab` / `Shift-Tab` move between panes, in the order Folders → Messages →
+Message body; the active pane's heading is shown `[ bracketed ]` and
+highlighted. Arrows / `PgUp` / `PgDn` / `Home` / `End` / `Space` move within
+whichever pane is active — including scrolling the body. Moving the highlight
+in **Folders** reloads the message list; moving it in **Messages** loads the
+body. `Enter` on a message jumps focus to the body pane.
 
 ## Folders
 
