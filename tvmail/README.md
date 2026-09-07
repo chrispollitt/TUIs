@@ -222,7 +222,22 @@ tvmail reads your existing `~/.mailrc` (and `/etc/mailrc`, `$MAILRC`):
 | `set DEAD=PATH` | the `dead.letter` folder |
 | `alias NAME addr…` / `group NAME …` | the address book, and recipient expansion on send |
 
-`~/.signature` and `~/dead.letter` follow the usual conventions.
+`~/.signature` and `~/dead.letter` follow the usual conventions. This holds in
+**both** modes — the address book, signature and dead.letter are always local.
+
+**Sharing the store with `mail(1)`.** On the master, `mail(1)` reads
+`/var/mail/$USER` directly — the same mbox Dovecot serves and tvmail-local
+reads, so all three agree. On a client there's no local store; point GNU
+Mailutils at IMAP too (it's built with `ENABLE_IMAP`):
+
+```sh
+# ~/.mailrc on a client
+set folder=imaps://chris@cmpi
+set sendmail=smtp://cmpi:25        # or smtps://cmpi:465
+```
+
+Credentials come from the same `~/.netrc` (`machine cmpi …`) that tvmail uses,
+so `mail` and `tvmail` then see the identical folders.
 
 ## `tvmail-backend` (usable on its own)
 
