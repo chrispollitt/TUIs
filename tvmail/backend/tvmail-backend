@@ -5,7 +5,15 @@
 All the mbox / MIME / send grunt work lives here so the C++ front-end can stay
 small.  Stdlib only.
 
-Sub-commands (mailbox defaults to $MAIL or /var/mail/$USER):
+LOCAL vs REMOTE.  One host (a Pi / small server) owns the mail store and relays
+outbound through the smarthost.  Every other machine - Cygwin, WSL, a VM - is a
+thin client that reads over IMAP and submits over SMTP to that master.  Same UI,
+same sub-commands; this program swaps its mbox layer for imaplib/smtplib when it
+is not the master.  Configure with ~/.config/tvmail/tvmail.conf (see the shipped
+tvmail.conf.example); passwords live only in ~/.netrc.
+
+Sub-commands (mailbox defaults to $MAIL or /var/mail/$USER; over IMAP the
+shorthands spool/mbox/trash/drafts map to INBOX/Archive/Trash/Drafts):
 
   list  [MBOX]              one line per message, TAB-separated:
                             idx <TAB> flags <TAB> date <TAB> from <TAB> subject
@@ -33,6 +41,7 @@ Exit status: 0 ok, 1 usage/not-found, 2 runtime error.
 """
 
 import sys, os, io, json, argparse, subprocess, tempfile, shutil, email, email.utils
+import configparser, socket
 import email.policy
 from mailbox import mbox
 from email.header import decode_header, make_header
@@ -234,6 +243,204 @@ def _short_date(raw):
         return dt.strftime("%Y-%m-%d %H:%M")
 
 
+# ==========================================================================
+# Local master  vs.  remote (IMAP/SMTP) client
+#
+# ~/.config/tvmail/tvmail.conf   ($TVMAIL_CONF overrides the path):
+#   [service] mode = auto|local|remote        master = host1 ; host2
+#   [imap]    host=  port=993  ssl=true  user=
+#   [smtp]    host=  port=587  starttls=true  user=
+#   [folders] saved=Archive  trash=Trash  drafts=Drafts
+# Passwords are NEVER in that file - ~/.netrc (machine <host> login <u>
+# password <p>, chmod 600), or $TVMAIL_IMAP_PASS / $TVMAIL_SMTP_PASS.
+# ==========================================================================
+def _conf_path():
+    return os.environ.get("TVMAIL_CONF") or os.path.expanduser(
+        "~/.config/tvmail/tvmail.conf")
+
+
+def _conf():
+    c = configparser.ConfigParser()
+    try:
+        c.read(_conf_path())
+    except configparser.Error:
+        pass
+    return c
+
+
+def _mode():
+    """'local' or 'remote'."""
+    import re
+    c = _conf()
+    m = (os.environ.get("TVMAIL_MODE")
+         or c.get("service", "mode", fallback="auto")).strip().lower()
+    if m in ("local", "remote"):
+        return m
+    masters = [x.lower() for x in
+               re.split(r"[;,\s]+", c.get("service", "master", fallback="")) if x]
+    if socket.gethostname().split(".")[0].lower() in masters:
+        return "local"
+    return "remote" if c.has_section("imap") else "local"
+
+
+def _is_remote():
+    return _mode() == "remote"
+
+
+def _cred(host, user, envvar):
+    """Password from $<envvar> or ~/.netrc; abort with guidance if neither."""
+    v = os.environ.get(envvar)
+    if v:
+        return v
+    try:
+        import netrc
+        auth = netrc.netrc(os.path.expanduser("~/.netrc")).authenticators(host)
+        if auth and auth[2]:
+            return auth[2]
+    except FileNotFoundError:
+        pass
+    except netrc.NetrcParseError as e:
+        sys.exit("tvmail-backend: ~/.netrc: %s (is it mode 600?)" % e)
+    sys.exit("tvmail-backend: no password for %s - add it to ~/.netrc "
+             "(machine %s login %s password ...) or set $%s"
+             % (host, host, user, envvar))
+
+
+_IMAP = None
+
+
+def _q_mbox(name):
+    """Quote an IMAP mailbox name if it needs it (imaplib does not)."""
+    return '"%s"' % name if (" " in name and not name.startswith('"')) else name
+
+
+def _imap():
+    """A logged-in IMAP4 connection, reused across serve-mode requests."""
+    global _IMAP
+    if _IMAP is not None:
+        try:
+            _IMAP.noop()
+            return _IMAP
+        except Exception:
+            _IMAP = None
+    c = _conf()
+    if not c.has_section("imap"):
+        sys.exit("tvmail-backend: remote mode but no [imap] section in "
+                 + _conf_path())
+    import imaplib
+    host = c.get("imap", "host")
+    port = c.getint("imap", "port", fallback=993)
+    user = c.get("imap", "user", fallback=_me())
+    use_ssl = c.getboolean("imap", "ssl", fallback=True)
+    try:
+        M = (imaplib.IMAP4_SSL(host, port) if use_ssl
+             else imaplib.IMAP4(host, port))
+        if not use_ssl and "STARTTLS" in getattr(M, "capabilities", ()):
+            M.starttls()
+        M.login(user, _cred(host, user, "TVMAIL_IMAP_PASS"))
+    except (imaplib.IMAP4.error, OSError) as e:
+        sys.exit("tvmail-backend: IMAP %s:%d - %s" % (host, port, e))
+    _IMAP = M
+    return M
+
+
+def _imap_folder(p):
+    """Map a tvmail mailbox shorthand to an IMAP folder name."""
+    c = _conf()
+    key = {None: "inbox", "": "inbox", "spool": "inbox",
+           "mbox": "saved"}.get(p, p)
+    default = {"inbox": "INBOX", "saved": "Archive",
+               "trash": "Trash", "drafts": "Drafts"}.get(key)
+    return c.get("folders", key, fallback=default) if default is not None else p
+
+
+def _imap_uids(folder, readonly=True):
+    M = _imap()
+    typ, _ = M.select(_q_mbox(folder), readonly=readonly)
+    if typ != "OK":
+        sys.exit("tvmail-backend: IMAP SELECT %s failed" % folder)
+    typ, data = M.uid("SEARCH", None, "ALL")
+    if typ != "OK":
+        sys.exit("tvmail-backend: IMAP SEARCH failed")
+    return sorted(int(x) for x in (data[0] or b"").split())
+
+
+def _imap_uid_at(folder, idx, readonly=True):
+    uids = _imap_uids(folder, readonly)
+    if not (0 <= idx < len(uids)):
+        sys.exit("tvmail-backend: no message at index %d" % idx)
+    return uids, uids[idx]
+
+
+def _imap_msg(folder, idx):
+    _, uid = _imap_uid_at(folder, idx)
+    typ, data = _imap().uid("FETCH", str(uid), "(BODY.PEEK[])")
+    for item in (data or []):
+        if isinstance(item, tuple) and item[1]:
+            return email.message_from_bytes(item[1])
+    sys.exit("tvmail-backend: IMAP FETCH %d failed" % idx)
+
+
+def _imap_list(folder):
+    import re
+    M = _imap()
+    uids = _imap_uids(folder)
+    if not uids:
+        return
+    typ, data = M.uid("FETCH", ",".join(map(str, uids)),
+                      "(FLAGS BODY.PEEK[HEADER.FIELDS (DATE FROM SUBJECT)])")
+    meta = {}
+    for item in (data or []):
+        if not (isinstance(item, tuple) and item[1]):
+            continue
+        head = item[0].decode("latin-1", "replace")
+        mu = re.search(r"UID (\d+)", head)
+        mf = re.search(r"FLAGS \(([^)]*)\)", head)
+        if mu:
+            meta[int(mu.group(1))] = (mf.group(1) if mf else "",
+                                      email.message_from_bytes(item[1]))
+    for i, u in enumerate(uids):
+        fl, msg = meta.get(u, ("", email.message.Message()))
+        print("\t".join((
+            str(i),
+            "." if "\\Seen" in fl else "N",
+            _short_date(msg.get("Date", "")),
+            _clean(_short_from(msg.get("From", "")), 28),
+            _clean(_hdr(msg, "Subject", "(no subject)"), 200),
+        )))
+
+
+def _smtp_send(msg, rcpts):
+    """Submit via [smtp] to the master.  False -> no [smtp], caller falls back."""
+    c = _conf()
+    if not c.has_section("smtp"):
+        return False
+    import smtplib, ssl as _ssl
+    host = c.get("smtp", "host")
+    port = c.getint("smtp", "port", fallback=587)
+    user = c.get("smtp", "user", fallback=_me())
+    use_ssl = c.getboolean("smtp", "ssl", fallback=(port == 465))
+    starttls = c.getboolean("smtp", "starttls", fallback=not use_ssl)
+    frm = msg.get("From") or user
+    try:
+        S = (smtplib.SMTP_SSL(host, port, timeout=30) if use_ssl
+             else smtplib.SMTP(host, port, timeout=30))
+        try:
+            S.ehlo()
+            if starttls and not use_ssl:
+                S.starttls(context=_ssl.create_default_context())
+                S.ehlo()
+            pw = _cred(host, user, "TVMAIL_SMTP_PASS")
+            if pw:
+                S.login(user, pw)
+            S.sendmail(frm, rcpts, msg.as_bytes())
+        finally:
+            S.quit()
+    except (smtplib.SMTPException, OSError) as e:
+        sys.exit("tvmail-backend: SMTP %s:%d - %s" % (host, port, e))
+    return True
+
+
 def _sweep_locks(path, older_than=300, temps_only=False):
     """Remove stale mailbox lock/temp cruft left next to the spool file.
 
@@ -286,6 +493,9 @@ def cmd_list(a):
                          _clean(_short_from(m.get("From", "")), 28),
                          _clean(_hdr(m, "Subject", "(dead.letter)"), 200))))
         return 0
+    if _is_remote():
+        _imap_list(_imap_folder(a.mbox))
+        return 0
     path = mbox_path(a.mbox)
     if not os.path.exists(path):
         return 0                       # a not-yet-created mailbox lists as empty
@@ -311,6 +521,8 @@ def _get_msg(a):
         if a.idx != 0:
             sys.exit("tvmail-backend: no message at index %d" % a.idx)
         return None, m
+    if _is_remote():
+        return None, _imap_msg(_imap_folder(a.mbox), a.idx)
     box = open_box(mbox_path(a.mbox))
     try:
         return box, box[a.idx]
@@ -415,6 +627,22 @@ def cmd_delete(a):
             os.remove(p)
         print("deleted 1 message(s)")
         return 0
+    if _is_remote():
+        folder = _imap_folder(a.mbox)
+        trash = _imap_folder("trash")
+        uids = _imap_uids(folder, readonly=False)
+        victims = sorted(set(a.idx))
+        if any(not (0 <= v < len(uids)) for v in victims):
+            sys.exit("tvmail-backend: index out of range")
+        M = _imap()
+        for v in victims:
+            u = str(uids[v])
+            if folder != trash and getattr(a, "trash", None):
+                M.uid("COPY", u, _q_mbox(trash))       # -> Trash, then delete
+            M.uid("STORE", u, "+FLAGS", r"(\Deleted)")
+        M.expunge()
+        print("deleted %d message(s)" % len(victims))
+        return 0
     path = mbox_path(a.mbox)
     box = open_box(path)
     box.lock()
@@ -452,6 +680,11 @@ def cmd_delete(a):
 def cmd_mark(a):
     if a.mbox == "dead":
         return 0                       # dead.letter has no per-message flags
+    if _is_remote():
+        _, uid = _imap_uid_at(_imap_folder(a.mbox), a.idx, readonly=False)
+        op = "+FLAGS" if a.state == "read" else "-FLAGS"
+        _imap().uid("STORE", str(uid), op, r"(\Seen)")
+        return 0
     path = mbox_path(a.mbox)
     box = open_box(path)
     box.lock()
@@ -479,11 +712,7 @@ def cmd_compose_template(a):
     subj = a.subject or ""
     body = ""
     if a.in_reply_to is not None:
-        box = open_box(mbox_path(a.mbox))
-        try:
-            src = box[a.in_reply_to]
-        except (IndexError, KeyError):
-            sys.exit("tvmail-backend: no message at index %d" % a.in_reply_to)
+        _, src = _get_msg(argparse.Namespace(mbox=a.mbox, idx=a.in_reply_to))
         if not to:
             to = _hdr(src, "Reply-To") or _hdr(src, "From")
         if not subj:
@@ -528,6 +757,10 @@ def cmd_send(a):
     if not rcpts:
         sys.exit("tvmail-backend send: no recipients (--to or a To: header)")
 
+    if _is_remote() and _smtp_send(msg, rcpts):
+        print("sent")
+        return 0
+
     sm = _sendmail()
     if not (os.path.exists(sm) or shutil.which(sm)):
         sys.exit("tvmail-backend: no sendmail MTA found "
@@ -541,13 +774,20 @@ def cmd_send(a):
 
 def cmd_save_draft(a):
     data = sys.stdin.buffer.read()
+    m = email.message_from_bytes(data)
+    if "Date" not in m:
+        m["Date"] = email.utils.formatdate(localtime=True)
+    if _is_remote():
+        import imaplib, time as _t
+        folder = _imap_folder("drafts")
+        _imap().append(_q_mbox(folder), r"(\Draft)",
+                       imaplib.Time2Internaldate(_t.time()), m.as_bytes())
+        print("draft saved")
+        return 0
     dp = mbox_path("drafts")
     d = os.path.dirname(dp)
     if d:
         os.makedirs(d, exist_ok=True)
-    m = email.message_from_bytes(data)
-    if "Date" not in m:
-        m["Date"] = email.utils.formatdate(localtime=True)
     box = mbox(dp, factory=None, create=True)
     box.lock()
     try:
@@ -566,8 +806,11 @@ def cmd_aliases(a):
 
 
 def cmd_pull(a):
+    if _is_remote():
+        print("pull: the master host fetches remote mail; nothing to do here.")
+        return 0
     exe = shutil.which("pop-pull")
-    if not os.path.exists(exe):
+    if not exe or not os.path.exists(exe):
         sys.exit("tvmail-backend: pop-pull not found - run configure-mail-pull.sh")
     return subprocess.run([exe, "-v"]).returncode
 
@@ -668,6 +911,11 @@ def cmd_serve(a):
         except Exception as e:
             st, body = 2, ("tvmail-backend serve: %s\n" % e).encode("utf-8")
         emit(st, body)
+    if _IMAP is not None:                        # drop the warm IMAP connection
+        try:
+            _IMAP.logout()
+        except Exception:
+            pass
     return 0
 
 

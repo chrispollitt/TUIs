@@ -1,0 +1,35 @@
+# tvmail-backend configuration.
+#
+# Copy to  ~/.config/tvmail/tvmail.conf  and edit.  Only the client machines
+# need this; the master (the host that owns the mailstore) can run without it.
+#
+# NO PASSWORDS HERE.  Put them in ~/.netrc (chmod 600):
+#     machine cmpi.lan  login chris  password s3cr3t
+# ...or the environment: $TVMAIL_IMAP_PASS / $TVMAIL_SMTP_PASS.
+
+[service]
+# auto  : local if this host's name is in `master` (or there is no [imap]),
+#         remote otherwise.   Override per-run with $TVMAIL_MODE.
+# local : always use the on-disk mbox + local sendmail (the master).
+# remote: always talk IMAP/SMTP to the master (a client).
+mode   = auto
+master = cmpi ; beelink
+
+[imap]
+host = cmpi.lan
+port = 993
+ssl  = true
+user = chris
+
+[smtp]
+host     = cmpi.lan
+port     = 587
+starttls = true
+user     = chris
+
+# Optional - override the shorthand -> IMAP folder mapping (these are the
+# defaults).  'dead.letter' is always a local file, never an IMAP folder.
+[folders]
+saved  = Archive
+trash  = Trash
+drafts = Drafts

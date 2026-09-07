@@ -7,6 +7,7 @@
 import email
 import importlib.machinery
 import importlib.util
+import io
 import os
 import shutil
 import subprocess
@@ -64,11 +65,13 @@ class Base(unittest.TestCase):
         self.spool = self.tmp / "spool.mbox"
         self.spool.write_text(MBOX_1)
         keys = ("HOME", "XDG_DATA_HOME", "MAIL", "MAILRC", "DEAD",
-                "USER", "LOGNAME", "SENDMAIL")
+                "USER", "LOGNAME", "SENDMAIL", "TVMAIL_CONF", "TVMAIL_MODE",
+                "TVMAIL_IMAP_PASS", "TVMAIL_SMTP_PASS")
         self._saved = {k: os.environ.get(k) for k in keys}
         os.environ.update(HOME=str(self.home), XDG_DATA_HOME=str(self.xdg),
                           MAIL=str(self.spool), USER="tester")
-        for k in ("MAILRC", "DEAD", "SENDMAIL"):
+        for k in ("MAILRC", "DEAD", "SENDMAIL", "TVMAIL_CONF", "TVMAIL_MODE",
+                  "TVMAIL_IMAP_PASS", "TVMAIL_SMTP_PASS"):
             os.environ.pop(k, None)
 
     def tearDown(self):
@@ -280,6 +283,221 @@ class TestServe(Base):
         p.stdin.write(b"quit\n")
         p.stdin.flush()
         self.assertEqual(p.wait(timeout=5), 0)
+
+
+# --------------------------------------------------------------------------
+# remote (IMAP/SMTP client) mode
+# --------------------------------------------------------------------------
+class TestMode(Base):
+    def _write_conf(self, text):
+        p = self.tmp / "tvmail.conf"
+        p.write_text(textwrap.dedent(text))
+        os.environ["TVMAIL_CONF"] = str(p)
+
+    def test_mode_auto_defaults_local_without_imap(self):
+        self.assertEqual(be._mode(), "local")
+
+    def test_mode_auto_remote_when_imap_present(self):
+        self._write_conf("[imap]\nhost = x\n")
+        self.assertEqual(be._mode(), "remote")
+
+    def test_mode_explicit_local_wins_over_imap(self):
+        self._write_conf("[service]\nmode = local\n[imap]\nhost = x\n")
+        self.assertEqual(be._mode(), "local")
+
+    def test_mode_master_hostname_forces_local(self):
+        host = __import__("socket").gethostname().split(".")[0]
+        self._write_conf("[service]\nmaster = %s ; other\n[imap]\nhost = x\n" % host)
+        self.assertEqual(be._mode(), "local")
+
+    def test_mode_env_override(self):
+        os.environ["TVMAIL_MODE"] = "remote"
+        self.assertEqual(be._mode(), "remote")
+
+    def test_imap_folder_mapping_and_override(self):
+        self.assertEqual(be._imap_folder("spool"), "INBOX")
+        self.assertEqual(be._imap_folder(None), "INBOX")
+        self.assertEqual(be._imap_folder("mbox"), "Archive")
+        self.assertEqual(be._imap_folder("trash"), "Trash")
+        self.assertEqual(be._imap_folder("drafts"), "Drafts")
+        self.assertEqual(be._imap_folder("Weird/Name"), "Weird/Name")
+        self._write_conf("[folders]\nsaved = Kept\n")
+        self.assertEqual(be._imap_folder("mbox"), "Kept")
+
+    def test_cred_env_then_netrc_then_error(self):
+        os.environ["TVMAIL_IMAP_PASS"] = "fromenv"
+        self.assertEqual(be._cred("h", "u", "TVMAIL_IMAP_PASS"), "fromenv")
+        os.environ.pop("TVMAIL_IMAP_PASS")
+        (self.home / ".netrc").write_text("machine h login u password fromnetrc\n")
+        os.chmod(self.home / ".netrc", 0o600)
+        self.assertEqual(be._cred("h", "u", "TVMAIL_IMAP_PASS"), "fromnetrc")
+        with self.assertRaises(SystemExit):
+            be._cred("nope", "u", "TVMAIL_IMAP_PASS")
+
+
+class FakeIMAP:
+    """Just enough IMAP for the backend's remote paths."""
+    def __init__(self):
+        self.folders = {}          # name -> [[uid, {flags}, raw], ...]
+        self._uid = 1
+        self.cur = None
+        self.copied = []
+        self.appended = []
+
+    def add(self, folder, raw, flags=()):
+        self.folders.setdefault(folder, []).append([self._uid, set(flags), raw])
+        self._uid += 1
+
+    def noop(self):
+        return ("OK", [b"NOOP"])
+
+    def logout(self):
+        return ("BYE", [b"bye"])
+
+    def select(self, mailbox, readonly=False):
+        self.cur = mailbox.strip('"')
+        self.folders.setdefault(self.cur, [])
+        return ("OK", [str(len(self.folders[self.cur])).encode()])
+
+    def _rows(self):
+        return self.folders.get(self.cur, [])
+
+    def uid(self, command, *args):
+        c = command.upper()
+        if c == "SEARCH":
+            return ("OK", [" ".join(str(r[0]) for r in self._rows()).encode()])
+        if c == "FETCH":
+            want = {int(x) for x in str(args[0]).replace(",", " ").split()}
+            spec, out = args[1], []
+            for uid, flags, raw in self._rows():
+                if uid not in want:
+                    continue
+                fl = " ".join(sorted(flags))
+                if "HEADER.FIELDS" in spec:
+                    m = email.message_from_bytes(raw)
+                    hdr = ("".join("%s: %s\r\n" % (h, m.get(h, ""))
+                                   for h in ("Date", "From", "Subject"))
+                           ).encode() + b"\r\n"
+                    meta = ("%d (UID %d FLAGS (%s) BODY[] {%d}"
+                            % (uid, uid, fl, len(hdr))).encode()
+                    out += [(meta, hdr), b")"]
+                else:
+                    meta = ("%d (UID %d BODY[] {%d}"
+                            % (uid, uid, len(raw))).encode()
+                    out += [(meta, raw), b")"]
+            return ("OK", out)
+        if c == "STORE":
+            uid, op, spec = int(args[0]), args[1], args[2]
+            fs = {f for f in spec.strip("()").split() if f}
+            for r in self._rows():
+                if r[0] == uid:
+                    r[1] = (r[1] | fs) if op[0] == "+" else (r[1] - fs)
+            return ("OK", [b"ok"])
+        if c == "COPY":
+            uid, dest = int(args[0]), args[1].strip('"')
+            for r in self._rows():
+                if r[0] == uid:
+                    self.folders.setdefault(dest, []).append(
+                        [self._uid, set(r[1]), r[2]])
+                    self._uid += 1
+                    self.copied.append((uid, dest))
+            return ("OK", [b"ok"])
+        return ("OK", [b""])
+
+    def expunge(self):
+        self.folders[self.cur] = [r for r in self._rows()
+                                  if "\\Deleted" not in r[1]]
+        return ("OK", [b"1"])
+
+    def append(self, mailbox, flags, date, message):
+        name = mailbox.strip('"')
+        raw = message if isinstance(message, bytes) else message.encode()
+        self.folders.setdefault(name, []).append([self._uid, set(), raw])
+        self._uid += 1
+        self.appended.append((name, raw))
+        return ("OK", [b"ok"])
+
+
+def _msg(frm, subj, body, date="Mon, 01 Sep 2026 10:00:00 -0700"):
+    return ("From: %s\r\nDate: %s\r\nSubject: %s\r\n\r\n%s\r\n"
+            % (frm, date, subj, body)).encode()
+
+
+class TestRemoteIMAP(Base):
+    def setUp(self):
+        super().setUp()
+        os.environ["TVMAIL_MODE"] = "remote"
+        self.imap = FakeIMAP()
+        self.imap.add("INBOX", _msg("alice@x", "Hello", "first body"),
+                      flags=("\\Seen",))
+        self.imap.add("INBOX", _msg("bob@x", "Second", "second body"))
+        self.imap.add("INBOX", _msg("carl@x", "Third", "third body"))
+        self._real_imap = be._imap
+        be._imap = lambda: self.imap
+
+    def tearDown(self):
+        be._imap = self._real_imap
+        be._IMAP = None
+        super().tearDown()
+
+    def _run(self, fn, ns):
+        cap = be._CapStream()
+        old = sys.stdout
+        sys.stdout = cap
+        try:
+            fn(ns)
+        finally:
+            sys.stdout = old
+        return cap.buffer.getvalue()
+
+    def ns(self, **kw):
+        import argparse as _a
+        kw.setdefault("mbox", "spool")
+        return _a.Namespace(**kw)
+
+    def test_list_over_imap(self):
+        out = self._run(be.cmd_list, self.ns()).decode()
+        rows = [r for r in out.splitlines() if r]
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(rows[0].split("\t")[1], ".")   # \Seen
+        self.assertEqual(rows[1].split("\t")[1], "N")
+        self.assertIn("Second", rows[1])
+
+    def test_show_over_imap(self):
+        out = self._run(be.cmd_show, self.ns(idx=1)).decode()
+        self.assertIn("From:", out)
+        self.assertIn("second body", out)
+
+    def test_mark_over_imap(self):
+        be.cmd_mark(self.ns(idx=1, state="read"))
+        rows = self._run(be.cmd_list, self.ns()).decode().splitlines()
+        self.assertEqual(rows[1].split("\t")[1], ".")
+
+    def test_delete_over_imap_moves_to_trash(self):
+        self._run(be.cmd_delete, self.ns(idx=[0], mbox="spool", trash="trash"))
+        self.assertEqual(len(self.imap.folders["INBOX"]), 2)
+        self.assertEqual([d for _, d in self.imap.copied], ["Trash"])
+
+    def _feed_stdin(self, data):
+        class _In:
+            buffer = io.BytesIO(data)
+        self._old_stdin, sys.stdin = sys.stdin, _In()
+        self.addCleanup(lambda: setattr(sys, "stdin", self._old_stdin))
+
+    def test_save_draft_over_imap_appends(self):
+        self._feed_stdin(b"To: x@y\nSubject: d\n\nbody\n")
+        self._run(be.cmd_save_draft, self.ns())
+        self.assertEqual([n for n, _ in self.imap.appended], ["Drafts"])
+
+    def test_send_over_imap_uses_smtp(self):
+        seen = {}
+        real, be._smtp_send = be._smtp_send, \
+            lambda m, r: (seen.setdefault("rcpts", r), True)[1]
+        self.addCleanup(lambda: setattr(be, "_smtp_send", real))
+        self._feed_stdin(b"To: a@b\nSubject: s\n\nhi\n")
+        out = self._run(be.cmd_send, self.ns(getfrom=None, to=[], subject=None))
+        self.assertIn(b"sent", out)
+        self.assertEqual(seen["rcpts"], ["a@b"])
 
 
 if __name__ == "__main__":
