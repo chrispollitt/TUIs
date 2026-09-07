@@ -33,6 +33,22 @@ uses; it is not a walled garden.
 See
 .B "mailrc INTEROPERABILITY"
 below.
+.SH "LOCAL AND REMOTE"
+On the host that owns the mail store,
+.B tvmail
+reads the on\-disk mbox files directly and sends through the local
+.BR sendmail (8).
+On any other machine it is an IMAP/SMTP client of that host: the three
+panes and every key work the same, but the folders are IMAP folders and
+.B F3
+(pull) does nothing \(em the master fetches remote mail.
+The choice is made by
+.IR ~/.config/tvmail/tvmail.conf ;
+see
+.BR tvmail\-backend (1)
+.RB ( MODES )
+and the shipped
+.IR tvmail.conf.example .
 .SH THE THREE PANES
 The window is divided into a folder list on the left, a message list at the
 top right, and the body of the highlighted message below it.
@@ -189,6 +205,14 @@ in a full editor window.
 .B Ctrl\-S
 writes the file; closing an unsaved change prompts first.
 .SH FILES
+.TP
+.I ~/.config/tvmail/tvmail.conf
+Local vs. remote, and the IMAP/SMTP host in remote mode.
+See
+.BR tvmail\-backend (1).
+.TP
+.I ~/.netrc
+The IMAP/SMTP password in remote mode (mode 0600).
 .TP
 .I ~/.mailrc ", " /etc/mailrc
 Read for

@@ -57,6 +57,21 @@ Getting tvision to build on Cygwin took a few small patches (`FIONREAD`,
 `strupr` linkage, `_GNU_SOURCE`) — it targets Linux / macOS / MinGW, not
 Cygwin — but nothing structural.
 
+## One master, many clients
+
+The original plan was one self-contained box per machine: local exim, local
+`/var/mail`, local everything. That fell apart the moment a *second* user
+wanted in on the Cygwin laptop — non-setuid exim on Cygwin can't share a spool
+between users, and Windows ACLs on `/var/spool` fought every `chmod`. Hours of
+hair I don't have.
+
+So the shape changed: one **master** host (a Raspberry Pi, later a Mini PC)
+owns the mailstore, runs the real MTA and Dovecot, and pulls replies back.
+Every other machine — the laptop, WSL, a VM — runs `tvmail` as a thin **IMAP /
+SMTP client**. `tvmail-backend` grew a second personality: same subcommands,
+but `imaplib` and `smtplib` underneath when it isn't the master. The Turbo
+Vision UI didn't change a line. Still stdlib only.
+
 ## The one rule
 
 Stay out of the way of `mail(1)`. tvmail reads the same `~/.mailrc` GNU

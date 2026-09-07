@@ -24,6 +24,19 @@ It is documented \(em and packaged \(em separately because it is perfectly
 usable on its own from a shell or a script; the Turbo Vision front end holds no
 mail logic that this does not.
 .PP
+It runs in one of two
+.BR modes .
+On the host that owns the mail store it reads mbox files and hands outgoing
+mail to
+.BR sendmail (8)
+(\fBlocal\fP mode).
+On any other machine it is an IMAP/SMTP client of that host (\fBremote\fP
+mode): the same subcommands, but backed by
+.BR imaplib / smtplib .
+See
+.B MODES
+below.
+.PP
 Each subcommand prints its result to standard output and exits
 .B 0
 on success,
@@ -62,6 +75,18 @@ from the mailrc files.
 or
 .IR ~/dead.letter ,
 treated as a single\-message mailbox.
+.PP
+In
+.B remote
+mode the shorthands map to IMAP folders instead \(em
+.BR spool " \(->" " INBOX" ,
+.BR mbox " \(->" " Archive" ,
+.BR trash " \(->" " Trash" ,
+.BR drafts " \(->" " Drafts"
+\(em overridable in
+.IR tvmail.conf .
+.B dead
+is always the local file.
 .SH SUBCOMMANDS
 .TP
 .BI "list " [MBOX]
@@ -109,8 +134,40 @@ A
 .I .bak
 of the mailbox is kept.
 .TP
+.BI "purge " "\fR[\fPMBOX\fR]\fP " "\fR[\fP--from " "S\fR]\fP " "\fR[\fP--subject " "S\fR]\fP " "\fR[\fP--to " "S\fR]\fP " "\fR[\fP--older-than " "DAYS\fR]\fP " "\fR[\fP--seen|--unseen\fR]\fP " "\fR[\fP--expunge\fR]\fP " "\fR[\fP-n\fR]\fP"
+Bulk\-delete every message in
+.I MBOX
+that matches
+.B all
+of the given filters \(em substring (case\-insensitive) on
+.BR From: ,
+.BR Subject: ,
+.BR To: ,
+an age in whole days, and/or read state.
+At least one filter is required; with none it refuses to run.
+Matches move to
+.B trash
+like
+.B delete
+unless
+.B \-\-expunge
+is given.
+.B \-n
+(\c
+.BR \-\-dry\-run )
+lists what would go and changes nothing.
+Handy from
+.BR cron :
+.RS
+.EX
+tvmail\-backend purge --from "Cron Daemon" --older-than 14
+.EE
+.RE
+.TP
 .BI "mark " "IDX " "read|unread " [MBOX]
-Set or clear the Status flag.
+Set or clear the Status flag
+.RB ( \(rs Seen
+over IMAP).
 .TP
 .BI "compose\-template " "\fR[\fP--to " "A\fR]\fP " "\fR[\fP--subject " "S\fR]\fP " "\fR[\fP--in-reply-to " "IDX\fR]\fP " [MBOX]
 Print a draft skeleton: a
@@ -153,7 +210,90 @@ Run
 .B pop\-pull
 if it is on
 .IR PATH .
+In
+.B remote
+mode this is a no\-op \(em the master host does the fetching.
+.TP
+.B ping
+Print
+.BR pong .
+A liveness check.
+.TP
+.B serve
+Persistent mode.
+Read one request (a normal argv) per line on standard input and write a framed
+reply per request:
+.RB ` "<status> <nbytes>" '
+and a newline, then
+.I nbytes
+bytes.
+The mbox / MIME machinery \(em and, in remote mode, the IMAP connection \(em
+stay warm, so
+.BR tvmail (1)
+pays start\-up once instead of once per keystroke.
+.B send ", " save\-draft ", " pull
+and
+.B serve
+itself are refused inside the loop.
+.SH MODES
+The mode is chosen by
+.I ~/.config/tvmail/tvmail.conf
+(an INI file;
+.B $TVMAIL_CONF
+overrides the path):
+.RS
+.EX
+[service]
+mode   = auto | local | remote
+master = host1 ; host2
+
+[imap]   host= port=993 ssl=true verify=true cafile= user=
+[smtp]   host= port=587 starttls=true auth=true from= user=
+[folders] saved=Archive  trash=Trash  drafts=Drafts
+.EE
+.RE
+.PP
+.B mode
+=
+.B auto
+(the default) resolves to
+.B local
+when this host's name is listed in
+.BR master ,
+or when there is no
+.B [imap]
+section; otherwise
+.BR remote .
+.B $TVMAIL_MODE
+overrides it for one run.
+.PP
+Passwords are never kept in
+.IR tvmail.conf .
+They are read from
+.I ~/.netrc
+.RI ( "machine <host> login <user> password <pw>" ,
+mode 0600) or from
+.B $TVMAIL_IMAP_PASS
+/
+.BR $TVMAIL_SMTP_PASS .
+With
+.B "[smtp] auth = false"
+(a relay that trusts the LAN) no password is needed;
+.B "[smtp] from"
+forces the sender identity so the master relays without rewriting.
 .SH FILES
+.TP
+.I ~/.config/tvmail/tvmail.conf
+Selects local vs. remote and holds the IMAP/SMTP host settings.
+See
+.BR MODES .
+A commented
+.I tvmail.conf.example
+ships with the source.
+.TP
+.I ~/.netrc
+The IMAP/SMTP password, keyed by host.
+Mode 0600.
 .TP
 .I /etc/mailrc ", " ~/.mailrc
 Read for
@@ -164,10 +304,29 @@ and
 .TP
 .I /usr/sbin/sendmail
 The delivery agent used by
-.BR send .
+.B send
+in local mode.
 .SH ENVIRONMENT
+.TP
+.B TVMAIL_CONF
+Path to
+.I tvmail.conf
+(default
+.IR ~/.config/tvmail/tvmail.conf ).
+.TP
+.B TVMAIL_MODE
+Force
+.B local
+or
+.B remote
+for one run.
+.TP
+.B TVMAIL_IMAP_PASS ", " TVMAIL_SMTP_PASS
+Passwords, in place of
+.IR ~/.netrc .
+.TP
 .B MAIL ", " DEAD ", " MAILRC ", " SENDMAIL ", " XDG_DATA_HOME
-override the corresponding defaults.
+Override the corresponding local\-mode defaults.
 The spool falls back from
 .I /var/mail
 to
@@ -184,6 +343,7 @@ is unset.
 .BR tvmail (1),
 .BR mail (1),
 .BR sendmail (8),
+.BR netrc (5),
 .BR mbox (5)
 .SH AUTHOR
 Chris Pollitt <chris.pollitt@gmail.com>.

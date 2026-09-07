@@ -365,9 +365,43 @@ class FakeIMAP:
     def uid(self, command, *args):
         c = command.upper()
         if c == "SEARCH":
-            return ("OK", [" ".join(str(r[0]) for r in self._rows()).encode()])
+            terms = [a for a in args if a not in (None, "ALL")]
+
+            def keep(row):
+                _uid, flags, raw = row
+                m = email.message_from_bytes(raw)
+                i = 0
+                while i < len(terms):
+                    t = terms[i].upper()
+                    if t in ("FROM", "SUBJECT", "TO"):
+                        want = terms[i + 1].strip('"').lower()
+                        if want not in (m.get(t.capitalize(), "") or "").lower():
+                            return False
+                        i += 2
+                    elif t == "SEEN":
+                        if "\\Seen" not in flags:
+                            return False
+                        i += 1
+                    elif t == "UNSEEN":
+                        if "\\Seen" in flags:
+                            return False
+                        i += 1
+                    elif t == "BEFORE":
+                        import time as _t
+                        cut = _t.strptime(terms[i + 1], "%d-%b-%Y")
+                        dt = email.utils.parsedate_to_datetime(m.get("Date", ""))
+                        if not dt or dt.timetuple() >= cut:
+                            return False
+                        i += 2
+                    else:
+                        i += 1
+                return True
+
+            uids = " ".join(str(r[0]) for r in self._rows() if keep(r))
+            return ("OK", [uids.encode()])
         if c == "FETCH":
-            want = {int(x) for x in str(args[0]).replace(",", " ").split()}
+            seq = args[0].decode() if isinstance(args[0], bytes) else str(args[0])
+            want = {int(x) for x in seq.replace(",", " ").split()}
             spec, out = args[1], []
             for uid, flags, raw in self._rows():
                 if uid not in want:
@@ -498,6 +532,112 @@ class TestRemoteIMAP(Base):
         out = self._run(be.cmd_send, self.ns(getfrom=None, to=[], subject=None))
         self.assertIn(b"sent", out)
         self.assertEqual(seen["rcpts"], ["a@b"])
+
+
+class TestPurgeLocal(Base):
+    @staticmethod
+    def _m(frm, subj, date, body):
+        return ("From x Mon Sep  1 00:00:00 2026\n"
+                "From: %s\nDate: %s\nSubject: %s\n\n%s\n\n"
+                % (frm, date, subj, body))
+
+    def setUp(self):
+        super().setUp()
+        old = email.utils.formatdate(time.time() - 40 * 86400, localtime=True)
+        new = email.utils.formatdate(time.time() - 1 * 86400, localtime=True)
+        self.spool.write_text(
+            self._m("Cron Daemon <root@cmpi>", "Cron <root@cmpi> check", old, "c1")
+            + self._m("Alice <a@x>", "hi", new, "hello")
+            + self._m("Cron Daemon <root@cmpi>", "Cron <root@cmpi> gravity", new, "c2")
+            + self._m("Bob <b@x>", "old note", old, "stale"))
+
+    def n(self, mbox="spool"):
+        return len([r for r in self.be("list", str(self.spool) if mbox == "spool"
+                                       else mbox).stdout.decode().splitlines() if r])
+
+    def test_purge_by_from_moves_to_trash(self):
+        p = self.be("purge", "--from", "Cron Daemon")
+        self.assertEqual(p.returncode, 0)
+        self.assertIn(b"purged 2", p.stdout)
+        self.assertEqual(self.n(), 2)                       # Alice + Bob remain
+        self.assertEqual(self.n("trash"), 2)
+
+    def test_purge_older_than(self):
+        self.be("purge", "--older-than", "7")
+        self.assertEqual(self.n(), 2)                       # the two 40-day msgs go
+
+    def test_purge_and_of_filters(self):
+        self.be("purge", "--from", "Cron", "--older-than", "30")
+        self.assertEqual(self.n(), 3)                       # only the old cron one
+
+    def test_purge_dry_run_changes_nothing(self):
+        p = self.be("purge", "-n", "--from", "Cron")
+        self.assertIn(b"would purge 2", p.stdout)
+        self.assertEqual(self.n(), 4)
+
+    def test_purge_expunge_skips_trash(self):
+        self.be("purge", "--from", "Cron Daemon", "--expunge")
+        self.assertEqual(self.n(), 2)
+        self.assertEqual(self.n("trash"), 0)
+
+    def test_purge_needs_a_filter(self):
+        p = self.be("purge")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn(b"no filter", p.stdout + p.stderr)
+
+
+class TestPurgeIMAP(Base):
+    def setUp(self):
+        super().setUp()
+        os.environ["TVMAIL_MODE"] = "remote"
+        self.imap = FakeIMAP()
+        old = email.utils.formatdate(time.time() - 40 * 86400)
+        new = email.utils.formatdate(time.time() - 1 * 86400)
+        self.imap.add("INBOX", _msg("Cron Daemon <r@cmpi>", "Cron A", "o", date=old))
+        self.imap.add("INBOX", _msg("Alice <a@x>", "hi", "b", date=new))
+        self.imap.add("INBOX", _msg("Cron Daemon <r@cmpi>", "Cron B", "o", date=new))
+        self._real, be._imap = be._imap, lambda: self.imap
+
+    def tearDown(self):
+        be._imap = self._real
+        be._IMAP = None
+        super().tearDown()
+
+    def ns(self, **kw):
+        import argparse
+        d = dict(mbox="spool", getfrom=None, subject=None, to=None,
+                 older_than=None, seen=False, unseen=False, trash="trash",
+                 expunge=False, dry_run=False)
+        d.update(kw)
+        return argparse.Namespace(**d)
+
+    def _purge(self, **kw):
+        cap = be._CapStream()
+        old = sys.stdout
+        sys.stdout = cap
+        try:
+            be.cmd_purge(self.ns(**kw))
+        finally:
+            sys.stdout = old
+        return cap.buffer.getvalue()
+
+    def test_purge_from_over_imap(self):
+        self._purge(getfrom="Cron Daemon")
+        self.assertEqual(len(self.imap.folders["INBOX"]), 1)
+        self.assertEqual([d for _, d in self.imap.copied], ["Trash", "Trash"])
+
+    def test_purge_before_over_imap(self):
+        self._purge(older_than=7)
+        self.assertEqual(len(self.imap.folders["INBOX"]), 2)     # only the 40-day one
+
+    def test_purge_dry_run_over_imap(self):
+        out = self._purge(getfrom="Cron Daemon", dry_run=True)
+        self.assertIn(b"would purge 2", out)
+        self.assertEqual(len(self.imap.folders["INBOX"]), 3)
+
+    def test_purge_no_filter_over_imap(self):
+        with self.assertRaises(SystemExit):
+            be.cmd_purge(self.ns())
 
 
 class TestSmtpSend(Base):

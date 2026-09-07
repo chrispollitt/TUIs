@@ -23,6 +23,8 @@ shorthands spool/mbox/trash/drafts map to INBOX/Archive/Trash/Drafts):
   parts IDX [MBOX]          list MIME parts: partno <TAB> content-type <TAB> filename <TAB> bytes
   save  IDX PARTNO DEST [MBOX]   write one MIME part's decoded payload to DEST
   delete IDX [IDX...] [--mbox MBOX]   remove message(s); a .bak is kept
+  purge [MBOX] [--from S] [--subject S] [--to S] [--older-than DAYS]
+        [--seen|--unseen] [--expunge] [-n]   bulk-delete by filter (needs >=1)
   mark  IDX (read|unread) [MBOX]
   send  [--from ADDR]       read an RFC822 message (or a bare body with --to/--subject)
         [--to ADDR ...]     from stdin and hand it to the local sendmail
@@ -693,6 +695,144 @@ def cmd_delete(a):
     return 0
 
 
+def _purge_filter(a):
+    """(predicate, have_filter) for local mbox purge."""
+    subs = [(h, n.lower()) for h, n in
+            (("From", a.getfrom), ("Subject", a.subject), ("To", a.to)) if n]
+    cutoff = None
+    if a.older_than is not None:
+        import time
+        cutoff = time.time() - a.older_than * 86400
+    have = bool(subs) or cutoff is not None or a.seen or a.unseen
+
+    def match(msg):
+        for h, needle in subs:
+            if needle not in _hdr(msg, h, "").lower():
+                return False
+        if cutoff is not None:
+            raw = msg.get("Date", "")
+            dt = email.utils.parsedate_to_datetime(raw) if raw else None
+            if dt is None or dt.timestamp() >= cutoff:   # undatable -> keep
+                return False
+        if a.seen or a.unseen:
+            seen = "R" in (msg.get("Status", "") or "")
+            if a.seen and not seen:
+                return False
+            if a.unseen and seen:
+                return False
+        return True
+
+    return match, have
+
+
+def _purge_preview(msg):
+    print("\t".join((_short_date(msg.get("Date", "")),
+                     _clean(_short_from(msg.get("From", "")), 28),
+                     _clean(_hdr(msg, "Subject", "(no subject)"), 120))))
+
+
+def _local_purge(a):
+    match, have = _purge_filter(a)
+    if not have:
+        sys.exit("tvmail-backend purge: refusing to run with no filter")
+    path = mbox_path(a.mbox)
+    if not os.path.exists(path):
+        print("purged 0 message(s)")
+        return 0
+    if a.dry_run:
+        n = 0
+        for msg in open_box(path):
+            if match(msg):
+                n += 1
+                _purge_preview(msg)
+        print("would purge %d message(s)" % n)
+        return 0
+    box = open_box(path)
+    box.lock()
+    try:
+        victims = [k for k in box.keys() if match(box[k])]
+        if not victims:
+            print("purged 0 message(s)")
+            return 0
+        if not a.expunge:
+            tp = mbox_path(a.trash or "trash")
+            d = os.path.dirname(tp)
+            if d:
+                os.makedirs(d, exist_ok=True)
+            tb = mbox(tp, factory=None, create=True)
+            tb.lock()
+            try:
+                for k in victims:
+                    tb.add(box[k])
+                tb.flush()
+            finally:
+                tb.unlock()
+        bdir = os.path.join(_data_home(), "tvmail", "backup")
+        os.makedirs(bdir, exist_ok=True)
+        shutil.copy2(path, os.path.join(bdir, os.path.basename(path) + ".bak"))
+        for k in victims:
+            box.remove(k)
+        box.flush()
+    finally:
+        box.unlock()
+        _sweep_locks(path, older_than=30, temps_only=True)
+    print("purged %d message(s)" % len(victims))
+    return 0
+
+
+def _imap_purge(a):
+    crit = []
+    if a.getfrom:
+        crit += ["FROM", '"%s"' % a.getfrom.replace('"', "")]
+    if a.subject:
+        crit += ["SUBJECT", '"%s"' % a.subject.replace('"', "")]
+    if a.to:
+        crit += ["TO", '"%s"' % a.to.replace('"', "")]
+    if a.seen:
+        crit += ["SEEN"]
+    if a.unseen:
+        crit += ["UNSEEN"]
+    if a.older_than is not None:
+        import time
+        crit += ["BEFORE", time.strftime(
+            "%d-%b-%Y", time.gmtime(time.time() - a.older_than * 86400))]
+    if not crit:
+        sys.exit("tvmail-backend purge: refusing to run with no filter")
+    folder = _imap_folder(a.mbox)
+    M = _imap()
+    M.select(_q_mbox(folder), readonly=a.dry_run)
+    typ, data = M.uid("SEARCH", None, *crit)
+    if typ != "OK":
+        sys.exit("tvmail-backend: IMAP SEARCH failed")
+    uids = (data[0] or b"").split()
+    if a.dry_run:
+        for u in uids:
+            _, d = M.uid("FETCH", u,
+                         "(BODY.PEEK[HEADER.FIELDS (DATE FROM SUBJECT)])")
+            for it in (d or []):
+                if isinstance(it, tuple) and it[1]:
+                    _purge_preview(email.message_from_bytes(it[1]))
+        print("would purge %d message(s)" % len(uids))
+        return 0
+    if not uids:
+        print("purged 0 message(s)")
+        return 0
+    trash = _imap_folder("trash")
+    for u in uids:
+        if not a.expunge and folder != trash:
+            M.uid("COPY", u, _q_mbox(trash))
+        M.uid("STORE", u, "+FLAGS", r"(\Deleted)")
+    M.expunge()
+    print("purged %d message(s)" % len(uids))
+    return 0
+
+
+def cmd_purge(a):
+    if a.mbox == "dead":
+        sys.exit("tvmail-backend purge: not applicable to dead.letter")
+    return _imap_purge(a) if _is_remote() else _local_purge(a)
+
+
 def cmd_mark(a):
     if a.mbox == "dead":
         return 0                       # dead.letter has no per-message flags
@@ -947,6 +1087,15 @@ def build_parser():
     p.add_argument("dest"); p.add_argument("mbox", nargs="?"); p.set_defaults(fn=cmd_save)
     p = sub.add_parser("delete"); p.add_argument("idx", type=int, nargs="+"); p.add_argument("--mbox", dest="mbox"); p.add_argument("--trash", dest="trash"); p.set_defaults(fn=cmd_delete)
     p = sub.add_parser("mark");  p.add_argument("idx", type=int); p.add_argument("state", choices=("read", "unread")); p.add_argument("mbox", nargs="?"); p.set_defaults(fn=cmd_mark)
+    p = sub.add_parser("purge"); p.add_argument("mbox", nargs="?")
+    p.add_argument("--from", dest="getfrom"); p.add_argument("--subject")
+    p.add_argument("--to"); p.add_argument("--older-than", type=int, dest="older_than", metavar="DAYS")
+    p.add_argument("--seen", action="store_true"); p.add_argument("--unseen", action="store_true")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--trash", nargs="?", const="trash", default="trash")
+    g.add_argument("--expunge", action="store_true")
+    p.add_argument("-n", "--dry-run", action="store_true", dest="dry_run")
+    p.set_defaults(fn=cmd_purge)
     p = sub.add_parser("compose-template")
     p.add_argument("--from", dest="getfrom"); p.add_argument("--to", action="append", default=[])
     p.add_argument("--subject"); p.add_argument("--in-reply-to", type=int); p.add_argument("mbox", nargs="?")

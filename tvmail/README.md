@@ -33,27 +33,42 @@ stays tiny; the backend is useful on its own (see below).
 It is a friendlier face on the **same mailbox `mail(1)` uses**, not a walled
 garden — see *mail(1) interoperability* below.
 
+## Modes
+
+`tvmail-backend` runs in one of two modes, chosen by
+`~/.config/tvmail/tvmail.conf` (copy [`tvmail.conf.example`](tvmail.conf.example)):
+
+| mode | what it talks to |
+|---|---|
+| **local** | on-disk mbox files + local `sendmail(8)` — the host that owns the mailstore |
+| **remote** | IMAP for reading, SMTP submission for sending — every other machine |
+
+`mode = auto` (default) → **local** if this host's name is in `master = …`, or if
+there's no `[imap]` section; **remote** otherwise. `$TVMAIL_MODE` overrides one
+run. Passwords are **only** in `~/.netrc` (`machine <host> login <u> password …`,
+mode 0600), never in `tvmail.conf`. In remote mode the folder shorthands map to
+IMAP folders (`spool→INBOX`, `mbox→Archive`, `trash→Trash`, `drafts→Drafts`,
+tunable in `[folders]`); `dead.letter` stays a local file and **F3 pull** is a
+no-op (the master fetches). The C++ UI is identical in both modes.
+
 ## Plumbing
 
-tvmail is the reader for a send-only mail setup on the same box (all in this
-repo, under `configure/` and `backend/`):
+A typical setup: **one master host** owns the mailstore; the laptop / WSL / VMs
+are remote clients.
 
-- The **MTA** delivers local mail to `/var/mail/$USER` and relays outbound
-  through an authenticated TLS smarthost, rewriting `From:` so replies reach a
-  real mailbox. `configure/configure-sendmail-relay.sh` sets that up on
-  **Cygwin** (hand-written `exim.conf`, no daemon) or **Linux** — where it
-  configures whatever real MTA is already installed (**Postfix** in place, no
-  apt; or Debian/Ubuntu/Pi **exim4** via `update-exim4.conf`) and installs
-  Postfix only if none is found. It asks whether to run the MTA as a systemd /
-  sysv service or send‑only. `--mta postfix|exim4` forces the choice.
-- **`pop-pull`** fetches remote mail into the same mbox
-  (`configure/configure-mail-pull.sh` — portable; `--timer N` adds a
-  systemd `--user` timer for periodic pulls).
-- **Send** goes through `/usr/sbin/sendmail` → exim → smarthost.
+- **Master** — a real MTA (`configure/configure-sendmail-relay.sh` on
+  **Linux**: configures Postfix in place, no apt, or Debian/Ubuntu/Pi `exim4`
+  via `update-exim4.conf`) delivering local mail to `/var/mail/$USER` and
+  relaying outbound through an authenticated TLS smarthost, plus **`pop-pull`**
+  (`configure/configure-mail-pull.sh --timer N`) to fetch replies back, and an
+  IMAP server (Dovecot) over the same mbox files.
+- **Clients** — just `tvmail` + `tvmail-backend` in remote mode. `[smtp] from`
+  fixes the sender identity so the master relays without any server-side
+  rewrite; `[smtp] auth = false` if the master's Postfix trusts the LAN.
+- The single-box Cygwin path still works (`configure-sendmail-relay.sh` writes a
+  hand-rolled `exim.conf`, no daemon) — but Cygwin multi-user local delivery is
+  a losing fight; use a Linux master and remote clients instead.
 - No credentials live anywhere in this project.
-
-Sending needs *some* MTA; if you already have Postfix/msmtp/whatever, skip the
-`configure/` scripts and just point `$SENDMAIL` at it.
 
 ## Platforms
 
@@ -153,6 +168,10 @@ body. `Enter` on a message jumps focus to the body pane.
 | `trash` | `~/.local/share/tvmail/trash.mbox` | `Ctrl-D` moves here; deleting from trash is permanent |
 | `dead.letter` | `$DEAD` (default `~/dead.letter`) | a single message `mail(1)` or tvmail left behind |
 
+In **remote** mode the first four are IMAP folders (`INBOX` / `Drafts` /
+`Archive` / `Trash`, tunable in `tvmail.conf`); `dead.letter` is still a local
+file.
+
 ## Keys
 
 | key | action |
@@ -214,16 +233,29 @@ tvmail-backend raw   IDX [MBOX]          the raw RFC822 message
 tvmail-backend parts IDX [MBOX]          list MIME parts
 tvmail-backend save  IDX PARTNO DEST [MBOX]
 tvmail-backend delete IDX [IDX...] [--mbox MBOX] [--trash DEST]
+tvmail-backend purge [MBOX] [--from S] [--subject S] [--to S]
+                     [--older-than DAYS] [--seen|--unseen] [--expunge] [-n]
 tvmail-backend mark  IDX read|unread [MBOX]
 tvmail-backend compose-template [--to A] [--subject S] [--in-reply-to IDX] [MBOX]
 tvmail-backend send  [--from A] [--to A ...] [--subject S]   < message-or-body
 tvmail-backend save-draft   < rfc822-message
 tvmail-backend aliases                   NAME <TAB> expanded, addresses
-tvmail-backend pull
+tvmail-backend pull                      (no-op in remote mode)
+tvmail-backend ping                      -> pong
+tvmail-backend serve                     persistent framed request loop
 ```
 
 `MBOX` is a path or one of the shorthands `spool` `mbox` `trash` `drafts`
-`dead`.
+`dead` (in remote mode the first four are IMAP folders).
+
+`purge` bulk-deletes everything matching **all** the filters you give (at least
+one required); `-n` dry-runs. Handy from `cron` on the master:
+
+```bash
+tvmail-backend purge --from "Cron Daemon" --older-than 14
+```
+
+Works in both modes; see `man tvmail-backend` (**MODES**) for `tvmail.conf`.
 
 ## Help
 
