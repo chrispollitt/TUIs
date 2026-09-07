@@ -1456,11 +1456,6 @@ void TVMailApp::handleEvent(TEvent &e)
 
 int main(int, char **)
 {
-    // tidy as you go: shCapture/shInteractive delete their own temp per call;
-    // this catches anything a previous crash left in TMPDIR.
-    shCapture("find \"${TMPDIR:-/tmp}\" -maxdepth 1 -name 'tvmail_*' -mmin +60 "
-              "-exec rm -f {} + 2>/dev/null; true");
-
     TVMailApp app;
     app.run();
     app.shutDown();
