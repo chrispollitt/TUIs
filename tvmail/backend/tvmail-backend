@@ -24,11 +24,17 @@ Sub-commands (mailbox defaults to $MAIL or /var/mail/$USER):
   compose-template [--to A] [--subject S] [--in-reply-to IDX] [MBOX]
                             print a draft skeleton (for $EDITOR) on stdout
   pull                      run 'pop-pull' if it exists (on-demand fetch)
+  ping                      print 'pong' - a liveness check
+  serve                     persistent mode: read one request (an argv) per
+                            line on stdin, write a framed reply per request:
+                                <status> <nbytes>\\n  then <nbytes> bytes
+                            Keeps the mbox/MIME machinery warm so the tvmail
+                            UI pays Python start-up once, not once per action.
 
 Exit status: 0 ok, 1 usage/not-found, 2 runtime error.
 """
 
-import sys, os, json, argparse, subprocess, tempfile, shutil, email, email.utils
+import sys, os, io, json, argparse, subprocess, tempfile, shutil, email, email.utils
 import email.policy
 from mailbox import mbox
 from email.header import decode_header, make_header
@@ -546,13 +552,112 @@ def cmd_aliases(a):
 
 
 def cmd_pull(a):
-    exe = shutil.which("pop-pull") 
+    exe = shutil.which("pop-pull")
     if not os.path.exists(exe):
         sys.exit("tvmail-backend: pop-pull not found - run configure-mail-pull.sh")
     return subprocess.run([exe, "-v"]).returncode
 
 
-def main():
+def cmd_ping(a):
+    sys.stdout.write("pong\n")
+    return 0
+
+
+# --------------------------------------------------------------------------
+# serve: a persistent request loop so the tvmail UI stops paying Python
+# start-up (and, on Cygwin, fork/exec) three times per folder switch.
+# --------------------------------------------------------------------------
+class _CapStream:
+    """stdout stand-in for serve mode.  Sub-commands write either str (print,
+    cmd_show, cmd_compose_template) or bytes via .buffer (cmd_raw); both land
+    in one BytesIO so the whole reply can be framed and sent down the pipe."""
+
+    def __init__(self):
+        self.buffer = io.BytesIO()
+
+    def write(self, s):
+        self.buffer.write(s.encode("utf-8", "replace") if isinstance(s, str) else s)
+        return len(s)
+
+    def writelines(self, seq):
+        for s in seq:
+            self.write(s)
+
+    def flush(self):
+        pass
+
+    def isatty(self):
+        return False
+
+
+# verbs that consume stdin or take over the terminal - never run them inside
+# the serve loop (they would eat the request stream)
+_SERVE_BLOCKED = frozenset(("serve", "send", "save-draft", "pull"))
+
+
+def _dispatch(parser, argv):
+    """Run one request argv.  Returns (status:int, body:bytes)."""
+    if argv and argv[0] in _SERVE_BLOCKED:
+        return 2, ("tvmail-backend: '%s' is not available in serve mode\n"
+                   % argv[0]).encode("utf-8")
+    cap = _CapStream()
+    real = sys.stdout
+    sys.stdout = cap
+    try:
+        ns = parser.parse_args(argv)
+        return (ns.fn(ns) or 0), cap.buffer.getvalue()
+    except SystemExit as e:
+        code = e.code
+        if isinstance(code, str):               # sys.exit("message") -> error
+            cap.write(code if code.endswith("\n") else code + "\n")
+            return 2, cap.buffer.getvalue()
+        return (int(code) if code else 0), cap.buffer.getvalue()
+    except Exception as e:                       # keep the server alive
+        cap.write("tvmail-backend: %s: %s\n" % (type(e).__name__, e))
+        return 2, cap.buffer.getvalue()
+    finally:
+        sys.stdout = real
+
+
+def cmd_serve(a):
+    import shlex
+    raw_out = getattr(sys.stdout, "buffer", sys.stdout)
+    try:                                         # stray output mustn't hit the TUI
+        sys.stderr = open(os.devnull, "w")
+    except OSError:
+        pass
+    parser = build_parser()
+
+    def emit(status, body):
+        raw_out.write(("%d %d\n" % (status, len(body))).encode("ascii") + body)
+        raw_out.flush()
+
+    emit(0, b"ready")                            # handshake banner
+    while True:
+        line = sys.stdin.readline()
+        if not line:                            # parent closed the pipe
+            break
+        line = line.strip()
+        if not line:
+            continue
+        if line in ("quit", "exit"):
+            break
+        try:
+            argv = shlex.split(line)
+        except ValueError:
+            emit(2, b"tvmail-backend serve: unparseable request line\n")
+            continue
+        try:
+            st, body = _dispatch(parser, argv)
+        except BrokenPipeError:
+            raise
+        except Exception as e:
+            st, body = 2, ("tvmail-backend serve: %s\n" % e).encode("utf-8")
+        emit(st, body)
+    return 0
+
+
+def build_parser():
     ap = argparse.ArgumentParser(prog="tvmail-backend", add_help=True)
     sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -574,8 +679,13 @@ def main():
     p = sub.add_parser("save-draft"); p.set_defaults(fn=cmd_save_draft)
     p = sub.add_parser("aliases");    p.set_defaults(fn=cmd_aliases)
     p = sub.add_parser("pull"); p.set_defaults(fn=cmd_pull)
+    p = sub.add_parser("ping"); p.set_defaults(fn=cmd_ping)
+    p = sub.add_parser("serve"); p.set_defaults(fn=cmd_serve)
+    return ap
 
-    a = ap.parse_args()
+
+def main():
+    a = build_parser().parse_args()
     try:
         sys.exit(a.fn(a))
     except BrokenPipeError:

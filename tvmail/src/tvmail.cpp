@@ -59,6 +59,11 @@
 #  define pclose _pclose
 #else
 #  include <unistd.h>
+#  include <fcntl.h>
+#  include <poll.h>
+#  include <csignal>
+#  include <cerrno>
+#  include <sys/wait.h>
 #endif
 
 #ifndef TVMAIL_SH
@@ -259,6 +264,165 @@ static int shInteractive(const std::string &body)
     return rc;
 }
 
+// ------------------------------------------------ persistent backend -------
+// Keep one tvmail-backend alive in "serve" mode and talk to it over a pipe.
+// Before this, every folder switch spawned three cold Python interpreters
+// through the shell (~800 ms on Cygwin, which has no real fork()).  Now the
+// mbox/MIME machinery is parsed once and each request is a pipe round-trip.
+//
+// Wire protocol - a request line, then a framed reply:
+//     ->  show 3 spool\n
+//     <-  <status> <nbytes>\n   followed by exactly <nbytes> bytes
+// The read verbs (list/show/raw/mark/aliases/compose-template) go through
+// here; the stdin-consuming / interactive ones (send/save-draft/pull) keep
+// the one-shot shell path.  The --mingw Windows build has no fork() and uses
+// the shell path for everything.
+
+#ifndef _WIN32
+class Backend {
+public:
+    static Backend &instance() { static Backend b; return b; }
+
+    // One request.  Returns false if the co-process is unavailable - the
+    // caller then falls back to a one-shot `tvmail-backend ...` via the shell.
+    bool call(const std::string &req, std::string &body, int &status)
+    {
+        if (permFail) return false;
+        if (!up && !start()) return false;
+        if (!writeLine(req) || !readFrame(body, status)) {
+            if (!restart() || !writeLine(req) || !readFrame(body, status))
+                return false;
+        }
+        return true;
+    }
+
+    void stop()
+    {
+        if (wr) { std::fclose(wr); wr = nullptr; }
+        if (rd) { std::fclose(rd); rd = nullptr; }
+        if (pid > 0) { int s; while (::waitpid(pid, &s, 0) < 0 && errno == EINTR) {} }
+        pid = -1;
+        up  = false;
+    }
+
+    ~Backend() { stop(); }
+
+private:
+    Backend() { std::signal(SIGPIPE, SIG_IGN); }
+    Backend(const Backend &) = delete;
+    Backend &operator=(const Backend &) = delete;
+
+    FILE *wr = nullptr, *rd = nullptr;
+    pid_t pid = -1;
+    bool  up = false;
+    bool  permFail = false;
+    int   restarts = 0;
+
+    bool giveUp() { permFail = true; return false; }
+
+    bool start()
+    {
+        int a[2], b[2];               // a: parent->child stdin; b: child stdout->parent
+        if (::pipe(a) != 0) return giveUp();
+        if (::pipe(b) != 0) { ::close(a[0]); ::close(a[1]); return giveUp(); }
+
+        pid = ::fork();
+        if (pid < 0) {
+            ::close(a[0]); ::close(a[1]); ::close(b[0]); ::close(b[1]);
+            return giveUp();
+        }
+        if (pid == 0) {                                  // ---- child ----
+            ::dup2(a[0], 0);
+            ::dup2(b[1], 1);
+            const char *log = ::getenv("TVMAIL_BACKEND_LOG");
+            int e = ::open((log && *log) ? log : "/dev/null",
+                           O_WRONLY | O_CREAT | O_APPEND, 0600);
+            if (e >= 0) { ::dup2(e, 2); if (e > 2) ::close(e); }
+            if (a[0] > 2) ::close(a[0]);
+            if (a[1] > 2) ::close(a[1]);
+            if (b[0] > 2) ::close(b[0]);
+            if (b[1] > 2) ::close(b[1]);
+            std::string sc = std::string(kPreamble) + "exec tvmail-backend serve\n";
+            ::execl(TVMAIL_SH, TVMAIL_SH, "-c", sc.c_str(), (char *)nullptr);
+            ::_exit(127);
+        }
+        ::close(a[0]); ::close(b[1]);                    // ---- parent ----
+        wr = ::fdopen(a[1], "w");
+        rd = ::fdopen(b[0], "r");
+        if (!wr || !rd) { stop(); return giveUp(); }
+
+        std::string banner; int st = -1;                // expect "0 5\nready"
+        if (!readFrame(banner, st) || st != 0 || banner != "ready") {
+            stop();
+            return giveUp();
+        }
+        up = true;
+        return true;
+    }
+
+    bool restart()
+    {
+        stop();
+        if (permFail || ++restarts > 3) return giveUp();
+        return start();
+    }
+
+    bool writeLine(const std::string &s)
+    {
+        if (!wr) return false;
+        if (std::fwrite(s.data(), 1, s.size(), wr) != s.size()) return false;
+        if (std::fputc('\n', wr) == EOF)                        return false;
+        return std::fflush(wr) == 0;
+    }
+
+    // "<status> <nbytes>\n" then exactly <nbytes> bytes.  poll() before the
+    // first byte bounds the wait so a wedged backend can't freeze the UI;
+    // once bytes are flowing the reply is one write on the far side, so
+    // blocking reads for the remainder can't deadlock.
+    bool readFrame(std::string &body, int &status)
+    {
+        body.clear();
+        struct pollfd pfd;
+        pfd.fd = ::fileno(rd); pfd.events = POLLIN; pfd.revents = 0;
+        if (::poll(&pfd, 1, 8000) <= 0) return false;
+
+        std::string hdr; int c;
+        while ((c = std::fgetc(rd)) != EOF && c != '\n') {
+            hdr += char(c);
+            if (hdr.size() > 64) return false;
+        }
+        if (c == EOF) return false;
+
+        long n = -1; int st = 0;
+        if (std::sscanf(hdr.c_str(), "%d %ld", &st, &n) != 2 || n < 0) return false;
+        status = st;
+        body.resize((size_t)n);
+        size_t got = 0;
+        while (got < (size_t)n) {
+            size_t r = std::fread(&body[got], 1, (size_t)n - got, rd);
+            if (r == 0) return false;
+            got += r;
+        }
+        return true;
+    }
+};
+#else   // _WIN32: no fork(); every call uses the one-shot shell path.
+class Backend {
+public:
+    static Backend &instance() { static Backend b; return b; }
+    bool call(const std::string &, std::string &, int &) { return false; }
+    void stop() {}
+};
+#endif
+
+// A read-only sub-command: try the warm co-process, else a one-shot shell call.
+static std::string backendRun(const std::string &args)
+{
+    std::string body; int st = 0;
+    if (Backend::instance().call(args, body, st)) return body;
+    return shCapture("tvmail-backend " + args + " 2>&1");
+}
+
 // -------------------------------------------------------- classic colors ----
 // Turbo Vision DOS palette — hard-coded so we never depend on terminal quirks.
 static inline TColorAttr cNorm()  { return TColorAttr(TColorBIOS(0x00), TColorBIOS(0x03)); } // black on cyan
@@ -330,11 +494,11 @@ static std::vector<std::string> splitLines(const std::string &s)
 static void loadList()
 {
     gRows.clear();
-    std::string raw = shCapture("tvmail-backend list" + mboxArg() + " 2>/dev/null");
+    std::string raw = backendRun("list " + gMbox);
     std::istringstream is(raw);
     std::string line;
     while (std::getline(is, line)) {
-        if (line.empty()) continue;
+        if (line.empty() || line.find('\t') == std::string::npos) continue;
         std::istringstream ls(line);
         std::string idx, flag, date, from, subj;
         std::getline(ls, idx,  '\t');
@@ -589,11 +753,14 @@ public:
             return;
         }
         int b = gRows[msgPane->focused].idx;
-        auto ls = splitLines(shCapture("tvmail-backend show " + std::to_string(b)
-                                       + mboxArg() + " 2>&1"));
+        auto ls = splitLines(backendRun("show " + std::to_string(b) + " " + gMbox));
         contentPane->setLines(std::move(ls));
-        shCapture("tvmail-backend mark " + std::to_string(b) + " read" + mboxArg()
-                  + " >/dev/null 2>&1");
+        {
+            std::string o; int s = 0;
+            if (!Backend::instance().call("mark " + std::to_string(b) + " read " + gMbox, o, s))
+                shCapture("tvmail-backend mark " + std::to_string(b) + " read"
+                          + mboxArg() + " >/dev/null 2>&1");
+        }
         gRows[msgPane->focused].flag = '.';
         msgPane->drawView();
     }
@@ -984,7 +1151,7 @@ class TAddrPane : public TListViewer {
 public:
     TAddrPane(const TRect &b, TScrollBar *vsb) : TListViewer(b, 1, nullptr, vsb)
     {
-        std::istringstream is(shCapture("tvmail-backend aliases 2>/dev/null"));
+        std::istringstream is(backendRun("aliases"));
         std::string ln;
         while (std::getline(is, ln)) {
             if (!ln.empty() && ln.back() == '\r') ln.pop_back();
@@ -1334,8 +1501,7 @@ void TVMailApp::viewSource(int row)
 {
     if (row < 0) return;
     int b = gRows[row].idx;
-    auto lines = splitLines(shCapture("tvmail-backend raw " + std::to_string(b)
-                                      + mboxArg() + " 2>&1"));
+    auto lines = splitLines(backendRun("raw " + std::to_string(b) + " " + gMbox));
     TRect r = deskTop->getExtent();
     r.grow(-3, -1);
     std::string title = "Source of msg " + std::to_string(b);
@@ -1361,8 +1527,8 @@ void TVMailApp::openComposeWith(const std::string &raw, const std::string &linkM
 void TVMailApp::replyOrCompose(int row)
 {
     if (row >= 0) {
-        std::string t = shCapture("tvmail-backend compose-template --in-reply-to "
-                                  + std::to_string(gRows[row].idx) + mboxArg() + " 2>/dev/null");
+        std::string t = backendRun("compose-template --in-reply-to "
+                                   + std::to_string(gRows[row].idx) + " " + gMbox);
         openComposeWith(t, "", -1, /*addSig=*/true);
     } else {
         openComposeWith("", "", -1, /*addSig=*/true);
@@ -1373,8 +1539,7 @@ void TVMailApp::editDraft(int row)
 {
     if (row < 0 || gMbox != "drafts") return;
     int idx = gRows[row].idx;
-    std::string raw = shCapture("tvmail-backend raw " + std::to_string(idx)
-                                + mboxArg() + " 2>&1");
+    std::string raw = backendRun("raw " + std::to_string(idx) + " " + gMbox);
     openComposeWith(raw, "drafts", idx, /*addSig=*/false);
 }
 
@@ -1454,10 +1619,23 @@ void TVMailApp::handleEvent(TEvent &e)
     if (handled) clearEvent(e);
 }
 
-int main(int, char **)
+int main(int argc, char **argv)
 {
+    // Dev aid: exercise the persistent-backend pipe without the full TUI.
+    //   tvmail --selftest   -> prints the raw `list spool` reply on stdout
+    if (argc > 1 && std::string(argv[1]) == "--selftest") {
+        std::string body; int st = -1;
+        bool ok = Backend::instance().call("list spool", body, st);
+        std::fprintf(stderr, "selftest: served=%d status=%d bytes=%zu\n",
+                     (int)ok, st, body.size());
+        std::fwrite(body.data(), 1, body.size(), stdout);
+        Backend::instance().stop();
+        return ok ? 0 : 1;
+    }
+
     TVMailApp app;
     app.run();
     app.shutDown();
+    Backend::instance().stop();
     return 0;
 }
