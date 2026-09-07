@@ -46,7 +46,7 @@ def _me():
 
 
 def mbox_path(p=None):
-    """Resolve a mailbox argument.  'spool'/'mbox'/'trash' are shorthands."""
+    """Resolve a mailbox argument.  Shorthands: spool/mbox/trash/drafts/dead."""
     if p in (None, "", "spool"):
         return os.environ.get("MAIL") or "/var/mail/" + _me()
     if p == "mbox":
@@ -55,7 +55,113 @@ def mbox_path(p=None):
         d = os.path.expanduser("~/.local/share/tvmail")
         os.makedirs(d, exist_ok=True)
         return os.path.join(d, "trash.mbox")
+    if p == "drafts":
+        d = _maildir()
+        os.makedirs(d, exist_ok=True)
+        return os.path.join(d, "drafts")
+    if p == "dead":
+        return _dead_path()
     return os.path.expanduser(p)
+
+
+# --------------------------------------------------------------------------
+# ~/.mailrc interop:  folder / DEAD variables, alias / group address book
+# --------------------------------------------------------------------------
+def _mailrc_files():
+    fs = ["/etc/mailrc"]
+    fs.append(os.environ.get("MAILRC") or os.path.expanduser("~/.mailrc"))
+    return [f for f in fs if os.path.isfile(f)]
+
+
+def _mailrc_var(name, default=None):
+    """Last `set NAME=VALUE` (or bare `set NAME`) across the mailrc files."""
+    import shlex
+    val = default
+    for f in _mailrc_files():
+        try:
+            for ln in open(f, encoding="utf-8", errors="replace"):
+                ln = ln.strip()
+                if not ln.startswith("set "):
+                    continue
+                try:
+                    toks = shlex.split(ln[4:])
+                except ValueError:
+                    continue
+                for tok in toks:
+                    if tok == name:
+                        val = ""
+                    elif tok.startswith(name + "="):
+                        val = tok[len(name) + 1:]
+        except OSError:
+            pass
+    return val
+
+
+def _maildir():
+    d = _mailrc_var("folder")
+    return os.path.expanduser(d) if d else os.path.expanduser("~/Mail")
+
+
+def _dead_path():
+    return (os.environ.get("DEAD") or _mailrc_var("DEAD")
+            or os.path.expanduser("~/dead.letter"))
+
+
+def _dead_msg():
+    p = _dead_path()
+    if not os.path.exists(p) or os.path.getsize(p) == 0:
+        return None
+    with open(p, "rb") as f:
+        return email.message_from_binary_file(f)
+
+
+def _aliases():
+    """{name: [addr, ...]} from mailrc alias/group lines, expanded recursively."""
+    import shlex
+    raw = {}
+    for f in _mailrc_files():
+        try:
+            for ln in open(f, encoding="utf-8", errors="replace"):
+                ln = ln.strip()
+                head = ln.split(None, 1)
+                if len(head) == 2 and head[0] in ("alias", "group"):
+                    try:
+                        toks = shlex.split(head[1])
+                    except ValueError:
+                        continue
+                    if len(toks) >= 2:
+                        raw[toks[0]] = toks[1:]
+        except OSError:
+            pass
+
+    def expand(name, seen):
+        out = []
+        for a in raw.get(name, [name]):
+            if a in raw and a not in seen:
+                out += expand(a, seen | {a})
+            else:
+                out.append(a)
+        return out
+
+    return {k: expand(k, {k}) for k in raw}
+
+
+def _expand_recipients(addrs):
+    al = _aliases()
+    out = []
+    for a in addrs:
+        a = a.strip()
+        if a:
+            out += al.get(a, [a])
+    return out
+
+
+def _rcpts(msg, headers):
+    out = []
+    for h in headers:
+        for v in (msg.get_all(h) or []):
+            out += [x.strip() for x in str(v).split(",") if x.strip()]
+    return out
 
 
 def _hdr(msg, name, default=""):
@@ -98,6 +204,17 @@ def open_box(path, create=False):
 
 
 def cmd_list(a):
+    if a.mbox == "dead":
+        import time
+        m = _dead_msg()
+        if m is None:
+            return 0
+        dt = _short_date(m.get("Date", "")) or time.strftime(
+            "%Y-%m-%d %H:%M", time.localtime(os.path.getmtime(_dead_path())))
+        print("\t".join(("0", "N", dt,
+                         _clean(_short_from(m.get("From", "")), 28),
+                         _clean(_hdr(m, "Subject", "(dead.letter)"), 200))))
+        return 0
     path = mbox_path(a.mbox)
     if not os.path.exists(path):
         return 0                       # a not-yet-created mailbox lists as empty
@@ -121,6 +238,13 @@ def cmd_list(a):
 
 
 def _get_msg(a):
+    if a.mbox == "dead":
+        m = _dead_msg()
+        if m is None:
+            sys.exit("tvmail-backend: dead.letter is empty")
+        if a.idx != 0:
+            sys.exit("tvmail-backend: no message at index %d" % a.idx)
+        return None, m
     box = open_box(mbox_path(a.mbox))
     try:
         return box, box[a.idx]
@@ -205,6 +329,26 @@ def cmd_save(a):
 
 
 def cmd_delete(a):
+    if a.mbox == "dead":
+        p = _dead_path()
+        if os.path.exists(p):
+            if getattr(a, "trash", None):
+                m = _dead_msg()
+                tp = mbox_path(a.trash)
+                d = os.path.dirname(tp)
+                if d:
+                    os.makedirs(d, exist_ok=True)
+                tb = mbox(tp, factory=None, create=True)
+                tb.lock()
+                try:
+                    if m is not None:
+                        tb.add(m)
+                    tb.flush()
+                finally:
+                    tb.unlock()
+            os.remove(p)
+        print("deleted 1 message(s)")
+        return 0
     path = mbox_path(a.mbox)
     box = open_box(path)
     box.lock()
@@ -237,6 +381,8 @@ def cmd_delete(a):
 
 
 def cmd_mark(a):
+    if a.mbox == "dead":
+        return 0                       # dead.letter has no per-message flags
     path = mbox_path(a.mbox)
     box = open_box(path)
     box.lock()
@@ -287,30 +433,64 @@ def cmd_send(a):
     looks_rfc822 = data[:200].lstrip().lower().startswith((
         b"from:", b"to:", b"subject:", b"date:", b"cc:", b"mime-version:",
         b"content-type:", b"reply-to:", b"message-id:"))
-    argv = [SENDMAIL, "-oi"]
-    if looks_rfc822 and not a.to:
-        argv.append("-t")                       # take recipients from the headers
+    if looks_rfc822:
+        msg = email.message_from_bytes(data)
     else:
-        msg = email.message_from_bytes(data if looks_rfc822 else b"")
-        if not looks_rfc822:
-            msg = email.message.EmailMessage()
-            msg.set_content(data.decode("utf-8", "replace"))
-        if a.getfrom:
-            msg["From"] = a.getfrom
-        if a.subject and "Subject" not in msg:
-            msg["Subject"] = a.subject
-        for t in a.to:
-            msg["To"] = t
-        if not a.to and "To" not in msg:
-            sys.exit("tvmail-backend send: no recipients (use --to or supply a To: header)")
-        argv += a.to
-        data = msg.as_bytes()
+        msg = email.message.EmailMessage()
+        msg.set_content(data.decode("utf-8", "replace"))
+    if a.getfrom and "From" not in msg:
+        msg["From"] = a.getfrom
+    if a.subject and "Subject" not in msg:
+        msg["Subject"] = a.subject
+    for t in a.to:
+        msg["To"] = t
+
+    # Address book: expand ~/.mailrc alias/group names in To:/Cc:/Bcc:
+    to_hdr = _expand_recipients(_rcpts(msg, ("To",)))
+    cc_hdr = _expand_recipients(_rcpts(msg, ("Cc",)))
+    bcc    = _expand_recipients(_rcpts(msg, ("Bcc",)))
+    del msg["To"], msg["Cc"], msg["Bcc"]
+    if to_hdr:
+        msg["To"] = ", ".join(to_hdr)
+    if cc_hdr:
+        msg["Cc"] = ", ".join(cc_hdr)
+
+    rcpts = to_hdr + cc_hdr + bcc
+    if not rcpts:
+        sys.exit("tvmail-backend send: no recipients (--to or a To: header)")
+
     if not os.path.exists(SENDMAIL):
         sys.exit("tvmail-backend: %s not found - run configure-sendmail-relay.sh" % SENDMAIL)
-    p = subprocess.run(argv, input=data)
+    p = subprocess.run([SENDMAIL, "-oi"] + rcpts, input=msg.as_bytes())
     if p.returncode != 0:
         sys.exit("tvmail-backend: sendmail exited %d" % p.returncode)
     print("sent")
+    return 0
+
+
+def cmd_save_draft(a):
+    data = sys.stdin.buffer.read()
+    dp = mbox_path("drafts")
+    d = os.path.dirname(dp)
+    if d:
+        os.makedirs(d, exist_ok=True)
+    m = email.message_from_bytes(data)
+    if "Date" not in m:
+        m["Date"] = email.utils.formatdate(localtime=True)
+    box = mbox(dp, factory=None, create=True)
+    box.lock()
+    try:
+        box.add(m)
+        box.flush()
+    finally:
+        box.unlock()
+    print("draft saved")
+    return 0
+
+
+def cmd_aliases(a):
+    for name, addrs in sorted(_aliases().items()):
+        print("%s\t%s" % (name, ", ".join(addrs)))
     return 0
 
 
@@ -340,6 +520,8 @@ def main():
     p = sub.add_parser("send")
     p.add_argument("--from", dest="getfrom"); p.add_argument("--to", action="append", default=[])
     p.add_argument("--subject"); p.set_defaults(fn=cmd_send)
+    p = sub.add_parser("save-draft"); p.set_defaults(fn=cmd_save_draft)
+    p = sub.add_parser("aliases");    p.set_defaults(fn=cmd_aliases)
     p = sub.add_parser("pull"); p.set_defaults(fn=cmd_pull)
 
     a = ap.parse_args()
