@@ -91,6 +91,7 @@ const ushort cmInsSig       = 2019;   // (compose) insert the signature
 const ushort cmInsDead      = 2020;   // (compose) insert ~/dead.letter
 const ushort cmResumeDead   = 2021;   // open ~/dead.letter as a new compose
 const ushort cmShowHelp   = 2022;   // in-app help window
+const ushort cmPullDone   = 2023;   // background pop-pull finished (self-posted)
 
 // ------------------------------------------------------ editor dialogs -----
 // Wire up the standard Find / Replace / "search failed" dialogs the TEditor
@@ -305,6 +306,26 @@ public:
         up  = false;
     }
 
+    // Fire-and-forget: run `tvmail-backend <args>` detached, stdin from
+    // /dev/null and stdout+stderr to logpath.  Returns the pid (the caller
+    // reaps it) or -1.  Used for the background mail pull, so F3 no longer
+    // suspends the whole UI.
+    pid_t spawnLogged(const std::string &args, const std::string &logpath)
+    {
+        pid_t p = ::fork();
+        if (p < 0) return -1;
+        if (p == 0) {
+            int n = ::open("/dev/null", O_RDONLY);
+            if (n >= 0) { ::dup2(n, 0); if (n > 2) ::close(n); }
+            int f = ::open(logpath.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+            if (f >= 0) { ::dup2(f, 1); ::dup2(f, 2); if (f > 2) ::close(f); }
+            std::string sc = std::string(kPreamble) + "exec tvmail-backend " + args + "\n";
+            ::execl(TVMAIL_SH, TVMAIL_SH, "-c", sc.c_str(), (char *)nullptr);
+            ::_exit(127);
+        }
+        return p;
+    }
+
     ~Backend() { stop(); }
 
 private:
@@ -350,6 +371,10 @@ private:
         wr = ::fdopen(a[1], "w");
         rd = ::fdopen(b[0], "r");
         if (!wr || !rd) { stop(); return giveUp(); }
+        // keep the pipe out of every later fork/exec (shell calls, the
+        // background pull) so closing wr on shutdown really reaches the child
+        ::fcntl(::fileno(wr), F_SETFD, FD_CLOEXEC);
+        ::fcntl(::fileno(rd), F_SETFD, FD_CLOEXEC);
 
         std::string banner; int st = -1;                // expect "0 5\nready"
         if (!readFrame(banner, st) || st != 0 || banner != "ready") {
@@ -1406,6 +1431,9 @@ public:
         return new TBlueDeskTop(r);
     }
     void handleEvent(TEvent &e) override;
+#ifndef _WIN32
+    void idle() override;                   // poll the background pull
+#endif
 
 private:
     int  currentRow();
@@ -1415,7 +1443,13 @@ private:
     void resumeDeadLetter();
     void deleteMsg(int row);
     void pullMail();
+    void pullFinished();                    // cmPullDone handler
     void reload();
+#ifndef _WIN32
+    pid_t       pullPid  = -1;              // >0 while pop-pull runs detached
+    int         pullExit = 0;
+    std::string pullLogPath;
+#endif
     void openComposeWith(const std::string &raw,
                          const std::string &linkMbox = "", int linkIdx = -1,
                          bool addSig = false);
@@ -1568,8 +1602,64 @@ void TVMailApp::deleteMsg(int row)
 
 void TVMailApp::pullMail()
 {
-    shInteractive("tvmail-backend pull");
+#ifndef _WIN32
+    if (pullPid > 0) return;                        // one at a time
+    std::string log = tempDir() + "tvmail_pull_" + std::to_string(procId()) + ".log";
+    pid_t p = Backend::instance().spawnLogged("pull", log);
+    if (p > 0) {
+        pullPid = p;
+        pullLogPath = log;
+        TCommandSet cs; cs.enableCmd(cmPull);
+        disableCommands(cs);                        // grey "F3 Pull" until it's done
+        return;
+    }
+#endif
+    shInteractive("tvmail-backend pull");           // fork failed / Windows: old way
     reload();
+}
+
+#ifndef _WIN32
+void TVMailApp::idle()
+{
+    TApplication::idle();
+    if (pullPid <= 0) return;
+    int st = 0;
+    pid_t r = ::waitpid(pullPid, &st, WNOHANG);
+    if (r == 0) return;                             // still pulling
+    pullExit = (r == pullPid && WIFEXITED(st)) ? WEXITSTATUS(st) : -1;
+    pullPid  = -1;
+    TEvent ev;                                      // finish outside idle()
+    ev.what = evCommand;
+    ev.message.command = cmPullDone;
+    ev.message.infoPtr = nullptr;
+    putEvent(ev);
+}
+#endif
+
+void TVMailApp::pullFinished()
+{
+#ifndef _WIN32
+    TCommandSet cs; cs.enableCmd(cmPull);
+    enableCommands(cs);
+
+    std::string out = slurp(pullLogPath);
+    if (!pullLogPath.empty()) ::remove(pullLogPath.c_str());
+    pullLogPath.clear();
+    reload();
+
+    // pop-pull's last line is the summary; show the tail so verbose
+    // "delivered msg ..." lines are visible too.
+    std::vector<std::string> ls = splitLines(out);
+    std::string tail;
+    for (int i = (int)ls.size() - 1, shown = 0; i >= 0 && shown < 8; --i) {
+        if (ls[i].empty()) continue;
+        tail = ls[i] + (tail.empty() ? std::string() : "\n" + tail);
+        ++shown;
+    }
+    if (tail.empty()) tail = "Pull finished (no output).";
+    messageBox(tail.c_str(),
+               (pullExit >= 2 ? mfError : mfInformation) | mfOKButton);
+#endif
 }
 
 void TVMailApp::reload()
@@ -1584,6 +1674,7 @@ void TVMailApp::handleEvent(TEvent &e)
     bool handled = true;
     switch (e.message.command) {
         case cmPull:      pullMail();                   break;
+        case cmPullDone:  pullFinished();               break;
         case cmReload:    reload();                     break;
         case cmReplyMsg:  replyOrCompose(currentRow()); break;
         case cmCompose:   replyOrCompose(-1);           break;
@@ -1629,6 +1720,16 @@ int main(int argc, char **argv)
         std::fprintf(stderr, "selftest: served=%d status=%d bytes=%zu\n",
                      (int)ok, st, body.size());
         std::fwrite(body.data(), 1, body.size(), stdout);
+#ifndef _WIN32
+        std::string log = tempDir() + "tvmail_selftest.log";
+        pid_t p = Backend::instance().spawnLogged("ping", log);
+        int wst = 0;
+        if (p > 0) while (::waitpid(p, &wst, 0) < 0 && errno == EINTR) {}
+        std::fprintf(stderr, "selftest: spawnLogged pid=%ld exit=%d log=%s",
+                     (long)p, (p > 0 && WIFEXITED(wst)) ? WEXITSTATUS(wst) : -1,
+                     slurp(log).c_str());
+        ::remove(log.c_str());
+#endif
         Backend::instance().stop();
         return ok ? 0 : 1;
     }
