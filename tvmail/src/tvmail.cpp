@@ -462,17 +462,18 @@ static inline TColorAttr cDim()   { return TColorAttr(TColorBIOS(0x08), TColorBI
 struct MsgRow { int idx = 0; char flag = '.'; std::string date, from, subj; };
 static std::vector<MsgRow> gRows;
 
-struct Folder { const char *name; const char *mbox; };
+struct Folder { const char *name; const char *mbox; bool pinLocal; };
 static const Folder gFolders[] = {
-    { "inbox  (/var/mail)", "spool"  },
-    { "drafts",             "drafts" },
-    { "saved  (~/mbox)",    "mbox"   },
-    { "trash",              "trash"  },
-    { "dead.letter",        "dead"   },
+    { "inbox",       "spool",  false },
+    { "drafts",      "drafts", false },
+    { "saved",       "mbox",   false },
+    { "trash",       "trash",  false },
+    { "dead.letter", "dead",   true  },   // always a local file, whatever the mode
 };
 static const int gFolderCount = int(sizeof gFolders / sizeof gFolders[0]);
 static int gFolderIdx = 0;                       // current folder (drives gMbox)
 static std::string gMbox = gFolders[0].mbox;
+static bool gRemote = false;                     // backend "mode" == remote (IMAP)
 
 static std::string mboxArg() { return gMbox.empty() ? std::string() : " '" + gMbox + "'"; }
 static std::string mboxOpt() { return gMbox.empty() ? std::string() : " --mbox '" + gMbox + "'"; }
@@ -595,8 +596,12 @@ public:
     }
     void getText(char *dest, short item, short maxLen) override
     {
-        const char *s = (item >= 0 && item < gFolderCount) ? gFolders[item].name : "";
-        std::strncpy(dest, s, maxLen); dest[maxLen] = 0;
+        if (item < 0 || item >= gFolderCount) { dest[0] = 0; return; }
+        // L / R = local (mbox) or remote (IMAP) storage for this folder
+        char tag = (gRemote && !gFolders[item].pinLocal) ? 'R' : 'L';
+        char line[64];
+        std::snprintf(line, sizeof line, "%c  %s", tag, gFolders[item].name);
+        std::strncpy(dest, line, maxLen); dest[maxLen] = 0;
     }
     void focusItem(short item) override
     {
@@ -1433,12 +1438,12 @@ static const char *kHelpText =
 "  same panes and keys, folders are IMAP folders, F3 (pull) does nothing.\n"
 "  Set it up in ~/.config/tvmail/tvmail.conf  (see man tvmail-backend).\n"
 "\n"
-"FOLDERS\n"
-"  inbox        /var/mail/$USER    - where exim and pop-pull deliver\n"
-"  drafts       ~/Mail/drafts      - messages you chose to keep unsent\n"
-"  saved        ~/mbox             - where mail(1) files read messages\n"
-"  trash        ~/.local/share/tvmail/trash.mbox\n"
-"  dead.letter  ~/dead.letter      - a message mail(1) or tvmail left behind\n"
+"FOLDERS   (the L / R column = Local mbox or Remote IMAP storage)\n"
+"  inbox        where mail is delivered      (local: /var/mail ; remote: INBOX)\n"
+"  drafts       messages kept unsent\n"
+"  saved        where read mail is filed     (local: ~/mbox ; remote: Archive)\n"
+"  trash        Ctrl-D moves here; from trash, delete is permanent\n"
+"  dead.letter  a message mail(1) or tvmail left behind - always a local file\n"
 "\n"
 "READING\n"
 "  Enter    jump to the body pane and scroll it\n"
@@ -1838,6 +1843,8 @@ int main(int argc, char **argv)
         Backend::instance().stop();
         return ok ? 0 : 1;
     }
+
+    gRemote = backendRun("mode").rfind("remote", 0) == 0;
 
     TVMailApp app;
     app.run();

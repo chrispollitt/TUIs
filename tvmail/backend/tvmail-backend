@@ -33,6 +33,7 @@ shorthands spool/mbox/trash/drafts map to INBOX/Archive/Trash/Drafts):
                             print a draft skeleton (for $EDITOR) on stdout
   pull                      run 'pop-pull' if it exists (on-demand fetch)
   ping                      print 'pong' - a liveness check
+  mode                      print 'local' or 'remote'
   serve                     persistent mode: read one request (an argv) per
                             line on stdin, write a framed reply per request:
                                 <status> <nbytes>\\n  then <nbytes> bytes
@@ -976,6 +977,11 @@ def cmd_ping(a):
     return 0
 
 
+def cmd_mode(a):
+    sys.stdout.write(_mode() + "\n")   # local | remote  (for the UI's L/R tags)
+    return 0
+
+
 # --------------------------------------------------------------------------
 # serve: a persistent request loop so the tvmail UI stops paying Python
 # start-up (and, on Cygwin, fork/exec) three times per folder switch.
@@ -1107,6 +1113,7 @@ def build_parser():
     p = sub.add_parser("aliases");    p.set_defaults(fn=cmd_aliases)
     p = sub.add_parser("pull"); p.set_defaults(fn=cmd_pull)
     p = sub.add_parser("ping"); p.set_defaults(fn=cmd_ping)
+    p = sub.add_parser("mode"); p.set_defaults(fn=cmd_mode)
     p = sub.add_parser("serve"); p.set_defaults(fn=cmd_serve)
     return ap
 

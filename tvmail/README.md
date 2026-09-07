@@ -168,9 +168,10 @@ body. `Enter` on a message jumps focus to the body pane.
 | `trash` | `~/.local/share/tvmail/trash.mbox` | `Ctrl-D` moves here; deleting from trash is permanent |
 | `dead.letter` | `$DEAD` (default `~/dead.letter`) | a single message `mail(1)` or tvmail left behind |
 
-In **remote** mode the first four are IMAP folders (`INBOX` / `Drafts` /
-`Archive` / `Trash`, tunable in `tvmail.conf`); `dead.letter` is still a local
-file.
+Each folder shows an **`L`** or **`R`** — local mbox or remote IMAP storage. In
+**remote** mode the first four are IMAP folders (`INBOX` / `Drafts` / `Archive`
+/ `Trash`, tunable in `tvmail.conf`); `dead.letter` is always a local file, so
+it stays `L`.
 
 ## Keys
 

@@ -314,6 +314,11 @@ class TestMode(Base):
         os.environ["TVMAIL_MODE"] = "remote"
         self.assertEqual(be._mode(), "remote")
 
+    def test_mode_subcommand_prints_word(self):
+        self.assertEqual(self.be("mode").stdout.strip(), b"local")
+        os.environ["TVMAIL_MODE"] = "remote"
+        self.assertEqual(self.be("mode").stdout.strip(), b"remote")
+
     def test_imap_folder_mapping_and_override(self):
         self.assertEqual(be._imap_folder("spool"), "INBOX")
         self.assertEqual(be._imap_folder(None), "INBOX")
