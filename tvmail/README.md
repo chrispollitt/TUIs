@@ -38,12 +38,14 @@ garden — see *mail(1) interoperability* below.
 tvmail is the reader for a send-only mail setup on the same box (all in this
 repo, under `configure/` and `backend/`):
 
-- **exim** delivers local mail to `/var/mail/$USER` and relays outbound through
-  an authenticated TLS smarthost, rewriting `From:` so replies reach a real
-  mailbox. `configure/configure-sendmail-relay.sh` sets it up on **Cygwin**
-  (hand-written `exim.conf`, no daemon) or **Debian/Ubuntu/Raspberry Pi OS**
-  (`exim4-daemon-light` via `update-exim4.conf`; it asks whether to run exim as
-  a systemd / sysv service or send-only).
+- The **MTA** delivers local mail to `/var/mail/$USER` and relays outbound
+  through an authenticated TLS smarthost, rewriting `From:` so replies reach a
+  real mailbox. `configure/configure-sendmail-relay.sh` sets that up on
+  **Cygwin** (hand-written `exim.conf`, no daemon) or **Linux** — where it
+  configures whatever real MTA is already installed (**Postfix** in place, no
+  apt; or Debian/Ubuntu/Pi **exim4** via `update-exim4.conf`) and installs
+  Postfix only if none is found. It asks whether to run the MTA as a systemd /
+  sysv service or send‑only. `--mta postfix|exim4` forces the choice.
 - **`pop-pull`** fetches remote mail into the same mbox
   (`configure/configure-mail-pull.sh` — portable; `--timer N` adds a
   systemd `--user` timer for periodic pulls).
