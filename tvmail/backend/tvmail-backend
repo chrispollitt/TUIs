@@ -46,11 +46,15 @@ def _me():
 
 
 def mbox_path(p=None):
-    """Resolve a mailbox argument.  Bare 'spool'/'mbox' are shorthands."""
+    """Resolve a mailbox argument.  'spool'/'mbox'/'trash' are shorthands."""
     if p in (None, "", "spool"):
         return os.environ.get("MAIL") or "/var/mail/" + _me()
     if p == "mbox":
         return os.path.expanduser("~/mbox")
+    if p == "trash":
+        d = os.path.expanduser("~/.local/share/tvmail")
+        os.makedirs(d, exist_ok=True)
+        return os.path.join(d, "trash.mbox")
     return os.path.expanduser(p)
 
 
@@ -94,7 +98,10 @@ def open_box(path, create=False):
 
 
 def cmd_list(a):
-    box = open_box(mbox_path(a.mbox))
+    path = mbox_path(a.mbox)
+    if not os.path.exists(path):
+        return 0                       # a not-yet-created mailbox lists as empty
+    box = open_box(path)
     box.lock()
     try:
         for i, msg in enumerate(box):
@@ -206,13 +213,26 @@ def cmd_delete(a):
         victims = sorted(set(a.idx))
         if any(not (0 <= v < len(keys)) for v in victims):
             sys.exit("tvmail-backend: index out of range")
+        if getattr(a, "trash", None):
+            tp = mbox_path(a.trash)
+            d = os.path.dirname(tp)
+            if d:
+                os.makedirs(d, exist_ok=True)
+            tbox = mbox(tp, factory=None, create=True)
+            tbox.lock()
+            try:
+                for v in victims:
+                    tbox.add(box[keys[v]])
+                tbox.flush()
+            finally:
+                tbox.unlock()
         shutil.copy2(path, path + ".bak")
         for v in victims:
             box.remove(keys[v])
         box.flush()
     finally:
         box.unlock()
-    print("deleted %d message(s); backup at %s.bak" % (len(victims), path))
+    print("deleted %d message(s)" % len(victims))
     return 0
 
 
@@ -311,7 +331,7 @@ def main():
     p = sub.add_parser("parts"); p.add_argument("idx", type=int); p.add_argument("mbox", nargs="?"); p.set_defaults(fn=cmd_parts)
     p = sub.add_parser("save");  p.add_argument("idx", type=int); p.add_argument("partno", type=int)
     p.add_argument("dest"); p.add_argument("mbox", nargs="?"); p.set_defaults(fn=cmd_save)
-    p = sub.add_parser("delete"); p.add_argument("idx", type=int, nargs="+"); p.add_argument("--mbox", dest="mbox"); p.set_defaults(fn=cmd_delete)
+    p = sub.add_parser("delete"); p.add_argument("idx", type=int, nargs="+"); p.add_argument("--mbox", dest="mbox"); p.add_argument("--trash", dest="trash"); p.set_defaults(fn=cmd_delete)
     p = sub.add_parser("mark");  p.add_argument("idx", type=int); p.add_argument("state", choices=("read", "unread")); p.add_argument("mbox", nargs="?"); p.set_defaults(fn=cmd_mark)
     p = sub.add_parser("compose-template")
     p.add_argument("--from", dest="getfrom"); p.add_argument("--to", action="append", default=[])

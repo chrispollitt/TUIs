@@ -71,10 +71,10 @@ const ushort cmCompose      = 2004;
 const ushort cmDeleteMsg    = 2005;
 const ushort cmViewSrc      = 2006;
 const ushort cmAboutBox     = 2007;
-const ushort cmFolderSpool  = 2008;
-const ushort cmFolderMbox   = 2009;
-const ushort cmFolderOther  = 2010;
 const ushort cmSendMsg      = 2011;   // send the focused compose window
+const ushort cmFolderPicked = 2012;   // broadcast: folder pane focus changed
+const ushort cmMsgPicked    = 2013;   // broadcast: message pane focus changed
+const ushort cmFocusContent = 2014;   // Enter in message pane -> jump to body
 
 // ------------------------------------------------------ editor dialogs -----
 // Wire up the standard Find / Replace / "search failed" dialogs the TEditor
@@ -258,17 +258,19 @@ static inline TColorAttr cDim()   { return TColorAttr(TColorBIOS(0x08), TColorBI
 // ---------------------------------------------------------------- data -------
 struct MsgRow { int idx = 0; char flag = '.'; std::string date, from, subj; };
 static std::vector<MsgRow> gRows;
-static std::string gMbox;                        // "", "spool", "mbox", or a path
-static std::string gTitle = "Mailbox";           // list-window title (must outlive it)
+
+struct Folder { const char *name; const char *mbox; };
+static const Folder gFolders[] = {
+    { "inbox  (/var/mail)", "spool" },
+    { "saved  (~/mbox)",    "mbox"  },
+    { "trash",              "trash" },
+};
+static const int gFolderCount = int(sizeof gFolders / sizeof gFolders[0]);
+static int gFolderIdx = 0;                       // current folder (drives gMbox)
+static std::string gMbox = gFolders[0].mbox;
 
 static std::string mboxArg() { return gMbox.empty() ? std::string() : " '" + gMbox + "'"; }
 static std::string mboxOpt() { return gMbox.empty() ? std::string() : " --mbox '" + gMbox + "'"; }
-static const char *folderLabel()
-{
-    if (gMbox.empty() || gMbox == "spool") return "spool  (/var/mail)";
-    if (gMbox == "mbox") return "~/mbox";
-    return gMbox.c_str();
-}
 
 static std::vector<std::string> splitLines(const std::string &s)
 {
@@ -329,93 +331,267 @@ public:
     static TBackground *initBackground(TRect r) { return new TBlueBg(r); }
 };
 
-// ---------------------------------------------------------- message list ----
-class TMsgList : public TListViewer {
+// ================================================= 3-pane mail window =======
+// One full-screen window: folders (left) | message list (top-right) /
+// message content (bottom-right).  Panes talk via evBroadcast: folder focus
+// reloads the list, message focus loads the content.
+
+class TDivider : public TView {
+    bool vert;
 public:
-    TMsgList(const TRect &b, TScrollBar *vsb) : TListViewer(b, 1, nullptr, vsb)
+    TDivider(const TRect &b, bool v) : TView(b), vert(v) {}
+    void draw() override
+    {
+        TColorAttr c = cFrame();
+        TDrawBuffer b;
+        if (vert) {
+            b.moveChar(0, char(0xB3), c, 1);           // vertical bar
+            for (short y = 0; y < size.y; ++y) writeLine(0, y, 1, 1, b);
+        } else {
+            b.moveChar(0, char(0xC4), c, size.x);       // horizontal bar
+            writeLine(0, 0, size.x, 1, b);
+        }
+    }
+};
+
+class TFolderPane : public TListViewer {
+public:
+    TFolderPane(const TRect &b) : TListViewer(b, 1, nullptr, nullptr)
+    {
+        setRange(gFolderCount);
+        TListViewer::focusItem(gFolderIdx);
+    }
+    void getText(char *dest, short item, short maxLen) override
+    {
+        const char *s = (item >= 0 && item < gFolderCount) ? gFolders[item].name : "";
+        std::strncpy(dest, s, maxLen); dest[maxLen] = 0;
+    }
+    void focusItem(short item) override
+    {
+        TListViewer::focusItem(item);
+        gFolderIdx = item;
+        if (owner) message(owner, evBroadcast, cmFolderPicked, this);
+    }
+    void selectItem(short item) override { focusItem(item); }
+    TColorAttr mapColor(uchar i) override
+    {
+        switch (i) {
+            case 1: case 2: return cNorm();
+            case 3:         return cHi();
+            case 4:         return cSel();
+            case 5:         return cDiv();
+        }
+        return TView::mapColor(i);
+    }
+};
+
+class TMsgPane : public TListViewer {
+public:
+    TMsgPane(const TRect &b, TScrollBar *vsb) : TListViewer(b, 1, nullptr, vsb)
     {
         setRange((short)gRows.size());
     }
-
-    // Override mapColor (virtual in TView) — NOT getColor
-    TColorAttr mapColor(uchar index) override
-    {
-        switch (index) {
-            case 1: return cNorm();  // active
-            case 2: return cNorm();  // inactive
-            case 3: return cHi();    // focused
-            case 4: return cSel();   // selected
-            case 5: return cDiv();   // divider
-        }
-        return TView::mapColor(index);
-    }
-
     void getText(char *dest, short item, short maxLen) override
     {
         if (item < 0 || item >= (short)gRows.size()) { dest[0] = 0; return; }
         const MsgRow &r = gRows[item];
         char line[600];
-        std::snprintf(line, sizeof line, "%c  %-16.16s  %-24.24s  %s",
+        std::snprintf(line, sizeof line, "%c %-16.16s %-20.20s %s",
                       r.flag, r.date.c_str(), r.from.c_str(), r.subj.c_str());
-        std::strncpy(dest, line, maxLen);
-        dest[maxLen] = 0;
+        std::strncpy(dest, line, maxLen); dest[maxLen] = 0;
     }
-
+    void focusItem(short item) override
+    {
+        TListViewer::focusItem(item);
+        if (owner) message(owner, evBroadcast, cmMsgPicked, this);
+    }
     void selectItem(short) override
     {
-        message(TProgram::application, evCommand, cmOpenMsg, nullptr);
+        if (owner) message(owner, evBroadcast, cmFocusContent, this);
     }
-
-    // Enter opens the focused message - handled here (not as a global menu
-    // accelerator) so Enter still means "newline" inside the compose editor.
     void handleEvent(TEvent &e) override
     {
         if (e.what == evKeyDown && e.keyDown.keyCode == kbEnter) {
-            if (focused < range) selectItem(focused);
-            clearEvent(e);
-            return;
+            selectItem(focused); clearEvent(e); return;
         }
         TListViewer::handleEvent(e);
     }
-
-    void refresh()
+    TColorAttr mapColor(uchar i) override
+    {
+        switch (i) {
+            case 1: case 2: return cNorm();
+            case 3:         return cHi();
+            case 4:         return cSel();
+            case 5:         return cDiv();
+        }
+        return TView::mapColor(i);
+    }
+    void reload()
     {
         setRange((short)gRows.size());
         if (focused >= (short)gRows.size())
-            focusItem(gRows.empty() ? 0 : (short)gRows.size() - 1);
+            focused = gRows.empty() ? 0 : (short)gRows.size() - 1;
         drawView();
     }
 };
 
-class TMailListWindow : public TWindow {
+class TContentPane : public TScroller {
+    std::vector<std::string> lines;
 public:
-    TMsgList *list = nullptr;
-    TMailListWindow(const TRect &b)
-        : TWindowInit(&TMailListWindow::initFrame),
-          TWindow(b, gTitle.c_str(), wnNoNumber)
+    TContentPane(const TRect &b, TScrollBar *h, TScrollBar *v) : TScroller(b, h, v)
     {
-        palette = wpCyanWindow;          // <-- use cyan window palette
-        flags &= ~(wfClose | wfZoom);
-        options |= ofTileable;
-        TScrollBar *vsb = new TScrollBar(TRect(size.x - 1, 1, size.x, size.y - 1));
-        insert(vsb);
-        list = new TMsgList(TRect(1, 1, size.x - 1, size.y - 1), vsb);
-        insert(list);
+        lines.push_back(std::string());
+        setLimit(1, 1);
+    }
+    void setLines(std::vector<std::string> ls)
+    {
+        lines = std::move(ls);
+        if (lines.empty()) lines.push_back(std::string());
+        size_t w = 1;
+        for (auto &l : lines) w = std::max(w, l.size());
+        setLimit((int)w + 1, (int)lines.size());
+        scrollTo(0, 0);
+        drawView();
+    }
+    void draw() override
+    {
+        TColorAttr c = cNorm();
+        for (short y = 0; y < size.y; ++y) {
+            TDrawBuffer b;
+            b.moveChar(0, ' ', c, size.x);
+            int li = delta.y + y;
+            if (li >= 0 && li < (int)lines.size()) {
+                const std::string &s = lines[li];
+                if (delta.x < (int)s.size())
+                    b.moveStr(0, s.c_str() + delta.x, c);
+            }
+            writeLine(0, y, size.x, 1, b);
+        }
+    }
+    TColorAttr mapColor(uchar i) override
+    { return i == 1 ? cNorm() : (i == 2 ? cHi() : TView::mapColor(i)); }
+};
+
+class TMailWindow : public TWindow {
+    Boolean ready = False;
+    TScrollBar *msgVsb = nullptr, *contentVsb = nullptr;
+    TDivider *vdiv = nullptr, *hdiv = nullptr;
+
+    struct Rects { TRect folder, vbar, msg, msgVsb, hbar, content, contentVsb; };
+    Rects paneRects() const
+    {
+        int W = size.x, H = size.y;
+        const int FW = 22;
+        int sy = 1 + (H - 2) * 2 / 5;
+        if (sy < 4)      sy = 4;
+        if (sy > H - 4)  sy = H - 4;
+        Rects r;
+        r.folder     = TRect(1, 1, 1 + FW, H - 1);
+        r.vbar       = TRect(1 + FW, 1, 2 + FW, H - 1);
+        r.msg        = TRect(2 + FW, 1, W - 2, sy);
+        r.msgVsb     = TRect(W - 2, 1, W - 1, sy);
+        r.hbar       = TRect(2 + FW, sy, W - 1, sy + 1);
+        r.content    = TRect(2 + FW, sy + 1, W - 2, H - 1);
+        r.contentVsb = TRect(W - 2, sy + 1, W - 1, H - 1);
+        return r;
     }
 
-    TColorAttr mapColor(uchar index) override
+public:
+    TFolderPane  *folderPane  = nullptr;
+    TMsgPane     *msgPane      = nullptr;
+    TContentPane *contentPane  = nullptr;
+
+    TMailWindow(const TRect &bounds)
+        : TWindowInit(&TMailWindow::initFrame),
+          TWindow(bounds, "tvmail", wnNoNumber)
     {
-        switch (index) {
-            case 1: return cDim();   // frame passive
-            case 2: return cFrame(); // frame active
-            case 3: return cFrame(); // frame icon
-            case 4: return cNorm();  // scrollbar page
-            case 5: return cHi();    // scrollbar controls
-            case 6: return cNorm();  // scroller normal
-            case 7: return cHi();    // scroller selected
-            case 8: return cNorm();  // reserved
+        palette = wpCyanWindow;
+        flags   &= ~(wfClose | wfZoom | wfMove);
+        growMode = gfGrowHiX | gfGrowHiY;
+
+        Rects R = paneRects();
+        folderPane  = new TFolderPane(R.folder);
+        vdiv        = new TDivider(R.vbar, true);
+        msgVsb      = new TScrollBar(R.msgVsb);
+        msgPane     = new TMsgPane(R.msg, msgVsb);
+        hdiv        = new TDivider(R.hbar, false);
+        contentVsb  = new TScrollBar(R.contentVsb);
+        contentPane = new TContentPane(R.content, nullptr, contentVsb);
+
+        insert(vdiv);        insert(hdiv);
+        insert(msgVsb);      insert(contentVsb);
+        insert(contentPane); insert(msgPane); insert(folderPane);
+
+        loadFolder();
+        ready = True;
+        folderPane->select();
+    }
+
+    void loadFolder()
+    {
+        gMbox = gFolders[gFolderIdx].mbox;
+        loadList();
+        if (msgPane) { msgPane->focused = 0; msgPane->reload(); }
+        loadContent();
+    }
+
+    void loadContent()
+    {
+        if (!contentPane) return;
+        if (gRows.empty() || !msgPane ||
+            msgPane->focused < 0 || msgPane->focused >= (int)gRows.size()) {
+            contentPane->setLines({ std::string("(no message)") });
+            return;
         }
-        return TView::mapColor(index);
+        int b = gRows[msgPane->focused].idx;
+        auto ls = splitLines(shCapture("tvmail-backend show " + std::to_string(b)
+                                       + mboxArg() + " 2>&1"));
+        contentPane->setLines(std::move(ls));
+        shCapture("tvmail-backend mark " + std::to_string(b) + " read" + mboxArg()
+                  + " >/dev/null 2>&1");
+        gRows[msgPane->focused].flag = '.';
+        msgPane->drawView();
+    }
+
+    void reloadFolder() { loadFolder(); }
+
+    void handleEvent(TEvent &e) override
+    {
+        TWindow::handleEvent(e);
+        if (ready && e.what == evBroadcast) {
+            switch (e.message.command) {
+                case cmFolderPicked: loadFolder();  clearEvent(e); break;
+                case cmMsgPicked:    loadContent(); clearEvent(e); break;
+                case cmFocusContent:
+                    if (contentPane) contentPane->select();
+                    clearEvent(e);
+                    break;
+            }
+        }
+    }
+
+    void changeBounds(const TRect &bounds) override
+    {
+        TWindow::changeBounds(bounds);
+        Rects R = paneRects();
+        folderPane->changeBounds(R.folder);
+        vdiv->changeBounds(R.vbar);
+        msgPane->changeBounds(R.msg);
+        msgVsb->changeBounds(R.msgVsb);
+        hdiv->changeBounds(R.hbar);
+        contentPane->changeBounds(R.content);
+        contentVsb->changeBounds(R.contentVsb);
+    }
+
+    TColorAttr mapColor(uchar i) override
+    {
+        switch (i) {
+            case 1: return cDim();
+            case 2: case 3: return cFrame();
+            case 4: case 6: case 8: return cNorm();
+            case 5: case 7: return cHi();
+        }
+        return TView::mapColor(i);
     }
 };
 
@@ -685,7 +861,7 @@ static void parseTemplate(const std::string &t, std::string &to, std::string &cc
 // ---------------------------------------------------------------- app -------
 class TVMailApp : public TApplication {
 public:
-    TMailListWindow *listWin = nullptr;
+    TMailWindow *mainWin = nullptr;
 
     TVMailApp()
         : TProgInit(&TVMailApp::initStatusLine,
@@ -705,9 +881,8 @@ public:
         es.enableCmd(cmSearchAgain);
         disableCommands(es);
 
-        loadList();
-        listWin = new TMailListWindow(deskTop->getExtent());
-        deskTop->insert(listWin);
+        mainWin = new TMailWindow(deskTop->getExtent());
+        deskTop->insert(mainWin);
     }
 
     static TMenuBar *initMenuBar(TRect r);
@@ -721,13 +896,11 @@ public:
 
 private:
     int  currentRow();
-    void openMsg(int row);
     void viewSource(int row);
     void replyOrCompose(int row);           // row < 0 => new message
     void deleteMsg(int row);
     void pullMail();
     void reload();
-    void switchFolder(const std::string &m);
 };
 
 TMenuBar *TVMailApp::initMenuBar(TRect r)
@@ -739,12 +912,7 @@ TMenuBar *TVMailApp::initMenuBar(TRect r)
             *new TMenuItem("~R~eload",    cmReload, kbF5, hcNoContext, "F5") +
             newLine() +
             *new TMenuItem("E~x~it", cmQuit, kbAltX, hcNoContext, "Alt-X") +
-        *new TSubMenu("Mail~b~ox", kbAltB) +
-            *new TMenuItem("~S~pool  (/var/mail)",  cmFolderSpool, kbNoKey, hcNoContext) +
-            *new TMenuItem("~H~ome mbox  (~/mbox)", cmFolderMbox,  kbNoKey, hcNoContext) +
-            *new TMenuItem("~O~ther...",            cmFolderOther, kbNoKey, hcNoContext) +
         *new TSubMenu("~M~essage", kbAltM) +
-            *new TMenuItem("~O~pen",         cmOpenMsg,   kbNoKey,  hcNoContext, "Enter") +
             *new TMenuItem("~R~eply",        cmReplyMsg,  kbCtrlR,  hcNoContext, "Ctrl-R") +
             *new TMenuItem("~N~ew message",  cmCompose,   kbCtrlN,  hcNoContext, "Ctrl-N") +
             *new TMenuItem("~S~end draft",   cmSendMsg,   kbF2,     hcNoContext, "F2") +
@@ -795,25 +963,9 @@ TStatusLine *TVMailApp::initStatusLine(TRect r)
 
 int TVMailApp::currentRow()
 {
-    if (!listWin || !listWin->list) return -1;
-    short f = listWin->list->focused;
+    if (!mainWin || !mainWin->msgPane) return -1;
+    short f = mainWin->msgPane->focused;
     return (f >= 0 && f < (short)gRows.size()) ? (int)f : -1;
-}
-
-void TVMailApp::openMsg(int row)
-{
-    if (row < 0) { messageBox("No message selected.", mfInformation | mfOKButton); return; }
-    int b = gRows[row].idx;
-    auto lines = splitLines(shCapture("tvmail-backend show " + std::to_string(b)
-                                      + mboxArg() + " 2>&1"));
-    TRect r = deskTop->getExtent();
-    r.grow(-3, -1);
-    std::string title = "Msg " + std::to_string(b) + "  " + gRows[row].subj;
-    deskTop->insert(new TMailViewWindow(r, title.c_str(), std::move(lines)));
-
-    shCapture("tvmail-backend mark " + std::to_string(b) + " read" + mboxArg() + " >/dev/null 2>&1");
-    gRows[row].flag = '.';
-    if (listWin && listWin->list) listWin->list->drawView();
 }
 
 void TVMailApp::viewSource(int row)
@@ -846,10 +998,12 @@ void TVMailApp::deleteMsg(int row)
     if (row < 0) return;
     int b = gRows[row].idx;
     if (messageBox(mfConfirmation | mfYesNoCancel, "Delete message %d?", b) != cmYes) return;
-    std::string out = shCapture("tvmail-backend delete " + std::to_string(b)
-                                + mboxOpt() + " 2>&1");
+    std::string cmd = "tvmail-backend delete " + std::to_string(b) + mboxOpt();
+    if (gMbox != "trash") cmd += " --trash trash";   // move to trash, don't destroy
+    std::string out = shCapture(cmd + " 2>&1");
     reload();
-    messageBox(out.empty() ? "deleted" : out.c_str(), mfInformation | mfOKButton);
+    if (!out.empty() && out.rfind("deleted", 0) != 0)
+        messageBox(out.c_str(), mfInformation | mfOKButton);
 }
 
 void TVMailApp::pullMail()
@@ -860,16 +1014,7 @@ void TVMailApp::pullMail()
 
 void TVMailApp::reload()
 {
-    loadList();
-    if (listWin && listWin->list) listWin->list->refresh();
-}
-
-void TVMailApp::switchFolder(const std::string &m)
-{
-    gMbox = m;
-    gTitle = std::string("Mailbox - ") + folderLabel();
-    if (listWin) { listWin->title = gTitle.c_str(); listWin->frame->drawView(); }
-    reload();
+    if (mainWin) mainWin->reloadFolder();
 }
 
 void TVMailApp::handleEvent(TEvent &e)
@@ -878,23 +1023,15 @@ void TVMailApp::handleEvent(TEvent &e)
     if (e.what != evCommand) return;
     bool handled = true;
     switch (e.message.command) {
-        case cmPull:      pullMail();               break;
-        case cmReload:    reload();                 break;
-        case cmOpenMsg:   openMsg(currentRow());    break;
+        case cmPull:      pullMail();                   break;
+        case cmReload:    reload();                     break;
         case cmReplyMsg:  replyOrCompose(currentRow()); break;
-        case cmCompose:   replyOrCompose(-1);       break;
-        case cmDeleteMsg: deleteMsg(currentRow());  break;
-        case cmViewSrc:   viewSource(currentRow()); break;
-        case cmFolderSpool: switchFolder("spool"); break;
-        case cmFolderMbox:  switchFolder("mbox");  break;
-        case cmFolderOther: {
-            char p[512] = "";
-            if (inputBox("Open mailbox", "Path:", p, (uchar)(sizeof(p) - 1)) == cmOK && *p)
-                switchFolder(p);
-            break;
-        }
+        case cmCompose:   replyOrCompose(-1);           break;
+        case cmDeleteMsg: deleteMsg(currentRow());      break;
+        case cmViewSrc:   viewSource(currentRow());     break;
         case cmAboutBox:
-            messageBox("tvmail v0.9\n\nA Turbo Vision front-end for a local mbox.\n"
+            messageBox("tvmail v0.9\n\n3-pane Turbo Vision mail client.\n"
+                       "Folders / message list / message content.\n"
                        "Plumbing: exim + tvmail-backend + pop-pull",
                        mfInformation | mfOKButton);
             break;
@@ -903,9 +1040,8 @@ void TVMailApp::handleEvent(TEvent &e)
     if (handled) clearEvent(e);
 }
 
-int main(int argc, char **argv)
+int main(int, char **)
 {
-    if (argc > 1) gMbox = argv[1];
     TVMailApp app;
     app.run();
     app.shutDown();
