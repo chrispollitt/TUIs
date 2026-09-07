@@ -8,32 +8,19 @@ port of Borland's Turbo Vision. It is 2026. This is fine.
 See [HISTORY.md](HISTORY.md) for the twenty-year excuse.
 
 ```
-<<<<<<< HEAD
  File  Message  Edit  Window  Help
-+----------------------------------------------------------------------+
++---------------------------------------------------------------------+
 | inbox  (/var/mail) | N 09-06 21:14  chris@cmlaptop   test2       ^  |
 | drafts             | . 09-06 00:34  Mail Delivery..  failed      #  |
 | saved  (~/mbox)    | . 09-06 19:38  Chris Pollitt    Re: test2   v  |
-| trash              |------------------------------------------------- |
+| trash              |----------------------------------------------- |
 | dead.letter        | Date:    Sat, 06 Sep 2026 19:38 -0700       ^  |
 |                    | From:    Chris Pollitt <chris.pollitt@..>      |
-|                    | Subject: Re: test2                         #  |
-|                    |                                               |
-|                    | bye                                        v  |
-+----------------------------------------------------------------------+
+|                    | Subject: Re: test2                          #  |
+|                    |                                                |
+|                    | bye                                         v  |
++---------------------------------------------------------------------+
  F1 Help  F3 Pull  F5 Reload  ^R Reply  ^N New  F2 Send  ^D Del  F4 Book
-=======
-  +-------------------------------------------------------------+
-  |  File   Message   Help                                      |
-  +-------------------------------------------------------------+
-  | +- Mailbox -------------------------------------------[^]-+ |
-  | | N  2026-09-05 21:14   chris@cmlaptop      test          | |
-  | | .  2026-09-05 21:16   Chris Pollitt       Re: hello ... | |
-  | |                                                         | |
-  | +---------------------------------------------------------+ |
-  |  F3 Pull  F5 Reload  Enter Open  ^R Reply  ^N New  ^D Del   |
-  +-------------------------------------------------------------+
->>>>>>> 41409a7fda2e73cdd151a17543e4ed7798ca483c
 ```
 
 ## What it is
