@@ -32,6 +32,12 @@
 #define Uses_TLabel
 #define Uses_TEditor
 #define Uses_TIndicator
+#define Uses_TDialog
+#define Uses_TButton
+#define Uses_TCheckBoxes
+#define Uses_TSItem
+#define Uses_THistory
+#define Uses_TCommandSet
 #include <tvision/tv.h>
 
 #include <string>
@@ -39,6 +45,7 @@
 #include <sstream>
 #include <algorithm>
 #include <cctype>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -68,6 +75,89 @@ const ushort cmFolderSpool  = 2008;
 const ushort cmFolderMbox   = 2009;
 const ushort cmFolderOther  = 2010;
 const ushort cmSendMsg      = 2011;   // send the focused compose window
+
+// ------------------------------------------------------ editor dialogs -----
+// Wire up the standard Find / Replace / "search failed" dialogs the TEditor
+// needs (tvision ships only a cmCancel stub).  Lifted from tvision's tvedit
+// example (tvedit2/3.cpp), trimmed to what a composer uses.
+static ushort execDialog(TDialog *d, void *data)
+{
+    TView *p = TProgram::application->validView(d);
+    if (!p) return cmCancel;
+    if (data) p->setData(data);
+    ushort result = TProgram::deskTop->execView(p);
+    if (result != cmCancel && data) p->getData(data);
+    TObject::destroy(p);
+    return result;
+}
+
+static TDialog *createFindDialog()
+{
+    TDialog *d = new TDialog(TRect(0, 0, 38, 12), "Find");
+    d->options |= ofCentered;
+    TInputLine *c = new TInputLine(TRect(3, 3, 32, 4), 80);
+    d->insert(c);
+    d->insert(new TLabel(TRect(2, 2, 15, 3), "~T~ext to find", c));
+    d->insert(new THistory(TRect(32, 3, 35, 4), c, 10));
+    d->insert(new TCheckBoxes(TRect(3, 5, 35, 7),
+        new TSItem("~C~ase sensitive",
+        new TSItem("~W~hole words only", 0))));
+    d->insert(new TButton(TRect(14, 9, 24, 11), "O~K~", cmOK, bfDefault));
+    d->insert(new TButton(TRect(26, 9, 36, 11), "Cancel", cmCancel, bfNormal));
+    d->selectNext(False);
+    return d;
+}
+
+static TDialog *createReplaceDialog()
+{
+    TDialog *d = new TDialog(TRect(0, 0, 40, 16), "Replace");
+    d->options |= ofCentered;
+    TInputLine *c = new TInputLine(TRect(3, 3, 34, 4), 80);
+    d->insert(c);
+    d->insert(new TLabel(TRect(2, 2, 15, 3), "~T~ext to find", c));
+    d->insert(new THistory(TRect(34, 3, 37, 4), c, 10));
+    c = new TInputLine(TRect(3, 6, 34, 7), 80);
+    d->insert(c);
+    d->insert(new TLabel(TRect(2, 5, 12, 6), "~N~ew text", c));
+    d->insert(new THistory(TRect(34, 6, 37, 7), c, 11));
+    d->insert(new TCheckBoxes(TRect(3, 8, 37, 12),
+        new TSItem("~C~ase sensitive",
+        new TSItem("~W~hole words only",
+        new TSItem("~P~rompt on replace",
+        new TSItem("~R~eplace all", 0))))));
+    d->insert(new TButton(TRect(17, 13, 27, 15), "O~K~", cmOK, bfDefault));
+    d->insert(new TButton(TRect(28, 13, 38, 15), "Cancel", cmCancel, bfNormal));
+    d->selectNext(False);
+    return d;
+}
+
+static ushort tvmailEditDialog(int dialog, ...)
+{
+    va_list arg;
+    switch (dialog) {
+        case edOutOfMemory:
+            return messageBox("Not enough memory for this operation.",
+                              mfError | mfOKButton);
+        case edFind: {
+            va_start(arg, dialog);
+            void *p = va_arg(arg, void *);
+            va_end(arg);
+            return execDialog(createFindDialog(), p);
+        }
+        case edSearchFailed:
+            return messageBox("Search string not found.", mfError | mfOKButton);
+        case edReplace: {
+            va_start(arg, dialog);
+            void *p = va_arg(arg, void *);
+            va_end(arg);
+            return execDialog(createReplaceDialog(), p);
+        }
+        case edReplacePrompt:
+            return messageBox("Replace this occurrence?",
+                              mfYesNoCancel | mfInformation);
+    }
+    return cmCancel;
+}
 
 // -------------------------------------------------------- shell plumbing ----
 // Everything the backend needs runs inside one bash script so we never fight
@@ -274,6 +364,18 @@ public:
     void selectItem(short) override
     {
         message(TProgram::application, evCommand, cmOpenMsg, nullptr);
+    }
+
+    // Enter opens the focused message - handled here (not as a global menu
+    // accelerator) so Enter still means "newline" inside the compose editor.
+    void handleEvent(TEvent &e) override
+    {
+        if (e.what == evKeyDown && e.keyDown.keyCode == kbEnter) {
+            if (focused < range) selectItem(focused);
+            clearEvent(e);
+            return;
+        }
+        TListViewer::handleEvent(e);
     }
 
     void refresh()
@@ -590,6 +692,19 @@ public:
                     &TVMailApp::initMenuBar,
                     &TVMailApp::initDeskTop)
     {
+        // editor clipboard + Find/Replace dialogs (tvision ships neither)
+        TEditor::clipboard = new TEditor(TRect(0, 0, 0, 0), 0, 0, 0, 0x10000);
+        TEditor::clipboard->canUndo = False;
+        TEditor::editorDialog = tvmailEditDialog;
+
+        // grey the edit commands until an editor has focus
+        TCommandSet es;
+        es.enableCmd(cmCut);    es.enableCmd(cmCopy);   es.enableCmd(cmPaste);
+        es.enableCmd(cmClear);  es.enableCmd(cmUndo);
+        es.enableCmd(cmFind);   es.enableCmd(cmReplace);
+        es.enableCmd(cmSearchAgain);
+        disableCommands(es);
+
         loadList();
         listWin = new TMailListWindow(deskTop->getExtent());
         deskTop->insert(listWin);
@@ -629,13 +744,23 @@ TMenuBar *TVMailApp::initMenuBar(TRect r)
             *new TMenuItem("~H~ome mbox  (~/mbox)", cmFolderMbox,  kbNoKey, hcNoContext) +
             *new TMenuItem("~O~ther...",            cmFolderOther, kbNoKey, hcNoContext) +
         *new TSubMenu("~M~essage", kbAltM) +
-            *new TMenuItem("~O~pen",         cmOpenMsg,   kbEnter,  hcNoContext, "Enter") +
+            *new TMenuItem("~O~pen",         cmOpenMsg,   kbNoKey,  hcNoContext, "Enter") +
             *new TMenuItem("~R~eply",        cmReplyMsg,  kbCtrlR,  hcNoContext, "Ctrl-R") +
             *new TMenuItem("~N~ew message",  cmCompose,   kbCtrlN,  hcNoContext, "Ctrl-N") +
             *new TMenuItem("~S~end draft",   cmSendMsg,   kbF2,     hcNoContext, "F2") +
             newLine() +
             *new TMenuItem("~V~iew source",  cmViewSrc,   kbNoKey, hcNoContext) +
             *new TMenuItem("~D~elete",       cmDeleteMsg, kbCtrlD,  hcNoContext, "Ctrl-D") +
+        *new TSubMenu("~E~dit", kbAltE) +
+            *new TMenuItem("~U~ndo",  cmUndo,  kbNoKey, hcNoContext) +
+            newLine() +
+            *new TMenuItem("Cu~t~",   cmCut,   kbShiftDel, hcNoContext, "Shift-Del") +
+            *new TMenuItem("~C~opy",  cmCopy,  kbCtrlIns,  hcNoContext, "Ctrl-Ins") +
+            *new TMenuItem("~P~aste", cmPaste, kbShiftIns, hcNoContext, "Shift-Ins") +
+            newLine() +
+            *new TMenuItem("~F~ind...",    cmFind,        kbNoKey, hcNoContext) +
+            *new TMenuItem("~R~eplace...", cmReplace,     kbNoKey, hcNoContext) +
+            *new TMenuItem("Find a~g~ain", cmSearchAgain, kbNoKey, hcNoContext) +
         *new TSubMenu("~W~indow", kbAltW) +
             *new TMenuItem("~N~ext",     cmNext,    kbF6,      hcNoContext, "F6") +
             *new TMenuItem("~P~revious", cmPrev,    kbShiftF6, hcNoContext, "Shift-F6") +
@@ -656,7 +781,6 @@ TStatusLine *TVMailApp::initStatusLine(TRect r)
         *new TStatusDef(0, 0xFFFF) +
             *new TStatusItem("~F3~ Pull",    kbF3,    cmPull) +
             *new TStatusItem("~F5~ Reload",  kbF5,    cmReload) +
-            *new TStatusItem("~Enter~ Open", kbEnter, cmOpenMsg) +
             *new TStatusItem("~^R~ Reply",   kbCtrlR, cmReplyMsg) +
             *new TStatusItem("~^N~ New",     kbCtrlN, cmCompose) +
             *new TStatusItem("~F2~ Send",    kbF2,    cmSendMsg) +
