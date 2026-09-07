@@ -68,9 +68,12 @@ if(TVMAIL_PYTHON)
 endif()
 
 if(NOT WIN32)
+    # TVMAIL_MODE=local pins it to the on-disk mbox path regardless of any
+    # ~/.config/tvmail/tvmail.conf on the host - so a client machine's
+    # --selftest doesn't wander off to a live IMAP server.
     add_test(NAME backend_pipe COMMAND tvmail --selftest)
     set_tests_properties(backend_pipe PROPERTIES
-        ENVIRONMENT "PATH=${CMAKE_CURRENT_SOURCE_DIR}/backend:$ENV{PATH}"
+        ENVIRONMENT "PATH=${CMAKE_CURRENT_SOURCE_DIR}/backend:$ENV{PATH};TVMAIL_MODE=local"
         PASS_REGULAR_EXPRESSION "served=1 status=0")
     if(TVMAIL_PYTHON)
         add_test(NAME e2e_tui
