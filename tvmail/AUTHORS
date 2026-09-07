@@ -1,0 +1,14 @@
+tvmail  --  a Turbo Vision mail client
+
+Created and maintained by
+    Chris Pollitt   <chris.pollitt@gmail.com>
+
+Developed with pair-programming assistance from Claude (Anthropic).
+See the "Co-Authored-By:" trailers in the git history for details.
+
+Bundled at build time (cloned by build.sh, not stored in this repository):
+    Turbo Vision   --   https://github.com/magiblot/tvision
+        modern C++ port by magiblot of Borland's Turbo Vision framework.
+
+Portions of src/tvmail.cpp (the Find / Replace dialog helpers) are adapted
+from the `tvedit` example in the Turbo Vision distribution.

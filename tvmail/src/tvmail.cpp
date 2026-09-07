@@ -83,6 +83,7 @@ const ushort cmSaveSig      = 2018;   // (signature window) write the file
 const ushort cmInsSig       = 2019;   // (compose) insert the signature
 const ushort cmInsDead      = 2020;   // (compose) insert ~/dead.letter
 const ushort cmResumeDead   = 2021;   // open ~/dead.letter as a new compose
+const ushort cmShowHelp   = 2022;   // in-app help window
 
 // ------------------------------------------------------ editor dialogs -----
 // Wire up the standard Find / Replace / "search failed" dialogs the TEditor
@@ -1121,6 +1122,84 @@ public:
     }
 };
 
+// ========================================================== in-app help ====
+static const char *kHelpText =
+"tvmail  -  a Turbo Vision mail client                (Esc / Alt-F3 closes)\n"
+"\n"
+"THE THREE PANES\n"
+"  Folders (left)  .  Messages (top right)  .  Message body (bottom right).\n"
+"  Tab / Shift-Tab move between panes.  Arrows, PgUp, PgDn move within one.\n"
+"  Moving the highlight in Folders reloads the message list; moving it in\n"
+"  Messages loads the body below.  Enter on a message jumps to the body.\n"
+"\n"
+"FOLDERS\n"
+"  inbox        /var/mail/$USER    - where exim and pop-pull deliver\n"
+"  drafts       ~/Mail/drafts      - messages you chose to keep unsent\n"
+"  saved        ~/mbox             - where mail(1) files read messages\n"
+"  trash        ~/.local/share/tvmail/trash.mbox\n"
+"  dead.letter  ~/dead.letter      - a message mail(1) or tvmail left behind\n"
+"\n"
+"READING\n"
+"  Enter    jump to the body pane and scroll it\n"
+"  Ctrl-D   delete  (moves to trash; from trash it deletes for good)\n"
+"  F5       reload the current folder      F3   pull new mail (pop-pull)\n"
+"  Message > View source shows the raw RFC822 message.\n"
+"\n"
+"COMPOSING\n"
+"  Ctrl-N   new message            Ctrl-R  reply to the selected message\n"
+"  F2       send the compose window you are in\n"
+"  A new message starts with your ~/.signature (after the quote on replies).\n"
+"  Message > Insert signature / Insert dead.letter add them by hand\n"
+"  (the classic ~a / ~d escapes).\n"
+"  Closing an unsent message offers  Save draft / Discard / Cancel.\n"
+"  In the Drafts folder, Enter opens the draft to finish it; sending it\n"
+"  removes it from Drafts.\n"
+"\n"
+"ADDRESS BOOK   (Message > Address book, F4)\n"
+"  Lists the alias / group entries from /etc/mailrc and ~/.mailrc.\n"
+"  Enter drops the addresses into the To: field of your compose window.\n"
+"  You can also just type an alias name in To: - it is expanded on send.\n"
+"\n"
+"SIGNATURE   (File > Edit signature)\n"
+"  Opens ~/.signature in the editor.  Ctrl-S saves.\n"
+"\n"
+"EDITING   (compose body, signature)\n"
+"  Shift-Del cut   Ctrl-Ins copy   Shift-Ins paste\n"
+"  Edit > Find / Replace / Find again\n"
+"\n"
+"mail(1) COMPATIBILITY\n"
+"  tvmail reads your ~/.mailrc:  set folder, set DEAD, and the alias / group\n"
+"  address book.  Drafts in ~/Mail/drafts open with  mail -f +drafts .\n"
+"  It is a face on the same mailbox, not a silo.\n"
+"\n"
+"KEYS AT A GLANCE\n"
+"  F1 help    F3 pull    F5 reload    F6 next window    F10 menu\n"
+"  Ctrl-R reply   Ctrl-N new   F2 send   Ctrl-D delete   F4 address book\n"
+"  Tab pane   Alt-X quit\n";
+
+class THelpWindow : public TWindow {
+public:
+    THelpWindow(const TRect &b)
+        : TWindowInit(&THelpWindow::initFrame),
+          TWindow(b, "Help", wnNoNumber)
+    {
+        palette = wpCyanWindow;
+        options |= ofTileable;
+        TScrollBar *v = standardScrollBar(sbVertical   | sbHandleKeyboard);
+        TScrollBar *h = standardScrollBar(sbHorizontal | sbHandleKeyboard);
+        TRect r = getExtent(); r.grow(-1, -1);
+        insert(new TTextView(r, h, v, splitLines(kHelpText)));
+    }
+    TColorAttr mapColor(uchar i) override
+    {
+        switch (i) {
+            case 1: return cDim();  case 2: case 3: return cFrame();
+            case 4: case 6: case 8: return cNorm();  case 5: case 7: return cHi();
+        }
+        return TView::mapColor(i);
+    }
+};
+
 // ---------------------------------------------------------------- app -------
 class TVMailApp : public TApplication {
 public:
@@ -1214,7 +1293,9 @@ TMenuBar *TVMailApp::initMenuBar(TRect r)
             newLine() +
             *new TMenuItem("~C~lose",    cmClose,   kbAltF3,   hcNoContext, "Alt-F3") +
         *new TSubMenu("~H~elp", kbAltH) +
-            *new TMenuItem("~A~bout", cmAboutBox, kbNoKey, hcNoContext)
+            *new TMenuItem("~C~ontents", cmShowHelp,     kbF1,   hcNoContext, "F1") +
+            newLine() +
+            *new TMenuItem("~A~bout",    cmAboutBox, kbNoKey, hcNoContext)
         );
 }
 
@@ -1231,6 +1312,7 @@ TStatusLine *TVMailApp::initStatusLine(TRect r)
             *new TStatusItem("~^D~ Del",     kbCtrlD, cmDeleteMsg) +
             *new TStatusItem("~F6~ Next",    kbF6,    cmNext) +
             *new TStatusItem("~Alt-X~ Exit", kbAltX,  cmQuit) +
+            *new TStatusItem("~F1~ Help",    kbF1,    cmShowHelp) +
             *new TStatusItem(nullptr,        kbF10,   cmMenu) +
             *new TStatusItem(nullptr,        kbShiftF6, cmPrev) +
             *new TStatusItem(nullptr,        kbAltF3, cmClose)
@@ -1350,10 +1432,17 @@ void TVMailApp::handleEvent(TEvent &e)
             deskTop->insert(new TSigWindow(r));
             break;
         }
+        case cmShowHelp: {
+            TRect r = deskTop->getExtent(); r.grow(-4, -2);
+            deskTop->insert(new THelpWindow(r));
+            break;
+        }
         case cmAboutBox:
-            messageBox("tvmail v0.9\n\n3-pane Turbo Vision mail client.\n"
-                       "Folders / message list / message content.\n"
-                       "Plumbing: exim + tvmail-backend + pop-pull",
+            messageBox("tvmail 1.0\n\n"
+                       "A Turbo Vision mail client for a local mailbox.\n"
+                       "Chris Pollitt  -  MIT licence, no warranty.\n\n"
+                       "Turbo Vision by magiblot.  Plumbing: exim +\n"
+                       "tvmail-backend + pop-pull.  See HISTORY.md.",
                        mfInformation | mfOKButton);
             break;
         default: handled = false;
