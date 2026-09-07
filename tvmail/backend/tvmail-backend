@@ -295,7 +295,7 @@ def cmd_send(a):
 
 
 def cmd_pull(a):
-    exe = shutil.which("pop-pull") or os.path.expanduser("~/bin/pop-pull")
+    exe = shutil.which("pop-pull") 
     if not os.path.exists(exe):
         sys.exit("tvmail-backend: pop-pull not found - run configure-mail-pull.sh")
     return subprocess.run([exe, "-v"]).returncode

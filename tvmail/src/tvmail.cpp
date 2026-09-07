@@ -894,8 +894,8 @@ void TVMailApp::handleEvent(TEvent &e)
             break;
         }
         case cmAboutBox:
-            messageBox("tvmail v0\n\nA Turbo Vision front-end for a local mbox.\n"
-                       "Mail plumbing: exim + tvmail-backend (Cygwin).",
+            messageBox("tvmail v0.9\n\nA Turbo Vision front-end for a local mbox.\n"
+                       "Plumbing: exim + tvmail-backend + pop-pull",
                        mfInformation | mfOKButton);
             break;
         default: handled = false;
