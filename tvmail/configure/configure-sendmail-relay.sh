@@ -21,6 +21,13 @@
 #   --relay-file FILE   cPanel-style "Mail Client Configuration" text to read the
 #                       smarthost host / port / username (and password) from.
 #   --user NAME         local account that receives root's mail   (default: you)
+#   --users "A B ..."   Cygwin: every local account that should be able to send
+#                       mail.  More than one switches on multi-user mode: the
+#                       mail spool / queue / logs and the smarthost credential
+#                       file become group-owned by --mail-group, and mailboxes
+#                       are group-writable.  (default: just --user)
+#   --mail-group NAME   Cygwin: the shared group for multi-user mode
+#                       (default: Administrators - exim's compiled CONFIGURE_GROUP)
 #   --mta KIND         Linux: force  postfix | exim4  (default: use whatever is
 #                       installed; install Postfix if nothing is)
 #   --service KIND      Linux: systemd | sysv | none   (default: ask)
@@ -38,11 +45,15 @@ TEST_ADDR=""
 SERVICE=""
 SMTP_PORT=""
 MTA_OPT=""
+USERS_STR=""
+MAIL_GRP="Administrators"
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --relay-file)  RELAY_FILE="${2:?}"; shift 2 ;;
     --user)        ADMIN_USER="${2:?}"; shift 2 ;;
+    --users)       USERS_STR="${2:?}";  shift 2 ;;
+    --mail-group)  MAIL_GRP="${2:?}";   shift 2 ;;
     --service)     SERVICE="${2:?}";    shift 2 ;;
     --smtp-port)   SMTP_PORT="${2:?}";  shift 2 ;;
     --mta)         MTA_OPT="${2:?}";    shift 2 ;;
@@ -53,6 +64,15 @@ while [ $# -gt 0 ]; do
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
+
+# Cygwin multi-user: --users lists every account that may send.  >1 flips on
+# group-shared perms (mail spool/queue/logs + credential file) so exim - which
+# runs unprivileged as whoever invoked sendmail - can still deliver and relay.
+[ -n "$USERS_STR" ] || USERS_STR="$ADMIN_USER"
+# shellcheck disable=SC2206
+MAIL_USERS=($USERS_STR)
+MULTI=0
+[ "${#MAIL_USERS[@]}" -gt 1 ] && MULTI=1
 
 log()  { printf '  %s\n' "$*"; }
 warn() { printf 'WARN: %s\n' "$*" >&2; }
@@ -349,6 +369,11 @@ REWRITE_TO="$SMARTHOST_USER"
 if [ "$SMARTHOST_PORT" = "465" ]; then PROTO="smtps"; else PROTO="smtp"; fi
 GRP="$(id -gn "$ADMIN_USER" 2>/dev/null || id -gn)"
 
+# extra local_delivery lines for multi-user mode (unprivileged exim delivering
+# to a mailbox it doesn't own)
+LD_SHARE=""
+[ "$MULTI" = 1 ] && LD_SHARE=$'  check_owner       = false\n  check_group       = false\n'
+
 log "smarthost   : ${SMARTHOST_HOST}:${SMARTHOST_PORT}  (${PROTO}, AUTH LOGIN/PLAIN)"
 log "auth user   : ${SMARTHOST_USER}"
 log "local host  : ${HOSTN}"
@@ -359,22 +384,40 @@ log "root's mail  : ${ADMIN_USER}"
 # 2. Directories
 # --------------------------------------------------------------------------
 install -d -m 1777 /var/mail
-install -d -m 1777 /var/spool/exim
-install -d -m 1777 /var/log/exim
+install -d -m 2775 /var/spool/exim
+install -d -m 2775 /var/log/exim
 install -d -m 0755 /etc/exim
 install -d -m 0755 /etc/BAK
 
-# A mailbox left by a broken earlier run can carry an ACL that Cygwin maps to a
-# non-writable mode (e.g. 564), which exim then refuses ("wrong mode ..."). If
-# it is empty, drop it so exim recreates it cleanly; if it has mail, just warn.
-mb="/var/mail/${ADMIN_USER}"
-if [ -f "$mb" ] && [ ! -s "$mb" ] && \
-   { [ ! -w "$mb" ] || [ "$(stat -c %a "$mb" 2>/dev/null)" != "600" ]; }; then
-  rm -f "$mb" && log "removed stale empty $mb (exim recreates it at mode 600)"
-elif [ -f "$mb" ] && [ ! -w "$mb" ]; then
-  chmod 600 "$mb" 2>/dev/null || true
-  [ -w "$mb" ] || warn "$mb is not writable - fix by hand:  chmod 600 $mb"
+MB_MODE=0600
+if [ "$MULTI" = 1 ]; then
+  MB_MODE=0660
+  # exim runs unprivileged as the invoking user; group-own + setgid the spool,
+  # queue and logs so every "$MAIL_GRP" member can write and new files inherit
+  # the group (else exim-as-A can't tidy files exim-as-B left behind).
+  for d in /var/mail /var/spool/exim /var/log/exim; do
+    chgrp "$MAIL_GRP" "$d" 2>/dev/null \
+      || warn "could not chgrp $d to $MAIL_GRP (run elevated / check the name)"
+  done
+  chmod g+s /var/mail 2>/dev/null || true            # 1777 -> 3777 (sticky+setgid)
+  find /var/spool/exim /var/log/exim -exec chgrp "$MAIL_GRP" {} + 2>/dev/null || true
+  find /var/spool/exim /var/log/exim -type d -exec chmod g+ws {} + 2>/dev/null || true
+  find /var/spool/exim /var/log/exim -type f -exec chmod g+w  {} + 2>/dev/null || true
 fi
+
+# Provision a mailbox per sending user.  A file left 0-byte and unwritable by a
+# broken earlier run (Cygwin ACL mapped to e.g. mode 564, which exim rejects)
+# is dropped so it gets recreated cleanly; one with mail in it is left alone.
+for u in "${MAIL_USERS[@]}"; do
+  mb="/var/mail/$u"
+  if [ -f "$mb" ] && [ ! -s "$mb" ] && [ ! -w "$mb" ]; then
+    rm -f "$mb" && log "removed stale unwritable empty $mb"
+  fi
+  [ -e "$mb" ] || { : > "$mb" && log "provisioned $mb"; }
+  [ "$MULTI" = 1 ] && chgrp "$MAIL_GRP" "$mb" 2>/dev/null || true
+  chmod "$MB_MODE" "$mb" 2>/dev/null || true
+  [ -w "$mb" ] || warn "$mb not writable - fix by hand:  chmod $MB_MODE $mb"
+done
 
 backup() {
   [ -e "$1" ] || return 0
@@ -399,6 +442,17 @@ EOF
   )
   chmod 600 /etc/exim/passwd.client
   log "wrote /etc/exim/passwd.client (0600)"
+fi
+
+# In multi-user mode every sender's (unprivileged) exim has to read the
+# credential file, so open it to the shared group.  Single-user stays 0600.
+if [ "$MULTI" = 1 ] && [ -f /etc/exim/passwd.client ]; then
+  chgrp "$MAIL_GRP" /etc/exim/passwd.client 2>/dev/null || true
+  chmod 0640 /etc/exim/passwd.client
+  warn "the smarthost password in /etc/exim/passwd.client is now readable by"
+  warn "  the '$MAIL_GRP' group (required for other users to relay externally)."
+elif [ -f /etc/exim/passwd.client ]; then
+  chmod 0600 /etc/exim/passwd.client
 fi
 
 # --------------------------------------------------------------------------
@@ -549,9 +603,12 @@ local_delivery:
   delivery_date_add
   envelope_to_add
   return_path_add
-  mode              = 0600
+  # mailbox mode ${MB_MODE}. Multi-user: 0660 + owner/group checks off so any
+  # ${MAIL_GRP}-group account's (unprivileged) exim can deliver.  The router
+  # restricts this to real local users and appendfile won't follow a symlink.
+  mode              = ${MB_MODE}
   mode_fail_narrower = false
-  # single-host mbox: fcntl lock only, no '<mbox>.lock' dotfiles in /var/mail
+${LD_SHARE}  # single-host mbox: fcntl lock only, no '<mbox>.lock' dotfiles in /var/mail
   use_lockfile      = false
   use_fcntl_lock    = true
 
@@ -588,7 +645,26 @@ begin retry
 # on the smarthost_smtp transport, so locally delivered mail is left as-is.
 EOF
 
-chmod 644 "$CONF"
+# Exim only trusts its runtime config if the file is owned by root or its
+# compiled CONFIGURE_OWNER (SYSTEM, uid 18 on Cygwin) and is not group/world
+# writable.  Owned by the invoking user also passes - which is why a chris-only
+# setup works - but that breaks the moment another account runs sendmail
+# ("Exim configuration file ... has the wrong owner, group, or mode").  Take
+# SYSTEM ownership if we can; the chown needs an elevated shell.
+chgrp "$MAIL_GRP" "$CONF" 2>/dev/null || true
+chown 18 "$CONF" 2>/dev/null || chown SYSTEM "$CONF" 2>/dev/null || true
+chmod 0644 "$CONF"
+_co="$(stat -c %u "$CONF" 2>/dev/null || echo '?')"
+if [ "$_co" != 18 ] && [ "$_co" != 0 ]; then
+  if [ "$MULTI" = 1 ]; then
+    warn "could NOT give $CONF to SYSTEM - other users' sendmail will still PANIC."
+    warn "  Run this once from an ELEVATED shell, then re-run me:"
+    warn "      chown 18:544 $CONF && chmod 0644 $CONF"
+  else
+    log "note: $CONF is owned by $ADMIN_USER (fine for a single user).  For"
+    log "  multi-user, chown it to SYSTEM from an elevated shell:  chown 18:544 $CONF"
+  fi
+fi
 log "wrote $CONF"
 
 # --------------------------------------------------------------------------
@@ -665,3 +741,11 @@ echo
 log "Done. sendmail is: $(ls -l /usr/sbin/sendmail | sed 's/.*-> //')"
 log "Logs : /var/log/exim/mainlog   (rejects: rejectlog, panics: paniclog)"
 log "Queue: exim -bp     Flush: exim -qff -v     Local mail: /var/mail/<user>"
+if [ "$MULTI" = 1 ]; then
+  log "Multi-user: ${MAIL_USERS[*]}  (shared group: $MAIL_GRP)"
+  log "  Each user reads their own /var/mail/<user>.  Delivery still runs as"
+  log "  whoever invoked sendmail, so a new mailbox is created owned by them;"
+  log "  it's group '$MAIL_GRP' + mode $MB_MODE via the setgid spool dir."
+else
+  log "Single user.  For a second sender:  $0 --users \"$ADMIN_USER other\" ..."
+fi
