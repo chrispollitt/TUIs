@@ -28,12 +28,17 @@
 #define Uses_TDrawBuffer
 #define Uses_TEvent
 #define Uses_MsgBox
+#define Uses_TInputLine
+#define Uses_TLabel
+#define Uses_TEditor
+#define Uses_TIndicator
 #include <tvision/tv.h>
 
 #include <string>
 #include <vector>
 #include <sstream>
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -62,6 +67,7 @@ const ushort cmAboutBox     = 2007;
 const ushort cmFolderSpool  = 2008;
 const ushort cmFolderMbox   = 2009;
 const ushort cmFolderOther  = 2010;
+const ushort cmSendMsg      = 2011;   // send the focused compose window
 
 // -------------------------------------------------------- shell plumbing ----
 // Everything the backend needs runs inside one bash script so we never fight
@@ -99,6 +105,19 @@ static std::string writeScript(const std::string &body)
         fputs(kPreamble, f);
         fputs(body.c_str(), f);
         fputc('\n', f);
+        fclose(f);
+    }
+    return path;
+}
+
+// a plain temp file (e.g. an RFC822 draft) - path is fine for Cygwin bash
+static std::string writeTemp(const std::string &content, const char *suffix)
+{
+    static int seq = 0;
+    std::string path = tempDir() + "tvmail_msg_" + std::to_string(procId())
+                     + "_" + std::to_string(++seq) + suffix;
+    if (FILE *f = fopen(path.c_str(), "wb")) {
+        fwrite(content.data(), 1, content.size(), f);
         fclose(f);
     }
     return path;
@@ -368,6 +387,199 @@ public:
     }
 };
 
+// -------------------------------------------------------- compose window ----
+// A real in-app composer (cf. third_party/tvision/examples/tvedit): To/Cc/
+// Subject input lines over a TEditor body with a scrollbar + L:C indicator.
+// F2 sends via `tvmail-backend send`; closing a modified draft asks first.
+
+class TBodyEditor : public TEditor {
+public:
+    TBodyEditor(const TRect &b, TScrollBar *h, TScrollBar *v, TIndicator *i, uint sz)
+        : TEditor(b, h, v, i, sz) {}
+    TColorAttr mapColor(uchar index) override
+    {
+        switch (index) {
+            case 1: return cNorm();   // normal text
+            case 2: return cSel();    // selected text
+        }
+        return TView::mapColor(index);
+    }
+};
+
+class TFieldLine : public TInputLine {
+public:
+    TFieldLine(const TRect &b, int lim) : TInputLine(b, lim) {}
+    TColorAttr mapColor(uchar index) override
+    {
+        switch (index) {
+            case 1: return cNorm();   // passive
+            case 2: return cSel();    // active
+            case 3: return cSel();    // selected block
+            case 4: return cHi();     // scroll arrows
+        }
+        return TView::mapColor(index);
+    }
+};
+
+class TComposeWindow : public TWindow {
+    TFieldLine  *toLine = nullptr, *ccLine = nullptr, *subjLine = nullptr;
+    TBodyEditor *editor = nullptr;
+    Boolean sent = False;
+
+    static std::string strip(std::string s)
+    {
+        size_t a = s.find_first_not_of(" \t\r\n");
+        size_t b = s.find_last_not_of(" \t\r\n");
+        return a == std::string::npos ? std::string() : s.substr(a, b - a + 1);
+    }
+
+public:
+    TComposeWindow(const TRect &bounds,
+                   const std::string &to, const std::string &cc,
+                   const std::string &subj, const std::string &body)
+        : TWindowInit(&TComposeWindow::initFrame),
+          TWindow(bounds, "Compose", wnNoNumber)
+    {
+        palette = wpCyanWindow;
+        options |= ofTileable;
+        const int W = size.x;
+
+        auto addField = [&](int y, const char *label, const std::string &val) {
+            insert(new TLabel(TRect(2, y, 11, y + 1), label, nullptr));
+            auto *il = new TFieldLine(TRect(11, y, W - 2, y + 1), 900);
+            il->growMode = gfGrowHiX;
+            if (!val.empty()) {
+                std::strncpy(il->data, val.c_str(), il->maxLen);
+                il->data[il->maxLen] = '\0';
+            }
+            insert(il);
+            return il;
+        };
+        toLine   = addField(1, "~T~o",      to);
+        ccLine   = addField(2, "~C~c",      cc);
+        subjLine = addField(3, "~S~ubject", subj);
+
+        TScrollBar *vsb = new TScrollBar(TRect(W - 2, 5, W - 1, size.y - 1));
+        insert(vsb);
+        TIndicator *ind = new TIndicator(TRect(2, size.y - 1, 16, size.y));
+        insert(ind);
+        editor = new TBodyEditor(TRect(1, 5, W - 2, size.y - 1), nullptr, vsb, ind, 64000);
+        editor->growMode = gfGrowHiX | gfGrowHiY;
+        insert(editor);
+
+        if (!body.empty()) {
+            editor->insertText(body.data(), (uint)body.size(), False);
+            editor->setSelect(0, 0, False);
+            editor->trackCursor(False);
+            editor->modified = False;
+        }
+        // blank compose -> cursor in To:, reply -> cursor in the body
+        if (to.empty()) toLine->select(); else editor->select();
+    }
+
+    TColorAttr mapColor(uchar index) override
+    {
+        switch (index) {
+            case 1: return cDim();    case 2: return cFrame();
+            case 3: return cFrame();  case 4: return cNorm();
+            case 5: return cHi();     case 6: return cNorm();
+            case 7: return cHi();     case 8: return cNorm();
+        }
+        return TView::mapColor(index);
+    }
+
+    std::string bodyText()
+    {
+        uint n = editor->bufLen;
+        std::string s(n, '\0');
+        if (n) editor->getText(0, TSpan<char>(&s[0], (size_t)n));
+        return s;
+    }
+
+    void doSend()
+    {
+        std::string to   = toLine->data   ? toLine->data   : "";
+        std::string cc   = ccLine->data   ? ccLine->data   : "";
+        std::string subj = subjLine->data ? subjLine->data : "";
+        if (strip(to).empty()) {
+            messageBox("Enter at least one To: address.", mfError | mfOKButton);
+            return;
+        }
+        std::string msg = "To: " + to + "\n";
+        if (!strip(cc).empty()) msg += "Cc: " + cc + "\n";
+        msg += "Subject: " + subj + "\n\n" + bodyText();
+        if (msg.empty() || msg.back() != '\n') msg += '\n';
+
+        std::string path = writeTemp(msg, ".eml");
+        std::string out = shCapture("tvmail-backend send < '" + path + "' 2>&1; rm -f '" + path + "'");
+        while (!out.empty() && (out.back() == '\n' || out.back() == ' ')) out.pop_back();
+
+        if (out == "sent" || out.empty()) {
+            sent = True;
+            messageBox("Message sent.", mfInformation | mfOKButton);
+            // close after this event unwinds (don't free 'this' mid-handleEvent)
+            TEvent ev;
+            ev.what = evCommand;
+            ev.message.command = cmClose;
+            ev.message.infoPtr = this;
+            putEvent(ev);
+        } else {
+            messageBox(("Send failed:\n" + out).c_str(), mfError | mfOKButton);
+        }
+    }
+
+    void handleEvent(TEvent &e) override
+    {
+        TWindow::handleEvent(e);
+        if (e.what == evCommand && e.message.command == cmSendMsg) {
+            doSend();
+            clearEvent(e);
+        }
+    }
+
+    Boolean valid(ushort command) override
+    {
+        if (!TWindow::valid(command)) return False;
+        if (command == cmClose && editor && editor->modified && !sent)
+            return Boolean(messageBox("Discard this draft?",
+                                      mfWarning | mfYesButton | mfNoButton) == cmYes);
+        return True;
+    }
+};
+
+static void parseTemplate(const std::string &t, std::string &to, std::string &cc,
+                          std::string &subj, std::string &body)
+{
+    std::istringstream is(t);
+    std::string line, b;
+    bool inBody = false;
+    auto ieq = [](const std::string &a, const char *k) {
+        if (a.size() != std::strlen(k)) return false;
+        for (size_t i = 0; i < a.size(); ++i)
+            if (std::tolower((unsigned char)a[i]) != std::tolower((unsigned char)k[i]))
+                return false;
+        return true;
+    };
+    while (std::getline(is, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (!inBody) {
+            if (line.empty()) { inBody = true; continue; }
+            size_t p = line.find(':');
+            if (p != std::string::npos) {
+                std::string k = line.substr(0, p), v = line.substr(p + 1);
+                while (!v.empty() && (v[0] == ' ' || v[0] == '\t')) v.erase(0, 1);
+                if      (ieq(k, "To"))      to = v;
+                else if (ieq(k, "Cc"))      cc = v;
+                else if (ieq(k, "Subject")) subj = v;
+            }
+        } else {
+            b += line;
+            b += '\n';
+        }
+    }
+    body = b;
+}
+
 // ---------------------------------------------------------------- app -------
 class TVMailApp : public TApplication {
 public:
@@ -420,6 +632,7 @@ TMenuBar *TVMailApp::initMenuBar(TRect r)
             *new TMenuItem("~O~pen",         cmOpenMsg,   kbEnter,  hcNoContext, "Enter") +
             *new TMenuItem("~R~eply",        cmReplyMsg,  kbCtrlR,  hcNoContext, "Ctrl-R") +
             *new TMenuItem("~N~ew message",  cmCompose,   kbCtrlN,  hcNoContext, "Ctrl-N") +
+            *new TMenuItem("~S~end draft",   cmSendMsg,   kbF2,     hcNoContext, "F2") +
             newLine() +
             *new TMenuItem("~V~iew source",  cmViewSrc,   kbNoKey, hcNoContext) +
             *new TMenuItem("~D~elete",       cmDeleteMsg, kbCtrlD,  hcNoContext, "Ctrl-D") +
@@ -446,6 +659,7 @@ TStatusLine *TVMailApp::initStatusLine(TRect r)
             *new TStatusItem("~Enter~ Open", kbEnter, cmOpenMsg) +
             *new TStatusItem("~^R~ Reply",   kbCtrlR, cmReplyMsg) +
             *new TStatusItem("~^N~ New",     kbCtrlN, cmCompose) +
+            *new TStatusItem("~F2~ Send",    kbF2,    cmSendMsg) +
             *new TStatusItem("~^D~ Del",     kbCtrlD, cmDeleteMsg) +
             *new TStatusItem("~F6~ Next",    kbF6,    cmNext) +
             *new TStatusItem("~Alt-X~ Exit", kbAltX,  cmQuit) +
@@ -492,33 +706,15 @@ void TVMailApp::viewSource(int row)
 
 void TVMailApp::replyOrCompose(int row)
 {
-    std::string tmpl;
+    std::string to, cc, subj, body;
     if (row >= 0) {
-        tmpl = "tvmail-backend compose-template --in-reply-to "
-             + std::to_string(gRows[row].idx) + mboxArg();
-    } else {
-        char to[256] = "";
-        if (inputBox("New message", "To:", to, sizeof(to) - 1) != cmOK || !*to) return;
-        char subj[256] = "";
-        inputBox("New message", "Subject:", subj, sizeof(subj) - 1);
-        tmpl = "tvmail-backend compose-template --to '" + std::string(to) + "'";
-        if (*subj) tmpl += " --subject '" + std::string(subj) + "'";
+        std::string t = shCapture("tvmail-backend compose-template --in-reply-to "
+                                  + std::to_string(gRows[row].idx) + mboxArg() + " 2>/dev/null");
+        parseTemplate(t, to, cc, subj, body);
     }
-
-    // one script: make a draft, open $EDITOR, stash the result
-    std::string body =
-        "d=\"${TMPDIR:-/tmp}/tvmail.draft.$$\"\n"
-        + tmpl + " > \"$d\" 2>/dev/null\n"
-        "\"${EDITOR:-${VISUAL:-vi}}\" \"$d\"\n"
-        "cp -f \"$d\" \"${TMPDIR:-/tmp}/tvmail.lastdraft\"\n"
-        "rm -f \"$d\"\n";
-    shInteractive(body);
-
-    if (messageBox("Send this message now?", mfConfirmation | mfYesNoCancel) == cmYes) {
-        std::string out = shCapture(
-            "tvmail-backend send < \"${TMPDIR:-/tmp}/tvmail.lastdraft\" 2>&1");
-        messageBox(out.empty() ? "sent" : out.c_str(), mfInformation | mfOKButton);
-    }
+    TRect r = deskTop->getExtent();
+    r.grow(-5, -2);
+    deskTop->insert(new TComposeWindow(r, to, cc, subj, body));
 }
 
 void TVMailApp::deleteMsg(int row)
