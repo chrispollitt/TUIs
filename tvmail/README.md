@@ -3,9 +3,9 @@
 A **Turbo Vision** mail client for a local Unix mailbox — dropdown menus,
 dialog boxes with drop shadows, the cyan desktop, `F10` for the menu bar.
 Built on [magiblot/tvision](https://github.com/magiblot/tvision), the modern C++
-port of Borland's Turbo Vision.
+port of Borland's Turbo Vision. It is 2026. This is fine.
 
-See [HISTORY.md](HISTORY.md) for why this exists.
+See [HISTORY.md](HISTORY.md) for the twenty-year excuse.
 
 ```
  File  Message  Edit  Window  Help
@@ -198,10 +198,16 @@ Created by Chris Pollitt (see [AUTHORS](AUTHORS)), with pair-programming help
 from Claude. Turbo Vision by [magiblot](https://github.com/magiblot/tvision);
 Find/Replace dialog helpers adapted from its `tvedit` example.
 
-## TODO
+## Man pages
+
+`man tvmail` and `man tvmail-backend`, installed to `$prefix/share/man/man1`.
+Old school. As nature intended.
+
+## TODO / someday / probably not
 
 - Window List dialog (open windows, à la Turbo Pascal)
 - attachment browser (`parts` / `save` are already in the backend)
 - threading, search / filter, sort by column
 - a `tvmailrc` for colours / default folder / poll-on-start
 - mark-as-read only after the body is actually scrolled
+- a mouse. it's Turbo Vision, it should have a mouse. one day.

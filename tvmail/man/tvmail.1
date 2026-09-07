@@ -1,0 +1,286 @@
+.\" tvmail(1) man page.  man(7) macros, because we are old school.
+.TH TVMAIL 1 "September 2026" "tvmail 1.0" "User Commands"
+.SH NAME
+tvmail \- a Turbo Vision mail client for a local mailbox
+.SH SYNOPSIS
+.B tvmail
+.SH DESCRIPTION
+.B tvmail
+reads, writes and files electronic mail from a text terminal, wearing the
+face of Borland's
+.B Turbo Vision
+\(em dropdown menus, dialog boxes with drop shadows, a cyan desktop, and
+.B F10
+for the menu bar.
+It is, unapologetically, a DOS\-era user interface built in the current decade
+to read a mailbox that most days contains three messages.
+.PP
+It is the presentation layer only.
+Every operation that touches a mail format \(em parsing mbox files, decoding
+MIME, composing, sending, deleting \(em is performed by a small companion
+program,
+.BR tvmail\-backend (1),
+which
+.B tvmail
+runs as a child process.
+The intent is a thin, legible front end and a back end that is useful on its
+own.
+.PP
+.B tvmail
+is a friendlier face on the very same mailbox that
+.BR mail (1)
+uses; it is not a walled garden.
+See
+.B "mailrc INTEROPERABILITY"
+below.
+.SH THE THREE PANES
+The window is divided into a folder list on the left, a message list at the
+top right, and the body of the highlighted message below it.
+.TP
+.B Tab ", " Shift\-Tab
+Move focus between the three panes.
+.TP
+.BR "Up" "/" "Down" ", " "PgUp" "/" "PgDn"
+Move within the focused pane.
+.PP
+Moving the highlight in the folder pane reloads the message list.
+Moving it in the message list loads the body pane.
+.B Enter
+in the message list moves focus to the body so it can be scrolled.
+.SH FOLDERS
+.TP
+.B inbox
+.I /var/mail/$USER
+(or
+.IR $MAIL ).
+Where the local MTA and
+.B pop\-pull
+deliver.
+.TP
+.B drafts
+.IR $folder/drafts ,
+default
+.IR ~/Mail/drafts .
+Messages you chose to keep but not send.
+.BR "mail \-f +drafts"
+opens the same file.
+.TP
+.B saved
+.IR ~/mbox .
+Where
+.BR mail (1)
+files messages once read.
+.TP
+.B trash
+.IR ~/.local/share/tvmail/trash.mbox .
+.B Ctrl\-D
+moves a message here.
+Deleting a message while
+.I in
+the trash folder deletes it for real.
+.TP
+.B dead.letter
+.I $DEAD
+(default
+.IR ~/dead.letter ).
+A single message that
+.BR mail (1)
+or
+.B tvmail
+left behind after an aborted composition.
+Shown as a one\-message pseudo\-folder.
+.SH KEYS
+.TP
+.B F1
+This help, but inside the program.
+.TP
+.B F3
+Pull remote mail (runs
+.BR pop\-pull ).
+.TP
+.B F5
+Reload the current folder.
+.TP
+.B "Ctrl\-R" ", " "Ctrl\-N"
+Reply to the selected message; compose a new one.
+.TP
+.B F2
+Send the compose window you are currently in.
+.TP
+.B Ctrl\-D
+Delete the selected message (to the trash folder).
+.TP
+.B F4
+Open the address book.
+.TP
+.B "F6" ", " "Shift\-F6"
+Cycle to the next / previous window.
+.TP
+.B F10
+Enter the menu bar.
+.TP
+.B Alt\-X
+Quit.
+.PP
+In any editor (the compose body, the signature file):
+.B Shift\-Del
+cut,
+.B Ctrl\-Ins
+copy,
+.B Shift\-Ins
+paste; the
+.B Edit
+menu carries Find, Replace and Find\-again.
+.SH COMPOSING
+A new message opens with the contents of
+.I ~/.signature
+appended (after the quoted text, on replies).
+.B "Message \(-> Insert signature"
+and
+.B "Message \(-> Insert dead.letter"
+add those by hand \(em the spiritual descendants of the
+.B ~a
+and
+.B ~d
+tilde escapes from
+.BR mail (1).
+.PP
+Closing a compose window that has unsent, modified text offers
+.BR "Save draft" ,
+.BR Discard ,
+or
+.BR Cancel .
+Saving appends the message to the
+.B drafts
+folder.
+Selecting a message in the
+.B drafts
+folder and pressing
+.B Enter
+re\-opens it for editing; sending it then removes it from
+.BR drafts .
+.SH ADDRESS BOOK
+.B "Message \(-> Address book"
+.RB ( F4 )
+lists the
+.B alias
+and
+.B group
+entries found in
+.I /etc/mailrc
+and
+.IR ~/.mailrc ,
+expanded recursively.
+.B Enter
+drops the expanded addresses into the
+.B To:
+field of your most recent compose window.
+You may also simply type an alias name into
+.BR To: ;
+.BR tvmail\-backend (1)
+expands it at send time, exactly as
+.B "mail team"
+would.
+.SH SIGNATURE
+.B "File \(-> Edit signature"
+opens
+.I ~/.signature
+in a full editor window.
+.B Ctrl\-S
+writes the file; closing an unsaved change prompts first.
+.SH FILES
+.TP
+.I ~/.mailrc ", " /etc/mailrc
+Read for
+.BR "set folder" ,
+.BR "set DEAD" ,
+and the
+.BR alias / group
+address book.
+.TP
+.I ~/.signature
+Appended to new messages; editable from within the program.
+.TP
+.I ~/dead.letter
+Honoured as the
+.B dead.letter
+folder and by
+.BR "File \(-> Resume dead.letter" .
+.TP
+.I ~/Mail/drafts
+The drafts mailbox (path follows
+.BR "set folder" ).
+.TP
+.I ~/.local/share/tvmail/trash.mbox
+The trash mailbox.
+.SH ENVIRONMENT
+.TP
+.B MAIL
+Overrides the inbox path.
+.TP
+.B DEAD
+Overrides
+.IR ~/dead.letter .
+.TP
+.B MAILRC
+Overrides
+.IR ~/.mailrc .
+.TP
+.B PATH
+Must contain
+.BR tvmail\-backend .
+.SH "mailrc INTEROPERABILITY"
+.B tvmail
+deliberately shares state with
+.BR mail (1):
+the same
+.IR ~/.mailrc ,
+the same address book, drafts that
+.B "mail \-f +drafts"
+can open, an honoured
+.IR ~/dead.letter .
+If you have used
+.BR mailx (1)
+or GNU Mailutils on this account, your aliases already work here.
+.SH "EXIT STATUS"
+.B tvmail
+exits
+.B 0
+on a clean quit.
+Anything else means Turbo Vision could not open the terminal, which is between
+you and your terminal.
+.SH BUGS
+It is a Turbo Vision application, written in 2026, to read local mail.
+Whether this constitutes a bug is left as an exercise for the reader.
+.PP
+Report the other kind at wherever you got this.
+.SH HISTORY
+The author spent roughly two decades not finding a terminal mail client he
+liked, tried and abandoned several of his own, and eventually built this one.
+The unabridged confession is in
+.IR HISTORY.md .
+.SH "SEE ALSO"
+.BR tvmail\-backend (1),
+.BR mail (1),
+.BR mailx (1),
+.BR sendmail (8),
+.BR exim (8),
+.BR mbox (5)
+.PP
+and, for the road not taken,
+.BR mutt (1)
+and
+.BR alpine (1).
+.SH AUTHOR
+Chris Pollitt <chris.pollitt@gmail.com>, with pair\-programming assistance from
+Claude.
+.SH COPYRIGHT
+MIT licence.
+There is
+.B no warranty
+of any kind; see the files
+.I LICENSE
+and
+.IR WARRANTY .
+This program sends mail and deletes messages \(em rehearse on a mailbox you can
+afford to lose.

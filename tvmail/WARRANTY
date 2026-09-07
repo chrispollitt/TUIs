@@ -14,5 +14,8 @@ licence text says it plainly:
     SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 In plain terms: this program sends email and deletes messages.  It is a
-hobby project.  Try it against a mailbox you can afford to lose before you
-trust it with anything that matters, and keep backups of your mbox files.
+hobby project written for an audience of roughly one.  Try it against a
+mailbox you can afford to lose before you trust it with anything that
+matters, and keep backups of your mbox files.
+
+If it eats your inbox, you get to keep both pieces.

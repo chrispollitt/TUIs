@@ -12,3 +12,7 @@ Bundled at build time (cloned by build.sh, not stored in this repository):
 
 Portions of src/tvmail.cpp (the Find / Replace dialog helpers) are adapted
 from the `tvedit` example in the Turbo Vision distribution.
+
+No mail was harmed in the making of this program.  A few test messages to
+chris.pollitt@gmail.com were, however, sent and re-sent an unreasonable
+number of times.

@@ -1,0 +1,183 @@
+.\" tvmail-backend(1) man page.
+.TH TVMAIL\-BACKEND 1 "September 2026" "tvmail 1.0" "User Commands"
+.SH NAME
+tvmail\-backend \- the part of tvmail that does the actual work
+.SH SYNOPSIS
+.B tvmail\-backend
+.I subcommand
+.RI [ args ]
+.SH DESCRIPTION
+.B tvmail\-backend
+is a small, standard\-library\-only Python program that performs every
+mail\-format operation on behalf of
+.BR tvmail (1):
+listing mailboxes, decoding MIME, composing message skeletons, handing outgoing
+mail to
+.BR sendmail (8),
+deleting, marking, saving drafts, and expanding
+.I ~/.mailrc
+aliases.
+.PP
+.BR tvmail (1)
+runs it as a child process and reads its output.
+It is documented \(em and packaged \(em separately because it is perfectly
+usable on its own from a shell or a script; the Turbo Vision front end holds no
+mail logic that this does not.
+.PP
+Each subcommand prints its result to standard output and exits
+.B 0
+on success,
+.B 1
+on a usage or not\-found error, or
+.B 2
+on a runtime failure.
+.SH "MAILBOX ARGUMENT"
+Wherever a subcommand takes a
+.I MBOX
+argument it accepts either a filesystem path or one of these shorthands:
+.TP
+.B spool
+.I $MAIL
+or
+.IR /var/mail/$USER .
+.TP
+.B mbox
+.IR ~/mbox .
+.TP
+.B drafts
+.IR $folder/drafts
+(default
+.IR ~/Mail/drafts ),
+where
+.I $folder
+is
+.B "set folder"
+from the mailrc files.
+.TP
+.B trash
+.IR ~/.local/share/tvmail/trash.mbox .
+.TP
+.B dead
+.I $DEAD
+or
+.IR ~/dead.letter ,
+treated as a single\-message mailbox.
+.SH SUBCOMMANDS
+.TP
+.BI "list " [MBOX]
+One line per message:
+.IR "index" ,
+tab,
+.I flags
+.RB ( N
+new or
+.B .
+seen), tab,
+.IR date ,
+tab,
+.IR from ,
+tab,
+.IR subject .
+A mailbox that does not exist yet lists as empty.
+.TP
+.BI "show " "IDX " [MBOX]
+Decoded headers followed by the best available text of message
+.IR IDX .
+.TP
+.BI "raw " "IDX " [MBOX]
+The message exactly as stored.
+.TP
+.BI "parts " "IDX " [MBOX]
+One line per MIME part:
+.IR "part\-number" ,
+.IR content\-type ,
+.IR filename ,
+.IR bytes .
+.TP
+.BI "save " "IDX PARTNO DEST " [MBOX]
+Write the decoded payload of one MIME part to
+.IR DEST .
+.TP
+.BI "delete " "IDX " "\fR[\fPIDX ...\fR]\fP " "\fR[\fP--mbox " "MBOX\fR]\fP " "\fR[\fP--trash " "DEST\fR]\fP"
+Remove one or more messages.
+With
+.BR \-\-trash ,
+each is appended to
+.I DEST
+first.
+A
+.I .bak
+of the mailbox is kept.
+.TP
+.BI "mark " "IDX " "read|unread " [MBOX]
+Set or clear the Status flag.
+.TP
+.BI "compose\-template " "\fR[\fP--to " "A\fR]\fP " "\fR[\fP--subject " "S\fR]\fP " "\fR[\fP--in-reply-to " "IDX\fR]\fP " [MBOX]
+Print a draft skeleton: a
+.BR From: ,
+.BR To: ,
+.B Subject:
+block, a blank line, and (for a reply) the quoted original.
+.TP
+.BI "send " "\fR[\fP--from " "A\fR]\fP " "\fR[\fP--to " "A ...\fR]\fP " "\fR[\fP--subject " "S\fR]\fP"
+Read an RFC\ 822 message (or a bare body, with
+.BR \-\-to )
+on standard input and hand it to
+.BR sendmail (8).
+.B alias
+and
+.B group
+names in
+.BR To: ,
+.B Cc:
+and
+.B Bcc:
+are expanded from the mailrc files before delivery.
+.TP
+.B save\-draft
+Read an RFC\ 822 message on standard input and append it to the
+.B drafts
+mailbox, adding a
+.B Date:
+header if absent.
+.TP
+.B aliases
+Print the address book:
+.I name
+tab
+.IR "expanded, addresses" ,
+one per line.
+.TP
+.B pull
+Run
+.B pop\-pull
+if it is on
+.IR PATH .
+.SH FILES
+.TP
+.I /etc/mailrc ", " ~/.mailrc
+Read for
+.BR "set folder" ,
+.BR "set DEAD" ,
+and
+.BR alias / group .
+.TP
+.I /usr/sbin/sendmail
+The delivery agent used by
+.BR send .
+.SH ENVIRONMENT
+.B MAIL ", " DEAD ", " MAILRC
+override the corresponding defaults.
+.SH "SEE ALSO"
+.BR tvmail (1),
+.BR mail (1),
+.BR sendmail (8),
+.BR mbox (5)
+.SH AUTHOR
+Chris Pollitt <chris.pollitt@gmail.com>.
+.SH COPYRIGHT
+MIT licence; no warranty.
+See
+.I LICENSE
+and
+.IR WARRANTY .

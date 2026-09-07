@@ -1,7 +1,10 @@
 # Why tvmail exists
 
+> *"How hard can it be?"* — the author, repeatedly, since about 2005.
+
 Short version: I have wanted a terminal mail client I actually *liked* for about
-twenty years, and I finally decided to build one.
+twenty years, and I finally decided to build one. It has a cyan desktop. I
+regret nothing.
 
 ## The long-running itch
 
@@ -65,7 +68,11 @@ walled garden.
 ## Is this over-engineered?
 
 Completely. It's a Turbo Vision app, in 2026, to read a mailbox that usually has
-three messages in it. That's the point. It's a labour of love for a workflow
-I've wanted since roughly the Clinton administration, and now it exists.
+three messages in it, two of which are cron complaining. That's the point. It's
+a labour of love for a workflow I've wanted since roughly the Clinton
+administration, and now it exists.
+
+If you are reading this because you are about to do the same thing: yes, you
+should. Send me a screenshot.
 
 — Chris
