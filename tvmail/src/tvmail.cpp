@@ -92,6 +92,7 @@ const ushort cmInsDead      = 2020;   // (compose) insert ~/dead.letter
 const ushort cmResumeDead   = 2021;   // open ~/dead.letter as a new compose
 const ushort cmShowHelp   = 2022;   // in-app help window
 const ushort cmPullDone   = 2023;   // background pop-pull finished (self-posted)
+const ushort cmPaneFocused = 2024;  // broadcast: a 3-pane pane took focus
 
 // ------------------------------------------------------ editor dialogs -----
 // Wire up the standard Find / Replace / "search failed" dialogs the TEditor
@@ -604,6 +605,12 @@ public:
         if (owner) message(owner, evBroadcast, cmFolderPicked, this);
     }
     void selectItem(short item) override { focusItem(item); }
+    void setState(ushort aState, Boolean enable) override
+    {
+        TListViewer::setState(aState, enable);
+        if (enable && (aState & sfFocused) && owner)
+            message(owner, evBroadcast, cmPaneFocused, this);
+    }
     TColorAttr mapColor(uchar i) override
     {
         switch (i) {
@@ -649,6 +656,12 @@ public:
             selectItem(focused); clearEvent(e); return;
         }
         TListViewer::handleEvent(e);
+    }
+    void setState(ushort aState, Boolean enable) override
+    {
+        TListViewer::setState(aState, enable);
+        if (enable && (aState & sfFocused) && owner)
+            message(owner, evBroadcast, cmPaneFocused, this);
     }
     TColorAttr mapColor(uchar i) override
     {
@@ -702,31 +715,96 @@ public:
             writeLine(0, y, size.x, 1, b);
         }
     }
+    // A plain TScroller ignores the keyboard (scrolling normally comes from a
+    // focused scrollbar, which we don't have).  Drive it here so arrows /
+    // PgUp / PgDn / Home / End / Space / Enter scroll the body when this pane
+    // has focus.
+    void handleEvent(TEvent &e) override
+    {
+        if (e.what == evKeyDown && (state & sfFocused)) {
+            int page = size.y > 1 ? size.y - 1 : 1;
+            int nx = delta.x, ny = delta.y;
+            bool mine = true;
+            switch (e.keyDown.keyCode) {
+                case kbUp:       ny -= 1;      break;
+                case kbDown:     ny += 1;      break;
+                case kbLeft:     nx -= 1;      break;
+                case kbRight:    nx += 1;      break;
+                case kbPgUp:     ny -= page;   break;
+                case kbPgDn:     ny += page;   break;
+                case kbHome:     nx  = 0;      break;
+                case kbEnd:      ny  = limit.y; break;   // scrollTo() clamps
+                case kbCtrlPgUp: ny  = 0;      break;
+                case kbCtrlPgDn: ny  = limit.y; break;
+                case kbEnter:    ny += 1;      break;    // like a pager
+                default:
+                    if (e.keyDown.charScan.charCode == ' ') ny += page;
+                    else mine = false;
+            }
+            if (mine) { scrollTo(nx, ny); clearEvent(e); return; }
+        }
+        TScroller::handleEvent(e);
+    }
+    void setState(ushort aState, Boolean enable) override
+    {
+        TScroller::setState(aState, enable);
+        if (enable && (aState & sfFocused) && owner)
+            message(owner, evBroadcast, cmPaneFocused, this);
+    }
     TColorAttr mapColor(uchar i) override
     { return i == 1 ? cNorm() : (i == 2 ? cHi() : TView::mapColor(i)); }
+};
+
+// A one-row heading above a pane.  Reverse-video when its pane holds focus,
+// dim otherwise - the "which pane am I in?" cue.  The one over the body also
+// serves as the rule between the message list and the message text.
+class TPaneTitle : public TView {
+    std::string label;
+    Boolean active = False;
+public:
+    TPaneTitle(const TRect &b, const char *l) : TView(b), label(l) {}
+    void setActive(Boolean a) { if (a != active) { active = a; drawView(); } }
+    void draw() override
+    {
+        TColorAttr rule = cDim();
+        TColorAttr lab  = active ? cSel() : cDim();
+        TDrawBuffer b;
+        b.moveChar(0, char(0xC4), rule, size.x);          // horizontal rule
+        std::string s = active ? "[ " + label + " ]" : "  " + label + "  ";
+        b.moveStr(2, s.c_str(), lab);
+        writeLine(0, 0, size.x, 1, b);
+    }
+    TColorAttr mapColor(uchar) override { return active ? cSel() : cDim(); }
 };
 
 class TMailWindow : public TWindow {
     Boolean ready = False;
     TScrollBar *msgVsb = nullptr, *contentVsb = nullptr;
-    TDivider *vdiv = nullptr, *hdiv = nullptr;
+    TDivider *vdiv = nullptr;
+    TPaneTitle *folderTitle = nullptr, *msgTitle = nullptr, *contentTitle = nullptr;
+    int activePane = 0;
 
-    struct Rects { TRect folder, vbar, msg, msgVsb, hbar, content, contentVsb; };
+    struct Rects {
+        TRect folderTitle, folder, vbar, msgTitle, msg, msgVsb,
+              contentTitle, content, contentVsb;
+    };
     Rects paneRects() const
     {
         int W = size.x, H = size.y;
         const int FW = 22;
         int sy = 1 + (H - 2) * 2 / 5;
-        if (sy < 4)      sy = 4;
-        if (sy > H - 4)  sy = H - 4;
+        if (sy < 6)      sy = 6;                 // title + a few rows + body title
+        if (sy > H - 5)  sy = H - 5;
         Rects r;
-        r.folder     = TRect(1, 1, 1 + FW, H - 1);
-        r.vbar       = TRect(1 + FW, 1, 2 + FW, H - 1);
-        r.msg        = TRect(2 + FW, 1, W - 2, sy);
-        r.msgVsb     = TRect(W - 2, 1, W - 1, sy);
-        r.hbar       = TRect(2 + FW, sy, W - 1, sy + 1);
-        r.content    = TRect(2 + FW, sy + 1, W - 2, H - 1);
-        r.contentVsb = TRect(W - 2, sy + 1, W - 1, H - 1);
+        r.folderTitle  = TRect(1,      1,     1 + FW, 2);
+        r.folder       = TRect(1,      2,     1 + FW, H - 1);
+        r.vbar         = TRect(1 + FW, 1,     2 + FW, H - 1);
+        r.msgTitle     = TRect(2 + FW, 1,     W - 1,  2);
+        r.msg          = TRect(2 + FW, 2,     W - 2,  sy);
+        r.msgVsb       = TRect(W - 2,  2,     W - 1,  sy);
+        r.contentTitle = TRect(2 + FW, sy,    W - 1,  sy + 1);
+        r.content      = TRect(2 + FW, sy + 1, W - 2, H - 1);
+        r.contentVsb   = TRect(W - 2,  sy + 1, W - 1, H - 1);
         return r;
     }
 
@@ -744,21 +822,33 @@ public:
         growMode = gfGrowHiX | gfGrowHiY;
 
         Rects R = paneRects();
+        folderTitle  = new TPaneTitle(R.folderTitle,  "Folders");
+        msgTitle     = new TPaneTitle(R.msgTitle,     "Messages");
+        contentTitle = new TPaneTitle(R.contentTitle, "Message");
         folderPane  = new TFolderPane(R.folder);
         vdiv        = new TDivider(R.vbar, true);
         msgVsb      = new TScrollBar(R.msgVsb);
         msgPane     = new TMsgPane(R.msg, msgVsb);
-        hdiv        = new TDivider(R.hbar, false);
         contentVsb  = new TScrollBar(R.contentVsb);
         contentPane = new TContentPane(R.content, nullptr, contentVsb);
 
-        insert(vdiv);        insert(hdiv);
+        insert(vdiv);
+        insert(folderTitle); insert(msgTitle); insert(contentTitle);
         insert(msgVsb);      insert(contentVsb);
         insert(contentPane); insert(msgPane); insert(folderPane);
 
         loadFolder();
         ready = True;
         folderPane->select();
+        setActivePane(0);
+    }
+
+    void setActivePane(int p)
+    {
+        activePane = p;
+        if (folderTitle)  folderTitle->setActive(Boolean(p == 0));
+        if (msgTitle)     msgTitle->setActive(Boolean(p == 1));
+        if (contentTitle) contentTitle->setActive(Boolean(p == 2));
     }
 
     void loadFolder()
@@ -799,6 +889,12 @@ public:
             switch (e.message.command) {
                 case cmFolderPicked: loadFolder();  clearEvent(e); break;
                 case cmMsgPicked:    loadContent(); clearEvent(e); break;
+                case cmPaneFocused: {
+                    void *v = e.message.infoPtr;
+                    setActivePane(v == folderPane ? 0 : v == msgPane ? 1 : 2);
+                    clearEvent(e);
+                    break;
+                }
                 case cmFocusContent:
                     if (contentPane) contentPane->select();
                     clearEvent(e);
@@ -815,11 +911,13 @@ public:
     {
         TWindow::changeBounds(bounds);
         Rects R = paneRects();
+        folderTitle->changeBounds(R.folderTitle);
         folderPane->changeBounds(R.folder);
         vdiv->changeBounds(R.vbar);
+        msgTitle->changeBounds(R.msgTitle);
         msgPane->changeBounds(R.msg);
         msgVsb->changeBounds(R.msgVsb);
-        hdiv->changeBounds(R.hbar);
+        contentTitle->changeBounds(R.contentTitle);
         contentPane->changeBounds(R.content);
         contentVsb->changeBounds(R.contentVsb);
     }
