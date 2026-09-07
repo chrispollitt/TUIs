@@ -429,6 +429,7 @@ def _smtp_send(msg, rcpts):
     user = c.get("smtp", "user", fallback=_me())
     use_ssl = c.getboolean("smtp", "ssl", fallback=(port == 465))
     starttls = c.getboolean("smtp", "starttls", fallback=not use_ssl)
+    do_auth = c.getboolean("smtp", "auth", fallback=True)  # false: mynetworks relay
     # This box can't receive, so force the sender to the real mailbox: the
     # master then just relays, no server-side rewrite needed.
     forced = c.get("smtp", "from", fallback="").strip()
@@ -444,9 +445,10 @@ def _smtp_send(msg, rcpts):
             if starttls and not use_ssl:
                 S.starttls(context=_ssl.create_default_context())
                 S.ehlo()
-            pw = _cred(host, user, "TVMAIL_SMTP_PASS")
-            if pw:
-                S.login(user, pw)
+            if do_auth:
+                pw = _cred(host, user, "TVMAIL_SMTP_PASS")
+                if pw:
+                    S.login(user, pw)
             S.sendmail(frm, rcpts, msg.as_bytes())
         finally:
             S.quit()

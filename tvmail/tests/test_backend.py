@@ -539,6 +539,34 @@ class TestSmtpSend(Base):
         os.environ["TVMAIL_CONF"] = str(self.tmp / "none.conf")
         self.assertFalse(be._smtp_send(email.message.Message(), ["a@b"]))
 
+    def test_smtp_send_auth_false_needs_no_password(self):
+        conf = self.tmp / "c.conf"
+        conf.write_text("[smtp]\nhost=h\nport=25\nstarttls=false\nauth=false\n")
+        os.environ["TVMAIL_CONF"] = str(conf)          # no netrc, no env pw
+        logged = []
+
+        class FakeSMTP:
+            def __init__(s, host, port, timeout=None):
+                pass
+            def ehlo(s):
+                pass
+            def login(s, u, p):
+                logged.append((u, p))
+            def sendmail(s, frm, rcpts, data):
+                pass
+            def quit(s):
+                pass
+
+        import smtplib
+        real, smtplib.SMTP = smtplib.SMTP, FakeSMTP
+        try:
+            ok = be._smtp_send(
+                email.message_from_string("From: a@b\n\nx\n"), ["c@d"])
+        finally:
+            smtplib.SMTP = real
+        self.assertTrue(ok)
+        self.assertEqual(logged, [])                   # never attempted AUTH
+
 
 if __name__ == "__main__":
     unittest.main()
