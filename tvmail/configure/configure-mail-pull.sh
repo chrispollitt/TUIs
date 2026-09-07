@@ -2,19 +2,20 @@
 #
 # configure-mail-pull.sh
 #
-# Set up an ON-DEMAND pull of remote mail (POP3S) into the local mailbox.
+# Set up a pull of remote mail (POP3S) into the local mailbox.  Portable:
+# Linux (incl. Raspberry Pi / WSL), macOS, the BSDs, and Cygwin.
+#
 # Installs a small, dependency-free Python puller ("pop-pull") that:
 #   * connects to the incoming server over implicit TLS (port 995)
-#   * reads the mailbox password LIVE from /etc/exim/passwd.client
-#     (nothing new stores the secret)
-#   * hands each message to exim as a local submission, so it lands in
-#     /var/mail/<user> via the same local_delivery transport as everything else
+#   * reads the mailbox password LIVE from passwd.client (/etc/exim4 or /etc/exim)
+#   * hands each message to sendmail/exim as a local submission -> /var/mail/<user>
 #   * by default KEEPs mail on the server and remembers what it has already
 #     fetched (UIDL list in ~/.local/state/mailpull.seen); --delete removes it
 #
-# No daemon.  Run 'pop-pull' (or 'pull-mail') whenever you want mail.
+# On-demand by default: run 'pop-pull' (or 'pull-mail') when you want mail.
+# --timer N installs a systemd --user timer that pulls every N minutes.
 #
-# Usage (from a Cygwin shell):
+# Usage:
 #   ./configure-mail-pull.sh --relay-file /path/to/smtp-relay.txt [options]
 #
 # Options:
@@ -35,6 +36,8 @@ KEEP=1
 VERIFY=1
 DO_TEST=0
 
+TIMER_MIN=0
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --relay-file) RELAY_FILE="${2:?}"; shift 2 ;;
@@ -43,6 +46,7 @@ while [ $# -gt 0 ]; do
     --delete)     KEEP=0; shift ;;
     --no-verify)  VERIFY=0; shift ;;
     --test)       DO_TEST=1; shift ;;
+    --timer)      TIMER_MIN="${2:?}"; shift 2 ;;   # systemd --user pull every N min
     -h|--help)    sed -n '2,/^set -euo/p' "$0" | sed 's/^# \{0,1\}//; $d'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -52,15 +56,33 @@ log()  { printf '  %s\n' "$*"; }
 warn() { printf 'WARN: %s\n' "$*" >&2; }
 die()  { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
-[ "$(uname -o 2>/dev/null)" = "Cygwin" ] || die "run this inside Cygwin"
+case "$(uname -s 2>/dev/null)" in
+  Linux|CYGWIN*|MSYS*|MINGW*|Darwin|*BSD|DragonFly|SunOS) : ;;
+  *) warn "untested OS - continuing anyway" ;;
+esac
 
-PY="$(command -v python3 || command -v python3.9 || command -v python3.8 || true)"
+PY="$(command -v python3 || command -v python3.12 || command -v python3.11 \
+      || command -v python3.10 || command -v python3.9 || command -v python3.8 || true)"
 [ -n "$PY" ] && "$PY" -c 'import ssl,poplib' 2>/dev/null \
-  || die "need a python3 with ssl+poplib - install the 'python39' Cygwin package"
+  || die "need a python3 with ssl+poplib
+    Debian/Pi:  sudo apt install python3
+    Cygwin:     setup-x86_64.exe -q -P python39"
 
-EXIM="$(command -v exim || echo /usr/bin/exim)"
-[ -x "$EXIM" ] || die "exim not found - run configure-sendmail-relay.sh first"
-[ -r /etc/exim/passwd.client ] || die "/etc/exim/passwd.client not readable - run configure-sendmail-relay.sh first"
+# local delivery agent (the puller pipes each fetched message to it)
+MDA=""
+for m in /usr/sbin/sendmail /usr/lib/sendmail /usr/sbin/exim4 /usr/bin/exim \
+         "$(command -v sendmail 2>/dev/null)" "$(command -v exim4 2>/dev/null)"; do
+  [ -n "$m" ] && [ -x "$m" ] && { MDA="$m"; break; }
+done
+[ -n "$MDA" ] || die "no sendmail/exim MDA found - run configure-sendmail-relay.sh first"
+
+# where the SMTP/POP password lives (shared with the send side)
+PWFILE=""
+for f in /etc/exim4/passwd.client /etc/exim/passwd.client; do
+  [ -r "$f" ] && { PWFILE="$f"; break; }
+done
+[ -n "$PWFILE" ] || { PWFILE="/etc/exim4/passwd.client"
+  warn "no readable passwd.client yet ($PWFILE) - run configure-sendmail-relay.sh, or add it by hand"; }
 
 # --------------------------------------------------------------------------
 # settings
@@ -73,8 +95,8 @@ fi
 : "${IN_SERVER:=u-l.ca}"
 : "${POP_USER:=cwp@u-l.ca}"
 
-grep -q ":${POP_USER}:" /etc/exim/passwd.client \
-  || warn "no line for '${POP_USER}' in /etc/exim/passwd.client - pop-pull will fail until one exists"
+[ -r "$PWFILE" ] && { grep -q ":${POP_USER}:" "$PWFILE" \
+  || warn "no line for '${POP_USER}' in $PWFILE - pop-pull will fail until one exists"; }
 
 CA=""
 for c in /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/certs/ca-bundle.crt \
@@ -85,7 +107,7 @@ done
 
 log "python      : $PY"
 log "remote      : ${POP_USER} @ ${IN_SERVER}  POP3S:995"
-log "deliver to  : ${LOCAL_USER}  ->  /var/mail/${LOCAL_USER}   (via ${EXIM})"
+log "deliver to  : ${LOCAL_USER}  ->  /var/mail/${LOCAL_USER}   (via ${MDA})"
 log "server copy : $( [ "$KEEP" = 1 ] && echo 'KEEP + remember seen UIDs' || echo 'DELETE after delivery' )"
 log "TLS verify  : $( [ "$VERIFY" = 1 ] && echo "yes (${CA:-system})" || echo 'NO' )"
 
@@ -105,8 +127,8 @@ local_user = ${LOCAL_USER}
 keep       = $( [ "$KEEP" = 1 ] && echo true || echo false )
 verify     = $( [ "$VERIFY" = 1 ] && echo true || echo false )
 cafile     = ${CA}
-exim       = ${EXIM}
-pwfile     = /etc/exim/passwd.client
+exim       = ${MDA}
+pwfile     = ${PWFILE}
 EOF
 log "wrote $CFG"
 
@@ -229,6 +251,39 @@ log "wrote $POP"
 
 # keep the earlier name working too
 ln -sf pop-pull "$BIN/pull-mail" 2>/dev/null && log "linked $BIN/pull-mail -> pop-pull" || true
+
+# --------------------------------------------------------------------------
+# optional: a systemd --user timer that pulls mail every N minutes
+# --------------------------------------------------------------------------
+if [ "$TIMER_MIN" != 0 ] && [ "$TIMER_MIN" -gt 0 ] 2>/dev/null; then
+  if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+    ud="$HOME/.config/systemd/user"; install -d -m 0700 "$ud"
+    cat > "$ud/tvmail-pull.service" <<EOF
+[Unit]
+Description=tvmail: fetch remote mail (pop-pull)
+[Service]
+Type=oneshot
+ExecStart=$POP
+EOF
+    cat > "$ud/tvmail-pull.timer" <<EOF
+[Unit]
+Description=tvmail: pull mail every ${TIMER_MIN} min
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=${TIMER_MIN}min
+Persistent=true
+[Install]
+WantedBy=timers.target
+EOF
+    systemctl --user daemon-reload
+    systemctl --user enable --now tvmail-pull.timer
+    log "systemd --user timer: tvmail-pull.timer (every ${TIMER_MIN} min)"
+    log "  status:  systemctl --user list-timers tvmail-pull.timer"
+    log "  (needs 'loginctl enable-linger $USER' to run while you're logged out)"
+  else
+    warn "--timer given but no systemd --user available; run 'pop-pull' from cron instead"
+  fi
+fi
 
 # --------------------------------------------------------------------------
 # optional test

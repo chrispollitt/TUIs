@@ -40,11 +40,18 @@ repo, under `configure/` and `backend/`):
 
 - **exim** delivers local mail to `/var/mail/$USER` and relays outbound through
   an authenticated TLS smarthost, rewriting `From:` so replies reach a real
-  mailbox. Set up with `configure/configure-sendmail-relay.sh`.
-- **`pop-pull`** fetches remote mail into the same mbox on demand
-  (`configure/configure-mail-pull.sh`).
+  mailbox. `configure/configure-sendmail-relay.sh` sets it up on **Cygwin**
+  (hand-written `exim.conf`, no daemon) or **Debian/Ubuntu/Raspberry Pi OS**
+  (`exim4-daemon-light` via `update-exim4.conf`; it asks whether to run exim as
+  a systemd / sysv service or send-only).
+- **`pop-pull`** fetches remote mail into the same mbox
+  (`configure/configure-mail-pull.sh` — portable; `--timer N` adds a
+  systemd `--user` timer for periodic pulls).
 - **Send** goes through `/usr/sbin/sendmail` → exim → smarthost.
 - No credentials live anywhere in this project.
+
+Sending needs *some* MTA; if you already have Postfix/msmtp/whatever, skip the
+`configure/` scripts and just point `$SENDMAIL` at it.
 
 ## Platforms
 

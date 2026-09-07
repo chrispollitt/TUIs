@@ -2,31 +2,27 @@
 #
 # configure-sendmail-relay.sh
 #
-# Configure Cygwin's Exim MTA as a *send-only* system sendmail:
+# Configure the system Exim as a send-only sendmail: local mail -> /var/mail,
+# everything else -> an authenticated TLS smarthost, with locally generated
+# senders rewritten to the real mailbox (this box can't receive replies).
 #
-#   * local recipients        -> /var/mail/<user>       (mbox, appendfile)
-#   * every other recipient    -> authenticated implicit-TLS smarthost
-#   * locally generated senders (user@thisbox, *.localdomain, ...) have their
-#     envelope-from, From:, Sender: and Reply-To: rewritten to the smarthost
-#     mailbox, and a Reply-To: is added when the message has none - this box
-#     cannot receive mail, so replies and bounces must go somewhere real.
+#   Cygwin           - hand-written /etc/exim.conf, no daemon.
+#   Debian / Ubuntu  - exim4-daemon-light via update-exim4.conf; you're asked
+#   / Raspberry Pi OS   whether to run it as a service (systemd / sysv / none).
 #
-# There is NO SMTP listener and NO service.  /usr/sbin/sendmail just works and
-# delivers immediately when called.
+# Re-runnable.
 #
-# Re-runnable.  Anything it overwrites is copied to /etc/BAK/ first.
-#
-# Usage (from a Cygwin shell):
-#   ./configure-sendmail-relay.sh --relay-file /path/to/smtp-relay.txt [options]
+# Usage:
+#   sudo ./configure-sendmail-relay.sh --relay-file smtp-relay.txt [options]
 #
 # Options:
 #   --relay-file FILE   cPanel-style "Mail Client Configuration" text to read the
 #                       smarthost host / port / username (and password) from.
 #   --user NAME         local account that receives root's mail   (default: you)
-#   --cron              also add a 15-minute "exim -q" crontab entry so deferred
-#                       mail is retried automatically (needs the 'cron' package).
-#   --test ADDR         after configuring, send a test message to ADDR and to the
-#                       local admin user, printing the SMTP conversation.
+#   --service KIND      Linux: systemd | sysv | none   (default: ask)
+#   --smtp-port N       override the smarthost submission port
+#   --cron              add a 15-minute queue-runner cron entry (send-only mode)
+#   --test ADDR         after configuring, send a test message to ADDR and you
 #   -h | --help         show this header.
 #
 set -euo pipefail
@@ -35,11 +31,15 @@ RELAY_FILE=""
 ADMIN_USER="$(id -un)"
 ADD_CRON=0
 TEST_ADDR=""
+SERVICE=""
+SMTP_PORT=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --relay-file)  RELAY_FILE="${2:?}"; shift 2 ;;
     --user)        ADMIN_USER="${2:?}"; shift 2 ;;
+    --service)     SERVICE="${2:?}";    shift 2 ;;
+    --smtp-port)   SMTP_PORT="${2:?}";  shift 2 ;;
     --rewrite-all) shift ;;   # deprecated no-op: outbound From is always rewritten now
     --cron)        ADD_CRON=1; shift ;;
     --test)        TEST_ADDR="${2:?}"; shift 2 ;;
@@ -52,7 +52,140 @@ log()  { printf '  %s\n' "$*"; }
 warn() { printf 'WARN: %s\n' "$*" >&2; }
 die()  { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
-[ "$(uname -o 2>/dev/null)" = "Cygwin" ] || die "run this inside Cygwin"
+# ==========================================================================
+# Debian / Ubuntu / Raspberry Pi OS  (exim4 via update-exim4.conf)
+# ==========================================================================
+linux_setup() {
+    SUDO=""
+    if [ "$(id -u)" != 0 ]; then
+        command -v sudo >/dev/null 2>&1 || die "run as root (no sudo found)"
+        SUDO="sudo"
+    fi
+    { command -v apt-get >/dev/null 2>&1 && [ -f /etc/debian_version ]; } || die \
+"Linux automation targets Debian / Ubuntu / Raspberry Pi OS (apt + exim4).
+  Other distros: install exim, wire a smarthost with auth + TLS by hand, and
+  point /usr/sbin/sendmail at it.  configure-mail-pull.sh works everywhere."
+
+    _rv() { sed -n "s/^$1:[[:space:]]*//p" "$RELAY_FILE" 2>/dev/null | head -1 | tr -d ' \r'; }
+    H=""; U=""; P=""; PORT=""
+    if [ -n "$RELAY_FILE" ] && [ -f "$RELAY_FILE" ]; then
+        H="$(_rv 'Outgoing Server')"; U="$(_rv Username)"; P="$(_rv Password)"
+        PORT="$(sed -n 's/.*SMTP Port:[[:space:]]*\([0-9]\{1,\}\).*/\1/p' "$RELAY_FILE" | head -1 | tr -d ' \r')"
+    fi
+    : "${H:=u-l.ca}"; : "${U:=cwp@u-l.ca}"
+    # Debian exim4's smarthost transport does STARTTLS submission; 465 (implicit
+    # TLS) isn't wired by default -> prefer 587.  --smtp-port overrides.
+    case "$PORT" in 465|"") PORT=587 ;; esac
+    [ -n "$SMTP_PORT" ] && PORT="$SMTP_PORT"
+
+    reuse=0
+    if [ -z "$P" ] || [ "$P" = SECRET ]; then
+        if [ -n "${SMARTHOST_PASS_ENV:-}" ]; then P="$SMARTHOST_PASS_ENV"
+        elif $SUDO test -r /etc/exim4/passwd.client; then reuse=1
+             log "reusing existing /etc/exim4/passwd.client"
+        else printf 'SMTP password for %s (host %s): ' "$U" "$H" >&2
+             read -rs P; echo >&2
+        fi
+    fi
+    [ "$reuse" = 1 ] || [ -n "$P" ] || die "no SMTP password supplied"
+
+    have_sd=0; have_sv=0
+    [ -d /run/systemd/system ] && have_sd=1
+    { command -v service >/dev/null 2>&1 && [ -d /etc/init.d ]; } && have_sv=1
+    svc="$SERVICE"
+    if [ -z "$svc" ]; then
+        def=none
+        [ "$have_sv" = 1 ] && def=sysv
+        [ "$have_sd" = 1 ] && def=systemd
+        echo
+        echo "Run exim as a background service (queue runner, deferred-mail retries)?"
+        printf "  options: "
+        [ "$have_sd" = 1 ] && printf "systemd "
+        [ "$have_sv" = 1 ] && printf "sysv "
+        printf "none\n  choice [%s]: " "$def"
+        read -r svc || true; : "${svc:=$def}"
+    fi
+
+    echo
+    log "smarthost : ${H}::${PORT}  (STARTTLS, AUTH)"
+    log "auth user : ${U}"
+    log "rewrite   : local senders -> ${U}   (dc_readhost + /etc/email-addresses)"
+    log "service   : ${svc}"
+    log "root mail : ${ADMIN_USER}"
+    echo
+
+    log "installing exim4-daemon-light ..."
+    $SUDO apt-get update -qq || true
+    $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y exim4-daemon-light >/dev/null
+
+    $SUDO tee /etc/exim4/update-exim4.conf.conf >/dev/null <<EOF
+# generated $(date) by tvmail configure-sendmail-relay.sh
+dc_eximconfig_configtype='smarthost'
+dc_other_hostnames=''
+dc_local_interfaces='127.0.0.1 ; ::1'
+dc_readhost='${H}'
+dc_relay_domains=''
+dc_minimaldns='false'
+dc_relay_nets=''
+dc_smarthost='${H}::${PORT}'
+CFILEMODE='644'
+dc_use_split_config='false'
+dc_hide_mailname='true'
+dc_mailname_in_oh='true'
+dc_localdelivery='mail_spool'
+EOF
+
+    if [ "$reuse" = 0 ]; then
+        printf '*:%s:%s\n' "$U" "$P" | $SUDO tee /etc/exim4/passwd.client >/dev/null
+        $SUDO chmod 640 /etc/exim4/passwd.client
+        $SUDO chgrp Debian-exim /etc/exim4/passwd.client 2>/dev/null || true
+    fi
+
+    $SUDO grep -qs REMOTE_SMTP_SMARTHOST_HOSTS_REQUIRE_TLS /etc/exim4/exim4.conf.localmacros \
+      || echo "REMOTE_SMTP_SMARTHOST_HOSTS_REQUIRE_TLS = *" \
+         | $SUDO tee -a /etc/exim4/exim4.conf.localmacros >/dev/null
+
+    $SUDO touch /etc/email-addresses
+    $SUDO grep -qs "^${ADMIN_USER}:" /etc/email-addresses \
+      || printf '%s: %s\n' "$ADMIN_USER" "$U" | $SUDO tee -a /etc/email-addresses >/dev/null
+
+    $SUDO grep -qs '^root:' /etc/aliases \
+      || printf 'root: %s\n' "$ADMIN_USER" | $SUDO tee -a /etc/aliases >/dev/null
+    command -v newaliases >/dev/null 2>&1 && $SUDO newaliases 2>/dev/null || true
+
+    $SUDO update-exim4.conf
+    log "wrote /etc/exim4/{update-exim4.conf.conf, passwd.client, exim4.conf.localmacros}, /etc/email-addresses"
+
+    case "$svc" in
+      systemd) $SUDO systemctl enable --now exim4
+               log "exim4: enabled + running (systemd)" ;;
+      sysv)    $SUDO update-rc.d exim4 defaults >/dev/null 2>&1 || true
+               $SUDO service exim4 restart
+               log "exim4: enabled + running (sysv init)" ;;
+      *)       $SUDO systemctl disable --now exim4 2>/dev/null \
+                 || $SUDO service exim4 stop 2>/dev/null || true
+               log "exim4: not a service - send-only; deferred mail retries only on 'exim4 -q'"
+               if [ "$ADD_CRON" = 1 ]; then
+                   printf '*/15 * * * * root exim4 -q\n' | $SUDO tee /etc/cron.d/tvmail-eximq >/dev/null
+                   log "added /etc/cron.d/tvmail-eximq"
+               fi ;;
+    esac
+
+    if [ -n "$TEST_ADDR" ]; then
+        echo; log "test message to $TEST_ADDR and $ADMIN_USER ..."
+        printf 'To: %s\nSubject: tvmail relay test\n\nsent %s from %s\n' \
+            "$TEST_ADDR" "$(date)" "$(hostname)" \
+          | /usr/sbin/sendmail -oi "$TEST_ADDR" "$ADMIN_USER"
+        log "check:  mail   |   sudo tail /var/log/exim4/mainlog   |   exim4 -bp"
+    fi
+    echo; log "done."
+}
+
+case "$(uname -s 2>/dev/null)" in
+  Linux)               linux_setup; exit $? ;;
+  CYGWIN*|MSYS*|MINGW*) : ;;   # fall through to the Cygwin path below
+  *) die "unsupported OS '$(uname -s)'.  Automated: Debian-family Linux, Cygwin." ;;
+esac
 
 # --- locate the REAL exim binary -----------------------------------------
 # Cygwin ships /usr/bin/exim as a bootstrap symlink to 'exim-config', a stub
