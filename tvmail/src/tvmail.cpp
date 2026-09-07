@@ -835,7 +835,8 @@ public:
         insert(vdiv);
         insert(folderTitle); insert(msgTitle); insert(contentTitle);
         insert(msgVsb);      insert(contentVsb);
-        insert(contentPane); insert(msgPane); insert(folderPane);
+        // insert order sets the Tab cycle: folders -> messages -> body
+        insert(msgPane);     insert(contentPane); insert(folderPane);
 
         loadFolder();
         ready = True;

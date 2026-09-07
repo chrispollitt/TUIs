@@ -114,21 +114,23 @@ def _mailrc_var(name, default=None):
     val = default
     for f in _mailrc_files():
         try:
-            for ln in open(f, encoding="utf-8", errors="replace"):
-                ln = ln.strip()
-                if not ln.startswith("set "):
-                    continue
-                try:
-                    toks = shlex.split(ln[4:])
-                except ValueError:
-                    continue
-                for tok in toks:
-                    if tok == name:
-                        val = ""
-                    elif tok.startswith(name + "="):
-                        val = tok[len(name) + 1:]
+            with open(f, encoding="utf-8", errors="replace") as fh:
+                lines = fh.readlines()
         except OSError:
-            pass
+            continue
+        for ln in lines:
+            ln = ln.strip()
+            if not ln.startswith("set "):
+                continue
+            try:
+                toks = shlex.split(ln[4:])
+            except ValueError:
+                continue
+            for tok in toks:
+                if tok == name:
+                    val = ""
+                elif tok.startswith(name + "="):
+                    val = tok[len(name) + 1:]
     return val
 
 
@@ -156,18 +158,20 @@ def _aliases():
     raw = {}
     for f in _mailrc_files():
         try:
-            for ln in open(f, encoding="utf-8", errors="replace"):
-                ln = ln.strip()
-                head = ln.split(None, 1)
-                if len(head) == 2 and head[0] in ("alias", "group"):
-                    try:
-                        toks = shlex.split(head[1])
-                    except ValueError:
-                        continue
-                    if len(toks) >= 2:
-                        raw[toks[0]] = toks[1:]
+            with open(f, encoding="utf-8", errors="replace") as fh:
+                lines = fh.readlines()
         except OSError:
-            pass
+            continue
+        for ln in lines:
+            ln = ln.strip()
+            head = ln.split(None, 1)
+            if len(head) == 2 and head[0] in ("alias", "group"):
+                try:
+                    toks = shlex.split(head[1])
+                except ValueError:
+                    continue
+                if len(toks) >= 2:
+                    raw[toks[0]] = toks[1:]
 
     def expand(name, seen):
         out = []
