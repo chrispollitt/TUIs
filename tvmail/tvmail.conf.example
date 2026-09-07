@@ -39,7 +39,9 @@ auth = true
 
 # Optional - override the shorthand -> IMAP folder mapping (these are the
 # defaults).  'dead.letter' is always a local file, never an IMAP folder.
+# Set  sent =  (blank) to stop filing a copy of outgoing mail.
 [folders]
 saved  = Archive
 trash  = Trash
 drafts = Drafts
+sent   = Sent

@@ -13,7 +13,7 @@ is not the master.  Configure with ~/.config/tvmail/tvmail.conf (see the shipped
 tvmail.conf.example); passwords live only in ~/.netrc.
 
 Sub-commands (mailbox defaults to $MAIL or /var/mail/$USER; over IMAP the
-shorthands spool/mbox/trash/drafts map to INBOX/Archive/Trash/Drafts):
+shorthands spool/mbox/trash/drafts/sent map to INBOX/Archive/Trash/Drafts/Sent):
 
   list  [MBOX]              one line per message, TAB-separated:
                             idx <TAB> flags <TAB> date <TAB> from <TAB> subject
@@ -27,8 +27,8 @@ shorthands spool/mbox/trash/drafts map to INBOX/Archive/Trash/Drafts):
         [--seen|--unseen] [--expunge] [-n]   bulk-delete by filter (needs >=1)
   mark  IDX (read|unread) [MBOX]
   send  [--from ADDR]       read an RFC822 message (or a bare body with --to/--subject)
-        [--to ADDR ...]     from stdin and hand it to the local sendmail
-        [--subject TEXT]
+        [--to ADDR ...]     from stdin, submit it, and file a copy in 'sent'
+        [--subject TEXT]    ([folders] sent = <blank> in tvmail.conf disables the copy)
   compose-template [--to A] [--subject S] [--in-reply-to IDX] [MBOX]
                             print a draft skeleton (for $EDITOR) on stdout
   pull                      run 'pop-pull' if it exists (on-demand fetch)
@@ -91,7 +91,8 @@ def _data_home():
 
 
 def mbox_path(p=None):
-    """Resolve a mailbox argument.  Shorthands: spool/mbox/trash/drafts/dead."""
+    """Resolve a mailbox argument.
+    Shorthands: spool/mbox/trash/drafts/sent/dead."""
     if p in (None, "", "spool"):
         return os.environ.get("MAIL") or _spool()
     if p == "mbox":
@@ -104,6 +105,11 @@ def mbox_path(p=None):
         d = _maildir()
         os.makedirs(d, exist_ok=True)
         return os.path.join(d, "drafts")
+    if p == "sent":
+        d = _maildir()
+        os.makedirs(d, exist_ok=True)
+        rec = (_mailrc_var("record") or "sent").lstrip("+")   # honour `set record`
+        return rec if os.path.isabs(rec) else os.path.join(d, rec)
     if p == "dead":
         return _dead_path()
     return os.path.expanduser(p)
@@ -360,8 +366,8 @@ def _imap_folder(p):
     c = _conf()
     key = {None: "inbox", "": "inbox", "spool": "inbox",
            "mbox": "saved"}.get(p, p)
-    default = {"inbox": "INBOX", "saved": "Archive",
-               "trash": "Trash", "drafts": "Drafts"}.get(key)
+    default = {"inbox": "INBOX", "saved": "Archive", "trash": "Trash",
+              "drafts": "Drafts", "sent": "Sent"}.get(key)
     return c.get("folders", key, fallback=default) if default is not None else p
 
 
@@ -458,6 +464,41 @@ def _smtp_send(msg, rcpts):
     except (smtplib.SMTPException, OSError) as e:
         sys.exit("tvmail-backend: SMTP %s:%d - %s" % (host, port, e))
     return True
+
+
+def _save_sent(msg):
+    """Best-effort copy of an outgoing message into the sent folder.
+    Disabled by an empty  [folders] sent  in tvmail.conf."""
+    c = _conf()
+    if _is_remote():
+        name = _imap_folder("sent")
+        if not name:
+            return
+        import imaplib, time as _t
+        try:
+            _imap().append(_q_mbox(name), r"(\Seen)",
+                           imaplib.Time2Internaldate(_t.time()), msg.as_bytes())
+        except Exception:
+            pass
+        return
+    if c.has_option("folders", "sent") and not c.get("folders", "sent"):
+        return
+    try:
+        p = mbox_path("sent")
+        d = os.path.dirname(p)
+        if d:
+            os.makedirs(d, exist_ok=True)
+        if "Date" not in msg:
+            msg["Date"] = email.utils.formatdate(localtime=True)
+        b = mbox(p, factory=None, create=True)
+        b.lock()
+        try:
+            b.add(msg)
+            b.flush()
+        finally:
+            b.close()                 # unlocks + closes the file handle
+    except OSError:
+        pass
 
 
 def _sweep_locks(path, older_than=300, temps_only=False):
@@ -915,6 +956,7 @@ def cmd_send(a):
         sys.exit("tvmail-backend send: no recipients (--to or a To: header)")
 
     if _is_remote() and _smtp_send(msg, rcpts):
+        _save_sent(msg)
         print("sent")
         return 0
 
@@ -925,6 +967,7 @@ def cmd_send(a):
     p = subprocess.run([sm, "-oi"] + rcpts, input=msg.as_bytes())
     if p.returncode != 0:
         sys.exit("tvmail-backend: %s exited %d" % (os.path.basename(sm), p.returncode))
+    _save_sent(msg)
     print("sent")
     return 0
 

@@ -466,6 +466,7 @@ struct Folder { const char *name; const char *mbox; bool pinLocal; };
 static const Folder gFolders[] = {
     { "inbox",       "spool",  false },
     { "drafts",      "drafts", false },
+    { "sent",        "sent",   false },
     { "saved",       "mbox",   false },
     { "trash",       "trash",  false },
     { "dead.letter", "dead",   true  },   // always a local file, whatever the mode
@@ -1441,6 +1442,7 @@ static const char *kHelpText =
 "FOLDERS   (the L / R column = Local mbox or Remote IMAP storage)\n"
 "  inbox        where mail is delivered      (local: /var/mail ; remote: INBOX)\n"
 "  drafts       messages kept unsent\n"
+"  sent         a copy of everything you send\n"
 "  saved        where read mail is filed     (local: ~/mbox ; remote: Archive)\n"
 "  trash        Ctrl-D moves here; from trash, delete is permanent\n"
 "  dead.letter  a message mail(1) or tvmail left behind - always a local file\n"

@@ -67,6 +67,14 @@ is
 .B "set folder"
 from the mailrc files.
 .TP
+.B sent
+.IR $folder/sent ,
+or the mailrc
+.B "set record"
+value.
+.B send
+files a copy here.
+.TP
 .B trash
 .IR ~/.local/share/tvmail/trash.mbox .
 .TP
@@ -82,7 +90,8 @@ mode the shorthands map to IMAP folders instead \(em
 .BR spool " \(->" " INBOX" ,
 .BR mbox " \(->" " Archive" ,
 .BR trash " \(->" " Trash" ,
-.BR drafts " \(->" " Drafts"
+.BR drafts " \(->" " Drafts" ,
+.BR sent " \(->" " Sent"
 \(em overridable in
 .IR tvmail.conf .
 .B dead
@@ -179,8 +188,10 @@ block, a blank line, and (for a reply) the quoted original.
 .BI "send " "\fR[\fP--from " "A\fR]\fP " "\fR[\fP--to " "A ...\fR]\fP " "\fR[\fP--subject " "S\fR]\fP"
 Read an RFC\ 822 message (or a bare body, with
 .BR \-\-to )
-on standard input and hand it to
-.BR sendmail (8).
+on standard input, submit it (\c
+.BR sendmail (8)
+locally, SMTP in remote mode) and file a copy in
+.BR sent .
 .B alias
 and
 .B group
@@ -190,6 +201,11 @@ names in
 and
 .B Bcc:
 are expanded from the mailrc files before delivery.
+A blank
+.B "[folders] sent"
+in
+.I tvmail.conf
+disables the copy.
 .TP
 .B save\-draft
 Read an RFC\ 822 message on standard input and append it to the

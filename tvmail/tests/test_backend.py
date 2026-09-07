@@ -99,7 +99,13 @@ class TestHelpers(Base):
         self.assertEqual(be.mbox_path("trash"),
                          str(self.xdg / "tvmail" / "trash.mbox"))
         self.assertTrue(be.mbox_path("drafts").endswith(os.sep + "drafts"))
+        self.assertTrue(be.mbox_path("sent").endswith(os.sep + "sent"))
         self.assertEqual(be.mbox_path("~/x"), str(self.home / "x"))
+
+    def test_mbox_path_sent_honours_record(self):
+        (self.home / ".mailrc").write_text("set folder=%s/Mail\nset record=+Kept\n"
+                                           % self.home)
+        self.assertEqual(be.mbox_path("sent"), str(self.home / "Mail" / "Kept"))
 
     def test_mailrc_folder_and_dead(self):
         (self.home / ".mailrc").write_text(
@@ -325,6 +331,7 @@ class TestMode(Base):
         self.assertEqual(be._imap_folder("mbox"), "Archive")
         self.assertEqual(be._imap_folder("trash"), "Trash")
         self.assertEqual(be._imap_folder("drafts"), "Drafts")
+        self.assertEqual(be._imap_folder("sent"), "Sent")
         self.assertEqual(be._imap_folder("Weird/Name"), "Weird/Name")
         self._write_conf("[folders]\nsaved = Kept\n")
         self.assertEqual(be._imap_folder("mbox"), "Kept")
@@ -528,7 +535,7 @@ class TestRemoteIMAP(Base):
         self._run(be.cmd_save_draft, self.ns())
         self.assertEqual([n for n, _ in self.imap.appended], ["Drafts"])
 
-    def test_send_over_imap_uses_smtp(self):
+    def test_send_over_imap_uses_smtp_and_files_a_copy(self):
         seen = {}
         real, be._smtp_send = be._smtp_send, \
             lambda m, r: (seen.setdefault("rcpts", r), True)[1]
@@ -537,6 +544,7 @@ class TestRemoteIMAP(Base):
         out = self._run(be.cmd_send, self.ns(getfrom=None, to=[], subject=None))
         self.assertIn(b"sent", out)
         self.assertEqual(seen["rcpts"], ["a@b"])
+        self.assertIn("Sent", [n for n, _ in self.imap.appended])   # copy filed
 
 
 class TestPurgeLocal(Base):
@@ -683,6 +691,20 @@ class TestSmtpSend(Base):
     def test_smtp_send_no_section_returns_false(self):
         os.environ["TVMAIL_CONF"] = str(self.tmp / "none.conf")
         self.assertFalse(be._smtp_send(email.message.Message(), ["a@b"]))
+
+    def test_save_sent_local_appends(self):
+        m = email.message_from_string("To: a@b\nSubject: s\n\nhi\n")
+        be._save_sent(m)
+        r = self.rows("sent")
+        self.assertEqual(len(r), 1)
+        self.assertIn("s", r[0])
+
+    def test_save_sent_disabled_by_blank_folder(self):
+        conf = self.tmp / "c.conf"
+        conf.write_text("[folders]\nsent =\n")
+        os.environ["TVMAIL_CONF"] = str(conf)
+        be._save_sent(email.message_from_string("To: a@b\nSubject: s\n\nx\n"))
+        self.assertEqual(self.rows("sent"), [])
 
     def test_smtp_send_auth_false_needs_no_password(self):
         conf = self.tmp / "c.conf"
