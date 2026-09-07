@@ -30,6 +30,9 @@ host     = cmpi
 port     = 587
 starttls = true
 user     = chris
+# This box can't receive replies, so submitted mail always goes out as this
+# address (header From + envelope) - the master just relays it, no rewrite.
+from     = chris via LAN <cwp@u-l.ca>
 # If the master's Postfix trusts the LAN in mynetworks you can skip auth and
 # submit to plain :25 instead:  port = 25, starttls = false, no ~/.netrc entry.
 

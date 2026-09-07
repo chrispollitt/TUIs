@@ -429,7 +429,13 @@ def _smtp_send(msg, rcpts):
     user = c.get("smtp", "user", fallback=_me())
     use_ssl = c.getboolean("smtp", "ssl", fallback=(port == 465))
     starttls = c.getboolean("smtp", "starttls", fallback=not use_ssl)
-    frm = msg.get("From") or user
+    # This box can't receive, so force the sender to the real mailbox: the
+    # master then just relays, no server-side rewrite needed.
+    forced = c.get("smtp", "from", fallback="").strip()
+    if forced:
+        del msg["From"]
+        msg["From"] = forced
+    frm = email.utils.parseaddr(msg.get("From", ""))[1] or user
     try:
         S = (smtplib.SMTP_SSL(host, port, timeout=30) if use_ssl
              else smtplib.SMTP(host, port, timeout=30))

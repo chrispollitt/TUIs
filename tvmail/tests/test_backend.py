@@ -500,5 +500,45 @@ class TestRemoteIMAP(Base):
         self.assertEqual(seen["rcpts"], ["a@b"])
 
 
+class TestSmtpSend(Base):
+    def test_smtp_send_forces_from_and_envelope(self):
+        conf = self.tmp / "c.conf"
+        conf.write_text("[smtp]\nhost=h\nport=25\nstarttls=false\n"
+                        "from=Bot <bot@x>\n")
+        os.environ["TVMAIL_CONF"] = str(conf)
+        os.environ["TVMAIL_SMTP_PASS"] = "x"
+        sent = {}
+
+        class FakeSMTP:
+            def __init__(s, host, port, timeout=None):
+                pass
+            def ehlo(s):
+                pass
+            def starttls(s, context=None):
+                pass
+            def login(s, u, p):
+                pass
+            def sendmail(s, frm, rcpts, data):
+                sent.update(frm=frm, rcpts=rcpts, data=data)
+            def quit(s):
+                pass
+
+        import smtplib
+        real, smtplib.SMTP = smtplib.SMTP, FakeSMTP
+        try:
+            m = email.message_from_string("From: orig@y\nSubject: s\n\nhi\n")
+            ok = be._smtp_send(m, ["a@b"])
+        finally:
+            smtplib.SMTP = real
+        self.assertTrue(ok)
+        self.assertEqual(sent["frm"], "bot@x")               # envelope sender
+        self.assertIn(b"From: Bot <bot@x>", sent["data"])
+        self.assertNotIn(b"orig@y", sent["data"])
+
+    def test_smtp_send_no_section_returns_false(self):
+        os.environ["TVMAIL_CONF"] = str(self.tmp / "none.conf")
+        self.assertFalse(be._smtp_send(email.message.Message(), ["a@b"]))
+
+
 if __name__ == "__main__":
     unittest.main()
