@@ -62,8 +62,12 @@ are remote clients.
   **Linux**: configures Postfix in place, no apt, or Debian/Ubuntu/Pi `exim4`
   via `update-exim4.conf`) delivering local mail to `/var/mail/$USER` and
   relaying outbound through an authenticated TLS smarthost, plus **`pop-pull`**
-  (`configure/configure-mail-pull.sh --timer N`) to fetch replies back, and an
-  IMAP server (Dovecot) over the same mbox files.
+  (`configure/configure-mail-pull.sh --timer N` — `--pwfile` if there's no
+  exim `passwd.client`) to fetch replies back, and an IMAP server (Dovecot)
+  over the same mbox files. Point the timer at a wrapper that runs `pop-pull`
+  then `tvmail-backend purge spool --subject "***SPAM***" --to-folder spam`
+  (over `localhost` IMAP, so Dovecot owns the move) and spam is filed for
+  every client automatically.
 - **Clients** — just `tvmail` + `tvmail-backend` in remote mode. `[smtp] from`
   fixes the sender identity so the master relays without any server-side
   rewrite; `[smtp] auth = false` if the master's Postfix trusts the LAN.

@@ -21,6 +21,8 @@
 # Options:
 #   --relay-file FILE   cPanel-style config text -> Incoming Server / Username.
 #   --pop-user NAME     remote mailbox login  (default: from file / passwd.client)
+#   --pwfile PATH       file holding  <host>:<login>:<password>  (for boxes with
+#                       no exim passwd.client, e.g. a Postfix master).  0600.
 #   --local-user NAME   deliver into this account            (default: you)
 #   --delete           delete messages from the server after delivery
 #   --no-verify        skip TLS certificate verification
@@ -35,6 +37,7 @@ LOCAL_USER="$(id -un)"
 KEEP=1
 VERIFY=1
 DO_TEST=0
+PWFILE_OPT=""
 
 TIMER_MIN=0
 
@@ -42,6 +45,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --relay-file) RELAY_FILE="${2:?}"; shift 2 ;;
     --pop-user)   POP_USER="${2:?}";   shift 2 ;;
+    --pwfile)     PWFILE_OPT="${2:?}"; shift 2 ;;
     --local-user) LOCAL_USER="${2:?}"; shift 2 ;;
     --delete)     KEEP=0; shift ;;
     --no-verify)  VERIFY=0; shift ;;
@@ -78,11 +82,16 @@ done
 
 # where the SMTP/POP password lives (shared with the send side)
 PWFILE=""
-for f in /etc/exim4/passwd.client /etc/exim/passwd.client; do
-  [ -r "$f" ] && { PWFILE="$f"; break; }
-done
-[ -n "$PWFILE" ] || { PWFILE="/etc/exim4/passwd.client"
-  warn "no readable passwd.client yet ($PWFILE) - run configure-sendmail-relay.sh, or add it by hand"; }
+if [ -n "$PWFILE_OPT" ]; then
+  PWFILE="$PWFILE_OPT"
+  [ -r "$PWFILE" ] || warn "--pwfile $PWFILE is not readable yet"
+else
+  for f in /etc/exim4/passwd.client /etc/exim/passwd.client; do
+    [ -r "$f" ] && { PWFILE="$f"; break; }
+  done
+  [ -n "$PWFILE" ] || { PWFILE="/etc/exim4/passwd.client"
+    warn "no readable passwd.client ($PWFILE) - run configure-sendmail-relay.sh, pass --pwfile, or add one by hand"; }
+fi
 
 # --------------------------------------------------------------------------
 # settings
