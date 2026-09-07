@@ -468,6 +468,7 @@ static const Folder gFolders[] = {
     { "drafts",      "drafts", false },
     { "sent",        "sent",   false },
     { "saved",       "mbox",   false },
+    { "spam",        "spam",   false },
     { "trash",       "trash",  false },
     { "dead.letter", "dead",   true  },   // always a local file, whatever the mode
 };
@@ -1436,7 +1437,7 @@ static const char *kHelpText =
 "LOCAL / REMOTE\n"
 "  On the mailstore host tvmail reads local mbox files and sends via\n"
 "  sendmail.  On any other machine it is an IMAP/SMTP client of that host -\n"
-"  same panes and keys, folders are IMAP folders, F3 (pull) does nothing.\n"
+"  same panes and keys, folders are IMAP folders, F3 files tagged spam.\n"
 "  Set it up in ~/.config/tvmail/tvmail.conf  (see man tvmail-backend).\n"
 "\n"
 "FOLDERS   (the L / R column = Local mbox or Remote IMAP storage)\n"
@@ -1444,13 +1445,15 @@ static const char *kHelpText =
 "  drafts       messages kept unsent\n"
 "  sent         a copy of everything you send\n"
 "  saved        where read mail is filed     (local: ~/mbox ; remote: Archive)\n"
+"  spam         F3 moves messages tagged ***SPAM*** by the server here\n"
 "  trash        Ctrl-D moves here; from trash, delete is permanent\n"
 "  dead.letter  a message mail(1) or tvmail left behind - always a local file\n"
 "\n"
 "READING\n"
 "  Enter    jump to the body pane and scroll it\n"
 "  Ctrl-D   delete  (moves to trash; from trash it deletes for good)\n"
-"  F5       reload the current folder      F3   pull new mail (pop-pull)\n"
+"  F5       reload the current folder\n"
+"  F3       local: pull new mail (pop-pull)  .  remote: file tagged spam\n"
 "  Message > View source shows the raw RFC822 message.\n"
 "\n"
 "COMPOSING\n"
@@ -1572,7 +1575,8 @@ TMenuBar *TVMailApp::initMenuBar(TRect r)
     r.b.y = r.a.y + 1;
     return new TMenuBar(r,
         *new TSubMenu("~F~ile", kbAltF) +
-            *new TMenuItem("~P~ull mail", cmPull,   kbF3, hcNoContext, "F3") +
+            *new TMenuItem(gRemote ? "File ~s~pam" : "~P~ull mail",
+                           cmPull, kbF3, hcNoContext, "F3") +
             *new TMenuItem("~R~eload",    cmReload, kbF5, hcNoContext, "F5") +
             newLine() +
             *new TMenuItem("Edit si~g~nature",   cmEditSig,    kbNoKey, hcNoContext) +
@@ -1621,7 +1625,7 @@ TStatusLine *TVMailApp::initStatusLine(TRect r)
     r.a.y = r.b.y - 1;
     return new TStatusLine(r,
         *new TStatusDef(0, 0xFFFF) +
-            *new TStatusItem("~F3~ Pull",    kbF3,    cmPull) +
+            *new TStatusItem(gRemote ? "~F3~ Spam" : "~F3~ Pull", kbF3, cmPull) +
             *new TStatusItem("~F5~ Reload",  kbF5,    cmReload) +
             *new TStatusItem("~^R~ Reply",   kbCtrlR, cmReplyMsg) +
             *new TStatusItem("~^N~ New",     kbCtrlN, cmCompose) +

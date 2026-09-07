@@ -48,8 +48,10 @@ there's no `[imap]` section; **remote** otherwise. `$TVMAIL_MODE` overrides one
 run. Passwords are **only** in `~/.netrc` (`machine <host> login <u> password …`,
 mode 0600), never in `tvmail.conf`. In remote mode the folder shorthands map to
 IMAP folders (`spool→INBOX`, `mbox→Archive`, `trash→Trash`, `drafts→Drafts`,
-tunable in `[folders]`); `dead.letter` stays a local file and **F3 pull** is a
-no-op (the master fetches). The C++ UI is identical in both modes.
+`sent→Sent`, `spam→Junk`, tunable in `[folders]`); `dead.letter` stays a local
+file. **F3** on a client doesn't pull (the master does that) — it files
+`***SPAM***`-tagged messages into the spam folder. The C++ UI is identical in
+both modes.
 
 ## Plumbing
 
@@ -166,6 +168,7 @@ body. `Enter` on a message jumps focus to the body pane.
 | `drafts` | `$folder/drafts` (default `~/Mail/drafts`) | `mail -f +drafts` opens it too |
 | `sent` | `$folder/sent` (honours `set record`) | a copy of everything you send lands here |
 | `saved` | `~/mbox` | where `mail(1)` files messages you've read |
+| `spam` | `$folder/Junk` (remote: `Junk`) | `F3` moves `***SPAM***`-tagged mail here |
 | `trash` | `~/.local/share/tvmail/trash.mbox` | `Ctrl-D` moves here; deleting from trash is permanent |
 | `dead.letter` | `$DEAD` (default `~/dead.letter`) | a single message `mail(1)` or tvmail left behind |
 
@@ -186,7 +189,7 @@ save-a-copy-on-send.
 | `Ctrl-N` | new message |
 | `F2` | send the compose window you're in |
 | `Ctrl-D` | delete (→ trash) |
-| `F3` | pull mail (`pop-pull`) · `F5` reload the folder |
+| `F3` | local: pull mail (`pop-pull`) · remote: file `***SPAM***` mail · `F5` reload |
 | `F4` | address book |
 | `F6` / `Shift-F6` | next / previous window · `F10` menu · `Alt-X` quit |
 
@@ -251,26 +254,29 @@ tvmail-backend raw   IDX [MBOX]          the raw RFC822 message
 tvmail-backend parts IDX [MBOX]          list MIME parts
 tvmail-backend save  IDX PARTNO DEST [MBOX]
 tvmail-backend delete IDX [IDX...] [--mbox MBOX] [--trash DEST]
-tvmail-backend purge [MBOX] [--from S] [--subject S] [--to S]
-                     [--older-than DAYS] [--seen|--unseen] [--expunge] [-n]
+tvmail-backend purge [MBOX] [--from S] [--subject S] [--to S] [--older-than DAYS]
+                     [--seen|--unseen] [--to-folder DEST | --expunge] [-n]
 tvmail-backend mark  IDX read|unread [MBOX]
 tvmail-backend compose-template [--to A] [--subject S] [--in-reply-to IDX] [MBOX]
 tvmail-backend send  [--from A] [--to A ...] [--subject S]   < message-or-body
 tvmail-backend save-draft   < rfc822-message
 tvmail-backend aliases                   NAME <TAB> expanded, addresses
-tvmail-backend pull                      (no-op in remote mode)
+tvmail-backend pull                      local: pop-pull + spam sweep; remote: spam sweep
 tvmail-backend ping                      -> pong
+tvmail-backend mode                      -> local | remote
 tvmail-backend serve                     persistent framed request loop
 ```
 
 `MBOX` is a path or one of the shorthands `spool` `mbox` `trash` `drafts`
-`dead` (in remote mode the first four are IMAP folders).
+`sent` `spam` `dead` (in remote mode all but `dead` are IMAP folders).
 
-`purge` bulk-deletes everything matching **all** the filters you give (at least
-one required); `-n` dry-runs. Handy from `cron` on the master:
+`purge` bulk-**moves** everything matching **all** the filters you give (at
+least one required) to `--to-folder DEST` (default `trash`), or deletes it with
+`--expunge`; `-n` dry-runs. Handy from `cron` on the master:
 
 ```bash
 tvmail-backend purge --from "Cron Daemon" --older-than 14
+tvmail-backend purge --subject "***SPAM***" --to-folder spam    # what F3 does
 ```
 
 Works in both modes; see `man tvmail-backend` (**MODES**) for `tvmail.conf`.

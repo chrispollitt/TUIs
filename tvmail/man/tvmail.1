@@ -94,6 +94,15 @@ Where
 .BR mail (1)
 files messages once read.
 .TP
+.B spam
+.IR $folder/Junk
+(remote:
+.BR Junk ).
+.B F3
+moves messages the server tagged
+.B ***SPAM***
+here.
+.TP
 .B trash
 .IR ~/.local/share/tvmail/trash.mbox .
 .B Ctrl\-D
@@ -118,8 +127,13 @@ Shown as a one\-message pseudo\-folder.
 This help, but inside the program.
 .TP
 .B F3
-Pull remote mail (runs
+Local: pull remote mail (runs
 .BR pop\-pull ).
+Remote: file
+.B ***SPAM***
+messages into the
+.B spam
+folder.
 .TP
 .B F5
 Reload the current folder.

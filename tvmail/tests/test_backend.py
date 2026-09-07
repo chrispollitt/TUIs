@@ -100,6 +100,7 @@ class TestHelpers(Base):
                          str(self.xdg / "tvmail" / "trash.mbox"))
         self.assertTrue(be.mbox_path("drafts").endswith(os.sep + "drafts"))
         self.assertTrue(be.mbox_path("sent").endswith(os.sep + "sent"))
+        self.assertEqual(be.mbox_path("spam"), str(self.home / "Mail" / "Junk"))
         self.assertEqual(be.mbox_path("~/x"), str(self.home / "x"))
 
     def test_mbox_path_sent_honours_record(self):
@@ -332,6 +333,7 @@ class TestMode(Base):
         self.assertEqual(be._imap_folder("trash"), "Trash")
         self.assertEqual(be._imap_folder("drafts"), "Drafts")
         self.assertEqual(be._imap_folder("sent"), "Sent")
+        self.assertEqual(be._imap_folder("spam"), "Junk")
         self.assertEqual(be._imap_folder("Weird/Name"), "Weird/Name")
         self._write_conf("[folders]\nsaved = Kept\n")
         self.assertEqual(be._imap_folder("mbox"), "Kept")
@@ -588,6 +590,11 @@ class TestPurgeLocal(Base):
         self.assertIn(b"would purge 2", p.stdout)
         self.assertEqual(self.n(), 4)
 
+    def test_purge_to_folder(self):
+        self.be("purge", "--from", "Cron Daemon", "--to-folder", "spam")
+        self.assertEqual(self.n(), 2)
+        self.assertEqual(self.n("spam"), 2)
+
     def test_purge_expunge_skips_trash(self):
         self.be("purge", "--from", "Cron Daemon", "--expunge")
         self.assertEqual(self.n(), 2)
@@ -651,6 +658,51 @@ class TestPurgeIMAP(Base):
     def test_purge_no_filter_over_imap(self):
         with self.assertRaises(SystemExit):
             be.cmd_purge(self.ns())
+
+
+class TestSpamSweep(Base):
+    def _m(self, subj):
+        return ("From x Mon Sep  1 00:00:00 2026\n"
+                "From: whoever <w@x>\nDate: %s\nSubject: %s\n\nbody\n\n"
+                % (email.utils.formatdate(localtime=True), subj))
+
+    def _list(self, mbox):
+        return [r for r in self.be("list", mbox).stdout.decode().splitlines() if r]
+
+    def test_local_sweep_moves_tagged(self):
+        self.spool.write_text(self._m("hi there")
+                              + self._m("***SPAM*** cheap watches")
+                              + self._m("real mail")
+                              + self._m("***SPAM*** you won"))
+        self.assertEqual(be._sweep_spam(), 2)
+        self.assertEqual(len(self._list(str(self.spool))), 2)
+        self.assertEqual(len(self._list("spam")), 2)
+
+    def test_sweep_disabled_by_blank_folder(self):
+        conf = self.tmp / "c.conf"
+        conf.write_text("[folders]\nspam =\n")
+        os.environ["TVMAIL_CONF"] = str(conf)
+        self.spool.write_text(self._m("***SPAM*** x"))
+        self.assertEqual(be._sweep_spam(), 0)
+
+    def test_custom_tag(self):
+        conf = self.tmp / "c.conf"
+        conf.write_text("[spam]\nsubject = [JUNK]\n")
+        os.environ["TVMAIL_CONF"] = str(conf)
+        self.spool.write_text(self._m("[JUNK] hello") + self._m("normal"))
+        self.assertEqual(be._sweep_spam(), 1)
+
+    def test_remote_sweep_moves_to_junk(self):
+        os.environ["TVMAIL_MODE"] = "remote"
+        fake = FakeIMAP()
+        fake.add("INBOX", _msg("a@x", "normal", "b"))
+        fake.add("INBOX", _msg("s@x", "***SPAM*** cheap", "b"))
+        real, be._imap = be._imap, lambda: fake
+        self.addCleanup(lambda: setattr(be, "_imap", real))
+        self.addCleanup(lambda: setattr(be, "_IMAP", None))
+        self.assertEqual(be._sweep_spam(), 1)
+        self.assertEqual(len(fake.folders["INBOX"]), 1)
+        self.assertIn("Junk", [d for _, d in fake.copied])
 
 
 class TestSmtpSend(Base):

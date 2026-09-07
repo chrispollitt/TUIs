@@ -39,9 +39,16 @@ auth = true
 
 # Optional - override the shorthand -> IMAP folder mapping (these are the
 # defaults).  'dead.letter' is always a local file, never an IMAP folder.
-# Set  sent =  (blank) to stop filing a copy of outgoing mail.
+# Set  sent =  (blank) to stop filing a copy of outgoing mail;
+# set  spam =  (blank) to stop the F3 / pull spam sweep.
 [folders]
 saved  = Archive
 trash  = Trash
 drafts = Drafts
 sent   = Sent
+spam   = Junk
+
+# F3 (and the master's pull) move INBOX messages whose Subject contains this
+# tag into the spam folder.  Default is SpamAssassin's ***SPAM*** prefix.
+[spam]
+subject = ***SPAM***

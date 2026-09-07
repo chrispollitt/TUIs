@@ -13,7 +13,8 @@ is not the master.  Configure with ~/.config/tvmail/tvmail.conf (see the shipped
 tvmail.conf.example); passwords live only in ~/.netrc.
 
 Sub-commands (mailbox defaults to $MAIL or /var/mail/$USER; over IMAP the
-shorthands spool/mbox/trash/drafts/sent map to INBOX/Archive/Trash/Drafts/Sent):
+shorthands spool/mbox/trash/drafts/sent/spam map to
+INBOX/Archive/Trash/Drafts/Sent/Junk):
 
   list  [MBOX]              one line per message, TAB-separated:
                             idx <TAB> flags <TAB> date <TAB> from <TAB> subject
@@ -24,14 +25,17 @@ shorthands spool/mbox/trash/drafts/sent map to INBOX/Archive/Trash/Drafts/Sent):
   save  IDX PARTNO DEST [MBOX]   write one MIME part's decoded payload to DEST
   delete IDX [IDX...] [--mbox MBOX]   remove message(s); a .bak is kept
   purge [MBOX] [--from S] [--subject S] [--to S] [--older-than DAYS]
-        [--seen|--unseen] [--expunge] [-n]   bulk-delete by filter (needs >=1)
+        [--seen|--unseen] [--to-folder DEST | --expunge] [-n]
+                            bulk-move (default DEST=trash) by filter (needs >=1)
   mark  IDX (read|unread) [MBOX]
   send  [--from ADDR]       read an RFC822 message (or a bare body with --to/--subject)
         [--to ADDR ...]     from stdin, submit it, and file a copy in 'sent'
         [--subject TEXT]    ([folders] sent = <blank> in tvmail.conf disables the copy)
   compose-template [--to A] [--subject S] [--in-reply-to IDX] [MBOX]
                             print a draft skeleton (for $EDITOR) on stdout
-  pull                      run 'pop-pull' if it exists (on-demand fetch)
+  pull                      local: run 'pop-pull', then file tagged spam
+                            remote: file tagged spam ('***SPAM***' subject ->
+                            the 'spam' folder; tag/dest set in tvmail.conf)
   ping                      print 'pong' - a liveness check
   mode                      print 'local' or 'remote'
   serve                     persistent mode: read one request (an argv) per
@@ -110,6 +114,10 @@ def mbox_path(p=None):
         os.makedirs(d, exist_ok=True)
         rec = (_mailrc_var("record") or "sent").lstrip("+")   # honour `set record`
         return rec if os.path.isabs(rec) else os.path.join(d, rec)
+    if p == "spam":
+        d = _maildir()
+        os.makedirs(d, exist_ok=True)
+        return os.path.join(d, _conf().get("folders", "spam", fallback="Junk"))
     if p == "dead":
         return _dead_path()
     return os.path.expanduser(p)
@@ -367,7 +375,7 @@ def _imap_folder(p):
     key = {None: "inbox", "": "inbox", "spool": "inbox",
            "mbox": "saved"}.get(p, p)
     default = {"inbox": "INBOX", "saved": "Archive", "trash": "Trash",
-              "drafts": "Drafts", "sent": "Sent"}.get(key)
+              "drafts": "Drafts", "sent": "Sent", "spam": "Junk"}.get(key)
     return c.get("folders", key, fallback=default) if default is not None else p
 
 
@@ -797,7 +805,7 @@ def _local_purge(a):
             print("purged 0 message(s)")
             return 0
         if not a.expunge:
-            tp = mbox_path(a.trash or "trash")
+            tp = mbox_path(getattr(a, "to_folder", None) or "trash")
             d = os.path.dirname(tp)
             if d:
                 os.makedirs(d, exist_ok=True)
@@ -808,7 +816,7 @@ def _local_purge(a):
                     tb.add(box[k])
                 tb.flush()
             finally:
-                tb.unlock()
+                tb.close()
         bdir = os.path.join(_data_home(), "tvmail", "backup")
         os.makedirs(bdir, exist_ok=True)
         shutil.copy2(path, os.path.join(bdir, os.path.basename(path) + ".bak"))
@@ -816,7 +824,7 @@ def _local_purge(a):
             box.remove(k)
         box.flush()
     finally:
-        box.unlock()
+        box.close()
         _sweep_locks(path, older_than=30, temps_only=True)
     print("purged %d message(s)" % len(victims))
     return 0
@@ -859,10 +867,10 @@ def _imap_purge(a):
     if not uids:
         print("purged 0 message(s)")
         return 0
-    trash = _imap_folder("trash")
+    dest = _imap_folder(getattr(a, "to_folder", None) or "trash")
     for u in uids:
-        if not a.expunge and folder != trash:
-            M.uid("COPY", u, _q_mbox(trash))
+        if not a.expunge and folder != dest:
+            M.uid("COPY", u, _q_mbox(dest))
         M.uid("STORE", u, "+FLAGS", r"(\Deleted)")
     M.expunge()
     print("purged %d message(s)" % len(uids))
@@ -1005,14 +1013,42 @@ def cmd_aliases(a):
     return 0
 
 
+def _sweep_spam():
+    """Move INBOX messages whose Subject carries the SpamAssassin tag into the
+    spam folder.  Returns how many moved.  [folders] spam = <blank> disables."""
+    import re
+    c = _conf()
+    if c.has_option("folders", "spam") and not c.get("folders", "spam"):
+        return 0
+    tag = c.get("spam", "subject", fallback="***SPAM***")
+    ns = argparse.Namespace(mbox="spool", getfrom=None, subject=tag, to=None,
+                            older_than=None, seen=False, unseen=False,
+                            to_folder="spam", expunge=False, dry_run=False)
+    buf, real = io.StringIO(), sys.stdout
+    sys.stdout = buf
+    try:
+        cmd_purge(ns)
+    except SystemExit:
+        pass
+    finally:
+        sys.stdout = real
+    m = re.search(r"purged (\d+)", buf.getvalue())
+    return int(m.group(1)) if m else 0
+
+
 def cmd_pull(a):
     if _is_remote():
-        print("pull: the master host fetches remote mail; nothing to do here.")
+        n = _sweep_spam()                       # F3 on a client = "file the spam"
+        print("filed %d spam message(s)" % n if n else "no spam to file")
         return 0
     exe = shutil.which("pop-pull")
     if not exe or not os.path.exists(exe):
         sys.exit("tvmail-backend: pop-pull not found - run configure-mail-pull.sh")
-    return subprocess.run([exe, "-v"]).returncode
+    rc = subprocess.run([exe, "-v"]).returncode
+    n = _sweep_spam()
+    if n:
+        print("filed %d spam message(s)" % n)
+    return rc
 
 
 def cmd_ping(a):
@@ -1141,8 +1177,9 @@ def build_parser():
     p.add_argument("--to"); p.add_argument("--older-than", type=int, dest="older_than", metavar="DAYS")
     p.add_argument("--seen", action="store_true"); p.add_argument("--unseen", action="store_true")
     g = p.add_mutually_exclusive_group()
-    g.add_argument("--trash", nargs="?", const="trash", default="trash")
-    g.add_argument("--expunge", action="store_true")
+    g.add_argument("--to-folder", "--trash", dest="to_folder", metavar="DEST",
+                   default="trash")           # where matches go (default: trash)
+    g.add_argument("--expunge", action="store_true")   # or delete outright
     p.add_argument("-n", "--dry-run", action="store_true", dest="dry_run")
     p.set_defaults(fn=cmd_purge)
     p = sub.add_parser("compose-template")

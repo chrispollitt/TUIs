@@ -75,6 +75,14 @@ value.
 .B send
 files a copy here.
 .TP
+.B spam
+.IR $folder/Junk
+(remote:
+.BR Junk ).
+Where
+.B pull
+files server\-tagged spam.
+.TP
 .B trash
 .IR ~/.local/share/tvmail/trash.mbox .
 .TP
@@ -91,7 +99,8 @@ mode the shorthands map to IMAP folders instead \(em
 .BR mbox " \(->" " Archive" ,
 .BR trash " \(->" " Trash" ,
 .BR drafts " \(->" " Drafts" ,
-.BR sent " \(->" " Sent"
+.BR sent " \(->" " Sent" ,
+.BR spam " \(->" " Junk"
 \(em overridable in
 .IR tvmail.conf .
 .B dead
@@ -143,33 +152,35 @@ A
 .I .bak
 of the mailbox is kept.
 .TP
-.BI "purge " "\fR[\fPMBOX\fR]\fP " "\fR[\fP--from " "S\fR]\fP " "\fR[\fP--subject " "S\fR]\fP " "\fR[\fP--to " "S\fR]\fP " "\fR[\fP--older-than " "DAYS\fR]\fP " "\fR[\fP--seen|--unseen\fR]\fP " "\fR[\fP--expunge\fR]\fP " "\fR[\fP-n\fR]\fP"
-Bulk\-delete every message in
+.BI "purge " "\fR[\fPMBOX\fR]\fP " "\fR[\fPfilters\fR]\fP " "\fR[\fP--to-folder " "DEST" " | --expunge\fR]\fP " "\fR[\fP-n\fR]\fP"
+Move every message in
 .I MBOX
 that matches
 .B all
 of the given filters \(em substring (case\-insensitive) on
-.BR From: ,
-.BR Subject: ,
-.BR To: ,
-an age in whole days, and/or read state.
-At least one filter is required; with none it refuses to run.
-Matches move to
-.B trash
-like
-.B delete
-unless
+.BR \-\-from ", " \-\-subject ", " \-\-to ,
+an
+.B \-\-older\-than
+age in whole days, and/or
+.BR \-\-seen / \-\-unseen
+\(em into
+.I DEST
+(a mailbox shorthand or path; default
+.BR trash ).
 .B \-\-expunge
-is given.
+deletes them instead.
+At least one filter is required; with none it refuses to run.
 .B \-n
 (\c
 .BR \-\-dry\-run )
-lists what would go and changes nothing.
+lists what would move and changes nothing.
 Handy from
-.BR cron :
+.BR cron
+on the master:
 .RS
 .EX
 tvmail\-backend purge --from "Cron Daemon" --older-than 14
+tvmail\-backend purge --subject "***SPAM***" --to-folder spam
 .EE
 .RE
 .TP
@@ -222,13 +233,27 @@ tab
 one per line.
 .TP
 .B pull
-Run
+In
+.B local
+mode: run
 .B pop\-pull
-if it is on
-.IR PATH .
+(if on
+.IR PATH ),
+then sweep the inbox for spam.
 In
 .B remote
-mode this is a no\-op \(em the master host does the fetching.
+mode: just the spam sweep \(em the master does the fetching.
+The sweep moves inbox messages whose
+.B Subject:
+contains the
+.B "[spam] subject"
+tag (default
+.BR ***SPAM*** ,
+what SpamAssassin prepends) into the
+.B spam
+folder.
+.B "[folders] spam"
+blank turns it off.
 .TP
 .B ping
 Print
