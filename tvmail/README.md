@@ -203,6 +203,20 @@ Find/Replace dialog helpers adapted from its `tvedit` example.
 `man tvmail` and `man tvmail-backend`, installed to `$prefix/share/man/man1`.
 Old school. As nature intended.
 
+## Tarballs
+
+```bash
+./dist.sh            # -> dist/tvmail-1.0.0.tar.gz              (source)
+                     #    dist/tvmail-1.0.0-<system>-<arch>.tar.gz  (binary)
+```
+
+The **source** tarball builds anywhere tvision does — Linux, macOS, Cygwin
+(`build.sh` skips the Cygwin patch elsewhere; the C++ is otherwise portable and
+the Python backend is pure stdlib). The **binary** tarball is per-platform: a
+Cygwin build is a Windows-PE-under-Cygwin program, a Linux build is an ELF, a
+macOS build is a Mach-O — pick the one that matches your box, or build from
+source. `cd build && cpack` also produces the binary tarball directly.
+
 ## TODO / someday / probably not
 
 - Window List dialog (open windows, à la Turbo Pascal)

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.13)
-project(tvmail CXX)
+project(tvmail VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -52,3 +52,27 @@ install(PROGRAMS backend/tvmail-backend DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(PROGRAMS backend/pop-pull DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES man/tvmail.1 man/tvmail-backend.1
         DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
+install(FILES README.md HISTORY.md LICENSE AUTHORS WARRANTY
+        DESTINATION ${CMAKE_INSTALL_DOCDIR})
+
+# --- tarballs (CPack) -------------------------------------------------------
+# Binary tarball:  cd build && cpack           -> tvmail-1.0.0-<system>.tar.gz
+# (the binary is per-platform; the source tree builds on Linux/macOS/Cygwin)
+set(CPACK_GENERATOR "TGZ")
+set(CPACK_PACKAGE_NAME "tvmail")
+set(CPACK_PACKAGE_VENDOR "Chris Pollitt")
+set(CPACK_PACKAGE_CONTACT "Chris Pollitt <chris.pollitt@gmail.com>")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Turbo Vision mail client for a local mailbox")
+set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
+set(CPACK_PACKAGE_FILE_NAME
+    "tvmail-${PROJECT_VERSION}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}")
+set(CPACK_STRIP_FILES ON)
+
+# Source tarball:  cd build && cpack --config CPackSourceConfig.cmake
+set(CPACK_SOURCE_GENERATOR "TGZ")
+set(CPACK_SOURCE_PACKAGE_FILE_NAME "tvmail-${PROJECT_VERSION}")
+set(CPACK_SOURCE_IGNORE_FILES
+    "/build/" "/_inst/" "/third_party/" "/\\\\.git/"
+    "\\\\.o$" "\\\\.bak$" "/__pycache__/" "\\\\.pyc$")
+include(CPack)
