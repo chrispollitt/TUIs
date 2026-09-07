@@ -551,6 +551,9 @@ local_delivery:
   return_path_add
   mode              = 0600
   mode_fail_narrower = false
+  # single-host mbox: fcntl lock only, no '<mbox>.lock' dotfiles in /var/mail
+  use_lockfile      = false
+  use_fcntl_lock    = true
 
 smarthost_smtp:
   driver             = smtp

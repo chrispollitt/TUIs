@@ -226,7 +226,29 @@ def _short_date(raw):
         return dt.strftime("%Y-%m-%d %H:%M")
 
 
+def _sweep_locks(path, older_than=300, temps_only=False):
+    """Remove stale dot-lock hitching posts left in the spool dir.
+
+    Python's mailbox.lock() creates '<mbox>.lock.<time>.<host>.<pid>', hardlinks
+    it to '<mbox>.lock', then unlinks the temp - but on Cygwin the hardlink step
+    is flaky and a hard kill leaks the temp.  Sweep those (and, unless
+    temps_only, a bare '<mbox>.lock') once they're older than `older_than` s.
+    """
+    import glob, time
+    now = time.time()
+    victims = glob.glob(glob.escape(path) + ".lock.*")
+    if not temps_only:
+        victims.append(path + ".lock")
+    for f in victims:
+        try:
+            if os.path.isfile(f) and now - os.path.getmtime(f) > older_than:
+                os.unlink(f)
+        except OSError:
+            pass
+
+
 def open_box(path, create=False):
+    _sweep_locks(path)
     if not create and not os.path.exists(path):
         sys.exit("tvmail-backend: no such mailbox: " + path)
     return mbox(path, factory=None, create=True)
@@ -247,22 +269,17 @@ def cmd_list(a):
     path = mbox_path(a.mbox)
     if not os.path.exists(path):
         return 0                       # a not-yet-created mailbox lists as empty
-    box = open_box(path)
-    box.lock()
-    try:
-        for i, msg in enumerate(box):
-            status = (msg.get("Status", "") or "") + (msg.get("X-Status", "") or "")
-            flags = "." if "R" in status else "N"
-            line = "\t".join((
-                str(i),
-                flags,
-                _short_date(msg.get("Date", "")),
-                _clean(_short_from(msg.get("From", "")), 28),
-                _clean(_hdr(msg, "Subject", "(no subject)"), 200),
-            ))
-            print(line)
-    finally:
-        box.unlock()
+    box = open_box(path)               # read-only: no lock (this is the hot path
+    for i, msg in enumerate(box):      # the 3-pane UI hammers on every keystroke)
+        status = (msg.get("Status", "") or "") + (msg.get("X-Status", "") or "")
+        flags = "." if "R" in status else "N"
+        print("\t".join((
+            str(i),
+            flags,
+            _short_date(msg.get("Date", "")),
+            _clean(_short_from(msg.get("From", "")), 28),
+            _clean(_hdr(msg, "Subject", "(no subject)"), 200),
+        )))
     return 0
 
 
@@ -399,12 +416,15 @@ def cmd_delete(a):
                 tbox.flush()
             finally:
                 tbox.unlock()
-        shutil.copy2(path, path + ".bak")
+        bdir = os.path.join(_data_home(), "tvmail", "backup")
+        os.makedirs(bdir, exist_ok=True)
+        shutil.copy2(path, os.path.join(bdir, os.path.basename(path) + ".bak"))
         for v in victims:
             box.remove(keys[v])
         box.flush()
     finally:
         box.unlock()
+        _sweep_locks(path, older_than=30, temps_only=True)   # tidy our own leak
     print("deleted %d message(s)" % len(victims))
     return 0
 
