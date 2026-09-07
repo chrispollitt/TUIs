@@ -13,19 +13,25 @@
 # local : always use the on-disk mbox + local sendmail (the master).
 # remote: always talk IMAP/SMTP to the master (a client).
 mode   = auto
-master = cmpi ; beelink
+master = cmpi ; beelink ; raspberrypi
 
 [imap]
-host = cmpi.lan
+host = cmpi
 port = 993
 ssl  = true
 user = chris
+# verify the server cert (default true).  Set false for a LAN box with the
+# stock self-signed cert, or point cafile at its .pem.
+verify = false
+#cafile = /etc/ssl/certs/cmpi-dovecot.pem
 
 [smtp]
-host     = cmpi.lan
+host     = cmpi
 port     = 587
 starttls = true
 user     = chris
+# If the master's Postfix trusts the LAN in mynetworks you can skip auth and
+# submit to plain :25 instead:  port = 25, starttls = false, no ~/.netrc entry.
 
 # Optional - override the shorthand -> IMAP folder mapping (these are the
 # defaults).  'dead.letter' is always a local file, never an IMAP folder.

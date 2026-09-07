@@ -327,18 +327,26 @@ def _imap():
     if not c.has_section("imap"):
         sys.exit("tvmail-backend: remote mode but no [imap] section in "
                  + _conf_path())
-    import imaplib
+    import imaplib, ssl as _ssl
     host = c.get("imap", "host")
     port = c.getint("imap", "port", fallback=993)
     user = c.get("imap", "user", fallback=_me())
     use_ssl = c.getboolean("imap", "ssl", fallback=True)
+    verify = c.getboolean("imap", "verify", fallback=True)
+    cafile = c.get("imap", "cafile", fallback="").strip() or None
+    ctx = _ssl.create_default_context(cafile=cafile)
+    if not verify:                              # LAN box with a self-signed cert
+        ctx.check_hostname = False
+        ctx.verify_mode = _ssl.CERT_NONE
     try:
-        M = (imaplib.IMAP4_SSL(host, port) if use_ssl
-             else imaplib.IMAP4(host, port))
-        if not use_ssl and "STARTTLS" in getattr(M, "capabilities", ()):
-            M.starttls()
+        if use_ssl:
+            M = imaplib.IMAP4_SSL(host, port, ssl_context=ctx)
+        else:
+            M = imaplib.IMAP4(host, port)
+            if "STARTTLS" in getattr(M, "capabilities", ()):
+                M.starttls(ssl_context=ctx)
         M.login(user, _cred(host, user, "TVMAIL_IMAP_PASS"))
-    except (imaplib.IMAP4.error, OSError) as e:
+    except (imaplib.IMAP4.error, OSError, _ssl.SSLError) as e:
         sys.exit("tvmail-backend: IMAP %s:%d - %s" % (host, port, e))
     _IMAP = M
     return M
