@@ -137,25 +137,29 @@ class TestHelpers(Base):
 
     def test_sweep_locks(self):
         base = str(self.spool)
-        stale = base + ".lock.111.host.222"
-        fresh = base + ".lock.999.host.888"
+        lock_temp = base + ".lock.1788888888.host.222"    # lock() hitching post
+        flush_temp = base + ".1788888888.host.222"        # flush() rewrite temp
+        fresh = base + ".lock.1799999999.host.888"
         bare = base + ".lock"
+        keep = base + ".bak"                              # unrelated -> never touched
         old = time.time() - 10_000
-        for p in (stale, fresh, bare):
+        for p in (lock_temp, flush_temp, fresh, bare, keep):
             Path(p).write_text("")
-        os.utime(stale, (old, old))
-        os.utime(bare, (old, old))
+        for p in (lock_temp, flush_temp, bare, keep):
+            os.utime(p, (old, old))
         be._sweep_locks(base, older_than=300)
-        self.assertFalse(os.path.exists(stale))   # aged temp -> swept
-        self.assertTrue(os.path.exists(fresh))    # recent temp -> kept
-        self.assertFalse(os.path.exists(bare))    # aged bare .lock -> swept
-        Path(stale).write_text("")
+        self.assertFalse(os.path.exists(lock_temp))   # aged lock temp  -> swept
+        self.assertFalse(os.path.exists(flush_temp))  # aged flush temp -> swept
+        self.assertTrue(os.path.exists(fresh))        # recent temp     -> kept
+        self.assertFalse(os.path.exists(bare))        # aged bare .lock -> swept
+        self.assertTrue(os.path.exists(keep))         # .bak            -> untouched
+        Path(lock_temp).write_text("")
         Path(bare).write_text("")
-        os.utime(stale, (old, old))
+        os.utime(lock_temp, (old, old))
         os.utime(bare, (old, old))
         be._sweep_locks(base, older_than=300, temps_only=True)
-        self.assertTrue(os.path.exists(bare))     # temps_only keeps the .lock
-        self.assertFalse(os.path.exists(stale))
+        self.assertTrue(os.path.exists(bare))         # temps_only keeps the .lock
+        self.assertFalse(os.path.exists(lock_temp))
 
 
 class TestCli(Base):
