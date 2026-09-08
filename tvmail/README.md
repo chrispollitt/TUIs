@@ -235,19 +235,21 @@ tvmail reads your existing `~/.mailrc` (and `/etc/mailrc`, `$MAILRC`):
 `~/.signature` and `~/dead.letter` follow the usual conventions. This holds in
 **both** modes — the address book, signature and dead.letter are always local.
 
-**Sharing the store with `mail(1)`.** On the master, `mail(1)` reads
-`/var/mail/$USER` directly — the same mbox Dovecot serves and tvmail-local
-reads, so all three agree. On a client there's no local store; point GNU
-Mailutils at IMAP too (it's built with `ENABLE_IMAP`):
+**Sharing the store with `mail(1)`.** KISS: IMAP everywhere. GNU Mailutils is
+built with `ENABLE_IMAP`, so point it at the same Dovecot tvmail uses —
+`localhost` on the master, the master's name on a client:
 
 ```sh
-# ~/.mailrc on a client
-set folder=imaps://chris@cmpi
-set sendmail=smtp://cmpi:25        # or smtps://cmpi:465
+# ~/.mailrc
+set folder=imaps://chris@cmpi        # or @localhost on the master itself
+set record=+Sent
+# mail -f +INBOX   opens the IMAP inbox
 ```
 
-Credentials come from the same `~/.netrc` (`machine cmpi …`) that tvmail uses,
-so `mail` and `tvmail` then see the identical folders.
+Credentials come from the same `~/.netrc` entry tvmail uses, so `mail` and
+`tvmail` see identical folders on every box. (Postfix still delivers to
+`/var/mail/$USER`, which *is* Dovecot's INBOX — so incoming mail lands in the
+one place everyone reads.)
 
 ## `tvmail-backend` (usable on its own)
 
