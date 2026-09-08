@@ -1206,6 +1206,12 @@ def main():
         sys.exit(0)
     except KeyboardInterrupt:
         sys.exit(130)
+    except PermissionError as e:
+        sys.exit("tvmail-backend: %s\n"
+                 "  (rewriting a spool mbox needs write access to its directory "
+                 "- on a mail server use IMAP/remote mode, not local)" % e)
+    except OSError as e:                    # -> one line, not a traceback dialog
+        sys.exit("tvmail-backend: %s" % e)
 
 
 if __name__ == "__main__":

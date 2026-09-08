@@ -218,6 +218,21 @@ class TestCli(Base):
     def test_ping(self):
         self.assertEqual(self.be("ping").stdout.strip(), b"pong")
 
+    def test_delete_in_readonly_dir_is_one_line_not_traceback(self):
+        ro = self.tmp / "ro"
+        ro.mkdir()
+        mb = ro / "spool.mbox"
+        mb.write_text(MBOX_1)
+        os.chmod(ro, 0o500)
+        try:
+            p = self.be("delete", "0", "--mbox", str(mb))
+        finally:
+            os.chmod(ro, 0o700)                 # so tearDown can rmtree
+        if p.returncode == 0:
+            self.skipTest("directory permissions not enforced here")
+        self.assertNotIn(b"Traceback", p.stderr)
+        self.assertIn(b"tvmail-backend:", p.stderr)
+
 
 class TestServe(Base):
     def _serve(self):
