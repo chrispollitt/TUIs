@@ -225,8 +225,9 @@ def main():
                 if a.verbose:
                     print("[dry-run] msg %d uid %s (%d bytes)" % (i, u, len(raw)))
             else:
-                r = subprocess.run([exim, "-oi", "-oMr", "pop-pull",
-                                    "-bm", "--", local_user], input=raw)
+                # portable sendmail interface: works for exim, Postfix, msmtp.
+                # (exim-only -oMr/-bm made Postfix parse them as recipients.)
+                r = subprocess.run([exim, "-oi", "--", local_user], input=raw)
                 if r.returncode != 0:
                     print("pop-pull: exim delivery failed on msg %d" % i, file=sys.stderr)
                     break
