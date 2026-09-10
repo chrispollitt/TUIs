@@ -5,5 +5,6 @@ _inst/
 *.o
 *.bak
 *.pyc
+DEVNOTES.txt
 __pycache__/
 tmp/
