@@ -1,0 +1,12 @@
+** WARNING **
+
+Due to a recent change in both Windows ssh and Cygwin ssh,
+using ssh from Windows to connect to a Linux machine to remotely
+run tvmail WILL NOT WORK. The workaround is to either run mintty
+or ssh from inside WSL.
+
+I added this Windows Terminal profile as a solution for me:
+
+wsl.exe -d Ubuntu-20.04 ssh cmpi
+
+(For the curious, see the end part of the accompanying TERMINAL-HISTORY.md)
