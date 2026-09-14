@@ -1,12 +1,31 @@
 ** WARNING **
 
-Due to a recent change in both Windows ssh and Cygwin ssh,
-using ssh from Windows to connect to a Linux machine to remotely
-run tvmail WILL NOT WORK. The workaround is to either run mintty
-or ssh from inside WSL.
+Running tvmail over SSH from inside Windows Terminal does not work
+correctly, whether you use Cygwin's ssh or Windows' native OpenSSH
+client. Windows Terminal's ConPTY layer (and, for Cygwin, its own
+pseudo-console bridge) sits between tvmail and the real terminal and
+mangles the live terminal-capability negotiation tvmail depends on.
+Depending on settings, you get either garbage escape sequences
+bleeding onto the screen, or keystrokes and mouse clicks silently
+dropped.
 
-I added this Windows Terminal profile as a solution for me:
+Workarounds, in order of preference:
+
+  1. Run ssh from mintty instead of Windows Terminal.
+  2. Run ssh from inside WSL instead of from Windows directly.
+
+I added this Windows Terminal profile as my solution (option 2):
 
 wsl.exe -d Ubuntu-20.04 ssh cmpi
 
-(For the curious, see the end part of the accompanying TERMINAL-HISTORY.md)
+(For the curious -- including the test that pinned this down -- see
+the accompanying TERMINAL-HISTORY.md, particularly section 7 at the
+end.)
+
+If you'd like to help make this someone else's problem to fix: this
+is a known, unresolved gap in ConPTY (microsoft/terminal on GitHub)
+and in Cygwin's pseudo-console handling (the cygwin-patches mailing
+list -- Cygwin has no GitHub tracker). TERMINAL-HISTORY.md section 7
+is a ready-made bug report with a reproducible test case attached.
+Old geezers who remember when terminals just worked are encouraged
+to make some noise. ;)
