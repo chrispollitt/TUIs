@@ -1,0 +1,9 @@
+# ~/.mail
+
+mailbox {
+    mailbox-pattern "imap://chris@cmpi:143/INBOX";
+};
+
+mailer {
+    url "smtp://cmpi:25";
+};
