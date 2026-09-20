@@ -372,12 +372,3 @@ the Python backend is pure stdlib). The **binary** tarball is per-platform: a
 Cygwin build is a Windows-PE-under-Cygwin program, a Linux build is an ELF, a
 macOS build is a Mach-O — pick the one that matches your box, or build from
 source. `cd build && cpack` also produces the binary tarball directly.
-
-## TODO / someday / probably not
-
-- Window List dialog (open windows, à la Turbo Pascal)
-- attachment browser (`parts` / `save` are already in the backend)
-- threading, search / filter, sort by column
-- a `tvmailrc` for colours / default folder / poll-on-start
-- mark-as-read only after the body is actually scrolled
-- a mouse. it's Turbo Vision, it should have a mouse. one day.
