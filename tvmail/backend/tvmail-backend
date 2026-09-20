@@ -10,7 +10,8 @@ outbound through the smarthost.  Every other machine - Cygwin, WSL, a VM - is a
 thin client that reads over IMAP and submits over SMTP to that master.  Same UI,
 same sub-commands; this program swaps its mbox layer for imaplib/smtplib when it
 is not the master.  Configure with ~/.config/tvmail/tvmail.conf (see the shipped
-tvmail.conf.example); passwords live only in ~/.netrc.
+tvmail.conf.example), or let it inherit GNU Mailutils' own ~/.mail (host/port)
+and ~/.mu-tickets (credentials) - passwords otherwise live only in ~/.netrc.
 
 Sub-commands (mailbox defaults to $MAIL or /var/mail/$USER; over IMAP the
 shorthands spool/mbox/trash/drafts/sent/spam map to
@@ -31,7 +32,8 @@ INBOX/Archive/Trash/Drafts/Sent/Junk):
   send  [--from ADDR]       read an RFC822 message (or a bare body with --to/--subject)
         [--to ADDR ...]     from stdin, submit it, and file a copy in 'sent'
         [--subject TEXT]    ([folders] sent = <blank> in tvmail.conf disables the copy)
-  compose-template [--to A] [--subject S] [--in-reply-to IDX] [MBOX]
+  compose-template [--to A] [--subject S] [--in-reply-to IDX [--reply-all]]
+                   [--forward IDX] [MBOX]
                             print a draft skeleton (for $EDITOR) on stdout
   pull                      local: run 'pop-pull', then file tagged spam
                             remote: file tagged spam ('***SPAM***' subject ->
@@ -260,6 +262,114 @@ def _short_date(raw):
         return dt.strftime("%Y-%m-%d %H:%M")
 
 
+# --------------------------------------------------------------------------
+# GNU Mailutils interop:  ~/.mail  and  ~/.mu-tickets.
+#
+# mail(1) from GNU Mailutils does NOT keep its host/port/credentials in
+# ~/.mailrc (that traditional file only ever holds the `set`/`alias`/`group`
+# lines handled above).  It uses its own block-syntax config,
+# ~/.mail  ($TVMAIL_MU_CONF overrides the path):
+#   mailbox { mailbox-pattern "imap://user@host:port/box"; };
+#   mailer  { url "smtp://host:port"; };
+# and a tickets file for credentials, ~/.mu-tickets ($TVMAIL_MU_TICKETS):
+#   scheme://user:pass@host[:port][/path]      # scheme "*" matches any
+# with user/pass percent (URL) encoded.  These are read as a fallback
+# behind explicit tvmail.conf [imap]/[smtp] settings and $TVMAIL_IMAP_PASS /
+# $TVMAIL_SMTP_PASS / ~/.netrc, so the two mail clients can share one setup.
+# --------------------------------------------------------------------------
+def _mu_url(u):
+    """Parse scheme://[user[:pass]@]host[:port][/path], percent-decoding
+    user/pass.  Accepts the '*' wildcard scheme used in ~/.mu-tickets.
+    None if u is falsy or does not parse."""
+    if not u:
+        return None
+    import re
+    from urllib.parse import unquote
+    m = re.match(
+        r'^(?P<scheme>\*|[A-Za-z][\w+.-]*)://'
+        r'(?:(?P<user>[^:@/]*)(?::(?P<pass>[^@/]*))?@)?'
+        r'(?P<host>[^:/]+)(?::(?P<port>\d+))?(?P<path>/.*)?$',
+        u.strip())
+    if not m:
+        return None
+    d = m.groupdict()
+    return {
+        "scheme": d["scheme"],
+        "user": unquote(d["user"]) if d["user"] else None,
+        "pass": unquote(d["pass"]) if d["pass"] else None,
+        "host": d["host"],
+        "port": int(d["port"]) if d["port"] else None,
+        "path": (d["path"] or "").lstrip("/"),
+    }
+
+
+def _mu_conf_path():
+    return os.environ.get("TVMAIL_MU_CONF") or os.path.expanduser("~/.mail")
+
+
+def _mu_conf():
+    """Parse ~/.mail's block syntax - name { key "value"; key2 val2; }; -
+    into {block: {key: value}}.  One level of nesting is enough for the
+    mailbox{} / mailer{} blocks tvmail cares about."""
+    import re
+    try:
+        with open(_mu_conf_path(), encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return {}
+    text = re.sub(r'#.*', '', text)
+    blocks = {}
+    for name, body in re.findall(r'([\w-]+)\s*\{([^{}]*)\}\s*;', text):
+        stmts = {}
+        for key, val in re.findall(r'([\w-]+)\s+"([^"]*)"\s*;', body):
+            stmts[key] = val
+        for key, val in re.findall(r'([\w-]+)\s+([^\s"][^\s;]*)\s*;', body):
+            stmts.setdefault(key, val)
+        blocks.setdefault(name, {}).update(stmts)
+    return blocks
+
+
+def _mu_mailbox():
+    """The [imap]-equivalent parsed from ~/.mail's mailbox{} block, or None."""
+    return _mu_url(_mu_conf().get("mailbox", {}).get("mailbox-pattern"))
+
+
+def _mu_mailer():
+    """The [smtp]-equivalent parsed from ~/.mail's mailer{} block, or None."""
+    return _mu_url(_mu_conf().get("mailer", {}).get("url"))
+
+
+def _mu_tickets_path():
+    return os.environ.get("TVMAIL_MU_TICKETS") or os.path.expanduser("~/.mu-tickets")
+
+
+def _mu_ticket_pass(scheme, host, user):
+    """Password for (scheme, host[, user]) from ~/.mu-tickets.  Prefers an
+    entry whose user matches; falls back to the first matching host/scheme."""
+    try:
+        with open(_mu_tickets_path(), encoding="utf-8", errors="replace") as fh:
+            lines = fh.readlines()
+    except OSError:
+        return None
+    fallback = None
+    for ln in lines:
+        ln = ln.strip()
+        if not ln or ln.startswith("#"):
+            continue
+        t = _mu_url(ln)
+        if not t or not t["host"] or t["host"].lower() != (host or "").lower():
+            continue
+        if t["scheme"] not in ("*", scheme):
+            continue
+        if t["pass"] is None:
+            continue
+        if user and t["user"] == user:
+            return t["pass"]
+        if fallback is None:
+            fallback = t["pass"]
+    return fallback
+
+
 # ==========================================================================
 # Local master  vs.  remote (IMAP/SMTP) client
 #
@@ -268,7 +378,8 @@ def _short_date(raw):
 #   [imap]    host=  port=993  ssl=true  user=
 #   [smtp]    host=  port=587  starttls=true  user=
 #   [folders] saved=Archive  trash=Trash  drafts=Drafts
-# Passwords are NEVER in that file - ~/.netrc (machine <host> login <u>
+# Host/port/user fall back to ~/.mail (see above) when unset here.  Passwords
+# are NEVER in that file - ~/.mu-tickets, ~/.netrc (machine <host> login <u>
 # password <p>, chmod 600), or $TVMAIL_IMAP_PASS / $TVMAIL_SMTP_PASS.
 # ==========================================================================
 def _conf_path():
@@ -297,18 +408,25 @@ def _mode():
                re.split(r"[;,\s]+", c.get("service", "master", fallback="")) if x]
     if socket.gethostname().split(".")[0].lower() in masters:
         return "local"
-    return "remote" if c.has_section("imap") else "local"
+    mu = _mu_mailbox()
+    has_imap = c.has_section("imap") or bool(
+        mu and (mu["scheme"] or "").startswith("imap"))
+    return "remote" if has_imap else "local"
 
 
 def _is_remote():
     return _mode() == "remote"
 
 
-def _cred(host, user, envvar):
-    """Password from $<envvar> or ~/.netrc; abort with guidance if neither."""
+def _cred(host, user, envvar, scheme=None):
+    """Password from $<envvar>, ~/.mu-tickets, or ~/.netrc; abort with
+    guidance if none of them have it."""
     v = os.environ.get(envvar)
     if v:
         return v
+    pw = _mu_ticket_pass(scheme, host, user)
+    if pw is not None:
+        return pw
     try:
         import netrc
         auth = netrc.netrc(os.path.expanduser("~/.netrc")).authenticators(host)
@@ -318,9 +436,10 @@ def _cred(host, user, envvar):
         pass
     except netrc.NetrcParseError as e:
         sys.exit("tvmail-backend: ~/.netrc: %s (is it mode 600?)" % e)
-    sys.exit("tvmail-backend: no password for %s - add it to ~/.netrc "
-             "(machine %s login %s password ...) or set $%s"
-             % (host, host, user, envvar))
+    sys.exit("tvmail-backend: no password for %s - add it to ~/.mu-tickets "
+             "(%s://%s:PASS@%s), ~/.netrc (machine %s login %s password "
+             "...), or set $%s"
+             % (host, scheme or "*", user, host, host, user, envvar))
 
 
 _IMAP = None
@@ -341,14 +460,18 @@ def _imap():
         except Exception:
             _IMAP = None
     c = _conf()
-    if not c.has_section("imap"):
-        sys.exit("tvmail-backend: remote mode but no [imap] section in "
-                 + _conf_path())
+    mu = _mu_mailbox() or {}
+    host = c.get("imap", "host", fallback=None) or mu.get("host")
+    if not host:
+        sys.exit("tvmail-backend: remote mode but no IMAP host in "
+                 + _conf_path() + " or " + _mu_conf_path())
     import imaplib, ssl as _ssl
-    host = c.get("imap", "host")
-    port = c.getint("imap", "port", fallback=993)
-    user = c.get("imap", "user", fallback=_me())
-    use_ssl = c.getboolean("imap", "ssl", fallback=True)
+    scheme = mu.get("scheme") or "imaps"
+    default_ssl = scheme != "imap"           # imaps (or no ~/.mail) -> TLS
+    use_ssl = c.getboolean("imap", "ssl", fallback=default_ssl)
+    port = (c.getint("imap", "port", fallback=None) or mu.get("port")
+            or (993 if use_ssl else 143))
+    user = c.get("imap", "user", fallback=None) or mu.get("user") or _me()
     verify = c.getboolean("imap", "verify", fallback=True)
     cafile = c.get("imap", "cafile", fallback="").strip() or None
     ctx = _ssl.create_default_context(cafile=cafile)
@@ -362,7 +485,7 @@ def _imap():
             M = imaplib.IMAP4(host, port)
             if "STARTTLS" in getattr(M, "capabilities", ()):
                 M.starttls(ssl_context=ctx)
-        M.login(user, _cred(host, user, "TVMAIL_IMAP_PASS"))
+        M.login(user, _cred(host, user, "TVMAIL_IMAP_PASS", scheme))
     except (imaplib.IMAP4.error, OSError, _ssl.SSLError) as e:
         sys.exit("tvmail-backend: IMAP %s:%d - %s" % (host, port, e))
     _IMAP = M
@@ -436,15 +559,19 @@ def _imap_list(folder):
 
 
 def _smtp_send(msg, rcpts):
-    """Submit via [smtp] to the master.  False -> no [smtp], caller falls back."""
+    """Submit via [smtp] (or ~/.mail's mailer{}) to the master.  False -> no
+    host configured, caller falls back to local sendmail."""
     c = _conf()
-    if not c.has_section("smtp"):
+    mu = _mu_mailer() or {}
+    host = c.get("smtp", "host", fallback=None) or mu.get("host")
+    if not host:
         return False
     import smtplib, ssl as _ssl
-    host = c.get("smtp", "host")
-    port = c.getint("smtp", "port", fallback=587)
-    user = c.get("smtp", "user", fallback=_me())
-    use_ssl = c.getboolean("smtp", "ssl", fallback=(port == 465))
+    scheme = mu.get("scheme") or "smtp"
+    port = c.getint("smtp", "port", fallback=None) or mu.get("port") or 587
+    user = c.get("smtp", "user", fallback=None) or mu.get("user") or _me()
+    use_ssl = c.getboolean("smtp", "ssl",
+                           fallback=(scheme == "smtps" or port == 465))
     starttls = c.getboolean("smtp", "starttls", fallback=not use_ssl)
     do_auth = c.getboolean("smtp", "auth", fallback=True)  # false: mynetworks relay
     # This box can't receive, so force the sender to the real mailbox: the
@@ -463,7 +590,7 @@ def _smtp_send(msg, rcpts):
                 S.starttls(context=_ssl.create_default_context())
                 S.ehlo()
             if do_auth:
-                pw = _cred(host, user, "TVMAIL_SMTP_PASS")
+                pw = _cred(host, user, "TVMAIL_SMTP_PASS", scheme)
                 if pw:
                     S.login(user, pw)
             S.sendmail(frm, rcpts, msg.as_bytes())
@@ -664,14 +791,19 @@ def cmd_parts(a):
 
 
 def cmd_save(a):
+    """partno is the number cmd_parts printed - the index into msg.walk(),
+    not a 0-based count of leaf parts (those differ whenever a message has
+    more than one multipart container, e.g. a mixed/alternative nesting)."""
     _, msg = _get_msg(a)
-    parts = [p for p in msg.walk() if not p.is_multipart()]
-    if not (0 <= a.partno < len(parts)):
-        sys.exit("tvmail-backend: no part %d" % a.partno)
-    with open(a.dest, "wb") as f:
-        f.write(parts[a.partno].get_payload(decode=True) or b"")
-    print("wrote", a.dest)
-    return 0
+    for n, part in enumerate(msg.walk()):
+        if part.is_multipart():
+            continue
+        if n == a.partno:
+            with open(a.dest, "wb") as f:
+                f.write(part.get_payload(decode=True) or b"")
+            print("wrote", a.dest)
+            return 0
+    sys.exit("tvmail-backend: no part %d" % a.partno)
 
 
 def cmd_delete(a):
@@ -917,7 +1049,17 @@ def cmd_compose_template(a):
     to = ", ".join(a.to) if a.to else ""
     subj = a.subject or ""
     body = ""
-    if a.in_reply_to is not None:
+    cc = ""
+    if getattr(a, "forward", None) is not None:
+        _, src = _get_msg(argparse.Namespace(mbox=a.mbox, idx=a.forward))
+        if not subj:
+            s = _hdr(src, "Subject", "")
+            subj = s if s.lower().startswith("fwd:") else "Fwd: " + s
+        body = ("\n---------- Forwarded message ----------\n"
+                "From: %s\nDate: %s\nSubject: %s\nTo: %s\n\n%s\n"
+                % (_hdr(src, "From"), _hdr(src, "Date"), _hdr(src, "Subject"),
+                   _hdr(src, "To"), _best_body(src)))
+    elif a.in_reply_to is not None:
         _, src = _get_msg(argparse.Namespace(mbox=a.mbox, idx=a.in_reply_to))
         if not to:
             to = _hdr(src, "Reply-To") or _hdr(src, "From")
@@ -927,8 +1069,21 @@ def cmd_compose_template(a):
         who = _short_from(src.get("From", "someone"))
         quoted = "\n".join("> " + ln for ln in _best_body(src).splitlines())
         body = "\nOn %s, %s wrote:\n%s\n" % (_short_date(src.get("Date", "")), who, quoted)
-    sys.stdout.write(
-        "From: %s\nTo: %s\nSubject: %s\n\n%s" % (frm, to, subj, body))
+        if getattr(a, "reply_all", False):
+            # Cc = original To+Cc, minus whatever just landed in the new To.
+            seen = {addr.lower() for _, addr in email.utils.getaddresses([to])}
+            cc_addrs = []
+            for name, addr in email.utils.getaddresses(_rcpts(src, ("To", "Cc"))):
+                key = addr.lower()
+                if addr and key not in seen:
+                    seen.add(key)
+                    cc_addrs.append(email.utils.formataddr((name, addr)) if name else addr)
+            cc = ", ".join(cc_addrs)
+    out = "From: %s\nTo: %s\n" % (frm, to)
+    if cc:
+        out += "Cc: %s\n" % cc
+    out += "Subject: %s\n\n%s" % (subj, body)
+    sys.stdout.write(out)
     return 0
 
 
@@ -1184,7 +1339,9 @@ def build_parser():
     p.set_defaults(fn=cmd_purge)
     p = sub.add_parser("compose-template")
     p.add_argument("--from", dest="getfrom"); p.add_argument("--to", action="append", default=[])
-    p.add_argument("--subject"); p.add_argument("--in-reply-to", type=int); p.add_argument("mbox", nargs="?")
+    p.add_argument("--subject"); p.add_argument("--in-reply-to", type=int)
+    p.add_argument("--forward", type=int); p.add_argument("--reply-all", action="store_true")
+    p.add_argument("mbox", nargs="?")
     p.set_defaults(fn=cmd_compose_template)
     p = sub.add_parser("send")
     p.add_argument("--from", dest="getfrom"); p.add_argument("--to", action="append", default=[])

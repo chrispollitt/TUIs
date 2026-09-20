@@ -229,7 +229,7 @@ def main():
                 # (exim-only -oMr/-bm made Postfix parse them as recipients.)
                 r = subprocess.run([exim, "-oi", "--", local_user], input=raw)
                 if r.returncode != 0:
-                    print("pop-pull: exim delivery failed on msg %d" % i, file=sys.stderr)
+                    print("pop-pull: delivery failed on msg %d" % i, file=sys.stderr)
                     break
                 if a.verbose:
                     print("delivered msg %d uid %s (%d bytes)" % (i, u, len(raw)))

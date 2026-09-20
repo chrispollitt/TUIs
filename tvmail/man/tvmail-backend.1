@@ -189,12 +189,26 @@ Set or clear the Status flag
 .RB ( \(rs Seen
 over IMAP).
 .TP
-.BI "compose\-template " "\fR[\fP--to " "A\fR]\fP " "\fR[\fP--subject " "S\fR]\fP " "\fR[\fP--in-reply-to " "IDX\fR]\fP " [MBOX]
+.BI "compose\-template " "\fR[\fP--to " "A\fR]\fP " "\fR[\fP--subject " "S\fR]\fP " "\fR[\fP--in-reply-to " "IDX " "\fR[\fP--reply-all\fR]\fP\fR]\fP " "\fR[\fP--forward " "IDX\fR]\fP " [MBOX]
 Print a draft skeleton: a
 .BR From: ,
 .BR To: ,
 .B Subject:
 block, a blank line, and (for a reply) the quoted original.
+.B --reply-all
+(with
+.BR --in-reply-to )
+also fills in a
+.B Cc:
+of the original message's To/Cc, minus whatever landed in the new
+.BR To: .
+.B --forward
+prefixes the subject
+.RB ( Fwd: ,
+not doubled if already present) and quotes the original message, headers
+included, with
+.B To:
+left blank.
 .TP
 .BI "send " "\fR[\fP--from " "A\fR]\fP " "\fR[\fP--to " "A ...\fR]\fP " "\fR[\fP--subject " "S\fR]\fP"
 Read an RFC\ 822 message (or a bare body, with
@@ -303,17 +317,46 @@ when this host's name is listed in
 .BR master ,
 or when there is no
 .B [imap]
-section; otherwise
+section and no IMAP
+.B mailbox-pattern
+in
+.IR ~/.mail ;
+otherwise
 .BR remote .
 .B $TVMAIL_MODE
 overrides it for one run.
 .PP
+.B host
+/
+.B port
+/
+.B user
+left unset in
+.I tvmail.conf
+fall back to GNU Mailutils'
+.I ~/.mail
+.RB ( $TVMAIL_MU_CONF
+overrides the path):
+.RS
+.EX
+mailbox { mailbox\-pattern "imap://chris@cmpi:143/INBOX"; };
+mailer  { url "smtp://cmpi:25"; };
+.EE
+.RE
+.PP
 Passwords are never kept in
 .IR tvmail.conf .
 They are read from
+.I ~/.mu-tickets
+.RB ( $TVMAIL_MU_TICKETS
+overrides the path) \(em lines of
+.RI scheme://user:pass@host
+(scheme
+.B *
+matches any), URL\-encoded, mode 0600 \(em then
 .I ~/.netrc
 .RI ( "machine <host> login <user> password <pw>" ,
-mode 0600) or from
+mode 0600), or
 .B $TVMAIL_IMAP_PASS
 /
 .BR $TVMAIL_SMTP_PASS .
@@ -331,6 +374,32 @@ See
 A commented
 .I tvmail.conf.example
 ships with the source.
+.TP
+.I ~/.mail
+GNU Mailutils' own config \(em its
+.B mailbox
+.RB { mailbox-pattern }
+and
+.B mailer
+.RB { url }
+blocks are a fallback for any of
+.IR tvmail.conf 's
+.B [imap]
+/
+.B [smtp]
+.BR host / port / user
+left unset.
+.TP
+.I ~/.mu-tickets
+GNU Mailutils' own credentials file, one
+.I scheme://user:pass@host
+line per ticket
+(scheme
+.B *
+matches any), URL\-encoded.
+Mode 0600.
+Checked before
+.IR ~/.netrc .
 .TP
 .I ~/.netrc
 The IMAP/SMTP password, keyed by host.
@@ -362,8 +431,18 @@ or
 .B remote
 for one run.
 .TP
+.B TVMAIL_MU_CONF
+Path to the GNU Mailutils config (default
+.IR ~/.mail ).
+.TP
+.B TVMAIL_MU_TICKETS
+Path to the GNU Mailutils tickets file (default
+.IR ~/.mu-tickets ).
+.TP
 .B TVMAIL_IMAP_PASS ", " TVMAIL_SMTP_PASS
 Passwords, in place of
+.I ~/.mu-tickets
+or
 .IR ~/.netrc .
 .TP
 .B MAIL ", " DEAD ", " MAILRC ", " SENDMAIL ", " XDG_DATA_HOME

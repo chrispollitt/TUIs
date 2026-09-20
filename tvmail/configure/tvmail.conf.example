@@ -3,7 +3,16 @@
 # Copy to  ~/.config/tvmail/tvmail.conf  and edit.  Only the client machines
 # need this; the master (the host that owns the mailstore) can run without it.
 #
-# NO PASSWORDS HERE.  Put them in ~/.netrc (chmod 600):
+# Already run GNU Mailutils' mail(1) against the same server?  You can skip
+# [imap]/[smtp] host/port/user entirely - tvmail falls back to the same
+# ~/.mail  it uses:
+#     mailbox { mailbox-pattern "imap://chris@cmpi:143/INBOX"; };
+#     mailer  { url "smtp://cmpi:25"; };
+# Anything you DO set below wins over ~/.mail.
+#
+# NO PASSWORDS HERE.  Put them in ~/.mu-tickets (chmod 600, URL-encoded):
+#     *://chris:s3cr3t@cmpi.lan
+# ...or ~/.netrc (chmod 600):
 #     machine cmpi.lan  login chris  password s3cr3t
 # ...or the environment: $TVMAIL_IMAP_PASS / $TVMAIL_SMTP_PASS.
 

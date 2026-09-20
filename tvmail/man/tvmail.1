@@ -232,6 +232,13 @@ Local vs. remote, and the IMAP/SMTP host in remote mode.
 See
 .BR tvmail\-backend (1).
 .TP
+.I ~/.mail ", " ~/.mu-tickets
+GNU Mailutils' own host/port and credentials, used as a fallback when
+.I tvmail.conf
+doesn't set them.
+See
+.BR tvmail\-backend (1).
+.TP
 .I ~/.netrc
 The IMAP/SMTP password in remote mode (mode 0600).
 .TP
@@ -309,6 +316,12 @@ can open, an honoured
 If you have used
 .BR mailx (1)
 or GNU Mailutils on this account, your aliases already work here.
+In remote mode it also falls back to GNU Mailutils'
+.I ~/.mail
+and
+.I ~/.mu-tickets
+for the IMAP/SMTP host and credentials mail(1) itself uses \(em see
+.BR tvmail\-backend (1).
 .SH "EXIT STATUS"
 .B tvmail
 exits

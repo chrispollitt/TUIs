@@ -36,7 +36,7 @@ garden — see *mail(1) interoperability* below.
 ## Modes
 
 `tvmail-backend` runs in one of two modes, chosen by
-`~/.config/tvmail/tvmail.conf` (copy [`tvmail.conf.example`](tvmail.conf.example)):
+`~/.config/tvmail/tvmail.conf` (copy [`configure/tvmail.conf.example`](configure/tvmail.conf.example)):
 
 | mode | what it talks to |
 |---|---|
@@ -44,9 +44,11 @@ garden — see *mail(1) interoperability* below.
 | **remote** | IMAP for reading, SMTP submission for sending — every other machine |
 
 `mode = auto` (default) → **local** if this host's name is in `master = …`, or if
-there's no `[imap]` section; **remote** otherwise. `$TVMAIL_MODE` overrides one
-run. Passwords are **only** in `~/.netrc` (`machine <host> login <u> password …`,
-mode 0600), never in `tvmail.conf`. In remote mode the folder shorthands map to
+there's no `[imap]` section and no IMAP `mailbox-pattern` in `~/.mail` (see
+below); **remote** otherwise. `$TVMAIL_MODE` overrides one run. Host/port/user
+left unset in `tvmail.conf` fall back to GNU Mailutils' own `~/.mail`, and
+passwords come from `~/.mu-tickets` or `~/.netrc` (`machine <host> login <u>
+password …`, mode 0600) — never `tvmail.conf`. In remote mode the folder shorthands map to
 IMAP folders (`spool→INBOX`, `mbox→Archive`, `trash→Trash`, `drafts→Drafts`,
 `sent→Sent`, `spam→Junk`, tunable in `[folders]`); `dead.letter` stays a local
 file. **F3** on a client doesn't pull (the master does that) — it files
@@ -86,6 +88,11 @@ specific — everything else is portable.
 
 ## Requirements
 
+`./configure.sh` is a wizard that checks/installs all of this for you (dev
+tools, an MTA if this box is the mail master, GNU Mailutils, a sendmail shim
+if it's a client) — run it first if you'd rather answer prompts than read
+the list below.
+
 - `cmake`, a C++17 compiler, `ncurses(w)` headers, `git`
   - Debian/Ubuntu/Pi: `apt install cmake g++ libncursesw5-dev git`
   - Fedora: `dnf install cmake gcc-c++ ncurses-devel git`
@@ -112,7 +119,14 @@ needs a small compatibility patch first (its Unix backend assumes Linux/BSD:
   (only useful from a real Windows console, not mintty).
 - On Linux / macOS `build.sh` just builds natively.
 
-Install both binaries onto `PATH`:
+Install and configure it with the wizard:
+
+```bash
+./setup.sh                 # local (~/.local) or system-wide (/usr/local);
+                            # offers to write tvmail.conf and smoke-test it
+```
+
+...or by hand:
 
 ```bash
 cmake --install build --prefix ~/.local
@@ -200,15 +214,38 @@ save-a-copy-on-send.
 Editing keys (compose body, signature): `Shift-Del` cut, `Ctrl-Ins` copy,
 `Shift-Ins` paste; **Edit** menu has Find / Replace / Find again.
 
+The **Message** menu has a few more actions with no dedicated key - Reply
+All, Forward, `Parts...`, Mark unread, `Move to...` - reach them with `F10`
+or `Alt-M`. **File ▸ Purge...** does the same for a whole folder at once.
+
 ## Composing
 
 - **New message** starts with your `~/.signature` (after the quoted text on
-  replies). **Message ▸ Insert signature / Insert dead.letter** add them by
-  hand — the classic `~a` / `~d` tilde escapes.
+  replies, or the forwarded original on **Forward**). **Message ▸ Insert
+  signature / Insert dead.letter** add them by hand — the classic `~a` / `~d`
+  tilde escapes.
+- **Reply All** fills `Cc:` with the original message's To/Cc, minus whoever
+  landed in the new `To:`. **Forward** prefixes the subject with `Fwd:`
+  (never doubled) and quotes the original message with its headers; `To:` is
+  left for you to fill in.
+- `To:` / `Cc:` / `Bcc:` all expand `~/.mailrc` aliases and groups on send;
+  `Bcc:` is stripped before the message is delivered, same as any MTA.
 - Closing an **unsent** message offers **Save draft / Discard / Cancel**. Save
   appends to the drafts mbox.
 - In the **Drafts** folder, `Enter` reopens a draft to finish; sending it
   removes it from Drafts.
+
+## Attachments
+
+**Message ▸ Parts...** lists a message's MIME parts (type, size, filename).
+`Enter` on one prompts for a path and saves it there.
+
+## Bulk actions
+
+**File ▸ Purge...** filters the current folder by From / Subject / To /
+older-than / seen-unseen, shows a dry-run preview, and asks for confirmation
+before moving the matches to trash (or **Expunge** to delete them outright).
+**Message ▸ Move to...** does the same for a single message, to any folder.
 
 ## Address book
 
@@ -224,7 +261,8 @@ also just type an alias name in `To:` — `tvmail-backend send` expands it.
 
 ## mail(1) interoperability
 
-tvmail reads your existing `~/.mailrc` (and `/etc/mailrc`, `$MAILRC`):
+tvmail reads your existing `~/.mailrc` (and `/etc/mailrc`, `$MAILRC`) for its
+own address book / folder defaults:
 
 | `.mailrc` | used for |
 |---|---|
@@ -235,21 +273,30 @@ tvmail reads your existing `~/.mailrc` (and `/etc/mailrc`, `$MAILRC`):
 `~/.signature` and `~/dead.letter` follow the usual conventions. This holds in
 **both** modes — the address book, signature and dead.letter are always local.
 
-**Sharing the store with `mail(1)`.** KISS: IMAP everywhere. GNU Mailutils is
-built with `ENABLE_IMAP`, so point it at the same Dovecot tvmail uses —
-`localhost` on the master, the master's name on a client:
+**Sharing the store with `mail(1)`.** GNU Mailutils' `mail` does *not* keep its
+IMAP/SMTP setup in `~/.mailrc` — that file is only ever `set`/`alias`/`group`
+lines. It reads its own `~/.mail` (host/port) and `~/.mu-tickets`
+(credentials), and tvmail reads the same two files as a fallback behind
+`tvmail.conf`'s `[imap]`/`[smtp]` sections, so one setup serves both clients:
 
-```sh
-# ~/.mailrc
-set folder=imaps://chris@cmpi        # or @localhost on the master itself
-set record=+Sent
-# mail -f +INBOX   opens the IMAP inbox
+```
+# ~/.mail  (point at localhost on the master itself, or the master's name on a client)
+mailbox {
+    mailbox-pattern "imap://chris@cmpi:143/INBOX";
+};
+mailer {
+    url "smtp://cmpi:25";
+};
 ```
 
-Credentials come from the same `~/.netrc` entry tvmail uses, so `mail` and
-`tvmail` see identical folders on every box. (Postfix still delivers to
-`/var/mail/$USER`, which *is* Dovecot's INBOX — so incoming mail lands in the
-one place everyone reads.)
+```
+# ~/.mu-tickets  (chmod 600; user/pass are URL-encoded; scheme "*" matches any)
+*://chris:zxczxc@cmpi
+```
+
+`mail -f +INBOX` and tvmail then read/write identical IMAP folders on every
+box. (Postfix still delivers to `/var/mail/$USER`, which *is* Dovecot's
+INBOX — so incoming mail lands in the one place everyone reads.)
 
 ## `tvmail-backend` (usable on its own)
 

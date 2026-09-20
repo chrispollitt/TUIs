@@ -66,12 +66,14 @@ class Base(unittest.TestCase):
         self.spool.write_text(MBOX_1)
         keys = ("HOME", "XDG_DATA_HOME", "MAIL", "MAILRC", "DEAD",
                 "USER", "LOGNAME", "SENDMAIL", "TVMAIL_CONF", "TVMAIL_MODE",
-                "TVMAIL_IMAP_PASS", "TVMAIL_SMTP_PASS")
+                "TVMAIL_IMAP_PASS", "TVMAIL_SMTP_PASS",
+                "TVMAIL_MU_CONF", "TVMAIL_MU_TICKETS")
         self._saved = {k: os.environ.get(k) for k in keys}
         os.environ.update(HOME=str(self.home), XDG_DATA_HOME=str(self.xdg),
                           MAIL=str(self.spool), USER="tester")
         for k in ("MAILRC", "DEAD", "SENDMAIL", "TVMAIL_CONF", "TVMAIL_MODE",
-                  "TVMAIL_IMAP_PASS", "TVMAIL_SMTP_PASS"):
+                  "TVMAIL_IMAP_PASS", "TVMAIL_SMTP_PASS",
+                  "TVMAIL_MU_CONF", "TVMAIL_MU_TICKETS"):
             os.environ.pop(k, None)
 
     def tearDown(self):
@@ -170,6 +172,128 @@ class TestHelpers(Base):
         be._sweep_locks(base, older_than=300, temps_only=True)
         self.assertTrue(os.path.exists(bare))         # temps_only keeps the .lock
         self.assertFalse(os.path.exists(lock_temp))
+
+
+class TestComposeTemplate(Base):
+    def setUp(self):
+        super().setUp()
+        self.spool.write_text(
+            "From alice@x Mon Sep  1 10:00:00 2026\n"
+            "From: Alice <alice@x>\n"
+            "To: Bob <bob@x>, carl@x\n"
+            "Cc: dana@x\n"
+            "Date: Mon, 01 Sep 2026 10:00:00 -0700\n"
+            "Subject: Hello\n"
+            "\n"
+            "hi there\n"
+            "\n"
+            "From eve@x Mon Sep  1 11:00:00 2026\n"
+            "From: eve@x\n"
+            "To: me@x\n"
+            "Date: Mon, 01 Sep 2026 11:00:00 -0700\n"
+            "Subject: Fwd: already forwarded\n"
+            "\n"
+            "second body\n"
+            "\n"
+        )
+
+    def ns(self, **kw):
+        import argparse
+        d = dict(getfrom=None, to=[], subject=None, in_reply_to=None,
+                 forward=None, reply_all=False, mbox="spool")
+        d.update(kw)
+        return argparse.Namespace(**d)
+
+    def _run(self, **kw):
+        cap = be._CapStream()
+        old, sys.stdout = sys.stdout, cap
+        try:
+            be.cmd_compose_template(self.ns(**kw))
+        finally:
+            sys.stdout = old
+        return cap.buffer.getvalue().decode()
+
+    def test_forward_prefixes_subject_and_quotes_original(self):
+        out = self._run(forward=0)
+        self.assertIn("Subject: Fwd: Hello", out)
+        self.assertIn("\nTo: \n", out)             # forward leaves To: blank
+        self.assertIn("---------- Forwarded message ----------", out)
+        self.assertIn("From: Alice <alice@x>", out)
+        self.assertIn("hi there", out)
+
+    def test_forward_does_not_double_prefix(self):
+        out = self._run(forward=1)
+        self.assertIn("Subject: Fwd: already forwarded", out)
+        self.assertNotIn("Fwd: Fwd:", out)
+
+    def test_reply_all_cc_excludes_new_to(self):
+        out = self._run(in_reply_to=0, reply_all=True)
+        self.assertIn("To: Alice <alice@x>", out)
+        cc_line = [ln for ln in out.splitlines() if ln.startswith("Cc:")][0]
+        self.assertIn("bob@x", cc_line)
+        self.assertIn("carl@x", cc_line)
+        self.assertIn("dana@x", cc_line)
+        self.assertNotIn("alice@x", cc_line)        # already in To, not duplicated
+
+    def test_reply_without_reply_all_has_no_cc(self):
+        out = self._run(in_reply_to=0)
+        self.assertNotIn("Cc:", out)
+
+
+class TestParts(Base):
+    def setUp(self):
+        super().setUp()
+        self.spool.write_text(
+            "From alice@x Mon Sep  1 10:00:00 2026\n"
+            "From: Alice <alice@x>\n"
+            "To: me@x\n"
+            "Date: Mon, 01 Sep 2026 10:00:00 -0700\n"
+            "Subject: Report attached\n"
+            "Content-Type: multipart/mixed; boundary=b\n"
+            "\n"
+            "--b\n"
+            "Content-Type: text/plain\n"
+            "\n"
+            "see attached report\n"
+            "--b\n"
+            "Content-Type: application/octet-stream\n"
+            "Content-Disposition: attachment; filename=\"don't panic.txt\"\n"
+            "\n"
+            "hello world attachment bytes\n"
+            "--b--\n"
+            "\n"
+        )
+
+    def _parts(self):
+        p = self.be("parts", "0")
+        return [ln.split("\t") for ln in p.stdout.decode().splitlines() if ln]
+
+    def test_parts_lists_leaf_parts_with_walk_indices(self):
+        # partno counts the multipart container itself (skipped, not printed),
+        # so leaf parts start at 1 here - not 0.
+        rows = self._parts()
+        self.assertEqual([r[0] for r in rows], ["1", "2"])
+        self.assertEqual(rows[0][1], "text/plain")
+        self.assertEqual(rows[1][2], "don't panic.txt")
+
+    def test_save_uses_the_same_index_parts_printed(self):
+        # Regression: cmd_save used to index a separately-built 0-based
+        # leaf-only list, disagreeing with cmd_parts' walk()-based numbering
+        # as soon as a message has a multipart container - so "save" on the
+        # partno "parts" printed would fail or grab the wrong part.
+        rows = self._parts()
+        dest_body = self.tmp / "body.txt"
+        dest_att = self.tmp / "att.txt"
+        p1 = self.be("save", "0", rows[0][0], str(dest_body))
+        p2 = self.be("save", "0", rows[1][0], str(dest_att))
+        self.assertEqual(p1.returncode, 0, p1.stderr)
+        self.assertEqual(p2.returncode, 0, p2.stderr)
+        self.assertIn("see attached report", dest_body.read_text())
+        self.assertIn("hello world attachment bytes", dest_att.read_text())
+
+    def test_save_out_of_range_errors(self):
+        p = self.be("save", "0", "99", str(self.tmp / "x.txt"))
+        self.assertNotEqual(p.returncode, 0)
 
 
 class TestCli(Base):
@@ -362,6 +486,133 @@ class TestMode(Base):
         self.assertEqual(be._cred("h", "u", "TVMAIL_IMAP_PASS"), "fromnetrc")
         with self.assertRaises(SystemExit):
             be._cred("nope", "u", "TVMAIL_IMAP_PASS")
+
+
+# --------------------------------------------------------------------------
+# GNU Mailutils interop:  ~/.mail  and  ~/.mu-tickets
+# --------------------------------------------------------------------------
+class TestMailutilsInterop(Base):
+    MAIL_CONF = """\
+        # ~/.mail
+
+        mailbox {
+            mailbox-pattern "imap://chris@cmpi:143/INBOX";
+        };
+
+        mailer {
+            url "smtp://cmpi:25";
+        };
+        """
+
+    def _write_mail(self, text):
+        (self.home / ".mail").write_text(textwrap.dedent(text))
+
+    def _write_tickets(self, text):
+        (self.home / ".mu-tickets").write_text(textwrap.dedent(text))
+
+    def test_mu_url_parses_plain_and_wildcard_and_decodes(self):
+        u = be._mu_url("imap://chris@cmpi:143/INBOX")
+        self.assertEqual(u, {"scheme": "imap", "user": "chris", "pass": None,
+                             "host": "cmpi", "port": 143, "path": "INBOX"})
+        u = be._mu_url("smtp://cmpi:25")
+        self.assertEqual(u["scheme"], "smtp")
+        self.assertEqual(u["host"], "cmpi")
+        self.assertEqual(u["port"], 25)
+        self.assertIsNone(u["user"])
+        u = be._mu_url("*://chris:zxc%40zxc@cmpi")
+        self.assertEqual(u["scheme"], "*")
+        self.assertEqual(u["user"], "chris")
+        self.assertEqual(u["pass"], "zxc@zxc")           # percent-decoded
+        self.assertIsNone(be._mu_url(""))
+        self.assertIsNone(be._mu_url("not a url"))
+
+    def test_mu_conf_parses_mailbox_and_mailer_blocks(self):
+        self._write_mail(self.MAIL_CONF)
+        box = be._mu_mailbox()
+        self.assertEqual(box["scheme"], "imap")
+        self.assertEqual(box["user"], "chris")
+        self.assertEqual(box["host"], "cmpi")
+        self.assertEqual(box["port"], 143)
+        mailer = be._mu_mailer()
+        self.assertEqual(mailer["scheme"], "smtp")
+        self.assertEqual(mailer["host"], "cmpi")
+        self.assertEqual(mailer["port"], 25)
+
+    def test_mu_conf_missing_file_is_empty(self):
+        self.assertEqual(be._mu_conf(), {})
+        self.assertIsNone(be._mu_mailbox())
+        self.assertIsNone(be._mu_mailer())
+
+    def test_mode_auto_remote_from_mail_file_alone(self):
+        self._write_mail(self.MAIL_CONF)
+        self.assertEqual(be._mode(), "remote")
+
+    def test_mode_stays_local_when_mailbox_pattern_is_not_imap(self):
+        self._write_mail("""\
+            mailbox {
+                mailbox-pattern "/var/mail/chris";
+            };
+            """)
+        self.assertEqual(be._mode(), "local")
+
+    def test_cred_from_mu_tickets_wildcard_scheme(self):
+        self._write_tickets("*://chris:zxczxc@cmpi\n")
+        self.assertEqual(be._cred("cmpi", "chris", "TVMAIL_IMAP_PASS", "imap"),
+                         "zxczxc")
+
+    def test_cred_mu_tickets_percent_decoded_and_host_matched(self):
+        self._write_tickets("imap://chris:p%40ss@cmpi.lan\n"
+                            "imap://someone:other@otherhost\n")
+        self.assertEqual(
+            be._cred("cmpi.lan", "chris", "TVMAIL_IMAP_PASS", "imap"), "p@ss")
+
+    def test_cred_mu_tickets_scheme_mismatch_falls_through_to_netrc(self):
+        self._write_tickets("pop3://chris:wrongproto@cmpi\n")
+        (self.home / ".netrc").write_text(
+            "machine cmpi login chris password fromnetrc\n")
+        os.chmod(self.home / ".netrc", 0o600)
+        self.assertEqual(
+            be._cred("cmpi", "chris", "TVMAIL_IMAP_PASS", "imap"), "fromnetrc")
+
+    def test_cred_prefers_env_over_mu_tickets(self):
+        self._write_tickets("*://chris:fromticket@cmpi\n")
+        os.environ["TVMAIL_IMAP_PASS"] = "fromenv"
+        self.assertEqual(
+            be._cred("cmpi", "chris", "TVMAIL_IMAP_PASS", "imap"), "fromenv")
+
+    def test_cred_mu_tickets_prefers_matching_user(self):
+        self._write_tickets("*://alice:apass@cmpi\n*://chris:cpass@cmpi\n")
+        self.assertEqual(
+            be._cred("cmpi", "chris", "TVMAIL_IMAP_PASS", "imap"), "cpass")
+
+    def test_smtp_send_host_falls_back_to_mailer_url(self):
+        self._write_mail(self.MAIL_CONF)
+        self._write_tickets("*://chris:zxczxc@cmpi\n")
+        logged = []
+
+        class FakeSMTP:
+            def __init__(s, host, port, timeout=None):
+                s.host, s.port = host, port
+            def ehlo(s):
+                pass
+            def starttls(s, context=None):
+                pass
+            def login(s, u, p):
+                logged.append((u, p))
+            def sendmail(s, frm, rcpts, data):
+                pass
+            def quit(s):
+                pass
+
+        import smtplib
+        real, smtplib.SMTP = smtplib.SMTP, FakeSMTP
+        try:
+            ok = be._smtp_send(
+                email.message_from_string("From: chris@cmpi\n\nx\n"), ["a@b"])
+        finally:
+            smtplib.SMTP = real
+        self.assertTrue(ok)
+        self.assertEqual([p for _, p in logged], ["zxczxc"])
 
 
 class FakeIMAP:

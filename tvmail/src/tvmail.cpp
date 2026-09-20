@@ -37,6 +37,7 @@
 #define Uses_TDialog
 #define Uses_TButton
 #define Uses_TCheckBoxes
+#define Uses_TRadioButtons
 #define Uses_TSItem
 #define Uses_THistory
 #define Uses_TCommandSet
@@ -93,6 +94,12 @@ const ushort cmResumeDead   = 2021;   // open ~/dead.letter as a new compose
 const ushort cmShowHelp   = 2022;   // in-app help window
 const ushort cmPullDone   = 2023;   // background pop-pull finished (self-posted)
 const ushort cmPaneFocused = 2024;  // broadcast: a 3-pane pane took focus
+const ushort cmViewParts   = 2025;  // open the MIME-parts window
+const ushort cmForwardMsg  = 2026;  // forward the focused message
+const ushort cmReplyAllMsg = 2027;  // reply-all to the focused message
+const ushort cmMarkUnread  = 2028;  // mark the focused message unread
+const ushort cmPurgeMsgs   = 2029;  // open the purge dialog
+const ushort cmMoveMsg     = 2030;  // move the focused message to another folder
 
 // ------------------------------------------------------ editor dialogs -----
 // Wire up the standard Find / Replace / "search failed" dialogs the TEditor
@@ -479,6 +486,18 @@ static bool gRemote = false;                     // backend "mode" == remote (IM
 
 static std::string mboxArg() { return gMbox.empty() ? std::string() : " '" + gMbox + "'"; }
 static std::string mboxOpt() { return gMbox.empty() ? std::string() : " --mbox '" + gMbox + "'"; }
+
+// Single-quote a value for /bin/sh.  Every other string interpolated into a
+// shCapture() command is program-controlled (folder shorthands, indices);
+// this is for the first free-form, user-typed values that reach one (purge
+// filters, an attachment's save-as path) - naive quoting breaks on a plain
+// apostrophe in the text.
+static std::string shq(const std::string &s)
+{
+    std::string r = "'";
+    for (char c : s) r += (c == '\'') ? "'\\''" : std::string(1, c);
+    return r + "'";
+}
 
 static std::string slurp(const std::string &path)
 {
@@ -1062,8 +1081,32 @@ static ushort askSaveDraft()
     return r;
 }
 
+// Prompt for a filesystem path (used by the attachment save dialog).  Empty
+// string means cancelled.
+static std::string askSavePath(const std::string &suggested)
+{
+    TDialog *d = new TDialog(TRect(0, 0, 56, 8), "Save attachment as");
+    d->options |= ofCentered;
+    TInputLine *il = new TInputLine(TRect(3, 3, 53, 4), 1024);
+    if (!suggested.empty()) {
+        std::strncpy(il->data, suggested.c_str(), il->maxLen);
+        il->data[il->maxLen] = '\0';
+    }
+    d->insert(il);
+    d->insert(new TLabel(TRect(2, 2, 20, 3), "~P~ath", il));
+    d->insert(new THistory(TRect(53, 3, 56, 4), il, 12));
+    d->insert(new TButton(TRect(20, 6, 30, 8), "O~K~", cmOK, bfDefault));
+    d->insert(new TButton(TRect(32, 6, 42, 8), "Cancel", cmCancel, bfNormal));
+    d->selectNext(False);
+    ushort r = TProgram::deskTop->execView(d);
+    std::string dest;
+    if (r != cmCancel && il->data) dest = il->data;
+    TObject::destroy(d);
+    return dest;
+}
+
 class TComposeWindow : public TWindow {
-    TFieldLine  *toLine = nullptr, *ccLine = nullptr, *subjLine = nullptr;
+    TFieldLine  *toLine = nullptr, *ccLine = nullptr, *bccLine = nullptr, *subjLine = nullptr;
     TBodyEditor *editor = nullptr;
     Boolean sent = False;
     std::string draftMbox;              // set when editing an existing draft
@@ -1093,9 +1136,11 @@ public:
     {
         std::string to   = toLine->data   ? toLine->data   : "";
         std::string cc   = ccLine->data   ? ccLine->data   : "";
+        std::string bcc  = bccLine->data  ? bccLine->data  : "";
         std::string subj = subjLine->data ? subjLine->data : "";
         std::string msg = "To: " + to + "\n";
-        if (!strip(cc).empty()) msg += "Cc: " + cc + "\n";
+        if (!strip(cc).empty())  msg += "Cc: "  + cc  + "\n";
+        if (!strip(bcc).empty()) msg += "Bcc: " + bcc + "\n";
         msg += "Subject: " + subj + "\n\n" + bodyText();
         if (msg.empty() || msg.back() != '\n') msg += '\n';
         return msg;
@@ -1118,7 +1163,8 @@ public:
 
     TComposeWindow(const TRect &bounds,
                    const std::string &to, const std::string &cc,
-                   const std::string &subj, const std::string &body)
+                   const std::string &subj, const std::string &body,
+                   const std::string &bcc = std::string())
         : TWindowInit(&TComposeWindow::initFrame),
           TWindow(bounds, "Compose", wnNoNumber)
     {
@@ -1140,13 +1186,14 @@ public:
         };
         toLine   = addField(1, "~T~o",      to);
         ccLine   = addField(2, "~C~c",      cc);
-        subjLine = addField(3, "~S~ubject", subj);
+        bccLine  = addField(3, "~B~cc",     bcc);
+        subjLine = addField(4, "~S~ubject", subj);
 
-        TScrollBar *vsb = new TScrollBar(TRect(W - 2, 5, W - 1, size.y - 1));
+        TScrollBar *vsb = new TScrollBar(TRect(W - 2, 6, W - 1, size.y - 1));
         insert(vsb);
         TIndicator *ind = new TIndicator(TRect(2, size.y - 1, 16, size.y));
         insert(ind);
-        editor = new TBodyEditor(TRect(1, 5, W - 2, size.y - 1), nullptr, vsb, ind, 64000);
+        editor = new TBodyEditor(TRect(1, 6, W - 2, size.y - 1), nullptr, vsb, ind, 64000);
         editor->growMode = gfGrowHiX | gfGrowHiY;
         insert(editor);
 
@@ -1242,7 +1289,7 @@ public:
 };
 
 static void parseTemplate(const std::string &t, std::string &to, std::string &cc,
-                          std::string &subj, std::string &body)
+                          std::string &subj, std::string &body, std::string &bcc)
 {
     std::istringstream is(t);
     std::string line, b;
@@ -1264,6 +1311,7 @@ static void parseTemplate(const std::string &t, std::string &to, std::string &cc
                 while (!v.empty() && (v[0] == ' ' || v[0] == '\t')) v.erase(0, 1);
                 if      (ieq(k, "To"))      to = v;
                 else if (ieq(k, "Cc"))      cc = v;
+                else if (ieq(k, "Bcc"))     bcc = v;
                 else if (ieq(k, "Subject")) subj = v;
             }
         } else {
@@ -1335,6 +1383,94 @@ public:
         TScrollBar *vsb = new TScrollBar(TRect(size.x - 1, 1, size.x, size.y - 1));
         insert(vsb);
         insert(new TAddrPane(TRect(1, 1, size.x - 1, size.y - 1), vsb));
+    }
+    TColorAttr mapColor(uchar i) override
+    {
+        switch (i) {
+            case 1: return cDim();  case 2: case 3: return cFrame();
+            case 4: case 6: case 8: return cNorm();  case 5: case 7: return cHi();
+        }
+        return TView::mapColor(i);
+    }
+};
+
+// ===================================================== MIME parts ==========
+// Lists `tvmail-backend parts IDX MBOX`; Enter on a part prompts for a save
+// path and runs `tvmail-backend save IDX PARTNO DEST [MBOX]`.
+class TPartsPane : public TListViewer {
+    struct Part { std::string no, type, name, bytes; };
+    std::vector<Part> rows;
+    int msgIdx;
+    std::string msgMbox;
+public:
+    TPartsPane(const TRect &b, TScrollBar *vsb, int idx, const std::string &mbox)
+        : TListViewer(b, 1, nullptr, vsb), msgIdx(idx), msgMbox(mbox)
+    {
+        std::istringstream is(backendRun("parts " + std::to_string(idx) + " " + mbox));
+        std::string ln;
+        while (std::getline(is, ln)) {
+            if (!ln.empty() && ln.back() == '\r') ln.pop_back();
+            std::vector<std::string> f;
+            size_t p = 0;
+            for (;;) {
+                size_t t = ln.find('\t', p);
+                f.push_back(ln.substr(p, t == std::string::npos ? std::string::npos : t - p));
+                if (t == std::string::npos) break;
+                p = t + 1;
+            }
+            if (f.size() >= 4) rows.push_back({f[0], f[1], f[2], f[3]});
+        }
+        setRange((short)rows.size());
+    }
+    void getText(char *dest, short item, short maxLen) override
+    {
+        if (item < 0 || item >= (short)rows.size()) { dest[0] = 0; return; }
+        char line[600];
+        std::snprintf(line, sizeof line, "%-4s %-28.28s %8s bytes  %s",
+                      rows[item].no.c_str(), rows[item].type.c_str(),
+                      rows[item].bytes.c_str(), rows[item].name.c_str());
+        std::strncpy(dest, line, maxLen); dest[maxLen] = 0;
+    }
+    void selectItem(short i) override
+    {
+        if (i < 0 || i >= (short)rows.size()) return;
+        std::string suggested = rows[i].name.empty() ? "part" + rows[i].no : rows[i].name;
+        std::string dest = askSavePath(suggested);
+        if (dest.empty()) return;
+        std::string cmd = "tvmail-backend save " + std::to_string(msgIdx) + " "
+                          + rows[i].no + " " + shq(dest);
+        if (!msgMbox.empty()) cmd += " " + shq(msgMbox);
+        std::string out = shCapture(cmd + " 2>&1");
+        while (!out.empty() && (out.back() == '\n' || out.back() == ' ')) out.pop_back();
+        messageBox(out.c_str(),
+                  (out.rfind("wrote", 0) == 0 ? mfInformation : mfError) | mfOKButton);
+    }
+    void handleEvent(TEvent &e) override
+    {
+        if (e.what == evKeyDown && e.keyDown.keyCode == kbEnter) {
+            selectItem(focused); clearEvent(e); return;
+        }
+        TListViewer::handleEvent(e);
+    }
+    TColorAttr mapColor(uchar i) override
+    {
+        switch (i) { case 1: case 2: return cNorm(); case 3: return cHi();
+                     case 4: return cSel(); case 5: return cDiv(); }
+        return TView::mapColor(i);
+    }
+};
+
+class TPartsWindow : public TWindow {
+public:
+    TPartsWindow(const TRect &b, int idx, const std::string &mbox, const char *title)
+        : TWindowInit(&TPartsWindow::initFrame),
+          TWindow(b, title, wnNoNumber)
+    {
+        palette = wpCyanWindow;
+        options |= ofTileable;
+        TScrollBar *vsb = new TScrollBar(TRect(size.x - 1, 1, size.x, size.y - 1));
+        insert(vsb);
+        insert(new TPartsPane(TRect(1, 1, size.x - 1, size.y - 1), vsb, idx, mbox));
     }
     TColorAttr mapColor(uchar i) override
     {
@@ -1553,10 +1689,15 @@ public:
 private:
     int  currentRow();
     void viewSource(int row);
-    void replyOrCompose(int row);           // row < 0 => new message
+    void replyOrCompose(int row, bool all = false);   // row < 0 => new message
+    void forwardMsg(int row);
     void editDraft(int row);
     void resumeDeadLetter();
     void deleteMsg(int row);
+    void markUnread(int row);
+    void moveMsg(int row);
+    void viewParts(int row);
+    void purgeDialog();
     void pullMail();
     void pullFinished();                    // cmPullDone handler
     void reload();
@@ -1578,23 +1719,30 @@ TMenuBar *TVMailApp::initMenuBar(TRect r)
             *new TMenuItem(gRemote ? "File ~s~pam" : "~P~ull mail",
                            cmPull, kbF3, hcNoContext, "F3") +
             *new TMenuItem("~R~eload",    cmReload, kbF5, hcNoContext, "F5") +
+            *new TMenuItem("P~u~rge...",  cmPurgeMsgs, kbNoKey, hcNoContext) +
             newLine() +
             *new TMenuItem("Edit si~g~nature",   cmEditSig,    kbNoKey, hcNoContext) +
             *new TMenuItem("Resume dead.~l~etter", cmResumeDead, kbNoKey, hcNoContext) +
             newLine() +
             *new TMenuItem("E~x~it", cmQuit, kbAltX, hcNoContext, "Alt-X") +
         *new TSubMenu("~M~essage", kbAltM) +
-            *new TMenuItem("~R~eply",         cmReplyMsg,  kbCtrlR,  hcNoContext, "Ctrl-R") +
-            *new TMenuItem("~N~ew message",   cmCompose,   kbCtrlN,  hcNoContext, "Ctrl-N") +
-            *new TMenuItem("~E~dit draft",    cmEditDraft, kbNoKey,  hcNoContext, "Enter") +
-            *new TMenuItem("~S~end draft",    cmSendMsg,   kbF2,     hcNoContext, "F2") +
+            *new TMenuItem("~R~eply",         cmReplyMsg,    kbCtrlR, hcNoContext, "Ctrl-R") +
+            *new TMenuItem("Repl~y~ All",     cmReplyAllMsg, kbNoKey, hcNoContext) +
+            *new TMenuItem("~F~orward",       cmForwardMsg,  kbNoKey, hcNoContext) +
+            *new TMenuItem("~N~ew message",   cmCompose,     kbCtrlN, hcNoContext, "Ctrl-N") +
+            *new TMenuItem("~E~dit draft",    cmEditDraft,   kbNoKey, hcNoContext, "Enter") +
+            *new TMenuItem("~S~end draft",    cmSendMsg,     kbF2,    hcNoContext, "F2") +
             newLine() +
             *new TMenuItem("Insert si~g~nature",  cmInsSig,  kbNoKey, hcNoContext) +
             *new TMenuItem("Insert dead.~l~etter", cmInsDead, kbNoKey, hcNoContext) +
             newLine() +
-            *new TMenuItem("~A~ddress book",  cmAddrBook,  kbF4,     hcNoContext, "F4") +
-            *new TMenuItem("~V~iew source",   cmViewSrc,   kbNoKey,  hcNoContext) +
-            *new TMenuItem("~D~elete",        cmDeleteMsg, kbCtrlD,  hcNoContext, "Ctrl-D") +
+            *new TMenuItem("~A~ddress book",  cmAddrBook,   kbF4,    hcNoContext, "F4") +
+            *new TMenuItem("~P~arts...",      cmViewParts,  kbNoKey, hcNoContext) +
+            *new TMenuItem("~V~iew source",   cmViewSrc,    kbNoKey, hcNoContext) +
+            newLine() +
+            *new TMenuItem("Mark ~u~nread",   cmMarkUnread, kbNoKey, hcNoContext) +
+            *new TMenuItem("M~o~ve to...",    cmMoveMsg,    kbNoKey, hcNoContext) +
+            *new TMenuItem("~D~elete",        cmDeleteMsg,  kbCtrlD, hcNoContext, "Ctrl-D") +
         *new TSubMenu("~E~dit", kbAltE) +
             *new TMenuItem("~U~ndo",  cmUndo,  kbNoKey, hcNoContext) +
             newLine() +
@@ -1658,31 +1806,50 @@ void TVMailApp::viewSource(int row)
     deskTop->insert(new TMailViewWindow(r, title.c_str(), std::move(lines)));
 }
 
+void TVMailApp::viewParts(int row)
+{
+    if (row < 0) return;
+    int b = gRows[row].idx;
+    TRect r = deskTop->getExtent();
+    r.grow(-8, -4);
+    std::string title = "Parts of msg " + std::to_string(b);
+    deskTop->insert(new TPartsWindow(r, b, gMbox, title.c_str()));
+}
+
 void TVMailApp::openComposeWith(const std::string &raw, const std::string &linkMbox,
                                 int linkIdx, bool addSig)
 {
-    std::string to, cc, subj, body;
-    if (!raw.empty()) parseTemplate(raw, to, cc, subj, body);
+    std::string to, cc, subj, body, bcc;
+    if (!raw.empty()) parseTemplate(raw, to, cc, subj, body, bcc);
     if (addSig) {
         std::string sig = readSigFile();
         if (!sig.empty()) body += "\n-- \n" + sig + "\n";
     }
     TRect r = deskTop->getExtent();
     r.grow(-5, -2);
-    auto *w = new TComposeWindow(r, to, cc, subj, body);
+    auto *w = new TComposeWindow(r, to, cc, subj, body, bcc);
     if (!linkMbox.empty()) w->linkDraft(linkMbox, linkIdx);
     deskTop->insert(w);
 }
 
-void TVMailApp::replyOrCompose(int row)
+void TVMailApp::replyOrCompose(int row, bool all)
 {
     if (row >= 0) {
-        std::string t = backendRun("compose-template --in-reply-to "
-                                   + std::to_string(gRows[row].idx) + " " + gMbox);
-        openComposeWith(t, "", -1, /*addSig=*/true);
+        std::string cmd = "compose-template --in-reply-to "
+                          + std::to_string(gRows[row].idx) + " " + gMbox;
+        if (all) cmd += " --reply-all";
+        openComposeWith(backendRun(cmd), "", -1, /*addSig=*/true);
     } else {
         openComposeWith("", "", -1, /*addSig=*/true);
     }
+}
+
+void TVMailApp::forwardMsg(int row)
+{
+    if (row < 0) return;
+    std::string t = backendRun("compose-template --forward "
+                               + std::to_string(gRows[row].idx) + " " + gMbox);
+    openComposeWith(t, "", -1, /*addSig=*/true);
 }
 
 void TVMailApp::editDraft(int row)
@@ -1713,6 +1880,150 @@ void TVMailApp::deleteMsg(int row)
     std::string out = shCapture(cmd + " 2>&1");
     reload();
     if (!out.empty() && out.rfind("deleted", 0) != 0)
+        messageBox(out.c_str(), mfInformation | mfOKButton);
+}
+
+void TVMailApp::markUnread(int row)
+{
+    if (row < 0) return;
+    int b = gRows[row].idx;
+    // Sticks only until this row is refocused: loadContent() re-marks read
+    // on every highlight move (TO-DO "mark as read only after you look" is
+    // a separate, later change - this doesn't fight it, it just doesn't
+    // survive it either).
+    shCapture("tvmail-backend mark " + std::to_string(b) + " unread" + mboxOpt() + " 2>&1");
+    reload();
+}
+
+void TVMailApp::moveMsg(int row)
+{
+    if (row < 0) return;
+    int b = gRows[row].idx;
+
+    std::vector<int> dest;
+    for (int i = 0; i < gFolderCount; ++i)
+        if (i != gFolderIdx && std::strcmp(gFolders[i].mbox, "dead") != 0)
+            dest.push_back(i);
+    if (dest.empty()) return;
+
+    TSItem *items = nullptr;
+    for (auto it = dest.rbegin(); it != dest.rend(); ++it)
+        items = new TSItem(gFolders[*it].name, items);
+
+    int n = (int)dest.size();
+    TDialog *d = new TDialog(TRect(0, 0, 30, 5 + n), "Move to folder");
+    d->options |= ofCentered;
+    TRadioButtons *rb = new TRadioButtons(TRect(3, 2, 27, 2 + n), items);
+    d->insert(rb);
+    d->insert(new TButton(TRect(4, 3 + n, 14, 5 + n),  "O~K~", cmOK, bfDefault));
+    d->insert(new TButton(TRect(16, 3 + n, 26, 5 + n), "Cancel", cmCancel, bfNormal));
+    d->selectNext(False);
+
+    ushort r = TProgram::deskTop->execView(d);
+    ushort sel = 0;
+    if (r != cmCancel) rb->getData(&sel);
+    TObject::destroy(d);
+    if (r == cmCancel || sel >= dest.size()) return;
+
+    std::string cmd = "tvmail-backend delete " + std::to_string(b) + mboxOpt()
+                      + " --trash " + shq(gFolders[dest[sel]].mbox);
+    std::string out = shCapture(cmd + " 2>&1");
+    reload();
+    if (!out.empty() && out.rfind("deleted", 0) != 0)
+        messageBox(out.c_str(), mfInformation | mfOKButton);
+}
+
+void TVMailApp::purgeDialog()
+{
+    TDialog *d = new TDialog(TRect(0, 0, 56, 21), "Purge");
+    d->options |= ofCentered;
+
+    TInputLine *fromIl = new TInputLine(TRect(20, 2, 53, 3), 200);
+    d->insert(fromIl);
+    d->insert(new TLabel(TRect(2, 2, 20, 3), "~F~rom contains", fromIl));
+
+    TInputLine *subjIl = new TInputLine(TRect(20, 3, 53, 4), 200);
+    d->insert(subjIl);
+    d->insert(new TLabel(TRect(2, 3, 20, 4), "~S~ubject contains", subjIl));
+
+    TInputLine *toIl = new TInputLine(TRect(20, 4, 53, 5), 200);
+    d->insert(toIl);
+    d->insert(new TLabel(TRect(2, 4, 20, 5), "~T~o contains", toIl));
+
+    TInputLine *daysIl = new TInputLine(TRect(20, 5, 30, 6), 8);
+    d->insert(daysIl);
+    d->insert(new TLabel(TRect(2, 5, 20, 6), "~O~lder than (days)", daysIl));
+
+    d->insert(new TStaticText(TRect(2, 7, 30, 8), "Read status"));
+    TRadioButtons *seenRb = new TRadioButtons(TRect(2, 8, 26, 11),
+        new TSItem("~E~ither",
+        new TSItem("Se~e~n only",
+        new TSItem("~U~nseen only", 0))));
+    d->insert(seenRb);
+
+    TCheckBoxes *expungeCb = new TCheckBoxes(TRect(2, 12, 53, 13),
+        new TSItem("E~x~punge (delete outright, don't move to trash)", 0));
+    d->insert(expungeCb);
+
+    d->insert(new TButton(TRect(16, 16, 28, 18), "Pre~v~iew", cmOK, bfDefault));
+    d->insert(new TButton(TRect(30, 16, 40, 18), "Cancel", cmCancel, bfNormal));
+    d->selectNext(False);
+
+    ushort r = TProgram::deskTop->execView(d);
+    if (r == cmCancel) { TObject::destroy(d); return; }
+
+    std::string from = fromIl->data ? fromIl->data : "";
+    std::string subj = subjIl->data ? subjIl->data : "";
+    std::string to   = toIl->data   ? toIl->data   : "";
+    std::string days = daysIl->data ? daysIl->data : "";
+    ushort seenSel = 0; seenRb->getData(&seenSel);
+    ushort expunge = 0; expungeCb->getData(&expunge);
+    TObject::destroy(d);
+
+    auto trimmed = [](std::string s) {
+        size_t a = s.find_first_not_of(" \t");
+        size_t b = s.find_last_not_of(" \t");
+        return a == std::string::npos ? std::string() : s.substr(a, b - a + 1);
+    };
+    from = trimmed(from); subj = trimmed(subj); to = trimmed(to); days = trimmed(days);
+
+    if (from.empty() && subj.empty() && to.empty() && days.empty() && seenSel == 0) {
+        messageBox("Enter at least one filter.", mfError | mfOKButton);
+        return;
+    }
+
+    std::string filt;
+    if (!from.empty()) filt += " --from "       + shq(from);
+    if (!subj.empty()) filt += " --subject "    + shq(subj);
+    if (!to.empty())   filt += " --to "         + shq(to);
+    if (!days.empty()) filt += " --older-than " + shq(days);
+    if (seenSel == 1)  filt += " --seen";
+    if (seenSel == 2)  filt += " --unseen";
+    if (expunge & 1)   filt += " --expunge";
+
+    std::string cmd = "tvmail-backend purge" + mboxArg() + filt;
+    std::string preview = shCapture(cmd + " -n 2>&1");
+    TRect pr = deskTop->getExtent();
+    pr.grow(-6, -3);
+    deskTop->insert(new TMailViewWindow(pr, "Purge preview", splitLines(preview)));
+
+    int n = -1;
+    {
+        std::istringstream is(preview);
+        std::string ln;
+        while (std::getline(is, ln))
+            if (ln.rfind("would purge ", 0) == 0) { n = std::atoi(ln.c_str() + 12); break; }
+    }
+    if (n <= 0) {
+        messageBox(n == 0 ? "Nothing matches that filter." : preview.c_str(),
+                  (n == 0 ? mfInformation : mfError) | mfOKButton);
+        return;
+    }
+    if (messageBox(mfConfirmation | mfYesNoCancel, "Purge %d message(s)?", n) != cmYes)
+        return;
+    std::string out = shCapture(cmd + " 2>&1");
+    reload();
+    if (!out.empty() && out.rfind("purged", 0) != 0)
         messageBox(out.c_str(), mfInformation | mfOKButton);
 }
 
@@ -1792,12 +2103,18 @@ void TVMailApp::handleEvent(TEvent &e)
         case cmPull:      pullMail();                   break;
         case cmPullDone:  pullFinished();               break;
         case cmReload:    reload();                     break;
-        case cmReplyMsg:  replyOrCompose(currentRow()); break;
-        case cmCompose:   replyOrCompose(-1);           break;
-        case cmDeleteMsg: deleteMsg(currentRow());      break;
-        case cmViewSrc:   viewSource(currentRow());     break;
-        case cmEditDraft: editDraft(currentRow());      break;
-        case cmResumeDead: resumeDeadLetter();          break;
+        case cmReplyMsg:    replyOrCompose(currentRow());       break;
+        case cmReplyAllMsg: replyOrCompose(currentRow(), true); break;
+        case cmForwardMsg:  forwardMsg(currentRow());           break;
+        case cmCompose:     replyOrCompose(-1);                 break;
+        case cmDeleteMsg:   deleteMsg(currentRow());            break;
+        case cmMarkUnread:  markUnread(currentRow());           break;
+        case cmMoveMsg:     moveMsg(currentRow());              break;
+        case cmViewParts:   viewParts(currentRow());            break;
+        case cmViewSrc:     viewSource(currentRow());           break;
+        case cmEditDraft:   editDraft(currentRow());            break;
+        case cmResumeDead:  resumeDeadLetter();                 break;
+        case cmPurgeMsgs:   purgeDialog();                      break;
         case cmAddrBook: {
             TRect r = deskTop->getExtent(); r.grow(-8, -4);
             deskTop->insert(new TAddrBookWindow(r));
