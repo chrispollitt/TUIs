@@ -1,7 +1,8 @@
 #!/bin/python3
-"""pop-pull - on-demand POP3S fetch into the local mailbox via exim.
+"""pop-pull - on-demand POP3S fetch into the local mailbox via sendmail.
 
-Config: ~/.config/mailpull.conf   Password: read live from pwfile (host:user:pass).
+Config: ~/.config/mailpull.conf   Password: read live from Postfix's own
+/etc/postfix/sasl_passwd (format "[host]:port user:pass"), or pwfile= if set.
 Seen-UID cache (keep mode): ~/.local/state/mailpull.seen
 """
 import os, sys, ssl, poplib, argparse, configparser, subprocess
@@ -13,14 +14,18 @@ def die(m, code=2):
     print("pop-pull: " + m, file=sys.stderr); sys.exit(code)
 
 def password(pwfile, login):
+    # Postfix sasl_passwd lines look like:  [host]:port  user:pass
     try:
         for ln in open(pwfile):
-            ln = ln.rstrip("\n")
+            ln = ln.strip()
             if not ln or ln.startswith("#"):
                 continue
-            p = ln.split(":", 2)
-            if len(p) == 3 and p[1] == login:
-                return p[2]
+            fields = ln.split(None, 1)
+            if len(fields) != 2:
+                continue
+            user, sep, pw = fields[1].partition(":")
+            if sep and user == login:
+                return pw
     except OSError as e:
         die("cannot read %s: %s" % (pwfile, e))
     die("no password for %s in %s" % (login, pwfile))
@@ -41,8 +46,8 @@ def main():
     keep = s.getboolean("keep", True)
     verify = s.getboolean("verify", True)
     cafile = s.get("cafile", "").strip()
-    exim = s.get("exim", "/usr/bin/exim")
-    pw = password(s.get("pwfile", "/etc/exim/passwd.client"), login)
+    mda = s.get("mda", "/usr/sbin/sendmail")
+    pw = password(s.get("pwfile", "/etc/postfix/sasl_passwd"), login)
 
     ctx = ssl.create_default_context()
     if cafile and os.path.exists(cafile):
@@ -76,9 +81,7 @@ def main():
                 if a.verbose:
                     print("[dry-run] msg %d uid %s (%d bytes)" % (i, u, len(raw)))
             else:
-                # portable sendmail interface: works for exim, Postfix, msmtp.
-                # (exim-only -oMr/-bm made Postfix parse them as recipients.)
-                r = subprocess.run([exim, "-oi", "--", local_user], input=raw)
+                r = subprocess.run([mda, "-oi", "--", local_user], input=raw)
                 if r.returncode != 0:
                     print("pop-pull: delivery failed on msg %d" % i, file=sys.stderr)
                     break

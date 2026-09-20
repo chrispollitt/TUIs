@@ -7,8 +7,9 @@
 #
 # Installs a small, dependency-free Python puller ("pop-pull") that:
 #   * connects to the incoming server over implicit TLS (port 995)
-#   * reads the mailbox password LIVE from passwd.client (/etc/exim4 or /etc/exim)
-#   * hands each message to sendmail/exim as a local submission -> /var/mail/<user>
+#   * reads the mailbox password LIVE from Postfix's own /etc/postfix/sasl_passwd
+#     (the same file configure-sendmail-relay.sh already wrote)
+#   * hands each message to sendmail as a local submission -> /var/mail/<user>
 #   * by default KEEPs mail on the server and remembers what it has already
 #     fetched (UIDL list in ~/.local/state/mailpull.seen); --delete removes it
 #
@@ -20,9 +21,9 @@
 #
 # Options:
 #   --relay-file FILE   cPanel-style config text -> Incoming Server / Username.
-#   --pop-user NAME     remote mailbox login  (default: from file / passwd.client)
-#   --pwfile PATH       file holding  <host>:<login>:<password>  (for boxes with
-#                       no exim passwd.client, e.g. a Postfix master).  0600.
+#   --pop-user NAME     remote mailbox login  (default: from file / sasl_passwd)
+#   --pwfile PATH       override the password file (default: Postfix's own
+#                       /etc/postfix/sasl_passwd, format "[host]:port user:pass").  0600.
 #   --local-user NAME   deliver into this account            (default: you)
 #   --delete           delete messages from the server after delivery
 #   --no-verify        skip TLS certificate verification
@@ -74,24 +75,15 @@ PY="$(command -v python3 || command -v python3.12 || command -v python3.11 \
 
 # local delivery agent (the puller pipes each fetched message to it)
 MDA=""
-for m in /usr/sbin/sendmail /usr/lib/sendmail /usr/sbin/exim4 /usr/bin/exim \
-         "$(command -v sendmail 2>/dev/null)" "$(command -v exim4 2>/dev/null)"; do
+for m in /usr/sbin/sendmail /usr/lib/sendmail "$(command -v sendmail 2>/dev/null)"; do
   [ -n "$m" ] && [ -x "$m" ] && { MDA="$m"; break; }
 done
-[ -n "$MDA" ] || die "no sendmail/exim MDA found - run configure-sendmail-relay.sh first"
+[ -n "$MDA" ] || die "no sendmail MDA found - run configure-sendmail-relay.sh first"
 
-# where the SMTP/POP password lives (shared with the send side)
-PWFILE=""
-if [ -n "$PWFILE_OPT" ]; then
-  PWFILE="$PWFILE_OPT"
-  [ -r "$PWFILE" ] || warn "--pwfile $PWFILE is not readable yet"
-else
-  for f in /etc/exim4/passwd.client /etc/exim/passwd.client; do
-    [ -r "$f" ] && { PWFILE="$f"; break; }
-  done
-  [ -n "$PWFILE" ] || { PWFILE="/etc/exim4/passwd.client"
-    warn "no readable passwd.client ($PWFILE) - run configure-sendmail-relay.sh, pass --pwfile, or add one by hand"; }
-fi
+# where the SMTP/POP password lives - Postfix's own sasl_passwd, the same
+# file configure-sendmail-relay.sh already wrote (format: "[host]:port user:pass")
+PWFILE="${PWFILE_OPT:-/etc/postfix/sasl_passwd}"
+[ -r "$PWFILE" ] || warn "$PWFILE is not readable - run configure-sendmail-relay.sh, pass --pwfile, or add one by hand"
 
 # --------------------------------------------------------------------------
 # settings
@@ -104,7 +96,7 @@ fi
 : "${IN_SERVER:=u-l.ca}"
 : "${POP_USER:=cwp@u-l.ca}"
 
-[ -r "$PWFILE" ] && { grep -q ":${POP_USER}:" "$PWFILE" \
+[ -r "$PWFILE" ] && { grep -qF -- " ${POP_USER}:" "$PWFILE" \
   || warn "no line for '${POP_USER}' in $PWFILE - pop-pull will fail until one exists"; }
 
 CA=""
@@ -136,7 +128,7 @@ local_user = ${LOCAL_USER}
 keep       = $( [ "$KEEP" = 1 ] && echo true || echo false )
 verify     = $( [ "$VERIFY" = 1 ] && echo true || echo false )
 cafile     = ${CA}
-exim       = ${MDA}
+mda        = ${MDA}
 pwfile     = ${PWFILE}
 EOF
 log "wrote $CFG"
@@ -148,9 +140,10 @@ BIN="$HOME/bin"; [ -d "$BIN" ] || BIN="/usr/local/bin"
 POP="$BIN/pop-pull"
 cat > "$POP" <<PYEOF
 #!${PY}
-"""pop-pull - on-demand POP3S fetch into the local mailbox via exim.
+"""pop-pull - on-demand POP3S fetch into the local mailbox via sendmail.
 
-Config: ~/.config/mailpull.conf   Password: read live from pwfile (host:user:pass).
+Config: ~/.config/mailpull.conf   Password: read live from Postfix's own
+/etc/postfix/sasl_passwd (format "[host]:port user:pass"), or pwfile= if set.
 Seen-UID cache (keep mode): ~/.local/state/mailpull.seen
 """
 import os, sys, ssl, poplib, argparse, configparser, subprocess
@@ -162,14 +155,18 @@ def die(m, code=2):
     print("pop-pull: " + m, file=sys.stderr); sys.exit(code)
 
 def password(pwfile, login):
+    # Postfix sasl_passwd lines look like:  [host]:port  user:pass
     try:
         for ln in open(pwfile):
-            ln = ln.rstrip("\\n")
+            ln = ln.strip()
             if not ln or ln.startswith("#"):
                 continue
-            p = ln.split(":", 2)
-            if len(p) == 3 and p[1] == login:
-                return p[2]
+            fields = ln.split(None, 1)
+            if len(fields) != 2:
+                continue
+            user, sep, pw = fields[1].partition(":")
+            if sep and user == login:
+                return pw
     except OSError as e:
         die("cannot read %s: %s" % (pwfile, e))
     die("no password for %s in %s" % (login, pwfile))
@@ -190,8 +187,8 @@ def main():
     keep = s.getboolean("keep", True)
     verify = s.getboolean("verify", True)
     cafile = s.get("cafile", "").strip()
-    exim = s.get("exim", "/usr/bin/exim")
-    pw = password(s.get("pwfile", "/etc/exim/passwd.client"), login)
+    mda = s.get("mda", "/usr/sbin/sendmail")
+    pw = password(s.get("pwfile", "/etc/postfix/sasl_passwd"), login)
 
     ctx = ssl.create_default_context()
     if cafile and os.path.exists(cafile):
@@ -225,9 +222,7 @@ def main():
                 if a.verbose:
                     print("[dry-run] msg %d uid %s (%d bytes)" % (i, u, len(raw)))
             else:
-                # portable sendmail interface: works for exim, Postfix, msmtp.
-                # (exim-only -oMr/-bm made Postfix parse them as recipients.)
-                r = subprocess.run([exim, "-oi", "--", local_user], input=raw)
+                r = subprocess.run([mda, "-oi", "--", local_user], input=raw)
                 if r.returncode != 0:
                     print("pop-pull: delivery failed on msg %d" % i, file=sys.stderr)
                     break

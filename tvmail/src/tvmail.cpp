@@ -2134,7 +2134,7 @@ void TVMailApp::handleEvent(TEvent &e)
             messageBox("tvmail 1.0\n\n"
                        "A Turbo Vision mail client for a local mailbox.\n"
                        "Chris Pollitt  -  MIT licence, no warranty.\n\n"
-                       "Turbo Vision by magiblot.  Plumbing: exim +\n"
+                       "Turbo Vision by magiblot.  Plumbing: Postfix +\n"
                        "tvmail-backend + pop-pull.  See HISTORY.md.",
                        mfInformation | mfOKButton);
             break;

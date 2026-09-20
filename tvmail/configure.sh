@@ -203,8 +203,7 @@ if [ "$ROLE" = master ]; then
       case "$PKG" in
         apt|dnf|yum|pacman) pkg_install postfix ;;
         brew) log "macOS ships Postfix already (/usr/sbin/postfix) - nothing to install" ;;
-        cygwin) warn "Cygwin has no Postfix package - the master role is meant for a Linux/Pi box."
-                warn "configure-sendmail-relay.sh (next step) can still set up Cygwin's exim instead." ;;
+        cygwin) warn "Cygwin has no Postfix package - the master role needs a Linux/Pi box." ;;
         *) warn "no known package manager - install postfix by hand" ;;
       esac
     fi
@@ -213,7 +212,7 @@ if [ "$ROLE" = master ]; then
   # ------------------------------------------------------------------------
   step "Configure Postfix (smarthost relay + local delivery)"
   # ------------------------------------------------------------------------
-  if command -v postfix >/dev/null 2>&1 || [ "$IS_CYGWIN" = 1 ]; then
+  if command -v postfix >/dev/null 2>&1; then
     if ask "Run configure-sendmail-relay.sh now?"; then
       relay_file=$(readval "cPanel-style relay-info file (blank = enter host/user/pass when asked)" "")
       test_addr=$(readval "send a live test message to (blank = skip)" "")

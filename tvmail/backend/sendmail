@@ -22,7 +22,7 @@
 # For SELinux: You may need to allow it: sudo setsebool -P httpd_can_network_connect 1 (if PHP is calling it) or create a custom policy module.
 # For AppArmor: You may need to add a rule to the AppArmor profile for the calling daemon (e.g., PHP-FPM or cron) to allow network access.
 # Python 3 Dependency: This script relies on Python 3 being installed on the system. On 99% of modern Linux distributions, python3 is installed by default. If it isn't, you will need to install it (apt install python3 or yum install python3).
-# No Queuing: Because this is a "blind forwarder", if the target server on port 25 is down or unreachable, the script will fail and exit immediately. It does not queue mail for later retry like a full MTA (Postfix/Exim) does.
+# No Queuing: Because this is a "blind forwarder", if the target server on port 25 is down or unreachable, the script will fail and exit immediately. It does not queue mail for later retry like a full MTA (Postfix) does.
 
 import sys
 import os

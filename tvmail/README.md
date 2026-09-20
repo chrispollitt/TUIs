@@ -60,22 +60,22 @@ both modes.
 A typical setup: **one master host** owns the mailstore; the laptop / WSL / VMs
 are remote clients.
 
-- **Master** — a real MTA (`configure/configure-sendmail-relay.sh` on
-  **Linux**: configures Postfix in place, no apt, or Debian/Ubuntu/Pi `exim4`
-  via `update-exim4.conf`) delivering local mail to `/var/mail/$USER` and
-  relaying outbound through an authenticated TLS smarthost, plus **`pop-pull`**
-  (`configure/configure-mail-pull.sh --timer N` — `--pwfile` if there's no
-  exim `passwd.client`) to fetch replies back, and an IMAP server (Dovecot)
-  over the same mbox files. Point the timer at a wrapper that runs `pop-pull`
-  then `tvmail-backend purge spool --subject "***SPAM***" --to-folder spam`
-  (over `localhost` IMAP, so Dovecot owns the move) and spam is filed for
-  every client automatically.
+- **Master** — Postfix (`configure/configure-sendmail-relay.sh`, Linux only;
+  installs Postfix via apt if nothing's there) delivering local mail to
+  `/var/mail/$USER` and relaying outbound through an authenticated TLS
+  smarthost, plus **`pop-pull`** (`configure/configure-mail-pull.sh --timer N`
+  — `--pwfile` if there's no `/etc/postfix/sasl_passwd` yet) to fetch replies
+  back, and an IMAP server (Dovecot) over the same mbox files. Point the timer
+  at a wrapper that runs `pop-pull` then
+  `tvmail-backend purge spool --subject "***SPAM***" --to-folder spam` (over
+  `localhost` IMAP, so Dovecot owns the move) and spam is filed for every
+  client automatically.
 - **Clients** — just `tvmail` + `tvmail-backend` in remote mode. `[smtp] from`
   fixes the sender identity so the master relays without any server-side
   rewrite; `[smtp] auth = false` if the master's Postfix trusts the LAN.
-- The single-box Cygwin path still works (`configure-sendmail-relay.sh` writes a
-  hand-rolled `exim.conf`, no daemon) — but Cygwin multi-user local delivery is
-  a losing fight; use a Linux master and remote clients instead.
+- The master role needs Postfix, so it's Linux/Pi only. Cygwin has no Postfix
+  package and is never a master — point it at a Linux master as a client
+  instead (`./configure.sh --role client`).
 - No credentials live anywhere in this project.
 
 ## Platforms
@@ -83,8 +83,9 @@ are remote clients.
 Builds and runs natively on **Linux** (including Raspberry Pi and WSL),
 **macOS** and the **BSDs**; the app is a normal ncurses program and the backend
 is pure‑stdlib Python 3. **Cygwin** works too, with a small tvision patch (see
-*Build*). The exim/`pop-pull` scripts under `configure/` are Cygwin‑host
-specific — everything else is portable.
+*Build*) — as a client only. `configure/configure-sendmail-relay.sh` (sets up
+the mail *master*) is Linux-only; `configure/configure-mail-pull.sh` and
+`pop-pull` are portable, and the app itself runs the same everywhere.
 
 ## Requirements
 
@@ -182,7 +183,7 @@ body. `Enter` on a message jumps focus to the body pane.
 
 | name | path | notes |
 |---|---|---|
-| `inbox` | `/var/mail/$USER` (`$MAIL`) | where exim + `pop-pull` deliver |
+| `inbox` | `/var/mail/$USER` (`$MAIL`) | where Postfix + `pop-pull` deliver |
 | `drafts` | `$folder/drafts` (default `~/Mail/drafts`) | `mail -f +drafts` opens it too |
 | `sent` | `$folder/sent` (honours `set record`) | a copy of everything you send lands here |
 | `saved` | `~/mbox` | where `mail(1)` files messages you've read |
