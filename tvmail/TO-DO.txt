@@ -1,0 +1,40 @@
+tvmail already covers the classic three-pane loop: folders, list, body, compose/reply, drafts, signature, dead.letter, aliases, view source, pull/spam, trash. The richest next features are ones that surface backend verbs the TUI still ignores, plus a few Turbo Vision manners the app is missing.
+
+Highest leverage (backend already has the plumbing)
+1 Attachment browser — parts and save exist; the body pane could list MIME parts and save one with a file dialog. That is the biggest “I can’t actually use this mail” gap.
+2 Forward — Reply exists; Forward (as attachment or quoted) does not. Easy compose-template --forward IDX plus a Message menu item.
+3 Reply All / explicit Cc and Bcc — Send already expands aliases in To/Cc/Bcc; the composer should make Cc/Bcc first-class and add Reply All.
+4 Mark unread / toggle N vs . — mark IDX read|unread is implemented; the list currently marks read as soon as the highlight moves. A U key and “mark unread” would match mail(1) muscle memory.
+5 Purge dialog — Wrap purge --from/--subject/--older-than/--unseen in a Turbo Vision dialog with a dry-run (-n) preview. Cron already uses this; the TUI should too.
+6 Move / copy to folder — Delete already files to trash. Save-to-saved, file-to-spam, and “move to…” would make the six folders more than destinations for special keys.
+
+Classic TUI polish (fits Turbo Vision, small C++)
+7 Window List (Alt-0) — Compose, help, source, address book, and signature already stack; a Window 8 List is the missing Borland habit (already on the README someday list).
+9 Incremental filter on the message pane — Type-to-filter From/Subject without a full search index. Cheap, immediate, and better than threading for a small mailbox.
+9 Column sort — Click or a key to sort by date / from / subject / unread. The list format is already flag date from subject.
+10 Unread counts on folders — N inbox (3) so you do not have to Tab into the list to see if anything arrived.
+11 Status-line context — When focus is in Folders vs Messages vs a compose window, swap the F-keys (e.g. Enter = Edit draft only in Drafts).
+12 Mouse — tvision already supports it; click-to-focus panes and double-click to open would make the cyan desktop feel finished.
+
+Behaviour that would make it feel “done”
+13 Mark-as-read only after you actually look — Delay mark read until the body pane is focused or scrolled, not on highlight. Stops arrow-through-inbox from eating every N.
+14 Periodic pull — Idle timer calling the existing background pull, with a quiet “N new” on the status line instead of a blocking message box every time.
+15 tvmailrc — Colours, default folder, poll-on-start, list date format, HTML-vs-plain preference. Keeps ~/.mailrc for mail(1) and puts tvmail-only knobs somewhere else.
+16 Print / save message as .eml or text — View source is close; “Save as…” next to it is the natural File menu item.
+17 Address-book write path — F4 is read-only aliases today. Add/edit alias lines in ~/.mailrc so the book is not a one-way dump into To:.
+18 Pipe body through $PAGER / less or an external $EDITOR — Escape hatch for huge mail and for people who still want vi for a long reply.
+
+Worth doing later (higher design cost)
+19 Threading — Useful, but it fights mbox + IMAP UID indexing and the current one-line list. Filter + sort will get you 80% of the way on a small store.
+20 HTML mail as a second view — Backend already has an HTML fallback; a “view HTML as text” toggle is enough. A real renderer is out of character.
+21 Multi-select — Space-tag then delete/move/mark, like Midnight Commander. Needed once purge/move land in the TUI.
+22 Resizable split — Drag or +/- on the folder width and the list/body ratio. The layout is currently a fixed 22-column / 2:5 split.
+
+If you want a short implementation order that stays in character: 
+* attachments
+* forward
+* window List
+* mark unread 
+* list filter 
+* purge dialog
+That uses code you already have and does not turn tvmail into mutt.
