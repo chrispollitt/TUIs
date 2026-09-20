@@ -623,6 +623,7 @@ class FakeIMAP:
         self.cur = None
         self.copied = []
         self.appended = []
+        self.created = []
 
     def add(self, folder, raw, flags=()):
         self.folders.setdefault(folder, []).append([self._uid, set(flags), raw])
@@ -709,14 +710,23 @@ class FakeIMAP:
             return ("OK", [b"ok"])
         if c == "COPY":
             uid, dest = int(args[0]), args[1].strip('"')
+            if dest not in self.folders:
+                # a real server refuses COPY to a mailbox that doesn't exist
+                # yet - this is what _imap_copy_to()'s create-then-retry is for
+                return ("NO", [b"[TRYCREATE] no such mailbox"])
             for r in self._rows():
                 if r[0] == uid:
-                    self.folders.setdefault(dest, []).append(
-                        [self._uid, set(r[1]), r[2]])
+                    self.folders[dest].append([self._uid, set(r[1]), r[2]])
                     self._uid += 1
                     self.copied.append((uid, dest))
             return ("OK", [b"ok"])
         return ("OK", [b""])
+
+    def create(self, name):
+        name = name.strip('"')
+        self.folders.setdefault(name, [])
+        self.created.append(name)
+        return ("OK", [b"ok"])
 
     def expunge(self):
         self.folders[self.cur] = [r for r in self._rows()
@@ -791,6 +801,39 @@ class TestRemoteIMAP(Base):
         self._run(be.cmd_delete, self.ns(idx=[0], mbox="spool", trash="trash"))
         self.assertEqual(len(self.imap.folders["INBOX"]), 2)
         self.assertEqual([d for _, d in self.imap.copied], ["Trash"])
+
+    def test_delete_over_imap_moves_to_the_requested_folder_not_trash(self):
+        # Regression: the remote path used to hard-code the copy destination
+        # to _imap_folder("trash") regardless of what --trash asked for, so
+        # "move to spam" silently moved to Trash instead (or nowhere, if
+        # Trash didn't exist either - see the auto-create test below).
+        self._run(be.cmd_delete, self.ns(idx=[0], mbox="spool", trash="spam"))
+        self.assertEqual(len(self.imap.folders["INBOX"]), 2)
+        self.assertEqual([d for _, d in self.imap.copied], ["Junk"])
+        self.assertNotIn("Trash", self.imap.folders)
+
+    def test_delete_over_imap_auto_creates_a_missing_destination_folder(self):
+        # Regression: COPY to a folder that doesn't exist on the server
+        # (e.g. a fresh Dovecot with only INBOX) used to fail silently - the
+        # code never checked COPY's result - and the message got expunged
+        # from INBOX anyway, vanishing outright instead of moving anywhere.
+        self.assertNotIn("Trash", self.imap.folders)
+        self._run(be.cmd_delete, self.ns(idx=[0], mbox="spool", trash="trash"))
+        self.assertIn("Trash", self.imap.created)
+        self.assertEqual(len(self.imap.folders["Trash"]), 1)
+        self.assertEqual(len(self.imap.folders["INBOX"]), 2)
+
+    def test_delete_over_imap_does_not_lose_the_message_if_copy_keeps_failing(self):
+        # If COPY still fails after CREATE (permission denied, quota, a
+        # server that doesn't support TRYCREATE, ...), the message must stay
+        # put rather than being expunged with nowhere to land.
+        real_uid = self.imap.uid
+        def dead_copy(command, *args):
+            return ("NO", [b"boom"]) if command.upper() == "COPY" else real_uid(command, *args)
+        self.imap.uid = dead_copy
+        with self.assertRaises(SystemExit):
+            self._run(be.cmd_delete, self.ns(idx=[0], mbox="spool", trash="trash"))
+        self.assertEqual(len(self.imap.folders["INBOX"]), 3)   # nothing expunged
 
     def _feed_stdin(self, data):
         class _In:
@@ -925,6 +968,22 @@ class TestPurgeIMAP(Base):
         with self.assertRaises(SystemExit):
             be.cmd_purge(self.ns())
 
+    def test_purge_to_folder_over_imap_auto_creates_and_uses_the_right_folder(self):
+        self.assertNotIn("Junk", self.imap.folders)
+        self._purge(getfrom="Cron Daemon", to_folder="spam")
+        self.assertIn("Junk", self.imap.created)
+        self.assertEqual(len(self.imap.folders["Junk"]), 2)
+        self.assertNotIn("Trash", self.imap.folders)
+
+    def test_purge_over_imap_does_not_lose_messages_if_copy_keeps_failing(self):
+        real_uid = self.imap.uid
+        def dead_copy(command, *args):
+            return ("NO", [b"boom"]) if command.upper() == "COPY" else real_uid(command, *args)
+        self.imap.uid = dead_copy
+        with self.assertRaises(SystemExit):
+            self._purge(getfrom="Cron Daemon")
+        self.assertEqual(len(self.imap.folders["INBOX"]), 3)   # nothing expunged
+
 
 class TestSpamSweep(Base):
     def _m(self, subj):
@@ -1009,6 +1068,95 @@ class TestSmtpSend(Base):
     def test_smtp_send_no_section_returns_false(self):
         os.environ["TVMAIL_CONF"] = str(self.tmp / "none.conf")
         self.assertFalse(be._smtp_send(email.message.Message(), ["a@b"]))
+
+    def test_smtp_send_verify_false_disables_cert_checking(self):
+        # Regression: [smtp] had no verify/cafile at all, so a self-signed
+        # cert on STARTTLS could only fail - there was no way to trust it,
+        # unlike [imap]'s existing verify/cafile.
+        conf = self.tmp / "c.conf"
+        conf.write_text("[smtp]\nhost=h\nport=25\nauth=false\nverify=false\n")
+        os.environ["TVMAIL_CONF"] = str(conf)
+        seen = {}
+
+        class FakeSMTP:
+            def __init__(s, host, port, timeout=None):
+                pass
+            def ehlo(s):
+                pass
+            def starttls(s, context=None):
+                seen["context"] = context
+            def sendmail(s, frm, rcpts, data):
+                pass
+            def quit(s):
+                pass
+
+        import smtplib
+        real, smtplib.SMTP = smtplib.SMTP, FakeSMTP
+        try:
+            ok = be._smtp_send(
+                email.message_from_string("From: a@b\n\nx\n"), ["c@d"])
+        finally:
+            smtplib.SMTP = real
+        self.assertTrue(ok)
+        ctx = seen["context"]
+        self.assertFalse(ctx.check_hostname)
+        import ssl
+        self.assertEqual(ctx.verify_mode, ssl.CERT_NONE)
+
+    def test_smtp_send_verify_default_true_checks_hostname(self):
+        conf = self.tmp / "c.conf"
+        conf.write_text("[smtp]\nhost=h\nport=25\nauth=false\n")
+        os.environ["TVMAIL_CONF"] = str(conf)
+        seen = {}
+
+        class FakeSMTP:
+            def __init__(s, host, port, timeout=None):
+                pass
+            def ehlo(s):
+                pass
+            def starttls(s, context=None):
+                seen["context"] = context
+            def sendmail(s, frm, rcpts, data):
+                pass
+            def quit(s):
+                pass
+
+        import smtplib
+        real, smtplib.SMTP = smtplib.SMTP, FakeSMTP
+        try:
+            be._smtp_send(email.message_from_string("From: a@b\n\nx\n"), ["c@d"])
+        finally:
+            smtplib.SMTP = real
+        self.assertTrue(seen["context"].check_hostname)
+
+    def test_smtp_send_failed_quit_does_not_mask_the_real_error(self):
+        # Regression: a failed STARTTLS left the connection in a state where
+        # the cleanup's own S.quit() also raised, and since that happened in
+        # a `finally` block it replaced the real error - so a cert failure
+        # showed up to the user as an opaque "Server not connected".
+        conf = self.tmp / "c.conf"
+        conf.write_text("[smtp]\nhost=h\nport=25\nauth=false\n")
+        os.environ["TVMAIL_CONF"] = str(conf)
+        import smtplib
+
+        class FakeSMTP:
+            def __init__(s, host, port, timeout=None):
+                pass
+            def ehlo(s):
+                pass
+            def starttls(s, context=None):
+                raise smtplib.SMTPException("certificate verify failed: boom")
+            def quit(s):
+                raise smtplib.SMTPServerDisconnected("please run connect() first")
+
+        real, smtplib.SMTP = smtplib.SMTP, FakeSMTP
+        try:
+            with self.assertRaises(SystemExit) as cm:
+                be._smtp_send(email.message_from_string("From: a@b\n\nx\n"), ["c@d"])
+        finally:
+            smtplib.SMTP = real
+        self.assertIn("certificate verify failed: boom", str(cm.exception))
+        self.assertNotIn("connect()", str(cm.exception))
 
     def test_save_sent_local_appends(self):
         m = email.message_from_string("To: a@b\nSubject: s\n\nhi\n")

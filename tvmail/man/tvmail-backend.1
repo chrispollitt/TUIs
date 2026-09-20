@@ -303,7 +303,7 @@ mode   = auto | local | remote
 master = host1 ; host2
 
 [imap]   host= port=993 ssl=true verify=true cafile= user=
-[smtp]   host= port=587 starttls=true auth=true from= user=
+[smtp]   host= port=587 starttls=true auth=true verify=true cafile= from= user=
 [folders] saved=Archive  trash=Trash  drafts=Drafts
 .EE
 .RE
@@ -365,6 +365,15 @@ With
 (a relay that trusts the LAN) no password is needed;
 .B "[smtp] from"
 forces the sender identity so the master relays without rewriting.
+.B "[imap] verify = false"
+and
+.B "[smtp] verify = false"
+(each with an optional
+.BR cafile )
+skip certificate\-chain checking \(em needed for a LAN server's stock
+self\-signed cert, the same one
+.BR mail (1)
+does not check either.
 .SH FILES
 .TP
 .I ~/.config/tvmail/tvmail.conf

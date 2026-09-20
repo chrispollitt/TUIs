@@ -283,6 +283,9 @@ lines. It reads its own `~/.mail` (host/port) and `~/.mu-tickets`
 # ~/.mail  (point at localhost on the master itself, or the master's name on a client)
 mailbox {
     mailbox-pattern "imap://chris@cmpi:143/INBOX";
+    # base URL for mail(1)'s "+name" folder shorthand - without this, +Trash /
+    # +Junk / etc. resolve as *local* paths instead of IMAP folders and fail.
+    folder "imap://chris@cmpi:143/";
 };
 mailer {
     url "smtp://cmpi:25";
@@ -294,9 +297,9 @@ mailer {
 *://chris:zxczxc@cmpi
 ```
 
-`mail -f +INBOX` and tvmail then read/write identical IMAP folders on every
-box. (Postfix still delivers to `/var/mail/$USER`, which *is* Dovecot's
-INBOX — so incoming mail lands in the one place everyone reads.)
+`mail -f +Trash` (or `folder +Junk` inside a session) and tvmail then read/write
+identical IMAP folders on every box. (Postfix still delivers to `/var/mail/$USER`,
+which *is* Dovecot's INBOX — so incoming mail lands in the one place everyone reads.)
 
 ## `tvmail-backend` (usable on its own)
 

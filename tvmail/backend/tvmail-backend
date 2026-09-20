@@ -502,6 +502,25 @@ def _imap_folder(p):
     return c.get("folders", key, fallback=default) if default is not None else p
 
 
+def _imap_copy_to(M, uid, dest):
+    """COPY uid to dest, creating dest first if it doesn't exist yet (IMAP
+    has no local mbox_path()-style auto-create; a plain COPY to a missing
+    folder just fails - and the old code never checked that, so a message
+    got marked \\Deleted and expunged even though the copy never landed
+    anywhere).  Exits with a clear error rather than silently losing mail."""
+    typ, _ = M.uid("COPY", uid, _q_mbox(dest))
+    if typ == "OK":
+        return
+    try:
+        M.create(_q_mbox(dest))
+    except Exception:
+        pass
+    typ, resp = M.uid("COPY", uid, _q_mbox(dest))
+    if typ != "OK":
+        sys.exit("tvmail-backend: IMAP COPY to %s failed (%s) - nothing deleted"
+                 % (dest, resp))
+
+
 def _imap_uids(folder, readonly=True):
     M = _imap()
     typ, _ = M.select(_q_mbox(folder), readonly=readonly)
@@ -574,6 +593,12 @@ def _smtp_send(msg, rcpts):
                            fallback=(scheme == "smtps" or port == 465))
     starttls = c.getboolean("smtp", "starttls", fallback=not use_ssl)
     do_auth = c.getboolean("smtp", "auth", fallback=True)  # false: mynetworks relay
+    verify = c.getboolean("smtp", "verify", fallback=True)
+    cafile = c.get("smtp", "cafile", fallback="").strip() or None
+    ctx = _ssl.create_default_context(cafile=cafile)
+    if not verify:                              # LAN box with a self-signed cert
+        ctx.check_hostname = False
+        ctx.verify_mode = _ssl.CERT_NONE
     # This box can't receive, so force the sender to the real mailbox: the
     # master then just relays, no server-side rewrite needed.
     forced = c.get("smtp", "from", fallback="").strip()
@@ -582,12 +607,12 @@ def _smtp_send(msg, rcpts):
         msg["From"] = forced
     frm = email.utils.parseaddr(msg.get("From", ""))[1] or user
     try:
-        S = (smtplib.SMTP_SSL(host, port, timeout=30) if use_ssl
+        S = (smtplib.SMTP_SSL(host, port, timeout=30, context=ctx) if use_ssl
              else smtplib.SMTP(host, port, timeout=30))
         try:
             S.ehlo()
             if starttls and not use_ssl:
-                S.starttls(context=_ssl.create_default_context())
+                S.starttls(context=ctx)
                 S.ehlo()
             if do_auth:
                 pw = _cred(host, user, "TVMAIL_SMTP_PASS", scheme)
@@ -595,7 +620,10 @@ def _smtp_send(msg, rcpts):
                     S.login(user, pw)
             S.sendmail(frm, rcpts, msg.as_bytes())
         finally:
-            S.quit()
+            try:
+                S.quit()
+            except Exception:
+                pass    # don't let a failed cleanup mask the real error above
     except (smtplib.SMTPException, OSError) as e:
         sys.exit("tvmail-backend: SMTP %s:%d - %s" % (host, port, e))
     return True
@@ -829,7 +857,9 @@ def cmd_delete(a):
         return 0
     if _is_remote():
         folder = _imap_folder(a.mbox)
-        trash = _imap_folder("trash")
+        requested = getattr(a, "trash", None)
+        dest = _imap_folder(requested) if requested else None
+        copy = dest and folder != dest
         uids = _imap_uids(folder, readonly=False)
         victims = sorted(set(a.idx))
         if any(not (0 <= v < len(uids)) for v in victims):
@@ -837,8 +867,8 @@ def cmd_delete(a):
         M = _imap()
         for v in victims:
             u = str(uids[v])
-            if folder != trash and getattr(a, "trash", None):
-                M.uid("COPY", u, _q_mbox(trash))       # -> Trash, then delete
+            if copy:
+                _imap_copy_to(M, u, dest)
             M.uid("STORE", u, "+FLAGS", r"(\Deleted)")
         M.expunge()
         print("deleted %d message(s)" % len(victims))
@@ -1000,9 +1030,10 @@ def _imap_purge(a):
         print("purged 0 message(s)")
         return 0
     dest = _imap_folder(getattr(a, "to_folder", None) or "trash")
+    copy = not a.expunge and folder != dest
     for u in uids:
-        if not a.expunge and folder != dest:
-            M.uid("COPY", u, _q_mbox(dest))
+        if copy:
+            _imap_copy_to(M, u, dest)
         M.uid("STORE", u, "+FLAGS", r"(\Deleted)")
     M.expunge()
     print("purged %d message(s)" % len(uids))

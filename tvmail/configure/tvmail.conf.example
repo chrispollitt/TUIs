@@ -39,11 +39,17 @@ host     = cmpi
 port     = 587
 starttls = true
 user     = chris
+# same as [imap] verify/cafile above - the master's self-signed cert on
+# STARTTLS needs one or the other, or send fails with CERTIFICATE_VERIFY_FAILED.
+verify = false
+#cafile = /etc/ssl/certs/cmpi-dovecot.pem
 # This box can't receive replies, so submitted mail always goes out as this
 # address (header From + envelope) - the master just relays it, no rewrite.
 from     = chris via LAN <cwp@u-l.ca>
-# If the master's Postfix trusts the LAN in mynetworks you can skip auth:
-#   port = 25   starttls = false   auth = false     (no ~/.netrc entry needed)
+# If the master's Postfix trusts the LAN in mynetworks you can skip auth -
+# most LAN-facing Postfixes only offer AUTH on 587/465, not on 25, so this is
+# usually required (not just optional) when pointing at port 25:
+#   port = 25   auth = false     (no ~/.netrc / ~/.mu-tickets entry needed)
 auth = true
 
 # These are the DEFAULTS - the whole [folders] section is optional.  Listed so

@@ -345,6 +345,8 @@ if ask "Write ~/.mail and ~/.mu-tickets now?"; then
 
 mailbox {
     mailbox-pattern "imap://${imap_user}@${imap_host}:${imap_port}/INBOX";
+    # base URL for mail(1)'s "+name" folder shorthand (folder +Trash, mail -f +Junk, ...)
+    folder "imap://${imap_user}@${imap_host}:${imap_port}/";
 };
 
 mailer {
