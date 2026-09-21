@@ -319,6 +319,18 @@ class TestCli(Base):
         self.assertEqual(self.be("mark", "1", "read", str(self.spool)).returncode, 0)
         self.assertEqual(self.rows(self.spool)[1].split("\t")[1], ".")
 
+    def test_show_mark_read_merges_into_one_call(self):
+        # Regression: show --mark-read used to open the local mbox TWICE in
+        # one call (once to read, once more inside a separate mark step) -
+        # a second handle rewriting-and-renaming the file while the first is
+        # still open broke outright on some filesystems. This runs the real
+        # CLI against a real file, the same way the crash actually happened.
+        p = self.be("show", "1", str(self.spool), "--mark-read")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn(b"Traceback", p.stderr)
+        self.assertIn(b"Second body, unread.", p.stdout)
+        self.assertEqual(self.rows(self.spool)[1].split("\t")[1], ".")
+
     def test_delete_moves_to_trash_and_backs_up(self):
         p = self.be("delete", "0", "--mbox", str(self.spool), "--trash", "trash")
         self.assertEqual(p.returncode, 0)
@@ -796,6 +808,39 @@ class TestRemoteIMAP(Base):
         be.cmd_mark(self.ns(idx=1, state="read"))
         rows = self._run(be.cmd_list, self.ns()).decode().splitlines()
         self.assertEqual(rows[1].split("\t")[1], ".")
+
+    def test_show_mark_read_over_imap_merges_select_and_search(self):
+        # Regression guard: a separate show + mark used to cost 6 IMAP round
+        # trips per keystroke (2x SELECT+SEARCH, plus FETCH, plus STORE) -
+        # over a slow link (a shared webhost vs. the LAN master) every one of
+        # those was felt. --mark-read must fold marking into the SELECT+
+        # SEARCH the fetch already paid for (down to 4), and a second show in
+        # the same folder+mode must skip re-selecting entirely (down to 3).
+        calls = {"select": 0, "uid": 0}
+        orig_select, orig_uid = self.imap.select, self.imap.uid
+
+        def counted_select(*a, **kw):
+            calls["select"] += 1
+            return orig_select(*a, **kw)
+
+        def counted_uid(*a, **kw):
+            calls["uid"] += 1
+            return orig_uid(*a, **kw)
+
+        self.imap.select, self.imap.uid = counted_select, counted_uid
+
+        out = self._run(be.cmd_show, self.ns(idx=1, mark_read=True)).decode()
+        self.assertIn("second body", out)
+        self.assertIn("\\Seen", self.imap.folders["INBOX"][1][1])
+        self.assertEqual(calls["select"], 1)
+        self.assertEqual(calls["uid"], 3)          # SEARCH + FETCH + STORE
+
+        calls["select"] = calls["uid"] = 0
+        out2 = self._run(be.cmd_show, self.ns(idx=2, mark_read=True)).decode()
+        self.assertIn("third body", out2)
+        self.assertIn("\\Seen", self.imap.folders["INBOX"][2][1])
+        self.assertEqual(calls["select"], 0)       # same folder+mode: no re-SELECT
+        self.assertEqual(calls["uid"], 3)
 
     def test_delete_over_imap_moves_to_trash(self):
         self._run(be.cmd_delete, self.ns(idx=[0], mbox="spool", trash="trash"))
