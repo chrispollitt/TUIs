@@ -6,6 +6,7 @@ BAK/
 *.o
 *.bak
 *.pyc
+*.log
 DEVNOTES.txt
 __pycache__/
 tmp/
