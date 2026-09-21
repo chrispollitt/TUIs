@@ -14,10 +14,10 @@ target="$PREFIX"; [ -e "$target" ] || target=$(dirname "$PREFIX")
 if [ -w "$target" ]; then
   cmake --install "$BUILD" --prefix "$PREFIX"
 elif [ -n "$SUDO" ]; then
-  log "no write access to $PREFIX - using sudo"
+  echo "no write access to $PREFIX - using sudo"
   $SUDO cmake --install "$BUILD" --prefix "$PREFIX"
 else
-  warn "no write access to $PREFIX and no sudo - trying anyway"
+  echo "no write access to $PREFIX and no sudo - trying anyway"
   cmake --install "$BUILD" --prefix "$PREFIX"
 fi
 
