@@ -295,7 +295,7 @@ mailer {
 
 ```
 # ~/.mu-tickets  (chmod 600; user/pass are URL-encoded; scheme "*" matches any)
-*://chris:zxczxc@cmpi
+*://chris:s3cr3t@cmpi
 ```
 
 `mail -f +Trash` (or `folder +Junk` inside a session) and tvmail then read/write

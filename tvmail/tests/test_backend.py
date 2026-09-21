@@ -556,9 +556,9 @@ class TestMailutilsInterop(Base):
         self.assertEqual(be._mode(), "local")
 
     def test_cred_from_mu_tickets_wildcard_scheme(self):
-        self._write_tickets("*://chris:zxczxc@cmpi\n")
+        self._write_tickets("*://chris:s3cr3t@cmpi\n")
         self.assertEqual(be._cred("cmpi", "chris", "TVMAIL_IMAP_PASS", "imap"),
-                         "zxczxc")
+                         "s3cr3t")
 
     def test_cred_mu_tickets_percent_decoded_and_host_matched(self):
         self._write_tickets("imap://chris:p%40ss@cmpi.lan\n"
@@ -587,7 +587,7 @@ class TestMailutilsInterop(Base):
 
     def test_smtp_send_host_falls_back_to_mailer_url(self):
         self._write_mail(self.MAIL_CONF)
-        self._write_tickets("*://chris:zxczxc@cmpi\n")
+        self._write_tickets("*://chris:s3cr3t@cmpi\n")
         logged = []
 
         class FakeSMTP:
@@ -612,7 +612,7 @@ class TestMailutilsInterop(Base):
         finally:
             smtplib.SMTP = real
         self.assertTrue(ok)
-        self.assertEqual([p for _, p in logged], ["zxczxc"])
+        self.assertEqual([p for _, p in logged], ["s3cr3t"])
 
 
 class FakeIMAP:

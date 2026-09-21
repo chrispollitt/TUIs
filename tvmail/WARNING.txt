@@ -29,3 +29,35 @@ list -- Cygwin has no GitHub tracker). TERMINAL-HISTORY.md section 7
 is a ready-made bug report with a reproducible test case attached.
 Old geezers who remember when terminals just worked are encouraged
 to make some noise. ;)
+
+
+** WARNING **
+
+IMAP servers disagree on folder-namespace layout, and mail(1)'s
+"+name" plus-notation cannot bridge the difference.
+
+cmpi's Dovecot puts folders at the namespace root (Sent, Junk,
+Trash -- no prefix, "/" hierarchy delimiter). mail.u-l.ca
+(cPanel/Dovecot) requires an "INBOX." prefix on everything except
+INBOX itself, with a "." delimiter (Sent -> INBOX.Sent). A folder
+name that's correct on one server is rejected by the other with
+"Client tried to access nonexistent namespace."
+
+tvmail-backend works around this automatically -- it discovers each
+server's real folder name via RFC 6154 SPECIAL-USE attributes on a
+plain LIST, rather than guessing the namespace layout (see
+_imap_folder()/_imap_specialuse_map() in backend/tvmail-backend).
+
+GNU Mailutils' mail(1) has no equivalent fix available. Its "+name"
+expansion always inserts a literal "/" between the folder variable
+and the name (manual: "the '+' sign is replaced by dir, followed by
+a directory separator ('/')") -- there's no config that makes
+"mail -f +Sent" resolve to "INBOX.Sent". You have to type the full
+name yourself:
+
+  mail --headers -f +INBOX.Sent          (mail.u-l.ca)
+  mail --headers -f +Sent                (cmpi)
+
+or wrap it in a shell function, e.g.:
+
+  mailf() { mail --headers -f "+INBOX.$1"; }
