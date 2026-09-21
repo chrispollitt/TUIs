@@ -483,6 +483,7 @@ static const int gFolderCount = int(sizeof gFolders / sizeof gFolders[0]);
 static int gFolderIdx = 0;                       // current folder (drives gMbox)
 static std::string gMbox = gFolders[0].mbox;
 static bool gRemote = false;                     // backend "mode" == remote (IMAP)
+static std::string gHost;                        // backend "host": the box we're talking to
 
 static std::string mboxArg() { return gMbox.empty() ? std::string() : " '" + gMbox + "'"; }
 static std::string mboxOpt() { return gMbox.empty() ? std::string() : " --mbox '" + gMbox + "'"; }
@@ -537,6 +538,11 @@ static std::vector<std::string> splitLines(const std::string &s)
     }
     if (v.empty()) v.push_back(std::string());
     return v;
+}
+
+static std::string mailWindowTitle()
+{
+    return gHost.empty() ? "tvmail" : "tvmail - " + gHost;
 }
 
 static void loadList()
@@ -841,7 +847,7 @@ public:
 
     TMailWindow(const TRect &bounds)
         : TWindowInit(&TMailWindow::initFrame),
-          TWindow(bounds, "tvmail", wnNoNumber)
+          TWindow(bounds, mailWindowTitle().c_str(), wnNoNumber)
     {
         palette = wpCyanWindow;
         flags   &= ~(wfClose | wfZoom | wfMove);
@@ -2168,6 +2174,7 @@ int main(int argc, char **argv)
     }
 
     gRemote = backendRun("mode").rfind("remote", 0) == 0;
+    gHost   = splitLines(backendRun("host")).front();
 
     TVMailApp app;
     app.run();

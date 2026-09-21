@@ -40,6 +40,9 @@ INBOX/Archive/Trash/Drafts/Sent/Junk):
                             the 'spam' folder; tag/dest set in tvmail.conf)
   ping                      print 'pong' - a liveness check
   mode                      print 'local' or 'remote'
+  host                      print the IMAP host (remote) or this machine's
+                            own hostname (local) - whichever mailbox the UI
+                            is actually showing
   serve                     persistent mode: read one request (an argv) per
                             line on stdin, write a framed reply per request:
                                 <status> <nbytes>\\n  then <nbytes> bytes
@@ -492,6 +495,46 @@ def _imap():
     return M
 
 
+_SPECIALUSE_ATTR = {"saved": "\\archive", "trash": "\\trash",
+                    "drafts": "\\drafts", "sent": "\\sent", "spam": "\\junk"}
+_specialuse_cache = {}
+
+
+def _imap_specialuse_map(M):
+    """RFC 6154 SPECIAL-USE folder discovery: {'\\sent': 'INBOX.Sent', ...}.
+    Servers disagree on namespace layout - cmpi's folders sit at the top
+    ("Sent"), mail.u-l.ca's sit under an "INBOX." prefix ("INBOX.Sent") - so a
+    folder name that is correct on one 404s on the other ("Client tried to
+    access nonexistent namespace"). Both still tag their special folders per
+    RFC 6154, so LIST's attributes name the real mailbox on either server
+    without tvmail having to know its namespace convention. Cached per
+    connection since it only changes if the mailbox layout changes."""
+    if id(M) in _specialuse_cache:
+        return _specialuse_cache[id(M)]
+    out = {}
+    try:
+        import re
+        typ, data = M.list()
+        if typ == "OK":
+            pat = re.compile(r'^\((?P<attrs>[^)]*)\)\s+"[^"]*"\s+(?P<name>.+)$')
+            for line in data or []:
+                if isinstance(line, bytes):
+                    line = line.decode("utf-8", "replace")
+                m = pat.match(line)
+                if not m:
+                    continue
+                name = m.group("name").strip()
+                if name.startswith('"') and name.endswith('"'):
+                    name = name[1:-1]
+                for attr in m.group("attrs").split():
+                    if attr.lower() in _SPECIALUSE_ATTR.values():
+                        out[attr.lower()] = name
+    except Exception:
+        pass
+    _specialuse_cache[id(M)] = out
+    return out
+
+
 def _imap_folder(p):
     """Map a tvmail mailbox shorthand to an IMAP folder name."""
     c = _conf()
@@ -499,7 +542,16 @@ def _imap_folder(p):
            "mbox": "saved"}.get(p, p)
     default = {"inbox": "INBOX", "saved": "Archive", "trash": "Trash",
               "drafts": "Drafts", "sent": "Sent", "spam": "Junk"}.get(key)
-    return c.get("folders", key, fallback=default) if default is not None else p
+    if default is None:
+        return p
+    if c.has_option("folders", key):
+        return c.get("folders", key)          # explicit override always wins
+    attr = _SPECIALUSE_ATTR.get(key)
+    if attr:
+        found = _imap_specialuse_map(_imap()).get(attr)
+        if found:
+            return found
+    return default
 
 
 def _imap_copy_to(M, uid, dest):
@@ -1247,6 +1299,20 @@ def cmd_mode(a):
     return 0
 
 
+def cmd_host(a):
+    """The box the UI is actually talking to: the IMAP host in remote mode
+    (same resolution _imap() uses - [imap] host, else ~/.mail), or this
+    machine's own hostname when local IS the mailstore."""
+    if _is_remote():
+        c = _conf()
+        mu = _mu_mailbox() or {}
+        host = c.get("imap", "host", fallback=None) or mu.get("host") or ""
+    else:
+        host = socket.gethostname().split(".")[0]
+    sys.stdout.write(host + "\n")
+    return 0
+
+
 # --------------------------------------------------------------------------
 # serve: a persistent request loop so the tvmail UI stops paying Python
 # start-up (and, on Cygwin, fork/exec) three times per folder switch.
@@ -1382,6 +1448,7 @@ def build_parser():
     p = sub.add_parser("pull"); p.set_defaults(fn=cmd_pull)
     p = sub.add_parser("ping"); p.set_defaults(fn=cmd_ping)
     p = sub.add_parser("mode"); p.set_defaults(fn=cmd_mode)
+    p = sub.add_parser("host"); p.set_defaults(fn=cmd_host)
     p = sub.add_parser("serve"); p.set_defaults(fn=cmd_serve)
     return ap
 

@@ -2,4 +2,4 @@
 # install.sh - deprecated alias for setup.sh.
 set -eu
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-exec "$here/setup.sh" "$@"
+exec sudo "cmake" --install "$here/build" --prefix "/usr/local/"
