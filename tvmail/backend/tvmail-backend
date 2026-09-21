@@ -20,7 +20,10 @@ INBOX/Archive/Trash/Drafts/Sent/Junk):
   list  [MBOX]              one line per message, TAB-separated:
                             idx <TAB> flags <TAB> date <TAB> from <TAB> subject
                             (idx = 0-based position; flags: 'N' new/unread, '.' seen)
-  show  IDX [MBOX]          decoded headers + best-effort text/plain body on stdout
+  show  IDX [MBOX] [--mark-read]   decoded headers + best-effort text/plain
+                            body on stdout; --mark-read also flags it \Seen,
+                            reusing this call's IMAP SELECT/SEARCH instead of
+                            a separate 'mark' round trip (remote mode)
   raw   IDX [MBOX]          the raw RFC822 message on stdout
   parts IDX [MBOX]          list MIME parts: partno <TAB> content-type <TAB> filename <TAB> bytes
   save  IDX PARTNO DEST [MBOX]   write one MIME part's decoded payload to DEST
@@ -573,11 +576,32 @@ def _imap_copy_to(M, uid, dest):
                  % (dest, resp))
 
 
-def _imap_uids(folder, readonly=True):
-    M = _imap()
+_select_cache = {}
+
+
+def _imap_select(M, folder, readonly):
+    """SELECT/EXAMINE folder, skipping the round trip if this connection
+    already has it open in the same mode. SELECT only switches mailbox
+    context - it doesn't refresh data (SEARCH/FETCH already see live server
+    state on an already-selected mailbox), so re-selecting the same folder
+    is a pure no-op round trip. Arrow-key navigation re-does this on every
+    keystroke; on a slow link (a shared webhost vs. the LAN master) that
+    round trip is real, felt latency. All SELECTs must go through here -
+    a stray M.select() would desync the cache from the connection's real
+    state and make a later skip wrong."""
+    key = id(M)
+    if _select_cache.get(key) == (folder, readonly):
+        return
     typ, _ = M.select(_q_mbox(folder), readonly=readonly)
     if typ != "OK":
+        _select_cache.pop(key, None)
         sys.exit("tvmail-backend: IMAP SELECT %s failed" % folder)
+    _select_cache[key] = (folder, readonly)
+
+
+def _imap_uids(folder, readonly=True):
+    M = _imap()
+    _imap_select(M, folder, readonly)
     typ, data = M.uid("SEARCH", None, "ALL")
     if typ != "OK":
         sys.exit("tvmail-backend: IMAP SEARCH failed")
@@ -591,12 +615,16 @@ def _imap_uid_at(folder, idx, readonly=True):
     return uids, uids[idx]
 
 
-def _imap_msg(folder, idx):
-    _, uid = _imap_uid_at(folder, idx)
+def _imap_msg(folder, idx, readonly=True):
+    """Fetch message idx in folder, returning (uid, parsed message). Opens
+    writable (readonly=False) when the caller is about to STORE flags right
+    after - e.g. show --mark-read - so that STORE reuses this SELECT instead
+    of paying for a second one under a fresh EXAMINE-vs-SELECT mismatch."""
+    _, uid = _imap_uid_at(folder, idx, readonly=readonly)
     typ, data = _imap().uid("FETCH", str(uid), "(BODY.PEEK[])")
     for item in (data or []):
         if isinstance(item, tuple) and item[1]:
-            return email.message_from_bytes(item[1])
+            return uid, email.message_from_bytes(item[1])
     sys.exit("tvmail-backend: IMAP FETCH %d failed" % idx)
 
 
@@ -797,7 +825,8 @@ def _get_msg(a):
             sys.exit("tvmail-backend: no message at index %d" % a.idx)
         return None, m
     if _is_remote():
-        return None, _imap_msg(_imap_folder(a.mbox), a.idx)
+        _, msg = _imap_msg(_imap_folder(a.mbox), a.idx)
+        return None, msg
     box = open_box(mbox_path(a.mbox))
     try:
         return box, box[a.idx]
@@ -836,7 +865,15 @@ def _best_body(msg):
 
 
 def cmd_show(a):
-    _, msg = _get_msg(a)
+    mark_read = getattr(a, "mark_read", False)
+    uid = None
+    if mark_read and a.mbox != "dead" and _is_remote():
+        # Open writable up front and keep the uid, so the STORE below reuses
+        # this SELECT+SEARCH instead of "mark" redoing them from scratch -
+        # that redundant round trip is what made remote mode feel sluggish.
+        uid, msg = _imap_msg(_imap_folder(a.mbox), a.idx, readonly=False)
+    else:
+        _, msg = _get_msg(a)
     out = []
     for h in ("Date", "From", "To", "Cc", "Subject"):
         v = _hdr(msg, h)
@@ -849,6 +886,8 @@ def cmd_show(a):
         out.append("%-8s %s" % ("Attach:", ", ".join(a for a in atts if a)))
     out.append("")
     out.append(_best_body(msg).replace("\r\n", "\n").rstrip() + "\n")
+    if mark_read:
+        _mark(a.mbox, a.idx, "read", uid=uid)
     sys.stdout.write("\n".join(out))
     return 0
 
@@ -1064,7 +1103,7 @@ def _imap_purge(a):
         sys.exit("tvmail-backend purge: refusing to run with no filter")
     folder = _imap_folder(a.mbox)
     M = _imap()
-    M.select(_q_mbox(folder), readonly=a.dry_run)
+    _imap_select(M, folder, a.dry_run)
     typ, data = M.uid("SEARCH", None, *crit)
     if typ != "OK":
         sys.exit("tvmail-backend: IMAP SEARCH failed")
@@ -1098,31 +1137,39 @@ def cmd_purge(a):
     return _imap_purge(a) if _is_remote() else _local_purge(a)
 
 
-def cmd_mark(a):
-    if a.mbox == "dead":
-        return 0                       # dead.letter has no per-message flags
+def _mark(mbox, idx, state, uid=None):
+    """Set/clear \\Seen for message idx in mbox. uid, when the caller already
+    has it (show --mark-read reuses the SELECT+SEARCH it just paid for),
+    skips the extra IMAP round trip _imap_uid_at() would otherwise repeat."""
+    if mbox == "dead":
+        return                          # dead.letter has no per-message flags
     if _is_remote():
-        _, uid = _imap_uid_at(_imap_folder(a.mbox), a.idx, readonly=False)
-        op = "+FLAGS" if a.state == "read" else "-FLAGS"
+        if uid is None:
+            _, uid = _imap_uid_at(_imap_folder(mbox), idx, readonly=False)
+        op = "+FLAGS" if state == "read" else "-FLAGS"
         _imap().uid("STORE", str(uid), op, r"(\Seen)")
-        return 0
-    path = mbox_path(a.mbox)
+        return
+    path = mbox_path(mbox)
     box = open_box(path)
     box.lock()
     try:
-        msg = box[a.idx]
+        msg = box[idx]
         status = "".join(c for c in (msg.get("Status", "") or "") if c in "ROU")
-        if a.state == "read":
+        if state == "read":
             status = "".join(sorted(set(status + "RO")))
         else:
             status = status.replace("R", "")
         del msg["Status"]
         if status:
             msg["Status"] = status
-        box[a.idx] = msg
+        box[idx] = msg
         box.flush()
     finally:
         box.unlock()
+
+
+def cmd_mark(a):
+    _mark(a.mbox, a.idx, a.state)
     return 0
 
 
@@ -1417,7 +1464,7 @@ def build_parser():
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("list");  p.add_argument("mbox", nargs="?"); p.set_defaults(fn=cmd_list)
-    p = sub.add_parser("show");  p.add_argument("idx", type=int); p.add_argument("mbox", nargs="?"); p.set_defaults(fn=cmd_show)
+    p = sub.add_parser("show");  p.add_argument("idx", type=int); p.add_argument("mbox", nargs="?"); p.add_argument("--mark-read", action="store_true", dest="mark_read"); p.set_defaults(fn=cmd_show)
     p = sub.add_parser("raw");   p.add_argument("idx", type=int); p.add_argument("mbox", nargs="?"); p.set_defaults(fn=cmd_raw)
     p = sub.add_parser("parts"); p.add_argument("idx", type=int); p.add_argument("mbox", nargs="?"); p.set_defaults(fn=cmd_parts)
     p = sub.add_parser("save");  p.add_argument("idx", type=int); p.add_argument("partno", type=int)

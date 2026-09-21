@@ -901,14 +901,12 @@ public:
             return;
         }
         int b = gRows[msgPane->focused].idx;
-        auto ls = splitLines(backendRun("show " + std::to_string(b) + " " + gMbox));
+        // --mark-read folds the "mark ... read" round trip into this same
+        // call, reusing its SELECT/SEARCH instead of a second one - remote
+        // mode pays real network latency for every extra round trip here.
+        auto ls = splitLines(backendRun("show " + std::to_string(b) + " " + gMbox
+                                         + " --mark-read"));
         contentPane->setLines(std::move(ls));
-        {
-            std::string o; int s = 0;
-            if (!Backend::instance().call("mark " + std::to_string(b) + " read " + gMbox, o, s))
-                shCapture("tvmail-backend mark " + std::to_string(b) + " read"
-                          + mboxArg() + " >/dev/null 2>&1");
-        }
         gRows[msgPane->focused].flag = '.';
         msgPane->drawView();
     }

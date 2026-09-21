@@ -61,3 +61,26 @@ name yourself:
 or wrap it in a shell function, e.g.:
 
   mailf() { mail --headers -f "+INBOX.$1"; }
+
+
+** WARNING **
+
+Don't run tvmail in local mode on a host that's also running Dovecot
+(or any other IMAP server) over the same mailstore -- even though
+"mode = auto" picks local by default on the master, since its own
+hostname is in the "master = ..." list.
+
+Dovecot and tvmail-backend's local mbox code (Python's stdlib
+"mailbox" module) are two independent programs that can both open,
+lock, and rewrite the same /var/mail/$USER file, and their locking
+conventions don't line up reliably. Hit this in practice on cmpi:
+/var/mail there is root:mail 2775, chris isn't in group mail, so
+local-mode delete failed outright with a permission error the moment
+tvmail tried to rewrite the mbox out from under Dovecot's nose.
+
+The fix, now the default setup for this project: even on the master,
+point tvmail.conf at Dovecot over localhost ([imap] host = localhost
+port = 993 verify = false) instead of local mode, so there's exactly
+one program (Dovecot) ever touching the mbox files, and every other
+box -- master included -- talks to it the same way, over IMAP. See
+README.md's "Plumbing" section.
