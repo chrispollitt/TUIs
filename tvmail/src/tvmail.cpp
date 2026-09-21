@@ -901,12 +901,27 @@ public:
             return;
         }
         int b = gRows[msgPane->focused].idx;
-        // --mark-read folds the "mark ... read" round trip into this same
-        // call, reusing its SELECT/SEARCH instead of a second one - remote
-        // mode pays real network latency for every extra round trip here.
-        auto ls = splitLines(backendRun("show " + std::to_string(b) + " " + gMbox
-                                         + " --mark-read"));
-        contentPane->setLines(std::move(ls));
+        if (gRemote) {
+            // --mark-read folds the "mark ... read" round trip into this
+            // same call, reusing its SELECT/SEARCH instead of a second one -
+            // remote mode pays real network latency for every extra round
+            // trip here, so the merge is worth the added complexity.
+            auto ls = splitLines(backendRun("show " + std::to_string(b) + " " + gMbox
+                                             + " --mark-read"));
+            contentPane->setLines(std::move(ls));
+        } else {
+            // Local mbox access has no round trip to amortize, so there's
+            // nothing to gain by merging here - keep marking read a
+            // separate, best-effort call whose errors are discarded (as
+            // before tonight), so a failed mark can never affect what's
+            // actually displayed.
+            auto ls = splitLines(backendRun("show " + std::to_string(b) + " " + gMbox));
+            contentPane->setLines(std::move(ls));
+            std::string o; int s = 0;
+            if (!Backend::instance().call("mark " + std::to_string(b) + " read " + gMbox, o, s))
+                shCapture("tvmail-backend mark " + std::to_string(b) + " read"
+                          + mboxArg() + " >/dev/null 2>&1");
+        }
         gRows[msgPane->focused].flag = '.';
         msgPane->drawView();
     }

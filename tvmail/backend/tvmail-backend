@@ -500,7 +500,6 @@ def _imap():
 
 _SPECIALUSE_ATTR = {"saved": "\\archive", "trash": "\\trash",
                     "drafts": "\\drafts", "sent": "\\sent", "spam": "\\junk"}
-_specialuse_cache = {}
 
 
 def _imap_specialuse_map(M):
@@ -510,10 +509,15 @@ def _imap_specialuse_map(M):
     folder name that is correct on one 404s on the other ("Client tried to
     access nonexistent namespace"). Both still tag their special folders per
     RFC 6154, so LIST's attributes name the real mailbox on either server
-    without tvmail having to know its namespace convention. Cached per
-    connection since it only changes if the mailbox layout changes."""
-    if id(M) in _specialuse_cache:
-        return _specialuse_cache[id(M)]
+    without tvmail having to know its namespace convention. Cached as an
+    attribute on the connection object itself (not in a module-level dict
+    keyed by id(M)) - CPython can and does reuse a freed object's id for an
+    unrelated new one, which made a stale entry wrongly match a different,
+    later connection (bit us via the test suite's per-test FakeIMAP
+    instances, but the same hazard exists for a real reconnect)."""
+    cached = getattr(M, "_tvmail_specialuse", None)
+    if cached is not None:
+        return cached
     out = {}
     try:
         import re
@@ -534,7 +538,7 @@ def _imap_specialuse_map(M):
                         out[attr.lower()] = name
     except Exception:
         pass
-    _specialuse_cache[id(M)] = out
+    M._tvmail_specialuse = out
     return out
 
 
@@ -551,7 +555,16 @@ def _imap_folder(p):
         return c.get("folders", key)          # explicit override always wins
     attr = _SPECIALUSE_ATTR.get(key)
     if attr:
-        found = _imap_specialuse_map(_imap()).get(attr)
+        try:
+            found = _imap_specialuse_map(_imap()).get(attr)
+        except (Exception, SystemExit):
+            # _imap() sys.exit()s (SystemExit, not caught by "except
+            # Exception") on a bad/missing connection - folder-name lookup
+            # must degrade to the hardcoded default rather than take the
+            # whole process down; the real connection error, if any, surfaces
+            # properly moments later when the caller actually uses the
+            # folder for real IMAP work.
+            found = None
         if found:
             return found
     return default
@@ -576,9 +589,6 @@ def _imap_copy_to(M, uid, dest):
                  % (dest, resp))
 
 
-_select_cache = {}
-
-
 def _imap_select(M, folder, readonly):
     """SELECT/EXAMINE folder, skipping the round trip if this connection
     already has it open in the same mode. SELECT only switches mailbox
@@ -588,15 +598,16 @@ def _imap_select(M, folder, readonly):
     keystroke; on a slow link (a shared webhost vs. the LAN master) that
     round trip is real, felt latency. All SELECTs must go through here -
     a stray M.select() would desync the cache from the connection's real
-    state and make a later skip wrong."""
-    key = id(M)
-    if _select_cache.get(key) == (folder, readonly):
+    state and make a later skip wrong. Cached as an attribute on M itself,
+    not in a module-level dict keyed by id(M) - see _imap_specialuse_map()'s
+    docstring for why that's unsafe (id() reuse across connections)."""
+    if getattr(M, "_tvmail_selected", None) == (folder, readonly):
         return
     typ, _ = M.select(_q_mbox(folder), readonly=readonly)
     if typ != "OK":
-        _select_cache.pop(key, None)
+        M._tvmail_selected = None
         sys.exit("tvmail-backend: IMAP SELECT %s failed" % folder)
-    _select_cache[key] = (folder, readonly)
+    M._tvmail_selected = (folder, readonly)
 
 
 def _imap_uids(folder, readonly=True):
@@ -867,13 +878,17 @@ def _best_body(msg):
 def cmd_show(a):
     mark_read = getattr(a, "mark_read", False)
     uid = None
+    box = None
     if mark_read and a.mbox != "dead" and _is_remote():
         # Open writable up front and keep the uid, so the STORE below reuses
         # this SELECT+SEARCH instead of "mark" redoing them from scratch -
         # that redundant round trip is what made remote mode feel sluggish.
         uid, msg = _imap_msg(_imap_folder(a.mbox), a.idx, readonly=False)
     else:
-        _, msg = _get_msg(a)
+        # Local mode: keep the open box too, so mark-read below (if asked
+        # for) reuses this handle instead of _mark() opening a second one -
+        # see _mark()'s docstring for why that combination is unsafe.
+        box, msg = _get_msg(a)
     out = []
     for h in ("Date", "From", "To", "Cc", "Subject"):
         v = _hdr(msg, h)
@@ -887,7 +902,7 @@ def cmd_show(a):
     out.append("")
     out.append(_best_body(msg).replace("\r\n", "\n").rstrip() + "\n")
     if mark_read:
-        _mark(a.mbox, a.idx, "read", uid=uid)
+        _mark(a.mbox, a.idx, "read", uid=uid, box=box)
     sys.stdout.write("\n".join(out))
     return 0
 
@@ -1137,10 +1152,18 @@ def cmd_purge(a):
     return _imap_purge(a) if _is_remote() else _local_purge(a)
 
 
-def _mark(mbox, idx, state, uid=None):
-    """Set/clear \\Seen for message idx in mbox. uid, when the caller already
-    has it (show --mark-read reuses the SELECT+SEARCH it just paid for),
-    skips the extra IMAP round trip _imap_uid_at() would otherwise repeat."""
+def _mark(mbox, idx, state, uid=None, box=None):
+    """Set/clear \\Seen for message idx in mbox.
+    uid, when the caller already has it (show --mark-read reuses the
+    SELECT+SEARCH it just paid for), skips the extra IMAP round trip
+    _imap_uid_at() would otherwise repeat.
+    box, when the caller already has the local mbox open (same case), must
+    be reused rather than reopened: flush() rewrites-and-renames the file,
+    and a second, independently-opened handle on the same path still open
+    when that happens breaks the rename on some filesystems (hit this for
+    real via show --mark-read - Cygwin/NTFS rename-over-an-open-handle is
+    flaky, same class of bug as the stale .lock* cleanup this project
+    already has to do elsewhere)."""
     if mbox == "dead":
         return                          # dead.letter has no per-message flags
     if _is_remote():
@@ -1149,8 +1172,9 @@ def _mark(mbox, idx, state, uid=None):
         op = "+FLAGS" if state == "read" else "-FLAGS"
         _imap().uid("STORE", str(uid), op, r"(\Seen)")
         return
-    path = mbox_path(mbox)
-    box = open_box(path)
+    owns_box = box is None
+    if owns_box:
+        box = open_box(mbox_path(mbox))
     box.lock()
     try:
         msg = box[idx]
@@ -1166,6 +1190,8 @@ def _mark(mbox, idx, state, uid=None):
         box.flush()
     finally:
         box.unlock()
+        if owns_box:
+            box.close()
 
 
 def cmd_mark(a):
