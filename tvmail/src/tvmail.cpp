@@ -802,16 +802,15 @@ struct Folder
 {
     const char *name;
     const char *mbox;
-    bool pinLocal;
 };
 static const Folder gFolders[] = {
-    {"inbox", "spool", false},
-    {"drafts", "drafts", false},
-    {"sent", "sent", false},
-    {"saved", "mbox", false},
-    {"spam", "spam", false},
-    {"trash", "trash", false},
-    {"dead.letter", "dead", true}, // always a local file, whatever the mode
+    {"inbox", "spool"},
+    {"drafts", "drafts"},
+    {"sent", "sent"},
+    {"saved", "mbox"},
+    {"spam", "spam"},
+    {"trash", "trash"},
+    {"dead.letter", "dead"}, // always a local file, whatever the mode
 };
 static const int gFolderCount = int(sizeof gFolders / sizeof gFolders[0]);
 static int gFolderIdx = 0; // current folder (drives gMbox)
@@ -884,7 +883,9 @@ static std::vector<std::string> splitLines(const std::string &s)
 
 static std::string mailWindowTitle()
 {
-    return gHost.empty() ? "tvmail" : "tvmail - " + gHost;
+    if (gHost.empty())
+        return "tvmail";
+    return "tvmail - " + gHost + (gRemote ? " (remote)" : " (local)");
 }
 
 static void loadList()
@@ -983,11 +984,7 @@ public:
             dest[0] = 0;
             return;
         }
-        // L / R = local (mbox) or remote (IMAP) storage for this folder
-        char tag = (gRemote && !gFolders[item].pinLocal) ? 'R' : 'L';
-        char line[64];
-        std::snprintf(line, sizeof line, "%c  %s", tag, gFolders[item].name);
-        std::strncpy(dest, line, maxLen);
+        std::strncpy(dest, gFolders[item].name, maxLen);
         dest[maxLen] = 0;
     }
     void focusItem(short item) override
