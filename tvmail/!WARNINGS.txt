@@ -1,4 +1,4 @@
-** WARNING **
+** WARNING 1 **
 
 Running tvmail over SSH from inside Windows Terminal does not work
 correctly, whether you use Cygwin's ssh or Windows' native OpenSSH
@@ -31,7 +31,7 @@ Old geezers who remember when terminals just worked are encouraged
 to make some noise. ;)
 
 
-** WARNING **
+** WARNING 2 **
 
 IMAP servers disagree on folder-namespace layout, and mail(1)'s
 "+name" plus-notation cannot bridge the difference.
@@ -63,7 +63,7 @@ or wrap it in a shell function, e.g.:
   mailf() { mail --headers -f "+INBOX.$1"; }
 
 
-** WARNING **
+** WARNING 3 **
 
 Don't run tvmail in local mode on a host that's also running Dovecot
 (or any other IMAP server) over the same mailstore -- even though

@@ -143,7 +143,9 @@ tvmail
 Both programs accept `--help` and `--version`. `--debug [FILE]` writes
 diagnostic logging (default `debug.log`); `--trace [FILE]` writes profiling
 data (default `trace.log`). The backend trace is standard `cProfile` data;
-the frontend trace is Chrome Trace Event JSON.
+the frontend trace is Chrome Trace Event JSON. When these flags are passed to
+`tvmail`, the backend receives them too, using a distinct filename such as
+`debug.backend.log` or `trace.backend.log`.
 
 `tvmail-backend` must be reachable from the shell tvmail invokes; the install
 step above puts it on `PATH`. Otherwise:

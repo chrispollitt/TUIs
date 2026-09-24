@@ -206,6 +206,8 @@ static FILE *gDebugLog = nullptr;
 static FILE *gTraceLog = nullptr;
 static bool gTraceFirst = true;
 static std::chrono::steady_clock::time_point gTraceStart;
+static std::string gBackendDebugPath;
+static std::string gBackendTracePath;
 
 static void debugLog(const char *fmt, ...)
 {
@@ -255,8 +257,8 @@ static void printUsage(FILE *out)
                  "Usage: tvmail [--debug [FILE]] [--trace [FILE]] [--help] [--version]\n"
                  "       tvmail --selftest\n\n"
                  "Options:\n"
-                 "  --debug [FILE]   write diagnostic logging (default: debug.log)\n"
-                 "  --trace [FILE]   write Chrome Trace Event profiling data (default: trace.log)\n"
+                 "  --debug [FILE]   write diagnostic logging (default: debug.log; backend: *.backend.log)\n"
+                 "  --trace [FILE]   write Chrome Trace Event profiling data (default: trace.log; backend: *.backend.log)\n"
                  "  --help           show this help\n"
                  "  --version        show the tvmail version\n");
 }
@@ -320,8 +322,17 @@ static bool parseOptions(int argc, char **argv, CliOptions &options)
 
 static void startDiagnostics(const CliOptions &options)
 {
+    auto backendPath = [](const std::string &path)
+    {
+        size_t slash = path.find_last_of("/\\");
+        size_t dot = path.find_last_of('.');
+        if (dot == std::string::npos || dot < slash + 1)
+            return path + ".backend";
+        return path.substr(0, dot) + ".backend" + path.substr(dot);
+    };
     if (!options.debugPath.empty())
     {
+        gBackendDebugPath = backendPath(options.debugPath);
         gDebugLog = std::fopen(options.debugPath.c_str(), "ab");
         if (!gDebugLog)
             std::fprintf(stderr, "tvmail: cannot open debug log %s\n",
@@ -329,6 +340,7 @@ static void startDiagnostics(const CliOptions &options)
     }
     if (!options.tracePath.empty())
     {
+        gBackendTracePath = backendPath(options.tracePath);
         gTraceLog = std::fopen(options.tracePath.c_str(), "wb");
         if (!gTraceLog)
         {
@@ -356,6 +368,23 @@ static void stopDiagnostics()
         std::fclose(gDebugLog);
         gDebugLog = nullptr;
     }
+}
+
+static std::string shq(const std::string &s);
+
+static std::string backendFlags()
+{
+    std::string flags;
+    if (!gBackendDebugPath.empty())
+        flags += " --debug " + shq(gBackendDebugPath);
+    if (!gBackendTracePath.empty())
+        flags += " --trace " + shq(gBackendTracePath);
+    return flags;
+}
+
+static std::string backendCommand(const std::string &args)
+{
+    return "tvmail-backend" + backendFlags() + " " + args;
 }
 
 static std::string tempDir()
@@ -536,7 +565,7 @@ public:
                 if (f > 2)
                     ::close(f);
             }
-            std::string sc = std::string(kPreamble) + "exec tvmail-backend " + args + "\n";
+            std::string sc = std::string(kPreamble) + "exec tvmail-backend" + backendFlags() + " " + args + "\n";
             ::execl(TVMAIL_SH, TVMAIL_SH, "-c", sc.c_str(), (char *)nullptr);
             ::_exit(127);
         }
@@ -604,7 +633,7 @@ private:
                 ::close(b[0]);
             if (b[1] > 2)
                 ::close(b[1]);
-            std::string sc = std::string(kPreamble) + "exec tvmail-backend serve\n";
+            std::string sc = std::string(kPreamble) + "exec tvmail-backend" + backendFlags() + " serve\n";
             ::execl(TVMAIL_SH, TVMAIL_SH, "-c", sc.c_str(), (char *)nullptr);
             ::_exit(127);
         }
@@ -715,7 +744,7 @@ static std::string backendRun(const std::string &args)
     int st = 0;
     if (Backend::instance().call(args, body, st))
         return body;
-    return shCapture("tvmail-backend " + args + " 2>&1");
+    return shCapture("tvmail-backend" + backendFlags() + " " + args + " 2>&1");
 }
 
 // -------------------------------------------------------- classic colors ----
@@ -1310,7 +1339,7 @@ public:
             std::string o;
             int s = 0;
             if (!Backend::instance().call("mark " + std::to_string(b) + " read " + gMbox, o, s))
-                shCapture("tvmail-backend mark " + std::to_string(b) + " read" + mboxArg() + " >/dev/null 2>&1");
+                shCapture(backendCommand("mark " + std::to_string(b) + " read" + mboxArg()) + " >/dev/null 2>&1");
         }
         gRows[msgPane->focused].flag = '.';
         msgPane->drawView();
@@ -1617,7 +1646,7 @@ public:
     {
         if (draftMbox.empty() || draftIdx < 0)
             return;
-        shCapture("tvmail-backend delete " + std::to_string(draftIdx) + " --mbox '" + draftMbox + "' 2>&1");
+        shCapture(backendCommand("delete " + std::to_string(draftIdx) + " --mbox '" + draftMbox + "'") + " 2>&1");
         message(TProgram::application, evCommand, cmReload, nullptr);
         draftIdx = -1;
     }
@@ -1722,7 +1751,7 @@ public:
             return;
         }
         std::string path = writeTemp(buildMessage(), ".eml");
-        std::string out = shCapture("tvmail-backend send < '" + path + "' 2>&1; rm -f '" + path + "'");
+        std::string out = shCapture(backendCommand("send") + " < '" + path + "' 2>&1; rm -f '" + path + "'");
         while (!out.empty() && (out.back() == '\n' || out.back() == ' '))
             out.pop_back();
 
@@ -1783,7 +1812,7 @@ public:
             if (r == cmYes)
             {
                 std::string path = writeTemp(buildMessage(), ".eml");
-                shCapture("tvmail-backend save-draft < '" + path + "' 2>&1; rm -f '" + path + "'");
+                shCapture(backendCommand("save-draft") + " < '" + path + "' 2>&1; rm -f '" + path + "'");
                 dropSourceDraft();
                 message(TProgram::application, evCommand, cmReload, nullptr);
             }
@@ -2010,7 +2039,7 @@ public:
         std::string dest = askSavePath(suggested);
         if (dest.empty())
             return;
-        std::string cmd = "tvmail-backend save " + std::to_string(msgIdx) + " " + rows[i].no + " " + shq(dest);
+        std::string cmd = backendCommand("save " + std::to_string(msgIdx) + " " + rows[i].no + " " + shq(dest));
         if (!msgMbox.empty())
             cmd += " " + shq(msgMbox);
         std::string out = shCapture(cmd + " 2>&1");
@@ -2532,7 +2561,7 @@ void TVMailApp::deleteMsg(int row)
     int b = gRows[row].idx;
     if (messageBox(mfConfirmation | mfYesNoCancel, "Delete message %d?", b) != cmYes)
         return;
-    std::string cmd = "tvmail-backend delete " + std::to_string(b) + mboxOpt();
+    std::string cmd = backendCommand("delete " + std::to_string(b) + mboxOpt());
     if (gMbox != "trash")
         cmd += " --trash trash"; // move to trash, don't destroy
     std::string out = shCapture(cmd + " 2>&1");
@@ -2550,7 +2579,7 @@ void TVMailApp::markUnread(int row)
     // on every highlight move (TO-DO "mark as read only after you look" is
     // a separate, later change - this doesn't fight it, it just doesn't
     // survive it either).
-    shCapture("tvmail-backend mark " + std::to_string(b) + " unread" + mboxOpt() + " 2>&1");
+    shCapture(backendCommand("mark " + std::to_string(b) + " unread" + mboxOpt()) + " 2>&1");
     reload();
 }
 
@@ -2588,7 +2617,7 @@ void TVMailApp::moveMsg(int row)
     if (r == cmCancel || sel >= dest.size())
         return;
 
-    std::string cmd = "tvmail-backend delete " + std::to_string(b) + mboxOpt() + " --trash " + shq(gFolders[dest[sel]].mbox);
+    std::string cmd = backendCommand("delete " + std::to_string(b) + mboxOpt() + " --trash " + shq(gFolders[dest[sel]].mbox));
     std::string out = shCapture(cmd + " 2>&1");
     reload();
     if (!out.empty() && out.rfind("deleted", 0) != 0)
@@ -2681,7 +2710,7 @@ void TVMailApp::purgeDialog()
     if (expunge & 1)
         filt += " --expunge";
 
-    std::string cmd = "tvmail-backend purge" + mboxArg() + filt;
+    std::string cmd = backendCommand("purge" + mboxArg() + filt);
     std::string preview = shCapture(cmd + " -n 2>&1");
     TRect pr = deskTop->getExtent();
     pr.grow(-6, -3);
@@ -2729,7 +2758,7 @@ void TVMailApp::pullMail()
         return;
     }
 #endif
-    shInteractive("tvmail-backend pull"); // fork failed / Windows: old way
+    shInteractive(backendCommand("pull")); // fork failed / Windows: old way
     reload();
 }
 
