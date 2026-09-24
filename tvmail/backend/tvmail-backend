@@ -1301,8 +1301,22 @@ def cmd_save_draft(a):
     if _is_remote():
         import imaplib, time as _t
         folder = _imap_folder("drafts")
-        _imap().append(_q_mbox(folder), r"(\Draft)",
-                       imaplib.Time2Internaldate(_t.time()), m.as_bytes())
+        M = _imap()
+        date = imaplib.Time2Internaldate(_t.time())
+        typ, resp = M.append(_q_mbox(folder), r"(\Draft)", date, m.as_bytes())
+        if typ != "OK":
+            # IMAP has no local mbox_path()-style auto-create (see
+            # _imap_copy_to) - a plain APPEND to a missing Drafts folder
+            # just fails, and the old code never checked that, so the
+            # draft silently vanished instead of being saved.
+            try:
+                M.create(_q_mbox(folder))
+            except Exception:
+                pass
+            typ, resp = M.append(_q_mbox(folder), r"(\Draft)", date, m.as_bytes())
+            if typ != "OK":
+                sys.exit("tvmail-backend: IMAP APPEND to %s failed (%s) - "
+                         "draft not saved" % (folder, resp))
         print("draft saved")
         return 0
     dp = mbox_path("drafts")

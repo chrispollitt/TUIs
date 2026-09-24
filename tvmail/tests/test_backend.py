@@ -764,8 +764,13 @@ class FakeIMAP:
 
     def append(self, mailbox, flags, date, message):
         name = mailbox.strip('"')
+        if name not in self.folders:
+            # a real server refuses APPEND to a mailbox that doesn't exist
+            # yet, same as COPY above - this is what cmd_save_draft's
+            # create-then-retry is for
+            return ("NO", [b"[TRYCREATE] no such mailbox"])
         raw = message if isinstance(message, bytes) else message.encode()
-        self.folders.setdefault(name, []).append([self._uid, set(), raw])
+        self.folders[name].append([self._uid, set(), raw])
         self._uid += 1
         self.appended.append((name, raw))
         return ("OK", [b"ok"])
@@ -917,11 +922,38 @@ class TestRemoteIMAP(Base):
         self._run(be.cmd_save_draft, self.ns())
         self.assertEqual([n for n, _ in self.imap.appended], ["Drafts"])
 
+    def test_save_draft_over_imap_auto_creates_a_missing_drafts_folder(self):
+        # Regression: a Dovecot with no Drafts folder configured (real-world
+        # case: cmpi has Sent/Archive/Junk/Trash/INBOX but no Drafts) made
+        # APPEND fail - the code never checked the result, so it printed
+        # "draft saved" and the draft vanished instead of landing anywhere.
+        self.assertNotIn("Drafts", self.imap.folders)
+        self._feed_stdin(b"To: x@y\nSubject: d\n\nbody\n")
+        out = self._run(be.cmd_save_draft, self.ns())
+        self.assertIn(b"draft saved", out)
+        self.assertIn("Drafts", self.imap.created)
+        self.assertEqual([n for n, _ in self.imap.appended], ["Drafts"])
+
+    def test_save_draft_over_imap_reports_append_failure_instead_of_lying(self):
+        # If APPEND still fails after CREATE (permission denied, quota, a
+        # server that doesn't support TRYCREATE, ...), cmd_save_draft must
+        # say so rather than printing "draft saved" with nothing saved.
+        real_append = self.imap.append
+        def dead_append(*a, **kw):
+            return ("NO", [b"boom"])
+        self.imap.append = dead_append
+        self._feed_stdin(b"To: x@y\nSubject: d\n\nbody\n")
+        with self.assertRaises(SystemExit):
+            self._run(be.cmd_save_draft, self.ns())
+        self.imap.append = real_append
+        self.assertEqual(self.imap.appended, [])
+
     def test_send_over_imap_uses_smtp_and_files_a_copy(self):
         seen = {}
         real, be._smtp_send = be._smtp_send, \
             lambda m, r: (seen.setdefault("rcpts", r), True)[1]
         self.addCleanup(lambda: setattr(be, "_smtp_send", real))
+        self.imap.create("Sent")
         self._feed_stdin(b"To: a@b\nSubject: s\n\nhi\n")
         out = self._run(be.cmd_send, self.ns(getfrom=None, to=[], subject=None))
         self.assertIn(b"sent", out)
