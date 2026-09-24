@@ -465,21 +465,25 @@ class TestMode(Base):
         p.write_text(textwrap.dedent(text))
         os.environ["TVMAIL_CONF"] = str(p)
 
-    def test_mode_auto_defaults_local_without_imap(self):
+    def test_mode_defaults_local_when_unset(self):
         self.assertEqual(be._mode(), "local")
 
-    def test_mode_auto_remote_when_imap_present(self):
+    def test_mode_stays_local_with_imap_present_but_unset(self):
         self._write_conf("[imap]\nhost = x\n")
+        self.assertEqual(be._mode(), "local")
+
+    def test_mode_explicit_remote(self):
+        self._write_conf("[service]\nmode = remote\n[imap]\nhost = x\n")
         self.assertEqual(be._mode(), "remote")
 
-    def test_mode_explicit_local_wins_over_imap(self):
+    def test_mode_explicit_local(self):
         self._write_conf("[service]\nmode = local\n[imap]\nhost = x\n")
         self.assertEqual(be._mode(), "local")
 
-    def test_mode_master_hostname_forces_local(self):
-        host = __import__("socket").gethostname().split(".")[0]
-        self._write_conf("[service]\nmaster = %s ; other\n[imap]\nhost = x\n" % host)
-        self.assertEqual(be._mode(), "local")
+    def test_mode_invalid_value_errors(self):
+        self._write_conf("[service]\nmode = bogus\n")
+        with self.assertRaises(SystemExit):
+            be._mode()
 
     def test_mode_env_override(self):
         os.environ["TVMAIL_MODE"] = "remote"
@@ -568,9 +572,9 @@ class TestMailutilsInterop(Base):
         self.assertIsNone(be._mu_mailbox())
         self.assertIsNone(be._mu_mailer())
 
-    def test_mode_auto_remote_from_mail_file_alone(self):
+    def test_mode_ignores_mail_file_imap_pattern_defaults_local(self):
         self._write_mail(self.MAIL_CONF)
-        self.assertEqual(be._mode(), "remote")
+        self.assertEqual(be._mode(), "local")
 
     def test_mode_stays_local_when_mailbox_pattern_is_not_imap(self):
         self._write_mail("""\
@@ -923,6 +927,96 @@ class TestRemoteIMAP(Base):
         self.assertIn(b"sent", out)
         self.assertEqual(seen["rcpts"], ["a@b"])
         self.assertIn("Sent", [n for n, _ in self.imap.appended])   # copy filed
+
+
+class TestDispatchReconnect(Base):
+    """_dispatch() drops a stale cached IMAP connection and retries the
+    command once, instead of _imap() paying for a noop() liveness check
+    before every request (see trace.sh / DEVNOTES)."""
+
+    def setUp(self):
+        super().setUp()
+        os.environ["TVMAIL_MODE"] = "remote"
+        self.good = FakeIMAP()
+        self.good.add("INBOX", _msg("alice@x", "Hello", "body"))
+        self._real_imap = be._imap
+        self.parser = be.build_parser()
+        self.addCleanup(lambda: setattr(be, "_imap", self._real_imap))
+        self.addCleanup(lambda: setattr(be, "_IMAP", None))
+
+    def test_retries_once_after_a_stale_connection(self):
+        # _imap() is a plain cache of be._IMAP (see the real function) - mimic
+        # that here so every call site within one attempt sees the same
+        # object, the way they would against the real connection.
+        reconnects = []
+
+        class Dead:
+            def select(self, *a, **kw):
+                raise OSError("stale connection")
+
+        def fake_imap():
+            if be._IMAP is None:
+                reconnects.append(1)
+                be._IMAP = self.good
+            return be._IMAP
+
+        be._IMAP = Dead()             # a previous request's now-stale connection
+        be._imap = fake_imap
+
+        status, body = be._dispatch(self.parser, ["list", "spool"])
+        self.assertEqual(status, 0)
+        self.assertEqual(len(reconnects), 1)        # reconnected exactly once
+        self.assertIs(be._IMAP, self.good)
+        rows = [r for r in body.decode().splitlines() if r]
+        self.assertEqual(len(rows), 1)
+        self.assertIn("Hello", rows[0])
+
+    def test_does_not_retry_a_second_failure(self):
+        class AlwaysDead:
+            def select(self, *a, **kw):
+                raise OSError("stale connection")
+
+        be._IMAP = object()
+        be._imap = lambda: AlwaysDead()
+
+        status, body = be._dispatch(self.parser, ["list", "spool"])
+        self.assertEqual(status, 2)
+        self.assertIn(b"OSError", body)
+
+    def test_does_not_retry_when_nothing_was_cached_yet(self):
+        # _IMAP is None here - a failure is a real (first) connect failure,
+        # not staleness, so it must surface immediately, not loop.
+        calls = []
+
+        def boom():
+            calls.append(1)
+            raise OSError("no route to host")
+
+        be._IMAP = None
+        be._imap = boom
+
+        status, body = be._dispatch(self.parser, ["list", "spool"])
+        self.assertEqual(status, 2)
+        self.assertEqual(len(calls), 1)
+
+    def test_ordinary_command_failure_is_not_retried(self):
+        # A non-connection error (e.g. a real IMAP protocol failure) must not
+        # be treated as staleness - retrying it would just fail the same way
+        # twice and mask the real error behind a generic OSError catch.
+        calls = []
+
+        class Picky:
+            def select(self, *a, **kw):
+                calls.append(1)
+                raise ValueError("not a connection problem")
+
+        be._IMAP = object()
+        be._imap = lambda: Picky()
+
+        status, body = be._dispatch(self.parser, ["list", "spool"])
+        self.assertEqual(status, 2)
+        self.assertEqual(len(calls), 1)
+        self.assertIn(b"ValueError", body)
 
 
 class TestPurgeLocal(Base):

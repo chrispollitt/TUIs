@@ -67,8 +67,9 @@ or wrap it in a shell function, e.g.:
 
 Don't run tvmail in local mode on a host that's also running Dovecot
 (or any other IMAP server) over the same mailstore -- even though
-"mode = auto" picks local by default on the master, since its own
-hostname is in the "master = ..." list.
+mode defaults to local whenever it's left unset (including when
+tvmail.conf doesn't exist at all), which is exactly the case on an
+unconfigured master.
 
 Dovecot and tvmail-backend's local mbox code (Python's stdlib
 "mailbox" module) are two independent programs that can both open,
@@ -84,3 +85,31 @@ port = 993 verify = false) instead of local mode, so there's exactly
 one program (Dovecot) ever touching the mbox files, and every other
 box -- master included -- talks to it the same way, over IMAP. See
 README.md's "Plumbing" section.
+
+
+** WARNING 4 **
+
+Pointing tvmail straight at a WAN/Internet IMAP host (e.g. [imap]
+host = mail.u-l.ca) works fine -- nothing about the protocol requires
+a local middleman -- but every folder switch, list and show is a
+synchronous round trip the UI blocks on (see trace.sh), and each of
+those round trips now costs real Internet latency instead of LAN
+latency. Profiling a session against a WAN host with trace.sh showed
+the backend spending the overwhelming majority of its time simply
+waiting on the SSL socket read for the server's reply -- tens of
+milliseconds per operation on a good connection, much worse on a bad
+one -- and there's no way to hide that inside tvmail's single-
+threaded, blocking design without a much bigger architecture change
+(see the "busy" status-line indicator added instead, which just makes
+the wait visible rather than eliminating it).
+
+The fix is the same "Plumbing" setup as Warning 3, and it solves both
+problems with one piece of infrastructure: run a local LAN Dovecot as
+the master, have pop-pull (configure/configure-mail-pull.sh --timer N)
+fetch mail down from the WAN host on a timer, and point every client's
+tvmail.conf at that LAN Dovecot instead of the WAN host directly. Every
+IMAP round trip then happens at LAN speed (single-digit milliseconds)
+regardless of how slow or far away the real mail host is -- the WAN
+latency still exists, it just happens once per pop-pull cycle in the
+background instead of once per click in the UI. See README.md's
+"Plumbing" section.

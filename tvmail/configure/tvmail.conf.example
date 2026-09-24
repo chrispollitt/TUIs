@@ -17,12 +17,12 @@
 # ...or the environment: $TVMAIL_IMAP_PASS / $TVMAIL_SMTP_PASS.
 
 [service]
-# auto  : local if this host's name is in `master` (or there is no [imap]),
-#         remote otherwise.   Override per-run with $TVMAIL_MODE.
 # local : always use the on-disk mbox + local sendmail (the master).
-# remote: always talk IMAP/SMTP to the master (a client).
-mode   = auto
-master = cmpi ; beelink ; raspberrypi
+#         Defaults to this if unset (or the file is missing entirely), so the
+#         master needs no [service] section at all.
+# remote: always talk IMAP/SMTP to the master (a client) - must be set
+#         explicitly.  Override per-run with $TVMAIL_MODE.
+mode   = remote
 
 [imap]
 host = cmpi

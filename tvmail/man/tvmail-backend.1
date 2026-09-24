@@ -325,8 +325,7 @@ overrides the path):
 .RS
 .EX
 [service]
-mode   = auto | local | remote
-master = host1 ; host2
+mode   = local | remote
 
 [imap]   host= port=993 ssl=true verify=true cafile= user=
 [smtp]   host= port=587 starttls=true auth=true verify=true cafile= from= user=
@@ -335,20 +334,18 @@ master = host1 ; host2
 .RE
 .PP
 .B mode
-=
-.B auto
-(the default) resolves to
+must be
 .B local
-when this host's name is listed in
-.BR master ,
-or when there is no
-.B [imap]
-section and no IMAP
-.B mailbox-pattern
-in
-.IR ~/.mail ;
-otherwise
+or
 .BR remote .
+Unset (or no
+.I tvmail.conf
+at all) defaults to
+.BR local ,
+so the master needs no configuration file.
+A client must set
+.B mode = remote
+explicitly.
 .B $TVMAIL_MODE
 overrides it for one run.
 .PP

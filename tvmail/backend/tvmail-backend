@@ -385,7 +385,7 @@ def _mu_ticket_pass(scheme, host, user):
 # Local master  vs.  remote (IMAP/SMTP) client
 #
 # ~/.config/tvmail/tvmail.conf   ($TVMAIL_CONF overrides the path):
-#   [service] mode = auto|local|remote        master = host1 ; host2
+#   [service] mode = local|remote
 #   [imap]    host=  port=993  ssl=true  user=
 #   [smtp]    host=  port=587  starttls=true  user=
 #   [folders] saved=Archive  trash=Trash  drafts=Drafts
@@ -409,20 +409,13 @@ def _conf():
 
 def _mode():
     """'local' or 'remote'."""
-    import re
     c = _conf()
     m = (os.environ.get("TVMAIL_MODE")
-         or c.get("service", "mode", fallback="auto")).strip().lower()
-    if m in ("local", "remote"):
-        return m
-    masters = [x.lower() for x in
-               re.split(r"[;,\s]+", c.get("service", "master", fallback="")) if x]
-    if socket.gethostname().split(".")[0].lower() in masters:
-        return "local"
-    mu = _mu_mailbox()
-    has_imap = c.has_section("imap") or bool(
-        mu and (mu["scheme"] or "").startswith("imap"))
-    return "remote" if has_imap else "local"
+         or c.get("service", "mode", fallback="local")).strip().lower()
+    if m not in ("local", "remote"):
+        sys.exit("tvmail-backend: [service] mode must be 'local' or 'remote' "
+                  "(got %r) - see tvmail.conf.example" % m)
+    return m
 
 
 def _is_remote():
@@ -462,14 +455,12 @@ def _q_mbox(name):
 
 
 def _imap():
-    """A logged-in IMAP4 connection, reused across serve-mode requests."""
+    """A logged-in IMAP4 connection, reused across serve-mode requests.  No
+    liveness check here - a stale connection surfaces as a real command
+    failing, and _dispatch() reconnects and retries once when that happens."""
     global _IMAP
     if _IMAP is not None:
-        try:
-            _IMAP.noop()
-            return _IMAP
-        except Exception:
-            _IMAP = None
+        return _IMAP
     c = _conf()
     mu = _mu_mailbox() or {}
     host = c.get("imap", "host", fallback=None) or mu.get("host")
@@ -1433,28 +1424,48 @@ _COMMANDS = frozenset(("list", "show", "raw", "parts", "save", "delete",
                        "host", "serve"))
 
 
+def _is_stale_connection_error(e):
+    """True for the flavors of failure a dead/reset IMAP connection raises -
+    not for an ordinary command failure (bad mailbox, bad syntax &c), which a
+    retry would not fix."""
+    import imaplib, ssl as _ssl
+    return isinstance(e, (imaplib.IMAP4.abort, OSError, _ssl.SSLError))
+
+
 def _dispatch(parser, argv):
-    """Run one request argv.  Returns (status:int, body:bytes)."""
+    """Run one request argv.  Returns (status:int, body:bytes).
+
+    A cached IMAP connection (_IMAP) can go stale between requests (server
+    timeout, dropped LAN link &c) - rather than pay for a liveness check
+    before every command, let the command itself hit the dead connection,
+    then drop it and retry exactly once."""
+    global _IMAP
     if argv and argv[0] in _SERVE_BLOCKED:
         return 2, ("tvmail-backend: '%s' is not available in serve mode\n"
                    % argv[0]).encode("utf-8")
-    cap = _CapStream()
+    retry_stale = _IMAP is not None
     real = sys.stdout
-    sys.stdout = cap
-    try:
-        ns = parser.parse_args(argv)
-        return (ns.fn(ns) or 0), cap.buffer.getvalue()
-    except SystemExit as e:
-        code = e.code
-        if isinstance(code, str):               # sys.exit("message") -> error
-            cap.write(code if code.endswith("\n") else code + "\n")
+    while True:
+        cap = _CapStream()
+        sys.stdout = cap
+        try:
+            ns = parser.parse_args(argv)
+            return (ns.fn(ns) or 0), cap.buffer.getvalue()
+        except SystemExit as e:
+            code = e.code
+            if isinstance(code, str):           # sys.exit("message") -> error
+                cap.write(code if code.endswith("\n") else code + "\n")
+                return 2, cap.buffer.getvalue()
+            return (int(code) if code else 0), cap.buffer.getvalue()
+        except Exception as e:                   # keep the server alive
+            if retry_stale and _is_stale_connection_error(e):
+                retry_stale = False
+                _IMAP = None
+                continue
+            cap.write("tvmail-backend: %s: %s\n" % (type(e).__name__, e))
             return 2, cap.buffer.getvalue()
-        return (int(code) if code else 0), cap.buffer.getvalue()
-    except Exception as e:                       # keep the server alive
-        cap.write("tvmail-backend: %s: %s\n" % (type(e).__name__, e))
-        return 2, cap.buffer.getvalue()
-    finally:
-        sys.stdout = real
+        finally:
+            sys.stdout = real
 
 
 def cmd_serve(a):

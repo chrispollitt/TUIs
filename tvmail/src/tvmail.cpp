@@ -21,6 +21,7 @@
 #define Uses_TStatusLine
 #define Uses_TStatusItem
 #define Uses_TStatusDef
+#define Uses_TScreen
 #define Uses_TDeskTop
 #define Uses_TWindow
 #define Uses_TFrame
@@ -737,9 +738,41 @@ public:
 };
 #endif
 
+// Every backendRun() call blocks the single TV event loop for the round
+// trip - fast on a local mailstore, but a real, felt pause over IMAP on a
+// slow link (see trace.sh). Flash a status-line message for the duration so
+// a slow request doesn't look like a hang. TProgram::statusLine is null
+// before the app object exists (the --selftest / early gRemote/gHost probes
+// in main() run before TVMailApp is constructed) - both ends just no-op then.
+static void showBusy()
+{
+    if (!TProgram::statusLine)
+        return;
+    TColorAttr c(TColorBIOS(0x0F), TColorBIOS(0x01)); // white on blue - the
+    TDrawBuffer b;                                    // desktop's own accent
+    ushort w = b.moveStr(0, " Working... ", c);
+    TProgram::statusLine->writeLine(0, 0, w, 1, b);
+    TScreen::flushScreen();
+}
+
+static void hideBusy()
+{
+    if (!TProgram::statusLine)
+        return;
+    TProgram::statusLine->drawView();   // repaint the normal F-key hints
+    TScreen::flushScreen();
+}
+
+struct BusyGuard
+{
+    BusyGuard() { showBusy(); }
+    ~BusyGuard() { hideBusy(); }
+};
+
 // A read-only sub-command: try the warm co-process, else a one-shot shell call.
 static std::string backendRun(const std::string &args)
 {
+    BusyGuard busy;
     std::string body;
     int st = 0;
     if (Backend::instance().call(args, body, st))

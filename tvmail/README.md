@@ -43,9 +43,9 @@ garden — see *mail(1) interoperability* below.
 | **local** | on-disk mbox files + local `sendmail(8)` — the host that owns the mailstore |
 | **remote** | IMAP for reading, SMTP submission for sending — every other machine |
 
-`mode = auto` (default) → **local** if this host's name is in `master = …`, or if
-there's no `[imap]` section and no IMAP `mailbox-pattern` in `~/.mail` (see
-below); **remote** otherwise. `$TVMAIL_MODE` overrides one run. Host/port/user
+`mode` must be `local` or `remote`; unset (or no `tvmail.conf` at all) defaults
+to **local**, so the master needs no config file — a client must set
+`mode = remote` explicitly. `$TVMAIL_MODE` overrides one run. Host/port/user
 left unset in `tvmail.conf` fall back to GNU Mailutils' own `~/.mail`, and
 passwords come from `~/.mu-tickets` or `~/.netrc` (`machine <host> login <u>
 password …`, mode 0600) — never `tvmail.conf`. In remote mode the folder shorthands map to
@@ -145,7 +145,10 @@ diagnostic logging (default `debug.log`); `--trace [FILE]` writes profiling
 data (default `trace.log`). The backend trace is standard `cProfile` data;
 the frontend trace is Chrome Trace Event JSON. When these flags are passed to
 `tvmail`, the backend receives them too, using a distinct filename such as
-`debug.backend.log` or `trace.backend.log`.
+`debug.backend.log` or `trace.backend.log`. After a `--trace` run, `./trace.sh
+[FILE [BACKEND_FILE]]` runs the matching profiler on each (cProfile's `pstats`
+for the backend, a hot-spot summary for the frontend JSON) and prints the top
+entries.
 
 `tvmail-backend` must be reachable from the shell tvmail invokes; the install
 step above puts it on `PATH`. Otherwise:
