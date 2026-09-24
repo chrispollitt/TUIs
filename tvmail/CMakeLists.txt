@@ -44,7 +44,8 @@ endif()
 
 add_executable(tvmail src/tvmail.cpp)
 target_link_libraries(tvmail PRIVATE tvision)
-target_compile_definitions(tvmail PRIVATE TVMAIL_SH="${TVMAIL_SH}")
+target_compile_definitions(tvmail PRIVATE TVMAIL_SH="${TVMAIL_SH}"
+    TVMAIL_VERSION="${PROJECT_VERSION}")
 
 if(WIN32)
     # self-contained .exe: no libstdc++-6/libgcc_s/libwinpthread next to it

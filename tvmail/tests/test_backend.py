@@ -297,6 +297,19 @@ class TestParts(Base):
 
 
 class TestCli(Base):
+    def test_diagnostics_help_and_version_flags(self):
+        help_out = self.be("--help")
+        self.assertEqual(help_out.returncode, 0)
+        self.assertIn(b"--trace", help_out.stdout)
+        self.assertEqual(self.be("--version").stdout.strip(), b"tvmail-backend 1.0.0")
+        debug = self.tmp / "debug.log"
+        trace = self.tmp / "trace.log"
+        p = self.be("--debug", str(debug), "--trace", str(trace), "ping")
+        self.assertEqual(p.returncode, 0)
+        self.assertEqual(p.stdout, b"pong\n")
+        self.assertTrue(debug.stat().st_size)
+        self.assertTrue(trace.stat().st_size)
+
     def test_list_rows_flags_subject(self):
         r = self.rows(self.spool)
         self.assertEqual(len(r), 2)
@@ -878,6 +891,15 @@ class TestRemoteIMAP(Base):
         self.imap.uid = dead_copy
         with self.assertRaises(SystemExit):
             self._run(be.cmd_delete, self.ns(idx=[0], mbox="spool", trash="trash"))
+        self.assertEqual(len(self.imap.folders["INBOX"]), 3)   # nothing expunged
+
+    def test_delete_over_imap_reports_store_failure(self):
+        real_uid = self.imap.uid
+        def dead_store(command, *args):
+            return ("NO", [b"boom"]) if command.upper() == "STORE" else real_uid(command, *args)
+        self.imap.uid = dead_store
+        with self.assertRaises(SystemExit):
+            self._run(be.cmd_delete, self.ns(idx=[0], mbox="spool", trash="drafts"))
         self.assertEqual(len(self.imap.folders["INBOX"]), 3)   # nothing expunged
 
     def _feed_stdin(self, data):

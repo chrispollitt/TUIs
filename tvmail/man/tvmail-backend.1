@@ -6,6 +6,11 @@ tvmail\-backend \- the part of tvmail that does the actual work
 .B tvmail\-backend
 .I subcommand
 .RI [ args ]
+.br
+.B tvmail\-backend
+.RB [ \-\-debug [ FILE ] ]
+.RB [ \-\-trace [ FILE ] ]
+.RB [ \-\-help | \-\-version ]
 .SH DESCRIPTION
 .B tvmail\-backend
 is a small, standard\-library\-only Python program that performs every
@@ -44,6 +49,27 @@ on success,
 on a usage or not\-found error, or
 .B 2
 on a runtime failure.
+.SH OPTIONS
+.TP
+.BI "--debug " [FILE]
+Write diagnostic logging to
+.IR FILE .
+If omitted, use
+.IR debug.log .
+.TP
+.BI "--trace " [FILE]
+Profile the backend with Python's standard
+.BR cProfile (1)
+and write its statistics to
+.IR FILE .
+If omitted, use
+.IR trace.log .
+.TP
+.B --help
+Show command-line help and exit.
+.TP
+.B --version
+Print the backend version and exit.
 .SH "MAILBOX ARGUMENT"
 Wherever a subcommand takes a
 .I MBOX

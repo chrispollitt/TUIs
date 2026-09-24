@@ -4,6 +4,9 @@
 tvmail \- a Turbo Vision mail client for a local mailbox
 .SH SYNOPSIS
 .B tvmail
+.RB [ \-\-debug [ FILE ] ]
+.RB [ \-\-trace [ FILE ] ]
+.RB [ \-\-help | \-\-version ]
 .SH DESCRIPTION
 .B tvmail
 reads, writes and files electronic mail from a text terminal, wearing the
@@ -25,6 +28,26 @@ which
 runs as a child process.
 The intent is a thin, legible front end and a back end that is useful on its
 own.
+.SH OPTIONS
+.TP
+.BI "--debug " [FILE]
+Write diagnostic logging to
+.IR FILE .
+If omitted, use
+.IR debug.log .
+.TP
+.BI "--trace " [FILE]
+Write profiling data as Chrome Trace Event JSON to
+.IR FILE .
+The file can be opened by Chrome's trace viewer and compatible profiling
+tools. If omitted, use
+.IR trace.log .
+.TP
+.B --help
+Show command-line help and exit.
+.TP
+.B --version
+Print the frontend version and exit.
 .PP
 .B tvmail
 is a friendlier face on the very same mailbox that

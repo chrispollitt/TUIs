@@ -21,7 +21,7 @@ INBOX/Archive/Trash/Drafts/Sent/Junk):
                             idx <TAB> flags <TAB> date <TAB> from <TAB> subject
                             (idx = 0-based position; flags: 'N' new/unread, '.' seen)
   show  IDX [MBOX] [--mark-read]   decoded headers + best-effort text/plain
-                            body on stdout; --mark-read also flags it \Seen,
+                            body on stdout; --mark-read also flags it \\Seen,
                             reusing this call's IMAP SELECT/SEARCH instead of
                             a separate 'mark' round trip (remote mode)
   raw   IDX [MBOX]          the raw RFC822 message on stdout
@@ -56,10 +56,15 @@ Exit status: 0 ok, 1 usage/not-found, 2 runtime error.
 """
 
 import sys, os, io, json, argparse, subprocess, tempfile, shutil, email, email.utils
+import logging
 import configparser, socket
 import email.policy
 from mailbox import mbox
 from email.header import decode_header, make_header
+
+
+__version__ = "1.0.0"
+_log = logging.getLogger("tvmail-backend")
 
 
 def _me():
@@ -975,8 +980,14 @@ def cmd_delete(a):
             u = str(uids[v])
             if copy:
                 _imap_copy_to(M, u, dest)
-            M.uid("STORE", u, "+FLAGS", r"(\Deleted)")
-        M.expunge()
+            typ, resp = M.uid("STORE", u, "+FLAGS", r"(\Deleted)")
+            if typ != "OK":
+                sys.exit("tvmail-backend: IMAP STORE failed (%s) - nothing deleted"
+                         % resp)
+        typ, resp = M.expunge()
+        if typ != "OK":
+            sys.exit("tvmail-backend: IMAP EXPUNGE failed (%s) - nothing deleted"
+                     % resp)
         print("deleted %d message(s)" % len(victims))
         return 0
     path = mbox_path(a.mbox)
@@ -1416,6 +1427,10 @@ class _CapStream:
 # verbs that consume stdin or take over the terminal - never run them inside
 # the serve loop (they would eat the request stream)
 _SERVE_BLOCKED = frozenset(("serve", "send", "save-draft", "pull"))
+_COMMANDS = frozenset(("list", "show", "raw", "parts", "save", "delete",
+                       "mark", "purge", "compose-template", "send",
+                       "save-draft", "aliases", "pull", "ping", "mode",
+                       "host", "serve"))
 
 
 def _dispatch(parser, argv):
@@ -1487,6 +1502,12 @@ def cmd_serve(a):
 
 def build_parser():
     ap = argparse.ArgumentParser(prog="tvmail-backend", add_help=True)
+    ap.add_argument("--debug", nargs="?", const="debug.log", metavar="FILE",
+                    help="write diagnostic logging to FILE (default: debug.log)")
+    ap.add_argument("--trace", nargs="?", const="trace.log", metavar="FILE",
+                    help="write cProfile data to FILE (default: trace.log)")
+    ap.add_argument("--version", action="version",
+                    version="tvmail-backend %s" % __version__)
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("list");  p.add_argument("mbox", nargs="?"); p.set_defaults(fn=cmd_list)
@@ -1526,20 +1547,51 @@ def build_parser():
     return ap
 
 
+def _normalize_cli(argv):
+    """Keep a bare diagnostic flag from consuming the subcommand as a path."""
+    out = []
+    for i, value in enumerate(argv):
+        if value in ("--debug", "--trace"):
+            next_value = argv[i + 1] if i + 1 < len(argv) else None
+            if next_value is None or next_value.startswith("-") or next_value in _COMMANDS:
+                out.append(value + ("=debug.log" if value == "--debug" else "=trace.log"))
+                continue
+        out.append(value)
+    return out
+
+
 def main():
-    a = build_parser().parse_args()
-    try:
-        sys.exit(a.fn(a))
-    except BrokenPipeError:
-        sys.exit(0)
-    except KeyboardInterrupt:
-        sys.exit(130)
-    except PermissionError as e:
-        sys.exit("tvmail-backend: %s\n"
-                 "  (rewriting a spool mbox needs write access to its directory "
-                 "- on a mail server use IMAP/remote mode, not local)" % e)
-    except OSError as e:                    # -> one line, not a traceback dialog
-        sys.exit("tvmail-backend: %s" % e)
+    a = build_parser().parse_args(_normalize_cli(sys.argv[1:]))
+    if a.debug:
+        logging.basicConfig(filename=a.debug, level=logging.DEBUG,
+                            format="%(asctime)s %(levelname)s %(message)s")
+        _log.debug("command: %s", " ".join(sys.argv[1:]))
+
+    def run():
+        try:
+            sys.exit(a.fn(a))
+        except BrokenPipeError:
+            sys.exit(0)
+        except KeyboardInterrupt:
+            sys.exit(130)
+        except PermissionError as e:
+            sys.exit("tvmail-backend: %s\n"
+                     "  (rewriting a spool mbox needs write access to its directory "
+                     "- on a mail server use IMAP/remote mode, not local)" % e)
+        except OSError as e:                    # -> one line, not a traceback dialog
+            sys.exit("tvmail-backend: %s" % e)
+
+    if a.trace:
+        import cProfile
+        profiler = cProfile.Profile()
+        try:
+            profiler.enable()
+            run()
+        finally:
+            profiler.disable()
+            profiler.dump_stats(a.trace)
+    else:
+        run()
 
 
 if __name__ == "__main__":
