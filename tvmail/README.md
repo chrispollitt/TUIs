@@ -71,15 +71,19 @@ are remote clients.
   [**mail-setup**](https://github.com/chrispollitt/POSIX/tree/main/mail-setup),
   a separate project that `./configure.sh` fetches into
   `third_party/POSIX/mail-setup` (see *Requirements*). Its `mail-pull` wrapper
-  runs whichever puller you picked; that's what **F3** runs. Give the puller a
-  timer (`scripts/configure-mail-pull.sh --timer N`, or
-  `configure-getmail.sh --timer N`), follow each pull with
+  runs whichever puller you picked, on the schedule the wizard asks for
+  (systemd timer, or cron where there's none). On the master itself tvmail
+  reads through Dovecot too: `./setup.sh` spots Dovecot and writes that
+  config, never local mode beside it (`!WARNINGS.txt`, Warning 3). So F3
+  there files spam and the timer does the pulling. Follow each pull with
   `tvmail-backend purge spool --subject "***SPAM***" --to-folder spam` (over
-  `localhost` IMAP, so Dovecot owns the move), and spam is filed for every
+  `localhost` IMAP, so Dovecot owns the move) and spam is filed for every
   client automatically.
 - **Clients** — just `tvmail` + `tvmail-backend` in remote mode. `[smtp] from`
   fixes the sender identity so the master relays without any server-side
-  rewrite; `[smtp] auth = false` if the master's Postfix trusts the LAN.
+  rewrite. Clients send through the master once its Postfix accepts the LAN
+  (answer yes to "Accept mail from LAN clients?", or `--lan auto`); then
+  `[smtp] port = 25` / `auth = false` works.
 - The master role needs Postfix, so it's Linux/Pi only. Cygwin has no Postfix
   package and is never a master — point it at a Linux master as a client
   instead (`./configure.sh --role client`).

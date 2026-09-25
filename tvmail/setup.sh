@@ -5,9 +5,13 @@
 # Run this after ./build.sh.  It:
 #   * asks whether to install for just you (~/.local) or system-wide
 #     (/usr/local), then runs  cmake --install
-#   * offers to write ~/.config/tvmail/tvmail.conf (local vs. remote mode;
-#     IMAP/SMTP host if you don't already have GNU Mailutils' ~/.mail set up
-#     via ./configure.sh - tvmail-backend falls back to that automatically)
+#   * offers to write ~/.config/tvmail/tvmail.conf:
+#       master - Dovecot is installed here: remote mode against this box's own
+#                Dovecot (IMAP 993) + Postfix (localhost:25), never local mode
+#                beside Dovecot (!WARNINGS.txt #3); warns if no pull timer
+#       remote - a client: the master's IMAP/SMTP (or just mode=remote when
+#                GNU Mailutils' ~/.mail from ./configure.sh has the hosts)
+#       local  - this box owns /var/mail and nothing else touches it
 #   * offers a couple of smoke tests (ping/mode, then a real inbox listing)
 #
 # Re-runnable; every step is a yes/no offer, so declining one just skips it.
@@ -69,6 +73,17 @@ readsecret() {
   printf '%s\n' "$ans"
 }
 
+write_netrc() {   # write_netrc HOST USER - ask for the password, (re)place its line
+  pw=$(readsecret "password for $2@$1")
+  netrc="$HOME/.netrc"
+  tmp=$(mktemp)
+  [ -e "$netrc" ] && grep -v "^machine $1 login $2 " "$netrc" > "$tmp" || : > "$tmp"
+  printf 'machine %s login %s password %s\n' "$1" "$2" "$pw" >> "$tmp"
+  mv "$tmp" "$netrc"
+  chmod 600 "$netrc"
+  log "wrote $netrc (mode 600)"
+}
+
 [ -e "$BUILD/CMakeCache.txt" ] || die "no build/ found - run ./build.sh first"
 command -v cmake >/dev/null 2>&1 || die "cmake not found - run ./configure.sh first"
 
@@ -115,14 +130,81 @@ esac
 # --------------------------------------------------------------------------
 step "Configure tvmail"
 if ask "Write ~/.config/tvmail/tvmail.conf now?"; then
-  echo "Local mode (this box owns the mailstore) or remote mode (talk IMAP/SMTP to a master)?"
-  mode=$(readval "local or remote" "remote")
+  # A box running Dovecot is the mail master.  tvmail there must read through
+  # Dovecot too, not edit /var/mail behind its back (!WARNINGS.txt, Warning 3).
+  have_dovecot=0
+  { command -v doveconf >/dev/null 2>&1 || [ -x /usr/sbin/doveconf ] || [ -d /etc/dovecot ]; } \
+    && have_dovecot=1
+  if [ "$have_dovecot" = 1 ]; then
+    echo "Dovecot is installed here, so this is the mail master.  tvmail should read"
+    echo "through Dovecot on this box (remote mode, IMAP on localhost) rather than edit"
+    echo "/var/mail itself - see !WARNINGS.txt, Warning 3."
+    mode=$(readval "master (via this box's Dovecot), local or remote" "master")
+    case "$mode" in
+      l|L|local|Local)
+        warn "local mode next to Dovecot: both edit /var/mail/\$USER, with different locking"
+        ask "Use local mode anyway?" N || mode=master ;;
+    esac
+  else
+    echo "Local mode (this box owns the mailstore) or remote mode (talk IMAP/SMTP to a master)?"
+    mode=$(readval "local or remote" "remote")
+  fi
   conf_dir="$HOME/.config/tvmail"
   mkdir -p "$conf_dir"
   conf="$conf_dir/tvmail.conf"
   [ -e "$conf" ] && cp -p "$conf" "$conf.bak.$(date +%Y%m%d-%H%M%S)" && log "backed up existing $conf"
 
   case "$mode" in
+    m|M|master|Master)
+      # IMAP host: whatever ~/.mail names (so its ~/.mu-tickets entry matches),
+      # else localhost.  SMTP: straight into Postfix on loopback, no password.
+      mu_host=""; mu_user=""
+      if [ -e "$HOME/.mail" ]; then
+        mu_url=$(sed -n 's|.*mailbox-pattern *"imap[s]*://\([^"]*\)".*|\1|p' "$HOME/.mail" | head -1)
+        case "$mu_url" in *@*) mu_user=${mu_url%%@*}; mu_url=${mu_url#*@} ;; esac
+        mu_host=${mu_url%%[:/]*}
+      fi
+      imap_host=${mu_host:-localhost}
+      user=${mu_user:-$(id -un)}
+      cat > "$conf" <<EOF
+# ~/.config/tvmail/tvmail.conf - generated $(date) by setup.sh
+# This box is the mail master: read through its own Dovecot, send through its
+# own Postfix.  Mail arrives via mail-setup's mail-pull on a timer (F3 here
+# only files spam).
+[service]
+mode = remote
+
+[imap]
+host   = ${imap_host}
+port   = 993
+ssl    = true
+user   = ${user}
+# Dovecot's stock self-signed cert
+verify = false
+
+[smtp]
+host     = localhost
+port     = 25
+starttls = false
+# Postfix trusts loopback - no password needed
+auth     = false
+EOF
+      log "wrote $conf (master: Dovecot on ${imap_host}:993, Postfix on localhost:25)"
+      if [ -e "$HOME/.mu-tickets" ] && grep -q "@${imap_host}\$" "$HOME/.mu-tickets"; then
+        log "password: ~/.mu-tickets already has ${imap_host}"
+      elif ask "Add your login password for ${user}@${imap_host} to ~/.netrc (mode 600)?"; then
+        write_netrc "$imap_host" "$user"
+      else
+        log "no password stored - add one to ~/.mu-tickets or ~/.netrc, or set \$TVMAIL_IMAP_PASS"
+      fi
+      # remote mode's F3 doesn't pull - make sure something does
+      if ! { crontab -l 2>/dev/null | grep -q mail-pull; } \
+         && ! systemctl --user is-enabled mail-pull.timer >/dev/null 2>&1; then
+        warn "nothing pulls your mail on a schedule yet (F3 won't here) - run"
+        warn "  ./configure.sh --role master   (it asks how often), or"
+        warn "  third_party/POSIX/mail-setup/scripts/configure-mail-pull.sh --timer 5"
+      fi
+      ;;
     l|L|local|Local)
       cat > "$conf" <<EOF
 # ~/.config/tvmail/tvmail.conf - generated $(date) by setup.sh
@@ -170,14 +252,7 @@ user     = ${user}
 EOF
         log "wrote $conf"
         if ask "Add the password to ~/.netrc now (mode 600)?"; then
-          pw=$(readsecret "password for ${user}@${master}")
-          netrc="$HOME/.netrc"
-          tmp=$(mktemp)
-          [ -e "$netrc" ] && grep -v "^machine ${master} login ${user} " "$netrc" > "$tmp" || : > "$tmp"
-          printf 'machine %s login %s password %s\n' "$master" "$user" "$pw" >> "$tmp"
-          mv "$tmp" "$netrc"
-          chmod 600 "$netrc"
-          log "wrote $netrc (mode 600)"
+          write_netrc "$master" "$user"
         else
           log "no password stored - set \$TVMAIL_IMAP_PASS / \$TVMAIL_SMTP_PASS, add one to"
           log "$HOME/.netrc yourself, or run ./configure.sh to set up ~/.mu-tickets on this box."

@@ -23,6 +23,8 @@
 # Options:
 #   --role master|client   skip the role question       (passed to mail-setup)
 #   --puller pop-pull|getmail|none                      (passed to mail-setup)
+#   --pull-every N         master: pull every N min, 0 = on demand  (mail-setup)
+#   --lan CIDR|auto|off    master: let LAN clients send via Postfix (mail-setup)
 #   -y, --yes              accept every "offer to ..." prompt (unattended)
 #   --assume-no            decline every "offer to ..." prompt (checks only)
 #   -h, --help             this text
@@ -41,8 +43,8 @@ ASSUME=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --role|--puller) PASS+=("$1" "${2:?}"); shift 2 ;;
-    --role=*|--puller=*) PASS+=("$1"); shift ;;
+    --role|--puller|--pull-every|--lan) PASS+=("$1" "${2:?}"); shift 2 ;;
+    --role=*|--puller=*|--pull-every=*|--lan=*) PASS+=("$1"); shift ;;
     -y|--yes)    ASSUME=yes; PASS+=(--yes); shift ;;
     --assume-no) ASSUME=no;  PASS+=(--assume-no); shift ;;
     -h|--help)   sed -n '2,/^set -euo pipefail/p' "$0" | sed 's/^# \{0,1\}//; $d'; exit 0 ;;

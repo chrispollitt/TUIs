@@ -86,6 +86,13 @@ you can skip what you already have. It asks about:
   through your ISP. Give it the relay-info file; it asks for the password
   once and keeps it in `/etc/postfix/sasl_passwd` (mode 600), the only
   place it's ever stored.
+- **LAN clients:** "Accept mail from LAN clients?" Say **yes** if other
+  machines will send through this one (tvmail clients, the sendmail shim).
+  Postfix then listens on all interfaces and trusts your LAN (worked out
+  for you, e.g. `192.168.1.0/24`) on port 25 with no password. `--yes`
+  never turns this on by itself; for unattended runs pass `--lan auto` (or
+  `--lan 192.168.1.0/24`). Re-running without the flag keeps whatever is
+  set; `--lan off` goes back to loopback-only.
 - **Dovecot:** IMAP on 993 using the distro's self-signed certificate.
   INBOX is `/var/mail/$USER`, other folders live in `~/mail`, and
   Drafts/Sent/Trash/Junk/Archive are created for you. Say **yes** to
@@ -93,7 +100,11 @@ you can skip what you already have. It asks about:
   will use `imap://…:143`.
 - **Puller:** `pop-pull` (tiny, nothing to install) or `getmail` (POP3S or
   IMAPS). Either way you get a `mail-pull` command in `~/bin` or
-  `~/.local/bin`.
+  `~/.local/bin`. It then asks **how often to pull** (default every 5
+  minutes, `0` = only when you run it) and schedules it: a systemd `--user`
+  timer (with lingering, so it keeps running after you log out), or a
+  crontab line where there's no systemd (WSL, containers). Unattended:
+  `--pull-every N`.
 - **GNU Mailutils:** `mail(1)`, plus `~/.mail` and `~/.mu-tickets` pointed
   at this box.
 - **Test messages:** through `mail(1)` and through sendmail.
@@ -106,52 +117,49 @@ then builds `build/tvmail`.
 
 **4. `./setup.sh`.** Asks where to install: `~/.local` (just you) or
 `/usr/local` (everyone). Then it writes `~/.config/tvmail/tvmail.conf`.
-**On the master, answer `remote` and point it at `localhost`:**
+On a box with Dovecot it knows it's the master and offers **`master`** (the
+default). That writes a config that reads through this box's own Dovecot and
+sends through its own Postfix:
 
 ```ini
 [service]
 mode = remote
 
 [imap]
-host   = localhost
+host   = localhost      # or the host your ~/.mail names, so ~/.mu-tickets matches
 port   = 993
 ssl    = true
-verify = false      # Dovecot's self-signed cert
+user   = you
+verify = false          # Dovecot's self-signed cert
 
 [smtp]
-host = localhost
-port = 25
+host     = localhost
+port     = 25
 starttls = false
-auth = false
+auth     = false        # Postfix trusts loopback
 ```
+
+It then offers to put your login password in `~/.netrc` (unless
+`~/.mu-tickets` already has it). It also warns if nothing is pulling your
+mail on a schedule, because in this mode F3 only files spam; the puller
+timer from step 1 does the pulling.
 
 Why not local mode on the master? Local mode makes tvmail edit
 `/var/mail/$USER` directly while Dovecot is doing the same, and the two
-don't lock the file the same way. See `!WARNINGS.txt`, Warning 3.
+don't lock the file the same way (`!WARNINGS.txt`, Warning 3). If you answer
+`local` anyway, `setup.sh` warns and asks again.
 
-**5. Pull on a timer.** In remote mode, F3 only files spam; it doesn't pull.
-So give the puller a timer:
-
-```bash
-third_party/POSIX/mail-setup/scripts/configure-mail-pull.sh --timer 5   # pop-pull
-# or
-third_party/POSIX/mail-setup/scripts/configure-getmail.sh --timer 5     # getmail
-sudo loginctl enable-linger "$USER"     # keep the timer running after you log out
-```
-
-No systemd (e.g. WSL)? Use cron instead: `*/5 * * * * $HOME/bin/mail-pull`.
-
-**6. Let the LAN clients in (only if you have clients).** The Postfix
-setup listens on loopback only. To accept mail from clients:
+**Changing your mind later** (no need to re-run the whole wizard):
 
 ```bash
-sudo postconf -e 'inet_interfaces = all' \
-                 'mynetworks = 127.0.0.0/8 [::1]/128 192.168.1.0/24'   # your LAN
-sudo systemctl restart postfix        # or: sudo service postfix restart
+M=third_party/POSIX/mail-setup/scripts
+$M/configure-mail-pull.sh --timer 10         # pull every 10 min (pop-pull)
+$M/configure-getmail.sh   --timer 10         # ...or switch to getmail
+sudo $M/configure-sendmail-relay.sh --lan auto   # let LAN clients in
+sudo $M/configure-sendmail-relay.sh --lan off    # ...or shut them out again
 ```
 
-Dovecot already listens on all interfaces. Only open ports 993/143 and
-25/587 to the LAN, never to the Internet.
+Only ever expose ports 25 and 993/143 to your LAN, never to the Internet.
 
 ## 4. Client, step by step
 
@@ -169,7 +177,8 @@ cd TUIs/tvmail
   `/usr/sbin/sendmail` with a small forwarder to the master's port 25. That
   lets anything on this box that calls `sendmail(8)` (cron, scripts) send
   mail. tvmail itself doesn't need it in remote mode. The master must
-  accept the LAN; see step 6 above.
+  accept the LAN (the "Accept mail from LAN clients?" question, or
+  `--lan auto`).
 - **Mailutils** (`~/.mail` + `~/.mu-tickets`): if you set it up, tvmail
   reads host, port and user from those files, so `tvmail.conf` only needs
   `mode = remote`.
@@ -260,8 +269,9 @@ still runs it. To remove the mail system itself, use your package manager
 |---|---|
 | `CERTIFICATE_VERIFY_FAILED` | self-signed LAN cert: `verify = false` under `[imap]` (and `[smtp]`), or `cafile = …` |
 | F3: "no mail puller found" | on the master: run `configure.sh` (or a mail-setup puller script) so `mail-pull` exists and is on `$PATH` |
-| F3 on the master only files spam | you're in remote mode (as recommended); pulling is the timer's job (step 5) |
-| a client can't send | the master's Postfix is loopback-only; see step 6 |
+| F3 on the master only files spam | you're in remote mode (as recommended); pulling is the timer's job: `crontab -l` or `systemctl --user list-timers mail-pull.timer` |
+| the timer never runs (WSL) | cron isn't started there: `sudo service cron start` |
+| a client can't send | the master's Postfix is loopback-only: on the master, `sudo third_party/POSIX/mail-setup/scripts/configure-sendmail-relay.sh --lan auto` |
 | mail reaches the master's Postfix but not `/var/mail` | `sudo postqueue -p`; "alias database unavailable" → re-run `configure-sendmail-relay.sh` (it pins `alias_maps`) |
 | `build.sh`: couldn't fetch mail-setup | only a warning; the build continues. Check network/GitHub, or set `MAIL_SETUP_DIR` |
 | check a master end to end | `sudo MAIL_SETUP_E2E_USER=$USER bash third_party/POSIX/mail-setup/tests/e2e/e2e_master.sh` |
