@@ -189,8 +189,9 @@ step above puts it on `PATH`. Otherwise:
 ## Tests
 
 ```bash
-./test.sh                 # build, then ctest all three layers
+./test.sh                 # build, then ctest every layer
 ./test.sh -R backend_unit # just one
+./test.sh -LE mail_setup  # everything but mail-setup's suites
 ```
 
 - **`backend_unit`** — stdlib `unittest` over `tvmail-backend`: mbox parsing,
@@ -202,6 +203,12 @@ step above puts it on `PATH`. Otherwise:
 - **`e2e_tui`** — drives the built binary in a pty: launch, panes populate,
   `Tab` walks the active-pane marker, the body scrolls, `F3` pulls in the
   background. Reports *skipped* where there's no usable terminal.
+- **`install_roundtrip`** — `cmake --install` into a temp prefix, then
+  `./uninstall.sh` it; nothing may be left behind (and a legacy `pop-pull`
+  that a `mail-pull` still runs must survive).
+- **`mail_setup`** — mail-setup's own unit, shell and pull-e2e suites from
+  `third_party/POSIX/mail-setup` (F3 runs its `mail-pull`). Temp dirs only;
+  never its live-master check. Skipped if mail-setup hasn't been fetched.
 
 Details in [tests/README.md](tests/README.md). No dependencies beyond a
 Python 3 and (for `e2e_tui`) a pty.

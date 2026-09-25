@@ -96,6 +96,12 @@ if(NOT WIN32)
     add_test(NAME install_roundtrip
              COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/install_roundtrip.sh"
                      "${CMAKE_CURRENT_BINARY_DIR}")
+    # mail_setup : third_party/POSIX/mail-setup's own sandboxed tests (F3 runs
+    #              its mail-pull); skipped if not fetched.  -LE mail_setup omits it
+    add_test(NAME mail_setup
+             COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/mail_setup.sh")
+    set_tests_properties(mail_setup PROPERTIES
+        SKIP_RETURN_CODE 77 TIMEOUT 300 LABELS mail_setup)
 endif()
 
 include(GNUInstallDirs)
