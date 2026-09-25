@@ -109,7 +109,7 @@ install(TARGETS tvmail RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(PROGRAMS backend/tvmail-backend DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES man/tvmail.1 man/tvmail-backend.1
         DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
-install(FILES README.md HISTORY.md LICENSE AUTHORS WARRANTY
+install(FILES README.md INSTALL.md HISTORY.md LICENSE AUTHORS WARRANTY
               configure/tvmail.conf.example
         DESTINATION ${CMAKE_INSTALL_DOCDIR})
 

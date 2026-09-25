@@ -7,6 +7,10 @@ port of Borland's Turbo Vision. It is 2026. This is fine.
 
 See [HISTORY.md](HISTORY.md) for the twenty-year excuse.
 
+**Installing:** see [INSTALL.md](INSTALL.md). It covers the master/client
+setup, the mail system (via mail-setup), building, updating and uninstalling.
+The Requirements, Build and Install sections below are a short summary.
+
 ```
  File  Message  Edit  Window  Help
 +---------------------------------------------------------------------+
@@ -91,6 +95,8 @@ is Linux-only; the pullers and client setup are portable, and the app itself
 runs the same everywhere.
 
 ## Requirements
+
+(Full walkthrough: [INSTALL.md](INSTALL.md).)
 
 `./configure.sh` is a wizard that checks/installs all of this for you: first
 the dev tools, then it hands off to
