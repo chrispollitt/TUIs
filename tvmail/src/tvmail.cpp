@@ -22,6 +22,7 @@
 #define Uses_TStatusItem
 #define Uses_TStatusDef
 #define Uses_TScreen
+#define Uses_TFileDialog
 #define Uses_TDeskTop
 #define Uses_TWindow
 #define Uses_TFrame
@@ -1597,28 +1598,28 @@ static ushort askSaveDraft()
     return r;
 }
 
-// Prompt for a filesystem path (used by the attachment save dialog).  Empty
-// string means cancelled.
+// Prompt for a filesystem path (used by the attachment save dialog), via
+// tvision's own file browser - lets you navigate directories instead of
+// typing a full path blind. Pre-filled with the attachment's own name (not
+// a wildcard) so the directory listing still shows every file and Enter
+// alone saves into the current directory under that name. Empty string
+// means cancelled.
 static std::string askSavePath(const std::string &suggested)
 {
-    TDialog *d = new TDialog(TRect(0, 0, 56, 8), "Save attachment as");
-    d->options |= ofCentered;
-    TInputLine *il = new TInputLine(TRect(3, 3, 53, 4), 1024);
-    if (!suggested.empty())
-    {
-        std::strncpy(il->data, suggested.c_str(), il->maxLen);
-        il->data[il->maxLen] = '\0';
-    }
-    d->insert(il);
-    d->insert(new TLabel(TRect(2, 2, 20, 3), "~P~ath", il));
-    d->insert(new THistory(TRect(53, 3, 56, 4), il, 12));
-    d->insert(new TButton(TRect(20, 6, 30, 8), "O~K~", cmOK, bfDefault));
-    d->insert(new TButton(TRect(32, 6, 42, 8), "Cancel", cmCancel, bfNormal));
-    d->selectNext(False);
+    TFileDialog *d = new TFileDialog("*.*", "Save attachment as", "~N~ame",
+                                     fdOKButton, 100);
+    char path[MAXPATH];
+    std::strncpy(path, suggested.c_str(), sizeof path - 1);
+    path[sizeof path - 1] = '\0';
+    if (path[0])
+        d->setData(path);
     ushort r = TProgram::deskTop->execView(d);
     std::string dest;
-    if (r != cmCancel && il->data)
-        dest = il->data;
+    if (r != cmCancel)
+    {
+        d->getData(path);
+        dest = path;
+    }
     TObject::destroy(d);
     return dest;
 }
