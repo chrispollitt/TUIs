@@ -92,6 +92,10 @@ if(NOT WIN32)
                          --backend-dir "${CMAKE_CURRENT_SOURCE_DIR}/backend")
         set_tests_properties(e2e_tui PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
     endif()
+    # install_roundtrip : cmake --install into a temp prefix, ./uninstall.sh it
+    add_test(NAME install_roundtrip
+             COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/install_roundtrip.sh"
+                     "${CMAKE_CURRENT_BINARY_DIR}")
 endif()
 
 include(GNUInstallDirs)

@@ -125,12 +125,19 @@ needs a small compatibility patch first (its Unix backend assumes Linux/BSD:
 `patches/cygwin_patch.py`, which `build.sh` applies automatically.
 
 ```bash
-./build.sh                # clones + patches tvision into third_party/, builds
+./build.sh                # fetches third_party/ (tvision, mail-setup), patches, builds
+./clean.sh                # removes build/, dist/, logs, __pycache__/
+./clean.sh --all          # ...and third_party/, so the next build re-fetches it
 ```
 
 - `./build.sh --mingw` — cross-compile a static native `tvmail.exe` instead
   (only useful from a real Windows console, not mintty).
 - On Linux / macOS `build.sh` just builds natively.
+- `third_party/` is filled by `./third_party.sh` (which `build.sh` and
+  `configure.sh` both run): `tvision` from magiblot/tvision, and `POSIX` (a
+  sparse clone of chrispollitt/POSIX, just `mail-setup/`). Existing
+  checkouts are left alone; `./third_party.sh --update` pulls them. Only
+  tvision is needed to compile, so a failed mail-setup fetch just warns.
 
 Install and configure it with the wizard:
 
@@ -145,6 +152,19 @@ Install and configure it with the wizard:
 cmake --install build --prefix ~/.local
 export PATH="$HOME/.local/bin:$PATH"        # add to ~/.bashrc
 ```
+
+To remove it again:
+
+```bash
+./uninstall.sh             # finds it in ~/.local and /usr/local, lists, asks
+./uninstall.sh -n          # just show what would go
+./uninstall.sh --purge     # also offer to remove ~/.config/tvmail/
+```
+
+It leaves the mail system alone (mail-setup's Postfix, Dovecot and pullers,
+plus `~/.mail`, `~/.mu-tickets` and `~/.netrc`, which `mail(1)` uses too). The
+exception is a `pop-pull` that older tvmail versions installed next to
+`tvmail`: it offers to remove that one, unless a `mail-pull` still runs it.
 
 ## Run
 

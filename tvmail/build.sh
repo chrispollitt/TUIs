@@ -28,10 +28,11 @@ case "$os" in CYGWIN*|MINGW*|MSYS*) is_cygwin=1 ;; esac
 jobs=$( (nproc 2>/dev/null) || (sysctl -n hw.ncpu 2>/dev/null) \
         || (getconf _NPROCESSORS_ONLN 2>/dev/null) || echo 4 )
 
-if [ ! -e "$tv/CMakeLists.txt" ]; then
-  echo ">> cloning magiblot/tvision ..."
-  git clone --depth 1 https://github.com/magiblot/tvision "$tv"
-fi
+# third_party/: tvision is needed to compile; mail-setup (configure.sh's mail
+# wizard) isn't, so a failed fetch of it only warns
+sh "$here/third_party.sh" tvision
+sh "$here/third_party.sh" mail-setup \
+  || echo "build.sh: WARNING - couldn't fetch mail-setup (only ./configure.sh needs it)" >&2
 
 if [ "$is_cygwin" = 1 ]; then
   py="${PYTHON:-}"

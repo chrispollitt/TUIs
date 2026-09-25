@@ -8,8 +8,8 @@
 #   * dev tools to build tvmail (cmake, a C++ compiler, make, git, python3)
 #   * the mail system itself - delegated to mail-setup, a separate project
 #     (github.com/chrispollitt/POSIX, folder mail-setup) that this script
-#     fetches into third_party/POSIX/mail-setup the way build.sh fetches
-#     tvision, then runs its wizard:
+#     fetches into third_party/POSIX/mail-setup (third_party.sh, same as
+#     build.sh uses for tvision), then runs its wizard:
 #       master  - Postfix (smarthost relay), Dovecot (IMAP), a puller
 #                 (pop-pull or getmail, run by F3 via mail-pull)
 #       client  - a /usr/sbin/sendmail shim that forwards to the master
@@ -151,27 +151,9 @@ fi
 # mail-setup (third_party/POSIX/mail-setup), like tvision in build.sh
 # --------------------------------------------------------------------------
 step "mail-setup (Postfix / Dovecot / pop-pull or getmail / Mailutils)"
-POSIX_DIR="$here/third_party/POSIX"
-MAIL_SETUP_DIR="${MAIL_SETUP_DIR:-$POSIX_DIR/mail-setup}"
-MAIL_SETUP_REPO="${MAIL_SETUP_REPO:-https://github.com/chrispollitt/POSIX}"
-
-if [ ! -f "$MAIL_SETUP_DIR/mail-setup.sh" ]; then
-  [ "$MAIL_SETUP_DIR" = "$POSIX_DIR/mail-setup" ] \
-    || die "MAIL_SETUP_DIR=$MAIL_SETUP_DIR has no mail-setup.sh"
-  command -v git >/dev/null 2>&1 || die "git not found - needed to fetch mail-setup"
-  echo ">> cloning $MAIL_SETUP_REPO (mail-setup only) ..."
-  rm -rf "$POSIX_DIR"
-  # sparse + blobless: just the mail-setup folder; plain shallow clone if the
-  # local git or the server can't do that
-  if git clone --depth 1 --filter=blob:none --sparse "$MAIL_SETUP_REPO" "$POSIX_DIR" \
-     && git -C "$POSIX_DIR" sparse-checkout set mail-setup; then
-    :
-  else
-    rm -rf "$POSIX_DIR"
-    git clone --depth 1 "$MAIL_SETUP_REPO" "$POSIX_DIR"
-  fi
-  [ -f "$MAIL_SETUP_DIR/mail-setup.sh" ] || die "cloned $MAIL_SETUP_REPO but found no mail-setup/mail-setup.sh"
-fi
+sh "$here/third_party.sh" mail-setup \
+  || die "couldn't get mail-setup - see above (or set MAIL_SETUP_DIR to a checkout)"
+MAIL_SETUP_DIR="${MAIL_SETUP_DIR:-$here/third_party/POSIX/mail-setup}"
 log "mail-setup: $MAIL_SETUP_DIR"
 
 bash "$MAIL_SETUP_DIR/mail-setup.sh" --caller tvmail ${PASS[@]+"${PASS[@]}"}
