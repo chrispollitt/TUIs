@@ -38,7 +38,8 @@ INBOX/Archive/Trash/Drafts/Sent/Junk):
   compose-template [--to A] [--subject S] [--in-reply-to IDX [--reply-all]]
                    [--forward IDX] [MBOX]
                             print a draft skeleton (for $EDITOR) on stdout
-  pull                      local: run 'pop-pull', then file tagged spam
+  pull                      local: run 'mail-pull' (mail-setup's pop-pull or
+                            getmail; [local] pull overrides), then file tagged spam
                             remote: file tagged spam ('***SPAM***' subject ->
                             the 'spam' folder; tag/dest set in tvmail.conf)
   ping                      print 'pong' - a liveness check
@@ -1363,15 +1364,36 @@ def _sweep_spam():
     return int(m.group(1)) if m else 0
 
 
+def _puller():
+    """argv that fetches remote mail on the master: $TVMAIL_PULL or
+    tvmail.conf [local] pull (a command line), else mail-setup's 'mail-pull'
+    wrapper (runs whichever of pop-pull / getmail was configured last), else a
+    bare 'pop-pull'.  None if there's nothing to run."""
+    import shlex
+    cmd = (os.environ.get("TVMAIL_PULL")
+           or _conf().get("local", "pull", fallback="")).strip()
+    if cmd:
+        return shlex.split(cmd)
+    for name in ("mail-pull", "pop-pull"):
+        exe = shutil.which(name)
+        if exe and os.path.exists(exe):
+            return [exe, "-v"]
+    return None
+
+
 def cmd_pull(a):
     if _is_remote():
         n = _sweep_spam()                       # F3 on a client = "file the spam"
         print("filed %d spam message(s)" % n if n else "no spam to file")
         return 0
-    exe = shutil.which("pop-pull")
-    if not exe or not os.path.exists(exe):
-        sys.exit("tvmail-backend: pop-pull not found - run configure-mail-pull.sh")
-    rc = subprocess.run([exe, "-v"]).returncode
+    argv = _puller()
+    if not argv:
+        sys.exit("tvmail-backend: no mail puller found (mail-pull / pop-pull) - "
+                 "run ./configure.sh (mail-setup) to set one up")
+    try:
+        rc = subprocess.run(argv).returncode
+    except OSError as e:
+        sys.exit("tvmail-backend: can't run %s: %s" % (argv[0], e))
     n = _sweep_spam()
     if n:
         print("filed %d spam message(s)" % n)

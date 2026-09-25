@@ -92,8 +92,10 @@ in the message list moves focus to the body so it can be scrolled.
 .I /var/mail/$USER
 (or
 .IR $MAIL ).
-Where the local MTA and
-.B pop\-pull
+Where the local MTA and the puller
+.RB ( pop\-pull
+or
+.BR getmail )
 deliver.
 .TP
 .B drafts
@@ -151,7 +153,8 @@ This help, but inside the program.
 .TP
 .B F3
 Local: pull remote mail (runs
-.BR pop\-pull ).
+.BR mail\-pull ,
+from mail\-setup).
 Remote: file
 .B ***SPAM***
 messages into the

@@ -215,8 +215,8 @@ def main():
             t.clear()
             t.send("\x1bOR")                      # F3 (SS3)
             t.send("\x1b[13~")                    # F3 (CSI ~) - whichever lands
-            s = t.read(until=r"pop-pull|Pull finished", timeout=15)
-            if not re.search(r"pop-pull|Pull finished", s):
+            s = t.read(until=r"pop-pull|getmail|mail puller|Pull finished", timeout=15)
+            if not re.search(r"pop-pull|getmail|mail puller|Pull finished", s):
                 fail("no background-pull completion box\n---\n%s" % s[-1200:])
             done.append("f3-background-pull")
         finally:

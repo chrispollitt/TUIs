@@ -67,13 +67,13 @@ class Base(unittest.TestCase):
         keys = ("HOME", "XDG_DATA_HOME", "MAIL", "MAILRC", "DEAD",
                 "USER", "LOGNAME", "SENDMAIL", "TVMAIL_CONF", "TVMAIL_MODE",
                 "TVMAIL_IMAP_PASS", "TVMAIL_SMTP_PASS",
-                "TVMAIL_MU_CONF", "TVMAIL_MU_TICKETS")
+                "TVMAIL_MU_CONF", "TVMAIL_MU_TICKETS", "TVMAIL_PULL")
         self._saved = {k: os.environ.get(k) for k in keys}
         os.environ.update(HOME=str(self.home), XDG_DATA_HOME=str(self.xdg),
                           MAIL=str(self.spool), USER="tester")
         for k in ("MAILRC", "DEAD", "SENDMAIL", "TVMAIL_CONF", "TVMAIL_MODE",
                   "TVMAIL_IMAP_PASS", "TVMAIL_SMTP_PASS",
-                  "TVMAIL_MU_CONF", "TVMAIL_MU_TICKETS"):
+                  "TVMAIL_MU_CONF", "TVMAIL_MU_TICKETS", "TVMAIL_PULL"):
             os.environ.pop(k, None)
 
     def tearDown(self):
@@ -488,6 +488,42 @@ class TestMode(Base):
     def test_mode_env_override(self):
         os.environ["TVMAIL_MODE"] = "remote"
         self.assertEqual(be._mode(), "remote")
+
+    def test_puller_override_env_then_conf(self):
+        self._write_conf("[local]\npull = /opt/x/getmail --getmaildir '/a b'\n")
+        self.assertEqual(be._puller(), ["/opt/x/getmail", "--getmaildir", "/a b"])
+        os.environ["TVMAIL_PULL"] = "my-pull -q"
+        try:
+            self.assertEqual(be._puller(), ["my-pull", "-q"])
+        finally:
+            del os.environ["TVMAIL_PULL"]
+
+    def test_puller_prefers_mail_pull_over_pop_pull(self):
+        bindir = self.tmp / "bin"
+        bindir.mkdir()
+        for n in ("pop-pull", "mail-pull"):
+            (bindir / n).write_text("#!/bin/sh\n")
+            (bindir / n).chmod(0o755)
+        saved = os.environ["PATH"]
+        os.environ["PATH"] = str(bindir)
+        try:
+            self.assertEqual(be._puller(), [str(bindir / "mail-pull"), "-v"])
+            (bindir / "mail-pull").unlink()
+            self.assertEqual(be._puller(), [str(bindir / "pop-pull"), "-v"])
+            (bindir / "pop-pull").unlink()
+            self.assertIsNone(be._puller())
+        finally:
+            os.environ["PATH"] = saved
+
+    def test_pull_without_puller_says_so(self):
+        env_path = os.environ["PATH"]
+        os.environ["PATH"] = str(self.tmp)          # no mail-pull / pop-pull
+        try:
+            r = self.be("pull")
+        finally:
+            os.environ["PATH"] = env_path
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn(b"no mail puller found", r.stderr)
 
     def test_mode_subcommand_prints_word(self):
         self.assertEqual(self.be("mode").stdout.strip(), b"local")

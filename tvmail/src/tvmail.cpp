@@ -2274,7 +2274,7 @@ static const char *kHelpText =
     "  Enter    jump to the body pane and scroll it\n"
     "  Ctrl-D   delete  (moves to trash; from trash it deletes for good)\n"
     "  F5       reload the current folder\n"
-    "  F3       local: pull new mail (pop-pull)  .  remote: file tagged spam\n"
+    "  F3       local: pull new mail (mail-pull)  .  remote: file tagged spam\n"
     "  Message > View source shows the raw RFC822 message.\n"
     "\n"
     "COMPOSING\n"
@@ -2825,7 +2825,7 @@ void TVMailApp::pullFinished()
     pullLogPath.clear();
     reload();
 
-    // pop-pull's last line is the summary; show the tail so verbose
+    // the puller's last line is the summary; show the tail so verbose
     // "delivered msg ..." lines are visible too.
     std::vector<std::string> ls = splitLines(out);
     std::string tail;

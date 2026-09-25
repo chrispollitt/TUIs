@@ -60,15 +60,18 @@ both modes.
 A typical setup: **one master host** owns the mailstore; the laptop / WSL / VMs
 are remote clients.
 
-- **Master** — Postfix (`configure/configure-sendmail-relay.sh`, Linux only;
-  installs Postfix via apt if nothing's there) delivering local mail to
-  `/var/mail/$USER` and relaying outbound through an authenticated TLS
-  smarthost, plus **`pop-pull`** (`configure/configure-mail-pull.sh --timer N`
-  — `--pwfile` if there's no `/etc/postfix/sasl_passwd` yet) to fetch replies
-  back, and an IMAP server (Dovecot) over the same mbox files. Point the timer
-  at a wrapper that runs `pop-pull` then
+- **Master** — Postfix delivering local mail to `/var/mail/$USER` and relaying
+  outbound through an authenticated TLS smarthost, Dovecot serving IMAP over
+  the same mbox files, and a puller — **`pop-pull`** or **getmail** — fetching
+  replies back. All of it is set up by
+  [**mail-setup**](https://github.com/chrispollitt/POSIX/tree/main/mail-setup),
+  a separate project that `./configure.sh` fetches into
+  `third_party/POSIX/mail-setup` (see *Requirements*). Its `mail-pull` wrapper
+  runs whichever puller you picked; that's what **F3** runs. Give the puller a
+  timer (`scripts/configure-mail-pull.sh --timer N`, or
+  `configure-getmail.sh --timer N`), follow each pull with
   `tvmail-backend purge spool --subject "***SPAM***" --to-folder spam` (over
-  `localhost` IMAP, so Dovecot owns the move) and spam is filed for every
+  `localhost` IMAP, so Dovecot owns the move), and spam is filed for every
   client automatically.
 - **Clients** — just `tvmail` + `tvmail-backend` in remote mode. `[smtp] from`
   fixes the sender identity so the master relays without any server-side
@@ -83,16 +86,25 @@ are remote clients.
 Builds and runs natively on **Linux** (including Raspberry Pi and WSL),
 **macOS** and the **BSDs**; the app is a normal ncurses program and the backend
 is pure‑stdlib Python 3. **Cygwin** works too, with a small tvision patch (see
-*Build*) — as a client only. `configure/configure-sendmail-relay.sh` (sets up
-the mail *master*) is Linux-only; `configure/configure-mail-pull.sh` and
-`pop-pull` are portable, and the app itself runs the same everywhere.
+*Build*) — as a client only. Setting up the mail *master* (Postfix + Dovecot)
+is Linux-only; the pullers and client setup are portable, and the app itself
+runs the same everywhere.
 
 ## Requirements
 
-`./configure.sh` is a wizard that checks/installs all of this for you (dev
-tools, an MTA if this box is the mail master, GNU Mailutils, a sendmail shim
-if it's a client) — run it first if you'd rather answer prompts than read
-the list below.
+`./configure.sh` is a wizard that checks/installs all of this for you: first
+the dev tools, then it hands off to
+[mail-setup](https://github.com/chrispollitt/POSIX/tree/main/mail-setup) for
+the mail system (Postfix, Dovecot and a puller on the master; a sendmail shim
+on a client; GNU Mailutils on both). Run it first if you'd rather answer
+prompts than read the list below.
+
+mail-setup is imported the way tvision is: `configure.sh` sparse-clones
+`github.com/chrispollitt/POSIX` (just `mail-setup/`) into
+`third_party/POSIX` on first run. Update it with
+`git -C third_party/POSIX pull`. Set `MAIL_SETUP_DIR=/path/to/mail-setup` to
+use a checkout of your own instead. It has its own tests
+(`third_party/POSIX/mail-setup/tests/run-tests.sh`).
 
 - `cmake`, a C++17 compiler, `ncurses(w)` headers, `git`
   - Debian/Ubuntu/Pi: `apt install cmake g++ libncursesw5-dev git`
@@ -193,7 +205,7 @@ body. `Enter` on a message jumps focus to the body pane.
 
 | name | path | notes |
 |---|---|---|
-| `inbox` | `/var/mail/$USER` (`$MAIL`) | where Postfix + `pop-pull` deliver |
+| `inbox` | `/var/mail/$USER` (`$MAIL`) | where Postfix + the puller (`pop-pull` / getmail) deliver |
 | `drafts` | `$folder/drafts` (default `~/Mail/drafts`) | `mail -f +drafts` opens it too |
 | `sent` | `$folder/sent` (honours `set record`) | a copy of everything you send lands here |
 | `saved` | `~/mbox` | where `mail(1)` files messages you've read |
@@ -218,7 +230,7 @@ save-a-copy-on-send.
 | `Ctrl-N` | new message |
 | `F2` | send the compose window you're in |
 | `Ctrl-D` | delete (→ trash) |
-| `F3` | local: pull mail (`pop-pull`) · remote: file `***SPAM***` mail · `F5` reload |
+| `F3` | local: pull mail (`mail-pull`) · remote: file `***SPAM***` mail · `F5` reload |
 | `F4` | address book |
 | `F6` / `Shift-F6` | next / previous window · `F10` menu · `Alt-X` quit |
 
@@ -328,7 +340,7 @@ tvmail-backend compose-template [--to A] [--subject S] [--in-reply-to IDX] [MBOX
 tvmail-backend send  [--from A] [--to A ...] [--subject S]   < message-or-body
 tvmail-backend save-draft   < rfc822-message
 tvmail-backend aliases                   NAME <TAB> expanded, addresses
-tvmail-backend pull                      local: pop-pull + spam sweep; remote: spam sweep
+tvmail-backend pull                      local: mail-pull + spam sweep; remote: spam sweep
 tvmail-backend ping                      -> pong
 tvmail-backend mode                      -> local | remote
 tvmail-backend serve                     persistent framed request loop

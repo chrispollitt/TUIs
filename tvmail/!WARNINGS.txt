@@ -105,11 +105,11 @@ the wait visible rather than eliminating it).
 
 The fix is the same "Plumbing" setup as Warning 3, and it solves both
 problems with one piece of infrastructure: run a local LAN Dovecot as
-the master, have pop-pull (configure/configure-mail-pull.sh --timer N)
+the master, have mail-pull (mail-setup's pop-pull or getmail, --timer N)
 fetch mail down from the WAN host on a timer, and point every client's
 tvmail.conf at that LAN Dovecot instead of the WAN host directly. Every
 IMAP round trip then happens at LAN speed (single-digit milliseconds)
 regardless of how slow or far away the real mail host is -- the WAN
-latency still exists, it just happens once per pop-pull cycle in the
+latency still exists, it just happens once per pull cycle in the
 background instead of once per click in the UI. See README.md's
 "Plumbing" section.

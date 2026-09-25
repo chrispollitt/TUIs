@@ -275,11 +275,21 @@ one per line.
 .B pull
 In
 .B local
-mode: run
+mode: run the puller \(em
+.B $TVMAIL_PULL
+or
+.B [local] pull
+in
+.IR tvmail.conf ,
+else
+.B mail\-pull
+(mail\-setup's wrapper around
 .B pop\-pull
-(if on
-.IR PATH ),
-then sweep the inbox for spam.
+or
+.BR getmail ),
+else
+.B pop\-pull
+\(em then sweep the inbox for spam.
 In
 .B remote
 mode: just the spam sweep \(em the master does the fetching.

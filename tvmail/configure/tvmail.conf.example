@@ -69,3 +69,10 @@ spam   = Junk
 # Default is SpamAssassin's ***SPAM*** prefix; change it if your server differs.
 [spam]
 subject = ***SPAM***
+
+# Master (local mode) only: what F3 / 'tvmail-backend pull' runs to fetch
+# remote mail.  Unset = mail-setup's 'mail-pull' wrapper (whichever of pop-pull
+# or getmail ./configure.sh set up last), else a bare 'pop-pull'.  A command
+# line; $TVMAIL_PULL overrides it for one run.
+#[local]
+#pull = getmail --getmaildir ~/.config/getmail
