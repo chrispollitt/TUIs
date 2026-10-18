@@ -106,6 +106,7 @@ const ushort cmReplyAllMsg = 2027;  // reply-all to the focused message
 const ushort cmMarkUnread = 2028;   // mark the focused message unread
 const ushort cmPurgeMsgs = 2029;    // open the purge dialog
 const ushort cmMoveMsg = 2030;      // move the focused message to another folder
+const ushort cmEmptyTrash = 2031;   // permanently delete everything in the trash folder
 
 // ------------------------------------------------------ editor dialogs -----
 // Wire up the standard Find / Replace / "search failed" dialogs the TEditor
@@ -2269,6 +2270,7 @@ static const char *kHelpText =
     "  saved        where read mail is filed     (local: ~/mbox ; remote: Archive)\n"
     "  spam         F3 moves messages tagged ***SPAM*** by the server here\n"
     "  trash        Ctrl-D moves here; from trash, delete is permanent\n"
+    "               (File > Empty trash... deletes it all, after a count + confirm)\n"
     "  dead.letter  a message mail(1) or tvmail left behind - always a local file\n"
     "\n"
     "READING\n"
@@ -2403,6 +2405,7 @@ private:
     void moveMsg(int row);
     void viewParts(int row);
     void purgeDialog();
+    void emptyTrash();
     void pullMail();
     void pullFinished(); // cmPullDone handler
     void reload();
@@ -2425,6 +2428,7 @@ TMenuBar *TVMailApp::initMenuBar(TRect r)
                                            cmPull, kbF3, hcNoContext, "F3") +
                             *new TMenuItem("~R~eload", cmReload, kbF5, hcNoContext, "F5") +
                             *new TMenuItem("P~u~rge...", cmPurgeMsgs, kbNoKey, hcNoContext) +
+                            *new TMenuItem("Empty ~t~rash...", cmEmptyTrash, kbNoKey, hcNoContext) +
                             newLine() +
                             *new TMenuItem("Edit si~g~nature", cmEditSig, kbNoKey, hcNoContext) +
                             *new TMenuItem("Resume dead.~l~etter", cmResumeDead, kbNoKey, hcNoContext) +
@@ -2772,6 +2776,41 @@ void TVMailApp::purgeDialog()
         messageBox(out.c_str(), mfInformation | mfOKButton);
 }
 
+void TVMailApp::emptyTrash()
+{
+    std::string cmd = backendCommand("empty-trash");
+    std::string preview = shCapture(cmd + " -n 2>&1");
+
+    int n = -1;
+    {
+        std::istringstream is(preview);
+        std::string ln;
+        while (std::getline(is, ln))
+            if (ln.rfind("would purge ", 0) == 0)
+            {
+                n = std::atoi(ln.c_str() + 12);
+                break;
+            }
+    }
+    if (n < 0)
+    {
+        messageBox(preview.c_str(), mfError | mfOKButton);
+        return;
+    }
+    if (n == 0)
+    {
+        messageBox("The trash is already empty.", mfInformation | mfOKButton);
+        return;
+    }
+    if (messageBox(mfConfirmation | mfYesNoCancel,
+                   "Permanently delete %d message(s) from the trash?\n\nThis cannot be undone.", n) != cmYes)
+        return;
+    std::string out = shCapture(cmd + " 2>&1");
+    reload();
+    if (!out.empty() && out.rfind("purged", 0) != 0)
+        messageBox(out.c_str(), mfInformation | mfOKButton);
+}
+
 void TVMailApp::pullMail()
 {
 #ifndef _WIN32
@@ -2902,6 +2941,9 @@ void TVMailApp::handleEvent(TEvent &e)
         break;
     case cmPurgeMsgs:
         purgeDialog();
+        break;
+    case cmEmptyTrash:
+        emptyTrash();
         break;
     case cmAddrBook:
     {

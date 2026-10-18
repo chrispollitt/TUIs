@@ -1143,6 +1143,35 @@ class TestPurgeLocal(Base):
         self.assertNotEqual(p.returncode, 0)
         self.assertIn(b"no filter", p.stdout + p.stderr)
 
+    def test_purge_all_refused_outside_trash(self):
+        p = self.be("purge", "--all")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn(b"only applies to the trash", p.stdout + p.stderr)
+        self.assertEqual(self.n(), 4)
+
+    def test_empty_trash_deletes_everything_in_trash_only(self):
+        self.be("purge", "--from", "Cron Daemon")           # 2 msgs -> trash
+        self.assertEqual(self.n("trash"), 2)
+        p = self.be("empty-trash")
+        self.assertEqual(p.returncode, 0)
+        self.assertIn(b"purged 2", p.stdout)
+        self.assertEqual(self.n("trash"), 0)
+        self.assertEqual(self.n(), 2)                       # inbox untouched
+
+    def test_empty_trash_dry_run_changes_nothing(self):
+        self.be("purge", "--from", "Cron Daemon")
+        p = self.be("empty-trash", "-n")
+        self.assertIn(b"would purge 2", p.stdout)
+        self.assertEqual(self.n("trash"), 2)
+
+    def test_empty_trash_when_already_empty(self):
+        p = self.be("empty-trash", "-n")
+        self.assertEqual(p.returncode, 0)
+        self.assertIn(b"would purge 0", p.stdout)
+        p = self.be("empty-trash")
+        self.assertEqual(p.returncode, 0)
+        self.assertIn(b"purged 0", p.stdout)
+
 
 class TestPurgeIMAP(Base):
     def setUp(self):
@@ -1203,6 +1232,22 @@ class TestPurgeIMAP(Base):
         self.assertIn("Junk", self.imap.created)
         self.assertEqual(len(self.imap.folders["Junk"]), 2)
         self.assertNotIn("Trash", self.imap.folders)
+
+    def test_empty_trash_over_imap(self):
+        self.imap.add("Trash", _msg("Old <o@x>", "junk 1", "b"))
+        self.imap.add("Trash", _msg("Old <o@x>", "junk 2", "b"))
+        self.imap.add("Trash", _msg("Old <o@x>", "junk 3", "b"))
+        be.cmd_empty_trash(self.ns(dry_run=True))
+        self.assertEqual(len(self.imap.folders["Trash"]), 3)      # dry run
+        be.cmd_empty_trash(self.ns())
+        self.assertEqual(len(self.imap.folders["Trash"]), 0)
+        self.assertEqual(len(self.imap.folders["INBOX"]), 3)      # inbox untouched
+        self.assertEqual(self.imap.copied, [])                     # deleted, not moved
+
+    def test_purge_all_refused_outside_trash_over_imap(self):
+        with self.assertRaises(SystemExit):
+            be.cmd_purge(self.ns(all=True))                        # mbox=spool
+        self.assertEqual(len(self.imap.folders["INBOX"]), 3)
 
     def test_purge_over_imap_does_not_lose_messages_if_copy_keeps_failing(self):
         real_uid = self.imap.uid

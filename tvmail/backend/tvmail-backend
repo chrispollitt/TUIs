@@ -31,6 +31,8 @@ INBOX/Archive/Trash/Drafts/Sent/Junk):
   purge [MBOX] [--from S] [--subject S] [--to S] [--older-than DAYS]
         [--seen|--unseen] [--to-folder DEST | --expunge] [-n]
                             bulk-move (default DEST=trash) by filter (needs >=1)
+  empty-trash [-n]          permanently delete everything in the trash folder
+                            (-n only counts; same as: purge trash --all --expunge)
   mark  IDX (read|unread) [MBOX]
   send  [--from ADDR]       read an RFC822 message (or a bare body with --to/--subject)
         [--to ADDR ...]     from stdin, submit it, and file a copy in 'sent'
@@ -1024,7 +1026,8 @@ def _purge_filter(a):
     if a.older_than is not None:
         import time
         cutoff = time.time() - a.older_than * 86400
-    have = bool(subs) or cutoff is not None or a.seen or a.unseen
+    have = (bool(subs) or cutoff is not None or a.seen or a.unseen
+            or getattr(a, "all", False))
 
     def match(msg):
         for h, needle in subs:
@@ -1058,7 +1061,7 @@ def _local_purge(a):
         sys.exit("tvmail-backend purge: refusing to run with no filter")
     path = mbox_path(a.mbox)
     if not os.path.exists(path):
-        print("purged 0 message(s)")
+        print("would purge 0 message(s)" if a.dry_run else "purged 0 message(s)")
         return 0
     if a.dry_run:
         n = 0
@@ -1117,6 +1120,8 @@ def _imap_purge(a):
         import time
         crit += ["BEFORE", time.strftime(
             "%d-%b-%Y", time.gmtime(time.time() - a.older_than * 86400))]
+    if getattr(a, "all", False):
+        crit += ["ALL"]
     if not crit:
         sys.exit("tvmail-backend purge: refusing to run with no filter")
     folder = _imap_folder(a.mbox)
@@ -1152,7 +1157,18 @@ def _imap_purge(a):
 def cmd_purge(a):
     if a.mbox == "dead":
         sys.exit("tvmail-backend purge: not applicable to dead.letter")
+    if getattr(a, "all", False) and a.mbox != "trash":
+        sys.exit("tvmail-backend purge: --all only applies to the trash folder")
     return _imap_purge(a) if _is_remote() else _local_purge(a)
+
+
+def cmd_empty_trash(a):
+    """Permanently delete everything in the trash folder (local mode keeps the
+    usual .bak of the trash mbox; IMAP has no undo)."""
+    return cmd_purge(argparse.Namespace(
+        mbox="trash", getfrom=None, subject=None, to=None, older_than=None,
+        seen=False, unseen=False, all=True, to_folder=None, expunge=True,
+        dry_run=a.dry_run))
 
 
 def _mark(mbox, idx, state, uid=None, box=None):
@@ -1455,7 +1471,7 @@ class _CapStream:
 # the serve loop (they would eat the request stream)
 _SERVE_BLOCKED = frozenset(("serve", "send", "save-draft", "pull"))
 _COMMANDS = frozenset(("list", "show", "raw", "parts", "save", "delete",
-                       "mark", "purge", "compose-template", "send",
+                       "mark", "purge", "empty-trash", "compose-template", "send",
                        "save-draft", "aliases", "pull", "ping", "mode",
                        "host", "serve"))
 
@@ -1573,8 +1589,12 @@ def build_parser():
     g.add_argument("--to-folder", "--trash", dest="to_folder", metavar="DEST",
                    default="trash")           # where matches go (default: trash)
     g.add_argument("--expunge", action="store_true")   # or delete outright
+    p.add_argument("--all", action="store_true")       # trash only: match everything
     p.add_argument("-n", "--dry-run", action="store_true", dest="dry_run")
     p.set_defaults(fn=cmd_purge)
+    p = sub.add_parser("empty-trash")
+    p.add_argument("-n", "--dry-run", action="store_true", dest="dry_run")
+    p.set_defaults(fn=cmd_empty_trash)
     p = sub.add_parser("compose-template")
     p.add_argument("--from", dest="getfrom"); p.add_argument("--to", action="append", default=[])
     p.add_argument("--subject"); p.add_argument("--in-reply-to", type=int)
