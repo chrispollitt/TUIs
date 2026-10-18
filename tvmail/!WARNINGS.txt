@@ -33,7 +33,7 @@ ESCDELAY, or use one of these:
      (CWPutils/toolbox, needs a native Windows Python), e.g. as a profile
      whose command line is the output of "python wincygterm --profile".
      Cygwin programs there see /dev/pty*, not Cygwin's own console, and
-     tvmail was checked to work in such a tab.  Key input reaches the program
+     tvmail's TUI was tested in such a tab and works.  Key input reaches the program
      as plain characters, so the win32-input-mode records that got cut in two
      do not exist on that path (even through a further ssh); that part is
      expected, not separately tested.
