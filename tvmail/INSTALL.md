@@ -250,6 +250,7 @@ Every setting, with comments: `configure/tvmail.conf.example`.
 | `uninstall.sh` | to remove tvmail | see section 8 |
 | `clean.sh` | to start a build over | see section 8 |
 | `all.sh` | development | build, test, install, run with `--trace`, report |
+| `Makefile` | habit | `make`, `make test`, `make install`, `make clean`, `make distclean` just call the scripts above (it's a CMake project; there's no real make build) |
 
 mail-setup's own scripts live in `third_party/POSIX/mail-setup/scripts/`.
 Each one runs on its own and takes `--help`; see that project's README.
