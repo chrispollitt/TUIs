@@ -6,14 +6,14 @@
 # Already run GNU Mailutils' mail(1) against the same server?  You can skip
 # [imap]/[smtp] host/port/user entirely - tvmail falls back to the same
 # ~/.mail  it uses:
-#     mailbox { mailbox-pattern "imap://chris@cmpi:143/INBOX"; };
-#     mailer  { url "smtp://cmpi:25"; };
+#     mailbox { mailbox-pattern "imap://chris@cpbee:143/INBOX"; };
+#     mailer  { url "smtp://cpbee:25"; };
 # Anything you DO set below wins over ~/.mail.
 #
 # NO PASSWORDS HERE.  Put them in ~/.mu-tickets (chmod 600, URL-encoded):
-#     *://chris:s3cr3t@cmpi.lan
+#     *://chris:s3cr3t@cpbee.lan
 # ...or ~/.netrc (chmod 600):
-#     machine cmpi.lan  login chris  password s3cr3t
+#     machine cpbee.lan  login chris  password s3cr3t
 # ...or the environment: $TVMAIL_IMAP_PASS / $TVMAIL_SMTP_PASS.
 
 [service]
@@ -25,24 +25,24 @@
 mode   = remote
 
 [imap]
-host = cmpi
+host = cpbee
 port = 993
 ssl  = true
 user = chris
 # verify the server cert (default true).  Set false for a LAN box with the
 # stock self-signed cert, or point cafile at its .pem.
 verify = false
-#cafile = /etc/ssl/certs/cmpi-dovecot.pem
+#cafile = /etc/ssl/certs/cpbee-dovecot.pem
 
 [smtp]
-host     = cmpi
+host     = cpbee
 port     = 587
 starttls = true
 user     = chris
 # same as [imap] verify/cafile above - the master's self-signed cert on
 # STARTTLS needs one or the other, or send fails with CERTIFICATE_VERIFY_FAILED.
 verify = false
-#cafile = /etc/ssl/certs/cmpi-dovecot.pem
+#cafile = /etc/ssl/certs/cpbee-dovecot.pem
 # This box can't receive replies, so submitted mail always goes out as this
 # address (header From + envelope) - the master just relays it, no rewrite.
 from     = chris via LAN <cwp@u-l.ca>

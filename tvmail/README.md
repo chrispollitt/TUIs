@@ -342,19 +342,19 @@ lines. It reads its own `~/.mail` (host/port) and `~/.mu-tickets`
 ```
 # ~/.mail  (point at localhost on the master itself, or the master's name on a client)
 mailbox {
-    mailbox-pattern "imap://chris@cmpi:143/INBOX";
+    mailbox-pattern "imap://chris@cpbee:143/INBOX";
     # base URL for mail(1)'s "+name" folder shorthand - without this, +Trash /
     # +Junk / etc. resolve as *local* paths instead of IMAP folders and fail.
-    folder "imap://chris@cmpi:143/";
+    folder "imap://chris@cpbee:143/";
 };
 mailer {
-    url "smtp://cmpi:25";
+    url "smtp://cpbee:25";
 };
 ```
 
 ```
 # ~/.mu-tickets  (chmod 600; user/pass are URL-encoded; scheme "*" matches any)
-*://chris:s3cr3t@cmpi
+*://chris:s3cr3t@cpbee
 ```
 
 `mail -f +Trash` (or `folder +Junk` inside a session) and tvmail then read/write

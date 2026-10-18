@@ -227,7 +227,7 @@ EOF
       else
         warn "no ~/.mail found - run ./configure.sh first if you want to share its"
         warn "settings with mail(1), or answer the questions below to set tvmail up alone."
-        master=$(readval "master hostname" "cmpi")
+        master=$(readval "master hostname" "cpbee")
         imap_port=$(readval "IMAP port" "993")
         imap_ssl=$(readval "IMAP uses TLS (true/false)" "true")
         smtp_port=$(readval "SMTP port" "587")

@@ -501,7 +501,7 @@ _SPECIALUSE_ATTR = {"saved": "\\archive", "trash": "\\trash",
 
 def _imap_specialuse_map(M):
     """RFC 6154 SPECIAL-USE folder discovery: {'\\sent': 'INBOX.Sent', ...}.
-    Servers disagree on namespace layout - cmpi's folders sit at the top
+    Servers disagree on namespace layout - cpbee's folders sit at the top
     ("Sent"), mail.u-l.ca's sit under an "INBOX." prefix ("INBOX.Sent") - so a
     folder name that is correct on one 404s on the other ("Client tried to
     access nonexistent namespace"). Both still tag their special folders per

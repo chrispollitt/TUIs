@@ -34,7 +34,7 @@ ESCDELAY, or fall back to a workaround:
 
 I use this Windows Terminal profile for option 2:
 
-wsl.exe -d Ubuntu-20.04 ssh cmpi
+wsl.exe -d Ubuntu-20.04 ssh cpbee
 
 (For the curious -- including the measurements behind the diagnosis -- see
 the accompanying TERMINAL-HISTORY.md, section 7.  Which layer cuts the
@@ -49,7 +49,7 @@ noise. ;)
 IMAP servers disagree on folder-namespace layout, and mail(1)'s
 "+name" plus-notation cannot bridge the difference.
 
-cmpi's Dovecot puts folders at the namespace root (Sent, Junk,
+cpbee's Dovecot puts folders at the namespace root (Sent, Junk,
 Trash -- no prefix, "/" hierarchy delimiter). mail.u-l.ca
 (cPanel/Dovecot) requires an "INBOX." prefix on everything except
 INBOX itself, with a "." delimiter (Sent -> INBOX.Sent). A folder
@@ -69,7 +69,7 @@ a directory separator ('/')") -- there's no config that makes
 name yourself:
 
   mail --headers -f +INBOX.Sent          (mail.u-l.ca)
-  mail --headers -f +Sent                (cmpi)
+  mail --headers -f +Sent                (cpbee)
 
 or wrap it in a shell function, e.g.:
 
@@ -87,7 +87,7 @@ unconfigured master.
 Dovecot and tvmail-backend's local mbox code (Python's stdlib
 "mailbox" module) are two independent programs that can both open,
 lock, and rewrite the same /var/mail/$USER file, and their locking
-conventions don't line up reliably. Hit this in practice on cmpi:
+conventions don't line up reliably. Hit this in practice on cpbee:
 /var/mail there is root:mail 2775, chris isn't in group mail, so
 local-mode delete failed outright with a permission error the moment
 tvmail tried to rewrite the mbox out from under Dovecot's nose.
