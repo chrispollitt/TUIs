@@ -27,22 +27,25 @@ To check a path without tvmail, run termprobe (CWPutils/toolbox):
                                  # how late the rest came
 
 If it still reports split records with gaps longer than your ESCDELAY, raise
-ESCDELAY, or use one of these:
+ESCDELAY, or use a workaround:
 
-  1. Run bash on a real pty inside Windows Terminal with wincygterm
-     (CWPutils/toolbox, needs a native Windows Python), e.g. as a profile
-     whose command line is the output of "python wincygterm --profile".
-     Cygwin programs there see /dev/pty*, not Cygwin's own console, and
-     tvmail's TUI was tested in such a tab and works.  Key input reaches the program
-     as plain characters, so the win32-input-mode records that got cut in two
-     do not exist on that path (even through a further ssh); that part is
-     expected, not separately tested.
+  1. Run ssh under wincygterm (CWPutils/toolbox, next to termprobe).  It runs
+     a Cygwin program on a real pty inside Windows Terminal instead of
+     Cygwin's own console layer, which is what swallows the terminal's
+     colour reply and hands ncurses its key input in fragments.  The tvmail
+     TUI was tested in such a tab and works.  Make a
+     Windows Terminal profile from the output of
+
+         python wincygterm --profile
+
+     (a NATIVE Windows Python, not Cygwin's), and end its command line with
+     "-- ssh cpbee" to land straight in the session, or leave that off for
+     a Cygwin shell that has the fix and run ssh from there.  See
+     "man wincygterm".  Not needed in mintty.
   2. Run ssh from mintty instead of Windows Terminal.
-  3. Run ssh from inside WSL instead of from Windows directly.
-
-I use this Windows Terminal profile for option 2:
-
-wsl.exe -d Ubuntu-20.04 ssh cmpi
+  3. Run ssh from inside WSL (the old workaround, before wincygterm), e.g. a
+     Windows Terminal profile whose command line is
+         wsl.exe -d Ubuntu-20.04 ssh cpbee
 
 (For the curious -- including the measurements behind the diagnosis -- see
 the accompanying TERMINAL-HISTORY.md, section 7.  Which layer cuts the
@@ -57,7 +60,7 @@ noise. ;)
 IMAP servers disagree on folder-namespace layout, and mail(1)'s
 "+name" plus-notation cannot bridge the difference.
 
-cmpi's Dovecot puts folders at the namespace root (Sent, Junk,
+cpbee's Dovecot puts folders at the namespace root (Sent, Junk,
 Trash -- no prefix, "/" hierarchy delimiter). mail.u-l.ca
 (cPanel/Dovecot) requires an "INBOX." prefix on everything except
 INBOX itself, with a "." delimiter (Sent -> INBOX.Sent). A folder
@@ -77,7 +80,7 @@ a directory separator ('/')") -- there's no config that makes
 name yourself:
 
   mail --headers -f +INBOX.Sent          (mail.u-l.ca)
-  mail --headers -f +Sent                (cmpi)
+  mail --headers -f +Sent                (cpbee)
 
 or wrap it in a shell function, e.g.:
 
@@ -95,7 +98,7 @@ unconfigured master.
 Dovecot and tvmail-backend's local mbox code (Python's stdlib
 "mailbox" module) are two independent programs that can both open,
 lock, and rewrite the same /var/mail/$USER file, and their locking
-conventions don't line up reliably. Hit this in practice on cmpi:
+conventions don't line up reliably. Hit this in practice on cpbee:
 /var/mail there is root:mail 2775, chris isn't in group mail, so
 local-mode delete failed outright with a permission error the moment
 tvmail tried to rewrite the mbox out from under Dovecot's nose.

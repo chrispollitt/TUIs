@@ -64,7 +64,7 @@ pacman, brew or Cygwin setup). By hand:
 | Debian / Ubuntu / Pi | `sudo apt install git cmake g++ make python3 libncurses-dev` |
 | Fedora | `sudo dnf install git cmake gcc-c++ make python3 ncurses-devel` |
 | macOS | Xcode Command Line Tools, then `brew install cmake` |
-| Cygwin | `setup-x86_64.exe -q -P git,cmake,gcc-g++,make,python3,libncursesw-devel` |
+| Cygwin | `setup-x86_64.exe -q -P git,cmake,gcc-g++,make,python3,libncurses-devel` |
 
 ## 3. Master, step by step
 
@@ -196,13 +196,46 @@ Every setting, with comments: `configure/tvmail.conf.example`.
 - `build.sh` patches tvision for Cygwin automatically
   (`patches/cygwin_patch.py`). `./clean.sh --all` removes the patched copy;
   the next build fetches and patches it again.
-- GNU Mailutils has no Cygwin package. `configure.sh` offers a source build
-  into `/usr/local` (`MAILUTILS_VERSION=` picks the release).
+- GNU Mailutils is a normal Cygwin package (`mailutils`); `configure.sh`
+  installs it through Cygwin's `setup-x86_64.exe`.
 - `./build.sh --mingw` cross-compiles a static native `tvmail.exe` for a
   real Windows console (needs `mingw64-x86_64-gcc-g++`). A normal Cygwin
   build is for mintty and other Unix terminals.
 - Run the scripts from a Cygwin shell (mintty or `bash -l`). Git Bash/MSYS
   hasn't been tested and lacks pieces like `python3`.
+- **`CMake Error: Could not find CMAKE_ROOT ... /share/cmake-4.4.4`** (note
+  the missing `/usr`) means cmake was launched as `/bin/cmake`. `/bin` and
+  `/usr/bin` are the same Windows directory, but `/usr/bin` is a separate
+  mount and `/bin` is not, so cmake sees different prefixes and looks for
+  its modules in `/share` instead of `/usr/share`. Put `/usr/bin`, not
+  `/bin`, in `PATH` (check `/etc/profile.d/*.sh` and `~/.bashrc`); stock
+  Cygwin already does. Check with `type cmake`: it should say `/usr/bin/cmake`.
+- **Antivirus that scans HTTPS (Norton, Kaspersky, ESET, Avast, ...)** causes
+  two problems. Windows' built-in Defender does neither.
+  - **`curl: (60) SSL certificate ... unable to get local issuer
+    certificate`** (curl, git or pip fetching anything over HTTPS). The
+    antivirus re-signs every HTTPS connection with its own root certificate.
+    Windows trusts that root; Cygwin's `ca-certificates` doesn't. Confirm
+    with `curl -vI https://ftp.gnu.org 2>&1 | grep issuer`: a vendor name
+    (e.g. `Norton Web/Mail Shield Root`) instead of a real CA means you're
+    being intercepted. Copy the root into Cygwin's trust store once. In
+    PowerShell (adjust the name to match your antivirus, and the path if
+    Cygwin isn't in `C:\cygwin`):
+
+    ```powershell
+    $c = Get-ChildItem Cert:\LocalMachine\Root | Where-Object Subject -match 'Norton Web/Mail Shield Root' | Select-Object -First 1
+    $b64 = [Convert]::ToBase64String($c.RawData, 'InsertLineBreaks')
+    "-----BEGIN CERTIFICATE-----`n$b64`n-----END CERTIFICATE-----" | Set-Content -Encoding ascii C:\cygwin\etc\pki\ca-trust\source\anchors\antivirus-root.crt
+    ```
+
+    then, in Cygwin, `update-ca-trust`. This also fixes git, pip and
+    anything else using HTTPS from Cygwin. Don't use `curl -k`.
+  - **Slow builds / "Suspicious file detected" popups.** Compiler probes
+    (cmake's, and autoconf's `conftest.exe` if you build anything from
+    source) produce many tiny new executables, and the antivirus scans and
+    uploads each one. It's harmless, just slow. Excluding `C:\cygwin\tmp` (or all of
+    `C:\cygwin`) from real-time scanning fixes it; do that only on a
+    machine you own.
 - In Windows Terminal, a Cygwin tab that starts `bash` directly runs on Cygwin's
   own console, which loses terminal replies and (over ssh) key input; see
   `!WARNINGS.txt`, Warning 1. `wincygterm` (CWPutils/toolbox) gives the shell a
@@ -221,6 +254,7 @@ Every setting, with comments: `configure/tvmail.conf.example`.
 | `uninstall.sh` | to remove tvmail | see section 8 |
 | `clean.sh` | to start a build over | see section 8 |
 | `all.sh` | development | build, test, install, run with `--trace`, report |
+| `Makefile` | habit | `make`, `make test`, `make install`, `make clean`, `make distclean` just call the scripts above (it's a CMake project; there's no real make build) |
 
 mail-setup's own scripts live in `third_party/POSIX/mail-setup/scripts/`.
 Each one runs on its own and takes `--help`; see that project's README.
@@ -272,9 +306,11 @@ still runs it. To remove the mail system itself, use your package manager
 | symptom | fix |
 |---|---|
 | `CERTIFICATE_VERIFY_FAILED` | self-signed LAN cert: `verify = false` under `[imap]` (and `[smtp]`), or `cafile = …` |
+| Cygwin: `curl: (60) ... unable to get local issuer certificate` | your antivirus is intercepting HTTPS; trust its root in Cygwin (section 5) |
 | F3: "no mail puller found" | on the master: run `configure.sh` (or a mail-setup puller script) so `mail-pull` exists and is on `$PATH` |
 | F3 on the master only files spam | you're in remote mode (as recommended); pulling is the timer's job: `crontab -l` or `systemctl --user list-timers mail-pull.timer` |
 | the timer never runs (WSL) | cron isn't started there: `sudo service cron start` |
+| a client can't read mail: IMAP connects time out (SMTP on 25 works), Dovecot's log never shows the client | the master's firewall (nftables/ufw/iptables, default-drop) isn't letting the LAN reach 993/143; Dovecot itself is fine. Allow them from the LAN interface only, e.g. nftables: `iifname "lan0" tcp dport { 143, 993 } accept`. Test with `ssh -L 1143:localhost:143 master` to prove Dovecot works |
 | a client can't send | the master's Postfix is loopback-only: on the master, `sudo third_party/POSIX/mail-setup/scripts/configure-sendmail-relay.sh --lan auto` |
 | mail reaches the master's Postfix but not `/var/mail` | `sudo postqueue -p`; "alias database unavailable" → re-run `configure-sendmail-relay.sh` (it pins `alias_maps`) |
 | `build.sh`: couldn't fetch mail-setup | only a warning; the build continues. Check network/GitHub, or set `MAIL_SETUP_DIR` |

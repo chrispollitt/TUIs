@@ -131,6 +131,17 @@ command -v git   >/dev/null 2>&1 || need="$need git"
 command -v make  >/dev/null 2>&1 || need="$need make"
 [ -n "$PY3" ] || need="$need python3"
 
+# tvision links against ncursesw; the -dev package is what ships the .so/.a
+# (macOS has it in the base OS, so skip the check there).
+have_ncursesw() {
+  pkg-config --exists ncursesw 2>/dev/null && return 0
+  for f in /usr/lib*/libncursesw.* /usr/lib/*/libncursesw.* /usr/local/lib/libncursesw.*; do
+    case "$f" in *.so|*.a|*.dll.a) [ -e "$f" ] && return 0 ;; esac
+  done
+  return 1
+}
+[ "$IS_MACOS" = 1 ] || have_ncursesw || need="$need ncursesw-dev"
+
 if [ -n "$need" ]; then
   log "missing:$need"
   if ask "Install them now?"; then
@@ -139,14 +150,14 @@ if [ -n "$need" ]; then
       dnf|yum) pkg_install cmake git gcc-c++ make python3 ncurses-devel ;;
       pacman)  pkg_install cmake git gcc make python3 ncurses ;;
       brew)    pkg_install cmake git python3 ;;   # Xcode CLT gives g++/make; ncurses is in the base OS
-      cygwin)  pkg_install cmake git gcc-g++ make python3 libncursesw-devel ;;
+      cygwin)  pkg_install cmake git gcc-g++ make python3 libncurses-devel ;;
       *) warn "no known package manager - install by hand: cmake git g++ make python3 ncurses(w)-dev" ;;
     esac
   else
     warn "build.sh will fail without:$need"
   fi
 else
-  log "cmake, git, a C++ compiler, make, python3: all found"
+  log "cmake, git, a C++ compiler, make, python3, ncursesw headers: all found"
 fi
 
 # --------------------------------------------------------------------------

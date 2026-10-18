@@ -227,7 +227,7 @@ EOF
       else
         warn "no ~/.mail found - run ./configure.sh first if you want to share its"
         warn "settings with mail(1), or answer the questions below to set tvmail up alone."
-        master=$(readval "master hostname" "cmpi")
+        master=$(readval "master hostname" "cpbee")
         imap_port=$(readval "IMAP port" "993")
         imap_ssl=$(readval "IMAP uses TLS (true/false)" "true")
         smtp_port=$(readval "SMTP port" "587")
@@ -283,7 +283,7 @@ if ask "Attempt a live connection (list your inbox) now?" N; then
     warn "could not list the inbox - check tvmail.conf / ~/.mail / ~/.netrc"
     printf '%s\n' "$out" | sed 's/^/    /'
     case "$out" in
-      *CERTIFICATE_VERIFY_FAILED*self*signed*)
+      *CERTIFICATE_VERIFY_FAILED*)   # self-signed, or "Hostname mismatch" (cert CN is host.domain)
         warn "that's a self-signed cert on a LAN mail server (mail(1) doesn't check"
         warn "certs either, so this can work there and still fail here) - add to"
         warn "$HOME/.config/tvmail/tvmail.conf:"

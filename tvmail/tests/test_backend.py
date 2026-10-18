@@ -561,11 +561,11 @@ class TestMailutilsInterop(Base):
         # ~/.mail
 
         mailbox {
-            mailbox-pattern "imap://chris@cmpi:143/INBOX";
+            mailbox-pattern "imap://chris@cpbee:143/INBOX";
         };
 
         mailer {
-            url "smtp://cmpi:25";
+            url "smtp://cpbee:25";
         };
         """
 
@@ -576,15 +576,15 @@ class TestMailutilsInterop(Base):
         (self.home / ".mu-tickets").write_text(textwrap.dedent(text))
 
     def test_mu_url_parses_plain_and_wildcard_and_decodes(self):
-        u = be._mu_url("imap://chris@cmpi:143/INBOX")
+        u = be._mu_url("imap://chris@cpbee:143/INBOX")
         self.assertEqual(u, {"scheme": "imap", "user": "chris", "pass": None,
-                             "host": "cmpi", "port": 143, "path": "INBOX"})
-        u = be._mu_url("smtp://cmpi:25")
+                             "host": "cpbee", "port": 143, "path": "INBOX"})
+        u = be._mu_url("smtp://cpbee:25")
         self.assertEqual(u["scheme"], "smtp")
-        self.assertEqual(u["host"], "cmpi")
+        self.assertEqual(u["host"], "cpbee")
         self.assertEqual(u["port"], 25)
         self.assertIsNone(u["user"])
-        u = be._mu_url("*://chris:zxc%40zxc@cmpi")
+        u = be._mu_url("*://chris:zxc%40zxc@cpbee")
         self.assertEqual(u["scheme"], "*")
         self.assertEqual(u["user"], "chris")
         self.assertEqual(u["pass"], "zxc@zxc")           # percent-decoded
@@ -596,11 +596,11 @@ class TestMailutilsInterop(Base):
         box = be._mu_mailbox()
         self.assertEqual(box["scheme"], "imap")
         self.assertEqual(box["user"], "chris")
-        self.assertEqual(box["host"], "cmpi")
+        self.assertEqual(box["host"], "cpbee")
         self.assertEqual(box["port"], 143)
         mailer = be._mu_mailer()
         self.assertEqual(mailer["scheme"], "smtp")
-        self.assertEqual(mailer["host"], "cmpi")
+        self.assertEqual(mailer["host"], "cpbee")
         self.assertEqual(mailer["port"], 25)
 
     def test_mu_conf_missing_file_is_empty(self):
@@ -621,38 +621,38 @@ class TestMailutilsInterop(Base):
         self.assertEqual(be._mode(), "local")
 
     def test_cred_from_mu_tickets_wildcard_scheme(self):
-        self._write_tickets("*://chris:s3cr3t@cmpi\n")
-        self.assertEqual(be._cred("cmpi", "chris", "TVMAIL_IMAP_PASS", "imap"),
+        self._write_tickets("*://chris:s3cr3t@cpbee\n")
+        self.assertEqual(be._cred("cpbee", "chris", "TVMAIL_IMAP_PASS", "imap"),
                          "s3cr3t")
 
     def test_cred_mu_tickets_percent_decoded_and_host_matched(self):
-        self._write_tickets("imap://chris:p%40ss@cmpi.lan\n"
+        self._write_tickets("imap://chris:p%40ss@cpbee.lan\n"
                             "imap://someone:other@otherhost\n")
         self.assertEqual(
-            be._cred("cmpi.lan", "chris", "TVMAIL_IMAP_PASS", "imap"), "p@ss")
+            be._cred("cpbee.lan", "chris", "TVMAIL_IMAP_PASS", "imap"), "p@ss")
 
     def test_cred_mu_tickets_scheme_mismatch_falls_through_to_netrc(self):
-        self._write_tickets("pop3://chris:wrongproto@cmpi\n")
+        self._write_tickets("pop3://chris:wrongproto@cpbee\n")
         (self.home / ".netrc").write_text(
-            "machine cmpi login chris password fromnetrc\n")
+            "machine cpbee login chris password fromnetrc\n")
         os.chmod(self.home / ".netrc", 0o600)
         self.assertEqual(
-            be._cred("cmpi", "chris", "TVMAIL_IMAP_PASS", "imap"), "fromnetrc")
+            be._cred("cpbee", "chris", "TVMAIL_IMAP_PASS", "imap"), "fromnetrc")
 
     def test_cred_prefers_env_over_mu_tickets(self):
-        self._write_tickets("*://chris:fromticket@cmpi\n")
+        self._write_tickets("*://chris:fromticket@cpbee\n")
         os.environ["TVMAIL_IMAP_PASS"] = "fromenv"
         self.assertEqual(
-            be._cred("cmpi", "chris", "TVMAIL_IMAP_PASS", "imap"), "fromenv")
+            be._cred("cpbee", "chris", "TVMAIL_IMAP_PASS", "imap"), "fromenv")
 
     def test_cred_mu_tickets_prefers_matching_user(self):
-        self._write_tickets("*://alice:apass@cmpi\n*://chris:cpass@cmpi\n")
+        self._write_tickets("*://alice:apass@cpbee\n*://chris:cpass@cpbee\n")
         self.assertEqual(
-            be._cred("cmpi", "chris", "TVMAIL_IMAP_PASS", "imap"), "cpass")
+            be._cred("cpbee", "chris", "TVMAIL_IMAP_PASS", "imap"), "cpass")
 
     def test_smtp_send_host_falls_back_to_mailer_url(self):
         self._write_mail(self.MAIL_CONF)
-        self._write_tickets("*://chris:s3cr3t@cmpi\n")
+        self._write_tickets("*://chris:s3cr3t@cpbee\n")
         logged = []
 
         class FakeSMTP:
@@ -673,7 +673,7 @@ class TestMailutilsInterop(Base):
         real, smtplib.SMTP = smtplib.SMTP, FakeSMTP
         try:
             ok = be._smtp_send(
-                email.message_from_string("From: chris@cmpi\n\nx\n"), ["a@b"])
+                email.message_from_string("From: chris@cpbee\n\nx\n"), ["a@b"])
         finally:
             smtplib.SMTP = real
         self.assertTrue(ok)
@@ -960,7 +960,7 @@ class TestRemoteIMAP(Base):
 
     def test_save_draft_over_imap_auto_creates_a_missing_drafts_folder(self):
         # Regression: a Dovecot with no Drafts folder configured (real-world
-        # case: cmpi has Sent/Archive/Junk/Trash/INBOX but no Drafts) made
+        # case: cpbee has Sent/Archive/Junk/Trash/INBOX but no Drafts) made
         # APPEND fail - the code never checked the result, so it printed
         # "draft saved" and the draft vanished instead of landing anywhere.
         self.assertNotIn("Drafts", self.imap.folders)
@@ -1099,9 +1099,9 @@ class TestPurgeLocal(Base):
         old = email.utils.formatdate(time.time() - 40 * 86400, localtime=True)
         new = email.utils.formatdate(time.time() - 1 * 86400, localtime=True)
         self.spool.write_text(
-            self._m("Cron Daemon <root@cmpi>", "Cron <root@cmpi> check", old, "c1")
+            self._m("Cron Daemon <root@cpbee>", "Cron <root@cpbee> check", old, "c1")
             + self._m("Alice <a@x>", "hi", new, "hello")
-            + self._m("Cron Daemon <root@cmpi>", "Cron <root@cmpi> gravity", new, "c2")
+            + self._m("Cron Daemon <root@cpbee>", "Cron <root@cpbee> gravity", new, "c2")
             + self._m("Bob <b@x>", "old note", old, "stale"))
 
     def n(self, mbox="spool"):
@@ -1143,6 +1143,35 @@ class TestPurgeLocal(Base):
         self.assertNotEqual(p.returncode, 0)
         self.assertIn(b"no filter", p.stdout + p.stderr)
 
+    def test_purge_all_refused_outside_trash(self):
+        p = self.be("purge", "--all")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn(b"only applies to the trash", p.stdout + p.stderr)
+        self.assertEqual(self.n(), 4)
+
+    def test_empty_trash_deletes_everything_in_trash_only(self):
+        self.be("purge", "--from", "Cron Daemon")           # 2 msgs -> trash
+        self.assertEqual(self.n("trash"), 2)
+        p = self.be("empty-trash")
+        self.assertEqual(p.returncode, 0)
+        self.assertIn(b"purged 2", p.stdout)
+        self.assertEqual(self.n("trash"), 0)
+        self.assertEqual(self.n(), 2)                       # inbox untouched
+
+    def test_empty_trash_dry_run_changes_nothing(self):
+        self.be("purge", "--from", "Cron Daemon")
+        p = self.be("empty-trash", "-n")
+        self.assertIn(b"would purge 2", p.stdout)
+        self.assertEqual(self.n("trash"), 2)
+
+    def test_empty_trash_when_already_empty(self):
+        p = self.be("empty-trash", "-n")
+        self.assertEqual(p.returncode, 0)
+        self.assertIn(b"would purge 0", p.stdout)
+        p = self.be("empty-trash")
+        self.assertEqual(p.returncode, 0)
+        self.assertIn(b"purged 0", p.stdout)
+
 
 class TestPurgeIMAP(Base):
     def setUp(self):
@@ -1151,9 +1180,9 @@ class TestPurgeIMAP(Base):
         self.imap = FakeIMAP()
         old = email.utils.formatdate(time.time() - 40 * 86400)
         new = email.utils.formatdate(time.time() - 1 * 86400)
-        self.imap.add("INBOX", _msg("Cron Daemon <r@cmpi>", "Cron A", "o", date=old))
+        self.imap.add("INBOX", _msg("Cron Daemon <r@cpbee>", "Cron A", "o", date=old))
         self.imap.add("INBOX", _msg("Alice <a@x>", "hi", "b", date=new))
-        self.imap.add("INBOX", _msg("Cron Daemon <r@cmpi>", "Cron B", "o", date=new))
+        self.imap.add("INBOX", _msg("Cron Daemon <r@cpbee>", "Cron B", "o", date=new))
         self._real, be._imap = be._imap, lambda: self.imap
 
     def tearDown(self):
@@ -1203,6 +1232,22 @@ class TestPurgeIMAP(Base):
         self.assertIn("Junk", self.imap.created)
         self.assertEqual(len(self.imap.folders["Junk"]), 2)
         self.assertNotIn("Trash", self.imap.folders)
+
+    def test_empty_trash_over_imap(self):
+        self.imap.add("Trash", _msg("Old <o@x>", "junk 1", "b"))
+        self.imap.add("Trash", _msg("Old <o@x>", "junk 2", "b"))
+        self.imap.add("Trash", _msg("Old <o@x>", "junk 3", "b"))
+        be.cmd_empty_trash(self.ns(dry_run=True))
+        self.assertEqual(len(self.imap.folders["Trash"]), 3)      # dry run
+        be.cmd_empty_trash(self.ns())
+        self.assertEqual(len(self.imap.folders["Trash"]), 0)
+        self.assertEqual(len(self.imap.folders["INBOX"]), 3)      # inbox untouched
+        self.assertEqual(self.imap.copied, [])                     # deleted, not moved
+
+    def test_purge_all_refused_outside_trash_over_imap(self):
+        with self.assertRaises(SystemExit):
+            be.cmd_purge(self.ns(all=True))                        # mbox=spool
+        self.assertEqual(len(self.imap.folders["INBOX"]), 3)
 
     def test_purge_over_imap_does_not_lose_messages_if_copy_keeps_failing(self):
         real_uid = self.imap.uid

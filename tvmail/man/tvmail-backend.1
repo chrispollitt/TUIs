@@ -210,6 +210,21 @@ tvmail\-backend purge --subject "***SPAM***" --to-folder spam
 .EE
 .RE
 .TP
+.BR "empty\-trash " "\fR[\fP-n\fR]\fP"
+Permanently delete every message in the
+.B trash
+folder.
+Equivalent to
+.BR "purge trash \-\-all \-\-expunge" ;
+.B \-\-all
+is accepted only for
+.BR trash .
+.B \-n
+only counts.
+In local mode a
+.I .bak
+of the trash mailbox is kept; over IMAP there is no undo.
+.TP
 .BI "mark " "IDX " "read|unread " [MBOX]
 Set or clear the Status flag
 .RB ( \(rs Seen
@@ -372,8 +387,8 @@ fall back to GNU Mailutils'
 overrides the path):
 .RS
 .EX
-mailbox { mailbox\-pattern "imap://chris@cmpi:143/INBOX"; };
-mailer  { url "smtp://cmpi:25"; };
+mailbox { mailbox\-pattern "imap://chris@cpbee:143/INBOX"; };
+mailer  { url "smtp://cpbee:25"; };
 .EE
 .RE
 .PP

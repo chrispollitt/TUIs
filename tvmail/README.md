@@ -307,6 +307,11 @@ older-than / seen-unseen, shows a dry-run preview, and asks for confirmation
 before moving the matches to trash (or **Expunge** to delete them outright).
 **Message ▸ Move to...** does the same for a single message, to any folder.
 
+**File ▸ Empty trash...** permanently deletes everything in the trash folder.
+It counts what's there first, asks you to confirm (there's no undo over
+IMAP; locally a `.bak` of the trash mbox is kept), and says so if the trash
+is already empty.
+
 ## Address book
 
 **Message ▸ Address book** (`F4`) opens a window listing the `alias` and
@@ -342,19 +347,19 @@ lines. It reads its own `~/.mail` (host/port) and `~/.mu-tickets`
 ```
 # ~/.mail  (point at localhost on the master itself, or the master's name on a client)
 mailbox {
-    mailbox-pattern "imap://chris@cmpi:143/INBOX";
+    mailbox-pattern "imap://chris@cpbee:143/INBOX";
     # base URL for mail(1)'s "+name" folder shorthand - without this, +Trash /
     # +Junk / etc. resolve as *local* paths instead of IMAP folders and fail.
-    folder "imap://chris@cmpi:143/";
+    folder "imap://chris@cpbee:143/";
 };
 mailer {
-    url "smtp://cmpi:25";
+    url "smtp://cpbee:25";
 };
 ```
 
 ```
 # ~/.mu-tickets  (chmod 600; user/pass are URL-encoded; scheme "*" matches any)
-*://chris:s3cr3t@cmpi
+*://chris:s3cr3t@cpbee
 ```
 
 `mail -f +Trash` (or `folder +Junk` inside a session) and tvmail then read/write
@@ -372,6 +377,7 @@ tvmail-backend save  IDX PARTNO DEST [MBOX]
 tvmail-backend delete IDX [IDX...] [--mbox MBOX] [--trash DEST]
 tvmail-backend purge [MBOX] [--from S] [--subject S] [--to S] [--older-than DAYS]
                      [--seen|--unseen] [--to-folder DEST | --expunge] [-n]
+tvmail-backend empty-trash [-n]          permanently delete everything in trash
 tvmail-backend mark  IDX read|unread [MBOX]
 tvmail-backend compose-template [--to A] [--subject S] [--in-reply-to IDX] [MBOX]
 tvmail-backend send  [--from A] [--to A ...] [--subject S]   < message-or-body
@@ -394,6 +400,9 @@ least one required) to `--to-folder DEST` (default `trash`), or deletes it with
 tvmail-backend purge --from "Cron Daemon" --older-than 14
 tvmail-backend purge --subject "***SPAM***" --to-folder spam    # what F3 does
 ```
+
+`empty-trash` is `purge trash --all --expunge` (`--all` is accepted only for
+`trash`); `-n` just counts.
 
 Works in both modes; see `man tvmail-backend` (**MODES**) for `tvmail.conf`.
 
