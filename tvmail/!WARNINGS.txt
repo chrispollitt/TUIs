@@ -27,14 +27,24 @@ To check a path without tvmail, run termprobe (CWPutils/toolbox):
                                  # how late the rest came
 
 If it still reports split records with gaps longer than your ESCDELAY, raise
-ESCDELAY, or fall back to a workaround:
+ESCDELAY, or use a workaround:
 
-  1. Run ssh from mintty instead of Windows Terminal.
-  2. Run ssh from inside WSL instead of from Windows directly.
+  1. Run ssh under wincygterm (CWPutils/toolbox, next to termprobe).  It runs
+     a Cygwin program on a real pty inside Windows Terminal instead of
+     Cygwin's own console layer, which is what swallows the terminal's
+     colour reply and hands ncurses its key input in fragments.  Make a
+     Windows Terminal profile from the output of
 
-I use this Windows Terminal profile for option 2:
+         python wincygterm --profile
 
-wsl.exe -d Ubuntu-20.04 ssh cpbee
+     (a NATIVE Windows Python, not Cygwin's), and end its command line with
+     "-- ssh cpbee" to land straight in the session, or leave that off for
+     a Cygwin shell that has the fix and run ssh from there.  See
+     "man wincygterm".  Not needed in mintty.
+  2. Run ssh from mintty instead of Windows Terminal.
+  3. Run ssh from inside WSL (the old workaround, before wincygterm), e.g. a
+     Windows Terminal profile whose command line is
+         wsl.exe -d Ubuntu-20.04 ssh cpbee
 
 (For the curious -- including the measurements behind the diagnosis -- see
 the accompanying TERMINAL-HISTORY.md, section 7.  Which layer cuts the
