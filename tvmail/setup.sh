@@ -283,7 +283,7 @@ if ask "Attempt a live connection (list your inbox) now?" N; then
     warn "could not list the inbox - check tvmail.conf / ~/.mail / ~/.netrc"
     printf '%s\n' "$out" | sed 's/^/    /'
     case "$out" in
-      *CERTIFICATE_VERIFY_FAILED*self*signed*)
+      *CERTIFICATE_VERIFY_FAILED*)   # self-signed, or "Hostname mismatch" (cert CN is host.domain)
         warn "that's a self-signed cert on a LAN mail server (mail(1) doesn't check"
         warn "certs either, so this can work there and still fail here) - add to"
         warn "$HOME/.config/tvmail/tvmail.conf:"

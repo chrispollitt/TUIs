@@ -305,6 +305,7 @@ still runs it. To remove the mail system itself, use your package manager
 | F3: "no mail puller found" | on the master: run `configure.sh` (or a mail-setup puller script) so `mail-pull` exists and is on `$PATH` |
 | F3 on the master only files spam | you're in remote mode (as recommended); pulling is the timer's job: `crontab -l` or `systemctl --user list-timers mail-pull.timer` |
 | the timer never runs (WSL) | cron isn't started there: `sudo service cron start` |
+| a client can't read mail: IMAP connects time out (SMTP on 25 works), Dovecot's log never shows the client | the master's firewall (nftables/ufw/iptables, default-drop) isn't letting the LAN reach 993/143; Dovecot itself is fine. Allow them from the LAN interface only, e.g. nftables: `iifname "lan0" tcp dport { 143, 993 } accept`. Test with `ssh -L 1143:localhost:143 master` to prove Dovecot works |
 | a client can't send | the master's Postfix is loopback-only: on the master, `sudo third_party/POSIX/mail-setup/scripts/configure-sendmail-relay.sh --lan auto` |
 | mail reaches the master's Postfix but not `/var/mail` | `sudo postqueue -p`; "alias database unavailable" → re-run `configure-sendmail-relay.sh` (it pins `alias_maps`) |
 | `build.sh`: couldn't fetch mail-setup | only a warning; the build continues. Check network/GitHub, or set `MAIL_SETUP_DIR` |
