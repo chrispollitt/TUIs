@@ -34,6 +34,16 @@ sh "$here/third_party.sh" tvision
 sh "$here/third_party.sh" mail-setup \
   || echo "build.sh: WARNING - couldn't fetch mail-setup (only ./configure.sh needs it)" >&2
 
+# tvision's ncurses input gives up on a byte after readTimeoutMs (10 ms).  Over ssh from
+# Windows Terminal, win32-input-mode key records arrive cut in two, the rest 16-33 ms
+# later, and the cut-off half shows on screen as "[68;32;100;1;0;1_".  Wait longer.
+# (Idempotent; needed on every platform, since the failing side is the remote one.)
+ncin="$tv/include/tvision/internal/ncursinp.h"
+if grep -q 'readTimeoutMs = 10 ' "$ncin" 2>/dev/null; then
+  echo ">> tvision: input read timeout 10 ms -> 50 ms (ssh from Windows Terminal)"
+  sed 's/readTimeoutMs = 10 /readTimeoutMs = 50 /' "$ncin" > "$ncin.new" && mv "$ncin.new" "$ncin"
+fi
+
 if [ "$is_cygwin" = 1 ]; then
   py="${PYTHON:-}"
   if [ -z "$py" ]; then
