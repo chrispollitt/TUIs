@@ -1,34 +1,47 @@
 ** WARNING 1 **
 
-Running tvmail over SSH from inside Windows Terminal does not work
-correctly, whether you use Cygwin's ssh or Windows' native OpenSSH
-client. Windows Terminal's ConPTY layer (and, for Cygwin, its own
-pseudo-console bridge) sits between tvmail and the real terminal and
-mangles the live terminal-capability negotiation tvmail depends on.
-Depending on settings, you get either garbage escape sequences
-bleeding onto the screen, or keystrokes and mouse clicks silently
-dropped.
+Running tvmail over SSH from inside Windows Terminal used to garble the
+screen: stray text such as "[68;32;100;1;0;1_" appeared in the message you
+were typing, and keystrokes or mouse clicks went missing.  Cause: tvmail
+asks Windows Terminal for win32-input-mode, so every key press arrives as a
+record "ESC [ Vk;Sc;Uc;Kd;Cs;Rc _".  On the way through ssh, the Cygwin pty
+and ConPTY, some of those records arrive cut in two, the second half 16-33 ms
+after the first.  ncurses (tvision's input layer) waits only 10 ms after an
+ESC before deciding it was the Escape key, so the ESC became a keypress and
+the rest was typed as text.  (The same can happen to the terminal's replies
+to tvmail's capability questions.)
 
-Workarounds, in order of preference:
+This is FIXED in tvmail: it now defaults ESCDELAY to 100 ms, and build.sh
+builds tvision with a 50 ms read timeout instead of 10 ms.  You need a tvmail
+built from this tree, on the host where tvmail runs (the Pi, not the
+Windows side).  Confirmed: Windows Terminal -> ssh -> Cygwin sshd.  Not
+re-tested separately: the older "garbage replies" and "dropped keys with
+CYGWIN=disable_pcon" symptoms, other ssh clients, and other remote hosts.
+A bare Escape key press now takes up to 100 ms to register (ESCDELAY=10
+restores the old feel, if your link is fast).
+
+To check a path without tvmail, run termprobe (CWPutils/toolbox):
+
+    termprobe --tvision          # replays tvision's startup, tests typing and
+                                 # clicking, reports records cut in two and
+                                 # how late the rest came
+
+If it still reports split records with gaps longer than your ESCDELAY, raise
+ESCDELAY, or fall back to a workaround:
 
   1. Run ssh from mintty instead of Windows Terminal.
   2. Run ssh from inside WSL instead of from Windows directly.
 
-I added this Windows Terminal profile as my solution (option 2):
+I use this Windows Terminal profile for option 2:
 
 wsl.exe -d Ubuntu-20.04 ssh cmpi
 
-(For the curious -- including the test that pinned this down -- see
-the accompanying TERMINAL-HISTORY.md, particularly section 7 at the
-end.)
-
-If you'd like to help make this someone else's problem to fix: this
-is a known, unresolved gap in ConPTY (microsoft/terminal on GitHub)
-and in Cygwin's pseudo-console handling (the cygwin-patches mailing
-list -- Cygwin has no GitHub tracker). TERMINAL-HISTORY.md section 7
-is a ready-made bug report with a reproducible test case attached.
-Old geezers who remember when terminals just worked are encouraged
-to make some noise. ;)
+(For the curious -- including the measurements behind the diagnosis -- see
+the accompanying TERMINAL-HISTORY.md, section 7.  Which layer cuts the
+records in two, and why in multiples of about 16 ms, is still an open
+question; so is why Cygwin's own console swallows OSC colour queries.  Old
+geezers who remember when terminals just worked are encouraged to make some
+noise. ;)
 
 
 ** WARNING 2 **

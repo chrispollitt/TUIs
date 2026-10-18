@@ -214,17 +214,19 @@ Today, the divergence has effectively closed:
 
 ## 7. The Asterisk: Where the Convergence Still Leaks
 
-§6 above isn't wrong, but it's told from the vantage point of a console app one hop from `ConPTY` — `pwsh.exe`, `vim` under WSL, `node.exe`. That's the case `ConPTY` was built for, and it works well. There's a narrower case it doesn't fully solve: **a full-screen TUI, tunneled over SSH, that does its own out-of-band negotiation with the terminal.** `tvmail` is exactly that case.
+§6 above isn't wrong, but it's told from the vantage point of a console app one hop from `ConPTY` — `pwsh.exe`, `vim` under WSL, `node.exe`. That's the case `ConPTY` was built for, and it works well. There's a narrower case that is harder: **a full-screen TUI, tunneled over SSH, that does its own out-of-band negotiation with the terminal.** `tvmail` is exactly that case.
 
-### 7.1 Why negotiation breaks the model
+### 7.1 Why negotiation is harder than drawing
 
-Apps like `vim` or `htop` mostly *write* — SGR colors, cursor moves, screen clears. `ConPTY` can translate that all day without knowing or caring who's on the other end.
+Apps like `vim` or `htop` mostly *write* — SGR colors, cursor moves, screen clears. Every layer in the chain can translate that all day without knowing or caring who's on the other end.
 
-A framework like [magiblot/tvision](https://github.com/magiblot/tvision) (the engine behind `tvmail`) also *asks questions*: Primary Device Attributes (`ESC[c`), window-size reports (`ESC[18t`), pixel geometry, mouse-encoding capability, `kitty`/`modifyOtherKeys` support. It expects the answers to come back byte-for-byte from the real terminal it's negotiating with. When that terminal is a hop away over SSH, `ConPTY` (or Cygwin's own console bridge, which has the same job one layer down) sits *in the middle of that conversation* — and because it has to keep its internal console-buffer model in sync for legacy Win32 apps, it can't just relay the bytes. It intercepts, reframes, or answers on the app's behalf. The reply that lands back at the remote TUI is no longer the one the real terminal would have sent.
+A framework like [magiblot/tvision](https://github.com/magiblot/tvision) (the engine behind `tvmail`) also *asks questions* and *switches on input extensions*: Primary Device Attributes (`ESC[c`), window-size reports (`ESC[18t`), pixel geometry, mouse encodings, `kitty`/`modifyOtherKeys`, and — for Windows Terminal's benefit — win32-input-mode (`ESC[?9001h`), in which every key press and release arrives as a record `ESC[Vk;Sc;Uc;Kd;Cs;Rc_`. The answers and the key records travel back through every layer in between, and every layer between the app and the real terminal (a pty, Cygwin's console layer, `ConPTY`, `ssh`) is a chance for them to be eaten, rewritten, doubled, delayed or **cut in two**.
 
-### 7.2 Case study: `tvmail` over SSH from Cygwin
+That last one matters because of an old design wart: a lone `ESC` byte means "the Escape key" *and* "the start of a sequence", and the only way a program can tell them apart is by timing — if nothing follows within a few milliseconds, it was the Escape key. ncurses (and so tvision) waits **10 ms** by default (`ESCDELAY`, and a 10 ms read timeout inside tvision). Any path that delivers the rest of a sequence later than that turns the `ESC` into a keypress and types the remainder as text.
 
-Confirmed empirically, September 2026, running this repo's `tvmail` on a Raspberry Pi over SSH from Windows:
+### 7.2 Case study: `tvmail` over SSH from Windows Terminal
+
+This was first seen in September 2026, running this repo's `tvmail` on a Raspberry Pi over SSH from Windows:
 
 | Client / terminal | Result |
 | :--- | :--- |
@@ -232,10 +234,36 @@ Confirmed empirically, September 2026, running this repo's `tvmail` on a Raspber
 | Cygwin `ssh` in Windows Terminal, `CYGWIN=disable_pcon` | No more garbage — but keystrokes and mouse clicks are silently dropped |
 | Cygwin `ssh` in **mintty** | Clean: no garbage, full input fidelity |
 
-The same failure class hits the *native* Windows OpenSSH client too — see [Win32-OpenSSH#2275](https://github.com/PowerShell/Win32-OpenSSH/issues/2275), where escape sequences leak into a `tmux` session and the only documented workaround (`SSH_TERM_CONHOST_PARSER=0`) trades garbage for slow, glitchy rendering. It isn't a Cygwin-specific bug — it's `ConPTY`-family behavior, wherever it sits in the chain.
+The first explanation was that `ConPTY` and Cygwin's pseudo-console bridge sit in the middle and rewrite the negotiation. In October 2026 it was measured properly, with [`termprobe`](https://github.com/chrispollitt/CWPutils/tree/main/toolbox) (CWPutils/toolbox), a small tool that asks the terminal the same questions tvision does and checks what comes back (Windows Terminal 1.24; Cygwin 3.7 development snapshot on one machine, a fresh 3.6.11 on another; the numbers below are from the first). The story turned out to be different, and in two parts.
 
-`mintty` sidesteps the problem entirely by not routing through `conhost`/`ConPTY` at all: it's a native Win32 GUI app that speaks VT directly to the Cygwin pty, so nothing between `tvmail` and the terminal is reinterpreting the stream. **This is why the recommended way to run `tvmail` over SSH from a Windows/Cygwin client is via `mintty`, not Windows Terminal.**
+**The colour question (OSC 11).**
+
+| Path in Windows Terminal | OSC 10/11 |
+| :--- | :--- |
+| Native Windows Python, `pwsh` | answered at once |
+| Native Windows Python started from Cygwin `bash` in the same tab | answered |
+| Cygwin Python in the Cygwin console (`/dev/cons*`) | **not answered** (DA1 is: it comes from Windows Terminal itself) |
+| Cygwin `ssh` from that console into Cygwin `sshd` | not answered |
+| Windows' `ssh.exe` into Cygwin `sshd` (`/dev/pty*`) | answered, about 50 ms |
+| mintty, direct or through Cygwin `ssh` | answered |
+
+So `ConPTY` and Windows Terminal answer the query for a native program, and for a Cygwin program behind a pty. What swallows it is **Cygwin's own console layer**, on the way out, not `ConPTY`.
+
+**The key input (win32-input-mode).** With plain input, win32-input-mode switched on by `ConPTY` is harmless: a program that does not ask for it gets plain characters. But `tvmail` asks for it, and then decodes the records. `termprobe --tvision` replays tvision's startup over the same path and counts the records that arrive cut in two, and how late the rest comes:
+
+| Run | Records | Split across reads | The rest came after |
+| :--- | :--- | :--- | :--- |
+| 1 | 33 | 5 | not recorded |
+| 2 | 33 | 3 | 16, 33 and 32 ms |
+
+Every gap that was measured is longer than ncurses' 10 ms. The gaps cluster at multiples of about 16 ms, which is suspiciously close to the default Windows timer tick, but which layer sleeps that long (Cygwin's `select`, `ConPTY`'s input pump, `ssh`) has not been established. The leaked text in `tvmail` (`[68;32;100;1;0;1_`) is exactly one such record whose `ESC` was taken for the Escape key.
+
+**The fix** is on the program's side: `tvmail` now defaults `ESCDELAY` to 100 ms and builds tvision with a 50 ms read timeout (`build.sh`). With that, typing in the compose window over SSH from Windows Terminal works. What has been re-tested is that one path; the September garbage-on-screen and dropped-input symptoms have the same signature (a cut-in-two sequence) and are expected to be fixed by the same change, but were not re-tested separately.
+
+The same failure class is reported for the *native* Windows OpenSSH client too — see [Win32-OpenSSH#2275](https://github.com/PowerShell/Win32-OpenSSH/issues/2275), where escape sequences leak into a `tmux` session and the only documented workaround (`SSH_TERM_CONHOST_PARSER=0`) trades garbage for slow, glitchy rendering.
 
 ### 7.3 The corrected claim
 
-> `ConPTY` closes the gap for **local, single-hop console apps** — the WSL/PowerShell/VS Code terminal case §4–§6 describe. It does not yet offer a transparent tunnel for **remote TUIs that negotiate terminal capabilities live**, because the very translation that makes legacy Win32 apps work is what corrupts that negotiation. For that case, as of 2026, an actual terminal emulator talking to an actual pty — `mintty`, a real `xterm`, WSL's own console — remains the only fully lossless path.
+> `ConPTY` closes the gap for **local, single-hop console apps** — the WSL/PowerShell/VS Code terminal case §4–§6 describe. For a **remote TUI that negotiates live**, the path through Windows Terminal, `ssh` and a Cygwin pty is not lossless, but it is not hopeless either: replies and key records get through whole, only sometimes **late and in pieces** (16-33 ms apart in the measurements above, roughly one record in ten), and a program that waits long enough for the rest — tvision with `ESCDELAY` and its read timeout raised — works. Separately, **Cygwin's own console layer swallows OSC queries**, so a Cygwin program in a Cygwin console tab cannot learn the terminal's colours; going through a pty (`ssh` to the machine, or mintty) avoids that. An actual terminal emulator talking to an actual pty — `mintty`, a real `xterm`, WSL's own console — is still the only path with no such caveats.
+
+Open questions, for anyone with the patience: which layer fragments the key records and why at timer-tick multiples, and why the Cygwin console drops OSC strings that Windows Terminal would answer (`termprobe` is a ready-made reproducer for both).
