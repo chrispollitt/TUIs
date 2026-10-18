@@ -262,7 +262,11 @@ Every gap that was measured is longer than ncurses' 10 ms. The gaps cluster at m
 
 The same failure class is reported for the *native* Windows OpenSSH client too — see [Win32-OpenSSH#2275](https://github.com/PowerShell/Win32-OpenSSH/issues/2275), where escape sequences leak into a `tmux` session and the only documented workaround (`SSH_TERM_CONHOST_PARSER=0`) trades garbage for slow, glitchy rendering.
 
-### 7.3 The corrected claim
+### 7.3 A way round it: a pty of its own
+
+The cleanest cure for the Cygwin-console half of the problem turned out to be giving the program a real pty without leaving Windows Terminal. `wincygterm` (CWPutils/toolbox) does that with two small pieces: a front-end on *native* Windows Python, which keeps the console raw and forwards bytes (nothing Cygwin sits on the console, so Windows Terminal's answers get through), and a helper on Cygwin's Python that runs `bash` on a Cygwin pty. In such a tab `tty` says `/dev/pty0`, `termprobe` reports the colour query ANSWERED, and `tvmail` works (October 2026, Windows Terminal 1.24, Cygwin 3.7 development snapshot). Key input arrives as plain characters rather than win32-input-mode records. It is not winpty, which goes the other way (a Windows console program inside a Unix pty).
+
+### 7.4 The corrected claim
 
 > `ConPTY` closes the gap for **local, single-hop console apps** — the WSL/PowerShell/VS Code terminal case §4–§6 describe. For a **remote TUI that negotiates live**, the path through Windows Terminal, `ssh` and a Cygwin pty is not lossless, but it is not hopeless either: replies and key records get through whole, only sometimes **late and in pieces** (16-33 ms apart in the measurements above, roughly one record in ten), and a program that waits long enough for the rest — tvision with `ESCDELAY` and its read timeout raised — works. Separately, **Cygwin's own console layer swallows OSC queries**, so a Cygwin program in a Cygwin console tab cannot learn the terminal's colours; going through a pty (`ssh` to the machine, or mintty) avoids that. An actual terminal emulator talking to an actual pty — `mintty`, a real `xterm`, WSL's own console — is still the only path with no such caveats.
 

@@ -27,10 +27,18 @@ To check a path without tvmail, run termprobe (CWPutils/toolbox):
                                  # how late the rest came
 
 If it still reports split records with gaps longer than your ESCDELAY, raise
-ESCDELAY, or fall back to a workaround:
+ESCDELAY, or use one of these:
 
-  1. Run ssh from mintty instead of Windows Terminal.
-  2. Run ssh from inside WSL instead of from Windows directly.
+  1. Run bash on a real pty inside Windows Terminal with wincygterm
+     (CWPutils/toolbox, needs a native Windows Python), e.g. as a profile
+     whose command line is the output of "python wincygterm --profile".
+     Cygwin programs there see /dev/pty*, not Cygwin's own console, and
+     tvmail was checked to work in such a tab.  Key input reaches the program
+     as plain characters, so the win32-input-mode records that got cut in two
+     do not exist on that path (even through a further ssh); that part is
+     expected, not separately tested.
+  2. Run ssh from mintty instead of Windows Terminal.
+  3. Run ssh from inside WSL instead of from Windows directly.
 
 I use this Windows Terminal profile for option 2:
 

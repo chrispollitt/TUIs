@@ -203,6 +203,10 @@ Every setting, with comments: `configure/tvmail.conf.example`.
   build is for mintty and other Unix terminals.
 - Run the scripts from a Cygwin shell (mintty or `bash -l`). Git Bash/MSYS
   hasn't been tested and lacks pieces like `python3`.
+- In Windows Terminal, a Cygwin tab that starts `bash` directly runs on Cygwin's
+  own console, which loses terminal replies and (over ssh) key input; see
+  `!WARNINGS.txt`, Warning 1. `wincygterm` (CWPutils/toolbox) gives the shell a
+  real pty instead.
 
 ## 6. What the scripts do (reference)
 
