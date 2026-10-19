@@ -248,15 +248,27 @@ lands in `cwp@u-l.ca`, and the part after the `+` says whose it is. Set
 `[sieve] plus = true` (and optionally `tag =`, default the local user name) and
 the table lists `cwp+chris@u-l.ca` in place of `cwp@u-l.ca` (`plus = both`
 lists the two). This only changes what the vacation reply *answers*. Two other
-pieces make the tag mean something: the puller has to sort fetched mail to the
-local user named by the tag, and Postfix's generic map has to send each user
-out as their tagged address (`chris@cpbee  cwp+chris@u-l.ca`). Also check that
-u-l.ca really delivers `cwp+anything@u-l.ca` to `cwp@u-l.ca` (send yourself one).
+pieces make the tag mean something, and both live in mail-setup: the fetch has
+to sort mail to the local user named by the tag, and Postfix's generic map has
+to send each user out as their tagged address (`chris@cpbee  cwp+chris@u-l.ca`).
+Mind where the host puts tagged mail: cPanel hosts such as u-l.ca deliver
+`cwp+chris@u-l.ca` into an IMAP *folder* named `chris`, not the inbox, where POP
+can't see it. mail-setup's `configure-getmail.sh --imap --plus-base ...` fetches
+those folders; see its README, "Several users, one mailbox", and test the host
+first with `tests/live/check-plus-addressing.py`.
 
 Things that can stop it working: the message was not addressed to a listed
 address (no reply, silently); only one Sieve script can be active, so tvmail
 asks before replacing another; and the smarthost must accept the public
 address as the sender of the reply.
+
+**`tvmail-backend vacation status` times out** while 22, 25, 143 and 993 work:
+a firewall on the master is dropping 4190. If the master is a router with a
+default-drop nftables input chain, `configure-sieve.sh` prints the rule to add
+(`nft add rule inet filter input iifname "lan0" tcp dport 4190 accept`, taken
+from wherever IMAP is already accepted) and `--open-firewall` adds it; make it
+permanent by adding 4190 to the 143/993 rule in your nftables file. A "connection
+refused" instead means managesieve is not running (`ss -ltn | grep 4190`).
 
 ## 5. Cygwin / Windows notes
 
