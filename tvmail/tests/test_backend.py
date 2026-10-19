@@ -10,6 +10,7 @@ import importlib.util
 import io
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -1343,6 +1344,39 @@ class TestSpamSweep(Base):
         self.assertIn("Junk", [d for _, d in fake.copied])
 
 
+class TestOriginHeaders(Base):
+    """loud and proud: every sent message names its tool and its origin"""
+
+    def _sent(self, stdin):
+        out = self.tmp / "sent.eml"
+        mta = self.tmp / "mta"
+        mta.write_text("#!%s\nimport sys\nopen(%r,'wb').write(sys.stdin.buffer.read())\n"
+                       % (sys.executable, str(out)))
+        mta.chmod(0o755)
+        os.environ["SENDMAIL"] = str(mta)
+        os.environ["TVMAIL_CONF"] = str(self.tmp / "none.conf")
+        p = self.be("send", "--to", "a@b", stdin=stdin)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return email.message_from_bytes(out.read_bytes())
+
+    def test_plain_text_gets_tool_user_and_host(self):
+        m = self._sent(b"hello\n")
+        self.assertEqual(m["X-Mailer"], "tvmail-backend 1.2.0")
+        self.assertEqual(m["X-Origin-User"], "tester")
+        self.assertEqual(m["X-Origin-Host"], socket.gethostname().replace(" ", "_"))
+
+    def test_the_tui_keeps_its_own_x_mailer(self):
+        m = self._sent(b"X-Mailer: tvmail 1.2.0\nTo: a@b\nSubject: s\n\nhi\n")
+        self.assertEqual(m.get_all("X-Mailer"), ["tvmail 1.2.0"])
+        self.assertEqual(m["X-Origin-User"], "tester")
+
+    def test_an_existing_origin_survives_a_resend(self):
+        m = self._sent(b"To: a@b\nX-Origin-User: orig\n"
+                       b"X-Origin-Host: elsewhere\nSubject: s\n\nhi\n")
+        self.assertEqual(m.get_all("X-Origin-User"), ["orig"])
+        self.assertEqual(m.get_all("X-Origin-Host"), ["elsewhere"])
+
+
 class TestSmtpSend(Base):
     def test_smtp_send_forces_from_and_envelope(self):
         conf = self.tmp / "c.conf"
@@ -1376,7 +1410,37 @@ class TestSmtpSend(Base):
         self.assertTrue(ok)
         self.assertEqual(sent["frm"], "bot@x")               # envelope sender
         self.assertIn(b"From: Bot <bot@x>", sent["data"])
-        self.assertNotIn(b"orig@y", sent["data"])
+        self.assertNotRegex(sent["data"], rb"(?m)^From: orig@y")
+        # ...but the rewrite doesn't lose where it came from
+        self.assertIn(b"X-Original-From: orig@y", sent["data"])
+
+    def test_smtp_send_keeps_an_earlier_x_original_from(self):
+        conf = self.tmp / "c.conf"
+        conf.write_text("[smtp]\nhost=h\nport=25\nstarttls=false\nauth=false\n"
+                        "from=Bot <bot@x>\n")
+        os.environ["TVMAIL_CONF"] = str(conf)
+        sent = {}
+
+        class FakeSMTP:
+            def __init__(s, host, port, timeout=None):
+                pass
+            def ehlo(s):
+                pass
+            def sendmail(s, frm, rcpts, data):
+                sent["data"] = data
+            def quit(s):
+                pass
+
+        import smtplib
+        real, smtplib.SMTP = smtplib.SMTP, FakeSMTP
+        try:
+            m = email.message_from_string(
+                "From: orig@y\nX-Original-From: first@z\nSubject: s\n\nhi\n")
+            be._smtp_send(m, ["a@b"])
+        finally:
+            smtplib.SMTP = real
+        self.assertEqual(sent["data"].count(b"X-Original-From:"), 1)
+        self.assertIn(b"X-Original-From: first@z", sent["data"])
 
     def test_smtp_send_no_section_returns_false(self):
         os.environ["TVMAIL_CONF"] = str(self.tmp / "none.conf")

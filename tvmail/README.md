@@ -301,6 +301,11 @@ once.
   left for you to fill in.
 - `To:` / `Cc:` / `Bcc:` all expand `~/.mailrc` aliases and groups on send;
   `Bcc:` is stripped before the message is delivered, same as any MTA.
+- Sent mail is loud and proud about where it came from: `X-Mailer: tvmail
+  VERSION`, plus `X-Origin-User` / `X-Origin-Host` (who sent it, from which
+  machine). They are only added when missing, so a message that is re-sent or
+  rewritten keeps its original origin; when `[smtp] from =` forces the sender,
+  the replaced `From:` is kept as `X-Original-From`.
 - Closing an **unsent** message offers **Save draft / Discard / Cancel**. Save
   appends to the drafts mbox.
 - In the **Drafts** folder, `Enter` reopens a draft to finish; sending it

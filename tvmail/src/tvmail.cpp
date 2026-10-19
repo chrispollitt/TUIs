@@ -1923,7 +1923,10 @@ public:
         std::string cc = ccLine->data ? ccLine->data : "";
         std::string bcc = bccLine->data ? bccLine->data : "";
         std::string subj = subjLine->data ? subjLine->data : "";
-        std::string msg = "To: " + to + "\n";
+        // loud and proud: name the tool + version.  tvmail-backend adds the
+        // origin user/host (X-Origin-User/-Host) and never overwrites this.
+        std::string msg = "X-Mailer: tvmail " TVMAIL_VERSION "\n";
+        msg += "To: " + to + "\n";
         if (!strip(cc).empty())
             msg += "Cc: " + cc + "\n";
         if (!strip(bcc).empty())

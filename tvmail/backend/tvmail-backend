@@ -98,6 +98,26 @@ def _me():
         return "nobody"
 
 
+def _hdr_safe(s):
+    """Header-safe ASCII: no controls, no folding."""
+    import re
+    return re.sub(r"[^\x21-\x7e]+", "_", str(s))[:200] or "unknown"
+
+
+def _stamp(msg):
+    """Say who sent this and where from ("loud and proud").  Adds, only when
+    absent, X-Mailer (the tool + version; a caller such as the tvmail TUI that
+    already named itself keeps its own) and X-Origin-User / X-Origin-Host.
+    Nothing existing is overwritten, so a message that is re-sent, forwarded
+    or rewritten later keeps the origin it started with."""
+    if "X-Mailer" not in msg and "User-Agent" not in msg:
+        msg["X-Mailer"] = "tvmail-backend %s" % __version__
+    if "X-Origin-User" not in msg:
+        msg["X-Origin-User"] = _hdr_safe(_me())
+    if "X-Origin-Host" not in msg:
+        msg["X-Origin-Host"] = _hdr_safe(socket.gethostname())
+
+
 def _sendmail():
     """Find a sendmail-compatible MTA.  Overridable with $SENDMAIL."""
     env = os.environ.get("SENDMAIL")
@@ -710,6 +730,11 @@ def _smtp_send(msg, rcpts):
     # master then just relays, no server-side rewrite needed.
     forced = c.get("smtp", "from", fallback="").strip()
     if forced:
+        # keep the address we're about to replace: the origin must survive
+        # the rewrite (only if no earlier hop already recorded one)
+        if msg.get("From") and "X-Original-From" not in msg \
+                and email.utils.parseaddr(msg["From"])[1] != email.utils.parseaddr(forced)[1]:
+            msg["X-Original-From"] = " ".join(str(msg["From"]).split())
         del msg["From"]
         msg["From"] = forced
     frm = email.utils.parseaddr(msg.get("From", ""))[1] or user
@@ -1321,7 +1346,8 @@ def cmd_send(a):
     data = sys.stdin.buffer.read()
     looks_rfc822 = data[:200].lstrip().lower().startswith((
         b"from:", b"to:", b"subject:", b"date:", b"cc:", b"mime-version:",
-        b"content-type:", b"reply-to:", b"message-id:"))
+        b"content-type:", b"reply-to:", b"message-id:",
+        b"x-mailer:", b"user-agent:"))     # the TUI's message starts X-Mailer:
     if looks_rfc822:
         msg = email.message_from_bytes(data)
     else:
@@ -1333,6 +1359,7 @@ def cmd_send(a):
         msg["Subject"] = a.subject
     for t in a.to:
         msg["To"] = t
+    _stamp(msg)
 
     # Address book: expand ~/.mailrc alias/group names in To:/Cc:/Bcc:
     to_hdr = _expand_recipients(_rcpts(msg, ("To",)))
