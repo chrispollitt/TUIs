@@ -301,7 +301,7 @@ class TestCli(Base):
         help_out = self.be("--help")
         self.assertEqual(help_out.returncode, 0)
         self.assertIn(b"--trace", help_out.stdout)
-        self.assertEqual(self.be("--version").stdout.strip(), b"tvmail-backend 1.0.0")
+        self.assertEqual(self.be("--version").stdout.strip(), b"tvmail-backend 1.1.0")
         debug = self.tmp / "debug.log"
         trace = self.tmp / "trace.log"
         p = self.be("--debug", str(debug), "--trace", str(trace), "ping")
@@ -317,6 +317,28 @@ class TestCli(Base):
         self.assertEqual(r[0].split("\t")[1], ".")     # Status: RO -> seen
         self.assertEqual(r[1].split("\t")[1], "N")     # no Status  -> new
         self.assertIn("\xa1Hola!", r[1])
+
+    def test_counts_total_and_unseen(self):
+        # the folder pane's "inbox (3)" numbers: name, total, unseen
+        p = self.be("counts", str(self.spool), "drafts")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        lines = p.stdout.decode().splitlines()
+        self.assertEqual(lines[0], "%s\t2\t1" % self.spool)   # one RO, one new
+        self.assertEqual(lines[1], "drafts\t0\t0")            # not created yet
+        self.be("mark", "1", "read", str(self.spool))
+        self.assertTrue(self.be("counts", str(self.spool)).stdout.decode()
+                        .endswith("\t2\t0\n"))
+
+    def test_counts_default_is_every_folder_but_dead(self):
+        names = [l.split("\t")[0] for l in
+                 self.be("counts").stdout.decode().splitlines()]
+        self.assertEqual(names, ["spool", "drafts", "sent", "mbox", "spam", "trash"])
+
+    def test_show_does_not_mark_read(self):
+        # the UI previews with plain show and marks read separately, so a
+        # message you only arrowed past stays unread
+        self.be("show", "1", str(self.spool))
+        self.assertEqual(self.rows(self.spool)[1].split("\t")[1], "N")
 
     def test_list_missing_mbox_is_empty_ok(self):
         p = self.be("list", str(self.tmp / "nope.mbox"))
@@ -787,6 +809,14 @@ class FakeIMAP:
             return ("OK", [b"ok"])
         return ("OK", [b""])
 
+    def status(self, mailbox, what):
+        name = mailbox.strip('"')
+        if name not in self.folders:
+            return ("NO", [b"no such mailbox"])
+        rows = self.folders[name]
+        unseen = sum(1 for r in rows if "\\Seen" not in r[1])
+        return ("OK", [('"%s" (MESSAGES %d UNSEEN %d)' % (name, len(rows), unseen)).encode()])
+
     def create(self, name):
         name = name.strip('"')
         self.folders.setdefault(name, [])
@@ -856,6 +886,15 @@ class TestRemoteIMAP(Base):
         self.assertEqual(rows[0].split("\t")[1], ".")   # \Seen
         self.assertEqual(rows[1].split("\t")[1], "N")
         self.assertIn("Second", rows[1])
+
+    def test_counts_over_imap_uses_status_not_select(self):
+        selected = []
+        orig = self.imap.select
+        self.imap.select = lambda *a, **kw: (selected.append(a), orig(*a, **kw))[1]
+        out = self._run(be.cmd_counts, self.ns(mboxes=["spool", "trash"])).decode()
+        # INBOX has 3 messages, 2 unseen; Trash doesn't exist yet -> 0 0
+        self.assertEqual(out.splitlines(), ["spool\t3\t2", "trash\t0\t0"])
+        self.assertEqual(selected, [])    # STATUS leaves the open folder alone
 
     def test_show_over_imap(self):
         out = self._run(be.cmd_show, self.ns(idx=1)).decode()

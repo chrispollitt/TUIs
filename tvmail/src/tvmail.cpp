@@ -74,7 +74,7 @@
 #define TVMAIL_SH "/bin/sh"
 #endif
 #ifndef TVMAIL_VERSION
-#define TVMAIL_VERSION "1.0.0"
+#define TVMAIL_VERSION "1.1.0"
 #endif
 
 // ---------------------------------------------------------------- commands ---
@@ -107,6 +107,16 @@ const ushort cmMarkUnread = 2028;   // mark the focused message unread
 const ushort cmPurgeMsgs = 2029;    // open the purge dialog
 const ushort cmMoveMsg = 2030;      // move the focused message to another folder
 const ushort cmEmptyTrash = 2031;   // permanently delete everything in the trash folder
+const ushort cmMarkRead = 2032;     // mark the focused message read
+const ushort cmSaveMsg = 2033;      // save the focused message to a file (.eml)
+const ushort cmWindowList = 2034;   // Window > List... (Alt-0)
+const ushort cmSortDate = 2035;     // list order: mailbox order (oldest first)
+const ushort cmSortFrom = 2036;     //             by sender
+const ushort cmSortSubj = 2037;     //             by subject
+const ushort cmSortUnread = 2038;   //             unread first
+const ushort cmSortReverse = 2039;  // flip the current order
+const ushort cmClearFilter = 2040;  // drop the type-to-filter text
+const ushort cmFilterChanged = 2041; // broadcast: list view rebuilt (title refresh)
 
 // ------------------------------------------------------ editor dialogs -----
 // Wire up the standard Find / Replace / "search failed" dialogs the TEditor
@@ -798,7 +808,20 @@ struct MsgRow
     char flag = '.';
     std::string date, from, subj;
 };
-static std::vector<MsgRow> gRows;
+static std::vector<MsgRow> gAll;  // everything the backend listed
+static std::vector<MsgRow> gRows; // what the pane shows: gAll, filtered and sorted
+                                  // (MsgRow::idx is still the backend index)
+
+enum SortKey
+{
+    sortDate, // mailbox order, oldest first
+    sortFrom,
+    sortSubj,
+    sortUnread // unread before read
+};
+static SortKey gSortKey = sortDate;
+static bool gSortRev = false;
+static std::string gFilter; // type-to-filter text (From / Subject, any case)
 
 struct Folder
 {
@@ -890,9 +913,88 @@ static std::string mailWindowTitle()
     return "tvmail - " + gHost + (gRemote ? " (remote)" : " (local)");
 }
 
-static void loadList()
+static std::string lowered(std::string s)
+{
+    for (char &c : s)
+        c = (char)std::tolower((unsigned char)c);
+    return s;
+}
+
+// Rebuild gRows from gAll: apply the type-to-filter text, then the sort.
+static void applyView()
 {
     gRows.clear();
+    std::string f = lowered(gFilter);
+    for (const MsgRow &r : gAll)
+        if (f.empty() || lowered(r.from).find(f) != std::string::npos ||
+            lowered(r.subj).find(f) != std::string::npos)
+            gRows.push_back(r);
+    switch (gSortKey)
+    {
+    case sortDate:
+        break; // mailbox order
+    case sortFrom:
+        std::stable_sort(gRows.begin(), gRows.end(), [](const MsgRow &a, const MsgRow &b)
+                         { return lowered(a.from) < lowered(b.from); });
+        break;
+    case sortSubj:
+        std::stable_sort(gRows.begin(), gRows.end(), [](const MsgRow &a, const MsgRow &b)
+                         { return lowered(a.subj) < lowered(b.subj); });
+        break;
+    case sortUnread:
+        std::stable_sort(gRows.begin(), gRows.end(), [](const MsgRow &a, const MsgRow &b)
+                         { return (a.flag == 'N') > (b.flag == 'N'); });
+        break;
+    }
+    if (gSortRev)
+        std::reverse(gRows.begin(), gRows.end());
+}
+
+// Flag change after mark read/unread: gAll is the master, gRows a view of it.
+static void setRowFlag(int idx, char flag)
+{
+    for (MsgRow &r : gAll)
+        if (r.idx == idx)
+            r.flag = flag;
+    for (MsgRow &r : gRows)
+        if (r.idx == idx)
+            r.flag = flag;
+}
+
+// Per-folder message and unread counts, for "inbox (3)" in the folder pane.
+// -1 = not known (the backend had no line for it).
+static int gTotal[gFolderCount];
+static int gUnread[gFolderCount];
+
+static void loadCounts()
+{
+    for (int i = 0; i < gFolderCount; ++i)
+        gTotal[i] = gUnread[i] = -1;
+    std::istringstream is(backendRun("counts"));
+    std::string line;
+    while (std::getline(is, line))
+    {
+        std::istringstream ls(line);
+        std::string name, tot, uns;
+        std::getline(ls, name, '\t');
+        std::getline(ls, tot, '\t');
+        std::getline(ls, uns);
+        if (tot.empty() || uns.empty() ||
+            tot.find_first_not_of("0123456789") != std::string::npos ||
+            uns.find_first_not_of("0123456789\r") != std::string::npos)
+            continue; // an error line, not a count
+        for (int i = 0; i < gFolderCount; ++i)
+            if (name == gFolders[i].mbox)
+            {
+                gTotal[i] = std::atoi(tot.c_str());
+                gUnread[i] = std::atoi(uns.c_str());
+            }
+    }
+}
+
+static void loadList()
+{
+    gAll.clear();
     std::string raw = backendRun("list " + gMbox);
     std::istringstream is(raw);
     std::string line;
@@ -913,8 +1015,9 @@ static void loadList()
         r.date = date;
         r.from = from;
         r.subj = subj;
-        gRows.push_back(r);
+        gAll.push_back(r);
     }
+    applyView();
 }
 
 // ------------------------------------------------------- blue desktop ------
@@ -986,7 +1089,18 @@ public:
             dest[0] = 0;
             return;
         }
-        std::strncpy(dest, gFolders[item].name, maxLen);
+        // "inbox (3)": unread for the mail folders, how many are waiting
+        // for drafts; nothing for sent / trash / dead.letter.
+        std::string label = gFolders[item].name;
+        const std::string m = gFolders[item].mbox;
+        int n = -1;
+        if (m == "spool" || m == "mbox" || m == "spam")
+            n = gUnread[item];
+        else if (m == "drafts")
+            n = gTotal[item];
+        if (n > 0)
+            label += " (" + std::to_string(n) + ")";
+        std::strncpy(dest, label.c_str(), maxLen);
         dest[maxLen] = 0;
     }
     void focusItem(short item) override
@@ -1058,13 +1172,56 @@ public:
     }
     void handleEvent(TEvent &e) override
     {
-        if (e.what == evKeyDown && e.keyDown.keyCode == kbEnter)
+        if (e.what == evKeyDown)
         {
-            selectItem(focused);
-            clearEvent(e);
-            return;
+            if (e.keyDown.keyCode == kbEnter)
+            {
+                selectItem(focused);
+                clearEvent(e);
+                return;
+            }
+            if (filterKey(e.keyDown))
+            {
+                clearEvent(e);
+                return;
+            }
         }
         TListViewer::handleEvent(e);
+    }
+    // Type-to-filter: plain characters build a From/Subject filter, Backspace
+    // trims it, Esc drops it.  Nothing else in this pane uses plain letters.
+    bool filterKey(const KeyDownEvent &k)
+    {
+        if (k.controlKeyState & (kbCtrlShift | kbAltShift))
+            return false;
+        std::string f = gFilter;
+        if (k.keyCode == kbEsc)
+        {
+            if (f.empty())
+                return false;
+            f.clear();
+        }
+        else if (k.keyCode == kbBack)
+        {
+            if (f.empty())
+                return false;
+            while (f.size() > 1 && ((uchar)f.back() & 0xC0) == 0x80)
+                f.pop_back(); // whole UTF-8 character
+            f.pop_back();
+        }
+        else if (k.textLength > 0 && (uchar)k.text[0] >= 0x20 && (uchar)k.text[0] != 0x7F)
+        {
+            if (k.text[0] == ' ' && f.empty())
+                return false; // Space on a message stays "open it"
+            f.append(k.text, k.textLength);
+        }
+        else
+            return false;
+        gFilter = f;
+        applyView();
+        if (owner)
+            message(owner, evBroadcast, cmFilterChanged, this);
+        return true;
     }
     void setState(ushort aState, Boolean enable) override
     {
@@ -1088,11 +1245,17 @@ public:
         }
         return TView::mapColor(i);
     }
-    void reload()
+    // Re-read gRows and put the highlight on row `sel` (clamped).  Goes
+    // through the base focusItem(), which scrolls to it without announcing
+    // cmMsgPicked - the caller decides whether the body needs reloading.
+    void reload(int sel = 0)
     {
         setRange((short)gRows.size());
-        if (focused >= (short)gRows.size())
-            focused = gRows.empty() ? 0 : (short)gRows.size() - 1;
+        if (sel >= (int)gRows.size())
+            sel = (int)gRows.size() - 1;
+        if (sel < 0)
+            sel = 0;
+        TListViewer::focusItem((short)sel);
         drawView();
     }
 };
@@ -1227,6 +1390,14 @@ public:
             drawView();
         }
     }
+    void setLabel(const std::string &l)
+    {
+        if (l != label)
+        {
+            label = l;
+            drawView();
+        }
+    }
     void draw() override
     {
         TColorAttr rule = cDim();
@@ -1310,6 +1481,7 @@ public:
         insert(contentPane);
         insert(folderPane);
 
+        loadCounts();
         loadFolder();
         ready = True;
         folderPane->select();
@@ -1327,18 +1499,97 @@ public:
             contentTitle->setActive(Boolean(p == 2));
     }
 
-    void loadFolder()
+    // keep: stay on the same message across the reload (F5, mark, delete,
+    // pull...) instead of jumping back to the top of the list.
+    void loadFolder(bool keep = false)
     {
+        int keepIdx = -1, keepPos = 0;
+        if (keep && msgPane && msgPane->focused >= 0 && msgPane->focused < (int)gRows.size())
+        {
+            keepPos = msgPane->focused;
+            keepIdx = gRows[keepPos].idx;
+        }
         gMbox = gFolders[gFolderIdx].mbox;
         loadList();
+        // the list we just read is the freshest word on this folder's counts
+        if (gMbox != "dead")
+        {
+            gTotal[gFolderIdx] = (int)gAll.size();
+            gUnread[gFolderIdx] = (int)std::count_if(gAll.begin(), gAll.end(),
+                                                     [](const MsgRow &r)
+                                                     { return r.flag == 'N'; });
+        }
         if (msgPane)
         {
-            msgPane->focused = 0;
-            msgPane->reload();
+            int sel = keepPos; // message gone (deleted/moved): nearest row
+            if (keepIdx >= 0)
+                for (size_t i = 0; i < gRows.size(); ++i)
+                    if (gRows[i].idx == keepIdx)
+                    {
+                        sel = (int)i;
+                        break;
+                    }
+            msgPane->reload(sel);
         }
+        refreshTitles();
+        if (folderPane)
+            folderPane->drawView();
         loadContent();
     }
 
+    // Folder-pane numbers and the Messages heading (filter, sort order).
+    void refreshTitles()
+    {
+        if (!msgTitle)
+            return;
+        std::string t = "Messages";
+        if (!gFilter.empty())
+            t += "  filter: " + gFilter + "_  (" + std::to_string(gRows.size()) +
+                 " of " + std::to_string(gAll.size()) + ")";
+        const char *how = nullptr;
+        switch (gSortKey)
+        {
+        case sortDate:
+            how = gSortRev ? "newest first" : nullptr;
+            break;
+        case sortFrom:
+            how = gSortRev ? "from Z-A" : "from A-Z";
+            break;
+        case sortSubj:
+            how = gSortRev ? "subject Z-A" : "subject A-Z";
+            break;
+        case sortUnread:
+            how = gSortRev ? "read first" : "unread first";
+            break;
+        }
+        if (how)
+            t += std::string("  sort: ") + how;
+        msgTitle->setLabel(t);
+    }
+
+    // The view (filter / sort) changed but the folder didn't: rebuild the
+    // list without asking the backend again, and stay on the same message
+    // if it is still shown.
+    void viewChanged(bool resetSel)
+    {
+        int keepIdx = -1;
+        if (!resetSel && msgPane && msgPane->focused >= 0 && msgPane->focused < (int)gRows.size())
+            keepIdx = gRows[msgPane->focused].idx;
+        applyView();
+        int sel = 0;
+        for (size_t i = 0; keepIdx >= 0 && i < gRows.size(); ++i)
+            if (gRows[i].idx == keepIdx)
+                sel = (int)i;
+        if (msgPane)
+            msgPane->reload(sel);
+        refreshTitles();
+        loadContent();
+    }
+
+    // Showing a message does not read it: the body is only fetched.  It is
+    // marked read once you actually look - the body pane takes focus (Enter,
+    // Tab, click), or Message > Mark read - so arrowing through the inbox
+    // leaves it unread, and "Mark unread" stays marked.
     void loadContent()
     {
         if (!contentPane)
@@ -1350,34 +1601,33 @@ public:
             return;
         }
         int b = gRows[msgPane->focused].idx;
-        if (gRemote)
-        {
-            // --mark-read folds the "mark ... read" round trip into this
-            // same call, reusing its SELECT/SEARCH instead of a second one -
-            // remote mode pays real network latency for every extra round
-            // trip here, so the merge is worth the added complexity.
-            auto ls = splitLines(backendRun("show " + std::to_string(b) + " " + gMbox + " --mark-read"));
-            contentPane->setLines(std::move(ls));
-        }
-        else
-        {
-            // Local mbox access has no round trip to amortize, so there's
-            // nothing to gain by merging here - keep marking read a
-            // separate, best-effort call whose errors are discarded (as
-            // before tonight), so a failed mark can never affect what's
-            // actually displayed.
-            auto ls = splitLines(backendRun("show " + std::to_string(b) + " " + gMbox));
-            contentPane->setLines(std::move(ls));
-            std::string o;
-            int s = 0;
-            if (!Backend::instance().call("mark " + std::to_string(b) + " read " + gMbox, o, s))
-                shCapture(backendCommand("mark " + std::to_string(b) + " read" + mboxArg()) + " >/dev/null 2>&1");
-        }
-        gRows[msgPane->focused].flag = '.';
-        msgPane->drawView();
+        contentPane->setLines(splitLines(backendRun("show " + std::to_string(b) + " " + gMbox)));
     }
 
-    void reloadFolder() { loadFolder(); }
+    // Flag the highlighted message read (or unread), best effort: a failed
+    // mark must not disturb what is on screen.
+    void markFocused(bool read)
+    {
+        if (!msgPane || msgPane->focused < 0 || msgPane->focused >= (int)gRows.size())
+            return;
+        const MsgRow &r = gRows[msgPane->focused];
+        if (gMbox == "dead" || (r.flag == 'N') == !read)
+            return; // nothing to change
+        backendRun("mark " + std::to_string(r.idx) + (read ? " read " : " unread ") + gMbox);
+        setRowFlag(r.idx, read ? '.' : 'N');
+        if (gUnread[gFolderIdx] >= 0)
+            gUnread[gFolderIdx] = std::max(0, gUnread[gFolderIdx] + (read ? -1 : 1));
+        msgPane->drawView();
+        folderPane->drawView();
+        if (gSortKey == sortUnread) // the order depends on the flag
+            viewChanged(false);
+    }
+
+    void reloadFolder()
+    {
+        loadCounts();
+        loadFolder(true);
+    }
 
     void handleEvent(TEvent &e) override
     {
@@ -1387,6 +1637,7 @@ public:
             switch (e.message.command)
             {
             case cmFolderPicked:
+                gFilter.clear(); // a filter belongs to the folder it was typed in
                 loadFolder();
                 clearEvent(e);
                 break;
@@ -1394,11 +1645,17 @@ public:
                 loadContent();
                 clearEvent(e);
                 break;
+            case cmFilterChanged:
+                viewChanged(true);
+                clearEvent(e);
+                break;
             case cmPaneFocused:
             {
                 void *v = e.message.infoPtr;
                 setActivePane(v == folderPane ? 0 : v == msgPane ? 1
                                                                  : 2);
+                if (v == contentPane)
+                    markFocused(true); // you are reading it now
                 clearEvent(e);
                 break;
             }
@@ -1605,9 +1862,10 @@ static ushort askSaveDraft()
 // a wildcard) so the directory listing still shows every file and Enter
 // alone saves into the current directory under that name. Empty string
 // means cancelled.
-static std::string askSavePath(const std::string &suggested)
+static std::string askSavePath(const std::string &suggested,
+                               const char *title = "Save attachment as")
 {
-    TFileDialog *d = new TFileDialog("*.*", "Save attachment as", "~N~ame",
+    TFileDialog *d = new TFileDialog("*.*", title, "~N~ame",
                                      fdOKButton, 100);
     char path[MAXPATH];
     std::strncpy(path, suggested.c_str(), sizeof path - 1);
@@ -2279,6 +2537,23 @@ static const char *kHelpText =
     "  F5       reload the current folder\n"
     "  F3       local: pull new mail (mail-pull)  .  remote: file tagged spam\n"
     "  Message > View source shows the raw RFC822 message.\n"
+    "  File > Save message as... writes it to a .eml file.\n"
+    "\n"
+    "READ AND UNREAD\n"
+    "  Arrowing through the list only previews a message: it stays unread (N).\n"
+    "  It is marked read once you look - Enter or Tab to the body pane - or by\n"
+    "  Message > Mark read.  Message > Mark unread puts the N back, and it stays.\n"
+    "  Folders show what is waiting:  inbox (3) = unread, drafts (2) = how many.\n"
+    "\n"
+    "FINDING AND ORDERING   (message list)\n"
+    "  Just type: the list narrows to messages whose From or Subject contains the\n"
+    "  text (any case).  Backspace trims it, Esc clears it (or View > Clear filter).\n"
+    "  View > Sort by date / from / subject / Unread first; choosing the same sort\n"
+    "  again, or View > Reverse order, flips it.  Date is mailbox order, oldest\n"
+    "  first - Reverse gives newest first.  The Messages heading shows both.\n"
+    "\n"
+    "WINDOWS\n"
+    "  F6 / Shift-F6 cycle windows; Window > List (Alt-0) lists them all.\n"
     "\n"
     "COMPOSING\n"
     "  Ctrl-N   new message            Ctrl-R  reply to the selected message\n"
@@ -2402,6 +2677,9 @@ private:
     void resumeDeadLetter();
     void deleteMsg(int row);
     void markUnread(int row);
+    void markRead(int row);
+    void saveMsg(int row);
+    void windowList();
     void moveMsg(int row);
     void viewParts(int row);
     void purgeDialog();
@@ -2427,6 +2705,7 @@ TMenuBar *TVMailApp::initMenuBar(TRect r)
                             *new TMenuItem(gRemote ? "File ~s~pam" : "~P~ull mail",
                                            cmPull, kbF3, hcNoContext, "F3") +
                             *new TMenuItem("~R~eload", cmReload, kbF5, hcNoContext, "F5") +
+                            *new TMenuItem("Sa~v~e message as...", cmSaveMsg, kbNoKey, hcNoContext) +
                             *new TMenuItem("P~u~rge...", cmPurgeMsgs, kbNoKey, hcNoContext) +
                             *new TMenuItem("Empty ~t~rash...", cmEmptyTrash, kbNoKey, hcNoContext) +
                             newLine() +
@@ -2449,6 +2728,7 @@ TMenuBar *TVMailApp::initMenuBar(TRect r)
                             *new TMenuItem("~P~arts...", cmViewParts, kbNoKey, hcNoContext) +
                             *new TMenuItem("~V~iew source", cmViewSrc, kbNoKey, hcNoContext) +
                             newLine() +
+                            *new TMenuItem("Mar~k~ read", cmMarkRead, kbNoKey, hcNoContext) +
                             *new TMenuItem("Mark ~u~nread", cmMarkUnread, kbNoKey, hcNoContext) +
                             *new TMenuItem("M~o~ve to...", cmMoveMsg, kbNoKey, hcNoContext) +
                             *new TMenuItem("~D~elete", cmDeleteMsg, kbCtrlD, hcNoContext, "Ctrl-D") +
@@ -2462,12 +2742,21 @@ TMenuBar *TVMailApp::initMenuBar(TRect r)
                             *new TMenuItem("~F~ind...", cmFind, kbNoKey, hcNoContext) +
                             *new TMenuItem("~R~eplace...", cmReplace, kbNoKey, hcNoContext) +
                             *new TMenuItem("Find a~g~ain", cmSearchAgain, kbNoKey, hcNoContext) +
+                            *new TSubMenu("~V~iew", kbAltV) +
+                            *new TMenuItem("Sort by ~d~ate", cmSortDate, kbNoKey, hcNoContext) +
+                            *new TMenuItem("Sort by ~f~rom", cmSortFrom, kbNoKey, hcNoContext) +
+                            *new TMenuItem("Sort by ~s~ubject", cmSortSubj, kbNoKey, hcNoContext) +
+                            *new TMenuItem("~U~nread first", cmSortUnread, kbNoKey, hcNoContext) +
+                            *new TMenuItem("~R~everse order", cmSortReverse, kbNoKey, hcNoContext) +
+                            newLine() +
+                            *new TMenuItem("~C~lear filter", cmClearFilter, kbNoKey, hcNoContext, "Esc") +
                             *new TSubMenu("~W~indow", kbAltW) +
                             *new TMenuItem("~N~ext", cmNext, kbF6, hcNoContext, "F6") +
                             *new TMenuItem("~P~revious", cmPrev, kbShiftF6, hcNoContext, "Shift-F6") +
                             *new TMenuItem("~Z~oom", cmZoom, kbNoKey, hcNoContext) +
                             *new TMenuItem("~T~ile", cmTile, kbNoKey, hcNoContext) +
                             *new TMenuItem("C~a~scade", cmCascade, kbNoKey, hcNoContext) +
+                            *new TMenuItem("~L~ist...", cmWindowList, kbAlt0, hcNoContext, "Alt-0") +
                             newLine() +
                             *new TMenuItem("~C~lose", cmClose, kbAltF3, hcNoContext, "Alt-F3") +
                             *new TSubMenu("~H~elp", kbAltH) +
@@ -2605,17 +2894,120 @@ void TVMailApp::deleteMsg(int row)
         messageBox(out.c_str(), mfInformation | mfOKButton);
 }
 
+// Mark read / unread.  The window does the work (backend call, flag, folder
+// counts); a message only becomes read by itself once the body pane takes
+// focus, so an unread mark made here stays put.
 void TVMailApp::markUnread(int row)
+{
+    if (row >= 0 && mainWin)
+        mainWin->markFocused(false);
+}
+
+void TVMailApp::markRead(int row)
+{
+    if (row >= 0 && mainWin)
+        mainWin->markFocused(true);
+}
+
+// File > Save message as...: the raw RFC822 message (headers, attachments and
+// all) to a file - an .eml that any mail program can open.
+void TVMailApp::saveMsg(int row)
 {
     if (row < 0)
         return;
     int b = gRows[row].idx;
-    // Sticks only until this row is refocused: loadContent() re-marks read
-    // on every highlight move (TO-DO "mark as read only after you look" is
-    // a separate, later change - this doesn't fight it, it just doesn't
-    // survive it either).
-    shCapture(backendCommand("mark " + std::to_string(b) + " unread" + mboxOpt()) + " 2>&1");
-    reload();
+    std::string dest = askSavePath("message-" + std::to_string(b) + ".eml", "Save message as");
+    if (dest.empty())
+        return;
+    std::string out = shCapture(backendCommand("raw " + std::to_string(b) + " " + gMbox) +
+                                " > " + shq(dest) + " 2>&1");
+    while (!out.empty() && (out.back() == '\n' || out.back() == ' '))
+        out.pop_back();
+    if (out.empty())
+        messageBox(("Saved to " + dest).c_str(), mfInformation | mfOKButton);
+    else
+        messageBox(out.c_str(), mfError | mfOKButton);
+}
+
+namespace
+{
+struct WinEntry
+{
+    TView *view;
+    std::string title;
+};
+void collectWindow(TView *v, void *arg)
+{
+    auto *list = static_cast<std::vector<WinEntry> *>(arg);
+    if (!(v->options & ofSelectable) || !(v->state & sfVisible))
+        return;
+    if (TWindow *w = dynamic_cast<TWindow *>(v))
+        list->push_back({v, (w->title && *w->title) ? w->title : "(untitled)"});
+}
+
+// One row per window, in the dialog's list.
+class TWinListPane : public TListViewer
+{
+    std::vector<WinEntry> *items;
+
+public:
+    TWinListPane(const TRect &b, TScrollBar *vsb, std::vector<WinEntry> *its)
+        : TListViewer(b, 1, nullptr, vsb), items(its)
+    {
+        setRange((short)items->size());
+    }
+    void getText(char *dest, short item, short maxLen) override
+    {
+        if (item < 0 || item >= (short)items->size())
+        {
+            dest[0] = 0;
+            return;
+        }
+        std::strncpy(dest, (*items)[item].title.c_str(), maxLen);
+        dest[maxLen] = 0;
+    }
+    void selectItem(short) override { message(owner, evCommand, cmOK, this); }
+    void handleEvent(TEvent &e) override
+    {
+        if (e.what == evKeyDown && e.keyDown.keyCode == kbEnter)
+        {
+            selectItem(focused);
+            clearEvent(e);
+            return;
+        }
+        TListViewer::handleEvent(e);
+    }
+    short chosen() const { return focused; }
+};
+} // namespace
+
+// Window > List... (Alt-0): every window on the desktop, pick one to bring to
+// the front.  Compose windows, source, parts, help and the mail window stack up
+// fast and F6 only cycles.
+void TVMailApp::windowList()
+{
+    std::vector<WinEntry> wins;
+    deskTop->forEach(collectWindow, &wins);
+    if (wins.empty())
+        return;
+    std::reverse(wins.begin(), wins.end()); // forEach walks back to front: top window first
+
+    int n = std::min<int>((int)wins.size(), 12);
+    TDialog *d = new TDialog(TRect(0, 0, 52, 7 + n), "Window list");
+    d->options |= ofCentered;
+    TScrollBar *vsb = new TScrollBar(TRect(49, 2, 50, 2 + n));
+    d->insert(vsb);
+    TWinListPane *lp = new TWinListPane(TRect(2, 2, 49, 2 + n), vsb, &wins);
+    d->insert(lp);
+    d->insert(new TButton(TRect(14, 3 + n, 26, 5 + n), "~S~elect", cmOK, bfDefault));
+    d->insert(new TButton(TRect(28, 3 + n, 40, 5 + n), "Cancel", cmCancel, bfNormal));
+    d->selectNext(False);
+
+    ushort r = deskTop->execView(d);
+    short sel = lp->chosen();
+    TObject::destroy(d);
+    if (r != cmCancel && sel >= 0 && sel < (short)wins.size())
+        wins[sel].view->select();
 }
 
 void TVMailApp::moveMsg(int row)
@@ -2923,6 +3315,40 @@ void TVMailApp::handleEvent(TEvent &e)
         break;
     case cmMarkUnread:
         markUnread(currentRow());
+        break;
+    case cmMarkRead:
+        markRead(currentRow());
+        break;
+    case cmSaveMsg:
+        saveMsg(currentRow());
+        break;
+    case cmWindowList:
+        windowList();
+        break;
+    case cmSortDate:
+    case cmSortFrom:
+    case cmSortSubj:
+    case cmSortUnread:
+    {
+        SortKey k = e.message.command == cmSortDate   ? sortDate
+                    : e.message.command == cmSortFrom ? sortFrom
+                    : e.message.command == cmSortSubj ? sortSubj
+                                                      : sortUnread;
+        gSortRev = (k == gSortKey) ? !gSortRev : false; // again = flip
+        gSortKey = k;
+        if (mainWin)
+            mainWin->viewChanged(false);
+        break;
+    }
+    case cmSortReverse:
+        gSortRev = !gSortRev;
+        if (mainWin)
+            mainWin->viewChanged(false);
+        break;
+    case cmClearFilter:
+        gFilter.clear();
+        if (mainWin)
+            mainWin->viewChanged(true);
         break;
     case cmMoveMsg:
         moveMsg(currentRow());

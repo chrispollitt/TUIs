@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.13)
-project(tvmail VERSION 1.0.0 LANGUAGES CXX)
+project(tvmail VERSION 1.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -114,7 +114,7 @@ install(FILES README.md INSTALL.md HISTORY.md LICENSE AUTHORS WARRANTY
         DESTINATION ${CMAKE_INSTALL_DOCDIR})
 
 # --- tarballs (CPack) -------------------------------------------------------
-# Binary tarball:  cd build && cpack           -> tvmail-1.0.0-<system>.tar.gz
+# Binary tarball:  cd build && cpack           -> tvmail-1.1.0-<system>.tar.gz
 # (the binary is per-platform; the source tree builds on Linux/macOS/Cygwin)
 set(CPACK_GENERATOR "TGZ")
 set(CPACK_PACKAGE_NAME "tvmail")

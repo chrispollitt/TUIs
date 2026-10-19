@@ -9,18 +9,18 @@ Highest leverage (backend already has the plumbing) — DONE
 6 [done] Move / copy to folder — Message ▸ Move to... (any folder), reusing delete --trash DEST as the generic move primitive.
 
 Classic TUI polish (fits Turbo Vision, small C++)
-7 Window List (Alt-0) — Compose, help, source, address book, signature, and now parts windows already stack; a Window 8 List is the missing Borland habit (already on the README someday list).
-8 Incremental filter on the message pane — Type-to-filter From/Subject without a full search index. Cheap, immediate, and better than threading for a small mailbox.
-9 Column sort — Click or a key to sort by date / from / subject / unread. The list format is already flag date from subject.
-10 Unread counts on folders — N inbox (3) so you do not have to Tab into the list to see if anything arrived.
+7 [done] Window List (Alt-0) — Window ▸ List... — Compose, help, source, address book, signature, and now parts windows already stack; a Window 8 List is the missing Borland habit (already on the README someday list).
+8 [done] Incremental filter on the message pane — just type; Esc clears. Type-to-filter From/Subject without a full search index. Cheap, immediate, and better than threading for a small mailbox.
+9 [done] Column sort — View menu: date / from / subject / unread first, same again or Reverse order flips. Click or a key to sort by date / from / subject / unread. The list format is already flag date from subject.
+10 [done] Unread counts on folders — via the backend's new `counts`. N inbox (3) so you do not have to Tab into the list to see if anything arrived.
 11 Status-line context — When focus is in Folders vs Messages vs a compose window, swap the F-keys (e.g. Enter = Edit draft only in Drafts).
 12 Mouse — tvision already supports it; click-to-focus panes and double-click to open would make the cyan desktop feel finished.
 
 Behaviour that would make it feel "done"
-13 Mark-as-read only after you actually look — Delay mark read until the body pane is focused or scrolled, not on highlight. Stops arrow-through-inbox from eating every N, and would let "mark unread" (4) actually stick.
+13 [done] Mark-as-read only after you actually look — body pane focus or Message ▸ Mark read. Delay mark read until the body pane is focused or scrolled, not on highlight. Stops arrow-through-inbox from eating every N, and would let "mark unread" (4) actually stick.
 14 Periodic pull — Idle timer calling the existing background pull, with a quiet “N new” on the status line instead of a blocking message box every time.
 15 tvmailrc — Colours, default folder, poll-on-start, list date format, HTML-vs-plain preference. Keeps ~/.mailrc for mail(1) and puts tvmail-only knobs somewhere else.
-16 Print / save message as .eml or text — View source is close; “Save as…” next to it is the natural File menu item.
+16 [done] (.eml) Print / save message as .eml or text — File ▸ Save message as... View source is close; “Save as…” next to it is the natural File menu item.
 17 Address-book write path — F4 is read-only aliases today. Add/edit alias lines in ~/.mailrc so the book is not a one-way dump into To:.
 18 Pipe body through $PAGER / less or an external $EDITOR — Escape hatch for huge mail and for people who still want vi for a long reply.
 
@@ -30,8 +30,9 @@ Worth doing later (higher design cost)
 21 Multi-select — Space-tag then delete/move/mark, like Midnight Commander. Purge (5) and Move to... (6) already give bulk/any-message action without it; add it later if it's still missed.
 22 Resizable split — Drag or +/- on the folder width and the list/body ratio. The layout is currently a fixed 22-column / 2:5 split.
 
-If you want a short implementation order that stays in character:
-* window List
-* list filter
-* mark-as-read-only-after-you-look (13) — the natural next step now that "mark unread" (4) exists
+Done so far from this list: 1-10, 13 and 16.  A short order for
+what is left that stays in character:
+* periodic pull / "N new" on the status line (14) - the counts (10) are the first half of it
+* tvmailrc (15), then the status-line context swap (11) and mouse manners (12)
+* address-book write path (17)
 That uses code you already have and does not turn tvmail into mutt.

@@ -149,6 +149,17 @@ tab,
 .IR subject .
 A mailbox that does not exist yet lists as empty.
 .TP
+.BI "counts " "\fR[\fPMBOX ...\fR]\fP"
+One line per mailbox:
+.IR name ,
+.IR total ,
+.I unseen
+(TAB-separated).
+Default is every folder except
+.BR dead .
+Over IMAP this is a STATUS request, so it does not disturb the open folder;
+a folder that does not exist counts as 0 0.
+.TP
 .BI "show " "IDX " [MBOX]
 Decoded headers followed by the best available text of message
 .IR IDX .

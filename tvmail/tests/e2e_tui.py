@@ -194,11 +194,46 @@ def main():
             t.send("\t")
             if not re.search(r"\[ Messages \]", t.read(until=r"\[ Messages \]", timeout=4)):
                 fail("Tab did not activate the Messages pane")
+            done.append("tab-activates-messages")
+
+            # 2b. previewing a message (the list highlight showed its body at
+            #     startup) must not mark it read - only looking at it does
+            if "Status:" in spool.read_text():
+                fail("showing a message in the preview marked it read")
+            #     the folder pane carries the unread count
+            #     (s is still the startup screen from step 1)
+            if not re.search(r"inbox \(1\)", s):
+                fail("no unread count on the inbox folder\n---\n%s" % s[-1500:])
+            done.append("preview-leaves-unread+folder-count")
+
+            # 2c. typing in the message list filters it (From / Subject);
+            #     Esc puts everything back
+            t.clear()
+            t.send("zz")
+            s = t.read(until=r"filter: zz_", timeout=4)
+            if not re.search(r"filter: zz_\s+\(0 of 1\)", s):
+                fail("typing did not filter the message list\n---\n%s" % s[-1200:])
+            t.clear()
+            t.send("\x1b", settle=0.8)                # Esc (ESCDELAY is 100 ms)
+            t.send("alice")                           # a sender that does match
+            s = t.read(until=r"\(1 of 1\)", timeout=4)  # tvision repaints only what changed
+            if not re.search(r"\(1 of 1\)", s):
+                fail("filter did not match the sender\n---\n%s" % s[-1200:])
+            t.send("\x1b", settle=0.8)
+            done.append("type-to-filter")
+
             t.clear()
             t.send("\t")
             if not re.search(r"\[ Message \]", t.read(until=r"\[ Message \]", timeout=4)):
                 fail("Tab did not activate the body pane")
-            done.append("tab-cycles-active-pane")
+            # ... and now that the body pane has focus it IS read
+            for _ in range(20):
+                if re.search(r"^Status: [OR]*R", spool.read_text(), re.M):
+                    break
+                time.sleep(0.25)
+            else:
+                fail("focusing the body pane did not mark the message read")
+            done.append("tab-cycles-active-pane+read-on-focus")
 
             # 3. the body pane now scrolls from the keyboard (it did not before)
             t.clear()

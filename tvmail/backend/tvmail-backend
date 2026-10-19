@@ -20,6 +20,8 @@ INBOX/Archive/Trash/Drafts/Sent/Junk):
   list  [MBOX]              one line per message, TAB-separated:
                             idx <TAB> flags <TAB> date <TAB> from <TAB> subject
                             (idx = 0-based position; flags: 'N' new/unread, '.' seen)
+  counts [MBOX...]          one line per mailbox, TAB-separated:
+                            name <TAB> total <TAB> unseen   (default: all folders)
   show  IDX [MBOX] [--mark-read]   decoded headers + best-effort text/plain
                             body on stdout; --mark-read also flags it \\Seen,
                             reusing this call's IMAP SELECT/SEARCH instead of
@@ -66,7 +68,7 @@ from mailbox import mbox
 from email.header import decode_header, make_header
 
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 _log = logging.getLogger("tvmail-backend")
 
 
@@ -826,6 +828,44 @@ def cmd_list(a):
     return 0
 
 
+def _imap_status(folder):
+    """(total, unseen) for an IMAP folder via STATUS - no SELECT, so it does
+    not disturb the folder the UI has open.  (0, 0) for a missing folder."""
+    import re
+    typ, data = _imap().status(_q_mbox(folder), "(MESSAGES UNSEEN)")
+    if typ != "OK" or not data or not data[0]:
+        return 0, 0
+    txt = data[0].decode("latin-1", "replace") if isinstance(data[0], bytes) else str(data[0])
+    mt = re.search(r"MESSAGES (\d+)", txt)
+    mu = re.search(r"UNSEEN (\d+)", txt)
+    return (int(mt.group(1)) if mt else 0, int(mu.group(1)) if mu else 0)
+
+
+def cmd_counts(a):
+    """name TAB total TAB unseen, one line per mailbox - the folder pane's
+    "inbox (3)" numbers.  Cheap: STATUS over IMAP, a header scan locally."""
+    names = a.mboxes or ["spool", "drafts", "sent", "mbox", "spam", "trash"]
+    for n in names:
+        if n == "dead":
+            continue
+        try:
+            if _is_remote():
+                total, unseen = _imap_status(_imap_folder(n))
+            else:
+                path = mbox_path(n)
+                total = unseen = 0
+                if os.path.exists(path):
+                    for msg in open_box(path):
+                        total += 1
+                        status = (msg.get("Status", "") or "") + (msg.get("X-Status", "") or "")
+                        if "R" not in status:
+                            unseen += 1
+        except Exception:
+            total = unseen = 0
+        print("%s\t%d\t%d" % (n, total, unseen))
+    return 0
+
+
 def _get_msg(a):
     if a.mbox == "dead":
         m = _dead_msg()
@@ -1574,6 +1614,7 @@ def build_parser():
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("list");  p.add_argument("mbox", nargs="?"); p.set_defaults(fn=cmd_list)
+    p = sub.add_parser("counts"); p.add_argument("mboxes", nargs="*"); p.set_defaults(fn=cmd_counts)
     p = sub.add_parser("show");  p.add_argument("idx", type=int); p.add_argument("mbox", nargs="?"); p.add_argument("--mark-read", action="store_true", dest="mark_read"); p.set_defaults(fn=cmd_show)
     p = sub.add_parser("raw");   p.add_argument("idx", type=int); p.add_argument("mbox", nargs="?"); p.set_defaults(fn=cmd_raw)
     p = sub.add_parser("parts"); p.add_argument("idx", type=int); p.add_argument("mbox", nargs="?"); p.set_defaults(fn=cmd_parts)

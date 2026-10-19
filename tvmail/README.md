@@ -269,14 +269,39 @@ save-a-copy-on-send.
 | `Ctrl-D` | delete (→ trash) |
 | `F3` | local: pull mail (`mail-pull`) · remote: file `***SPAM***` mail · `F5` reload |
 | `F4` | address book |
-| `F6` / `Shift-F6` | next / previous window · `F10` menu · `Alt-X` quit |
+| `F6` / `Shift-F6` | next / previous window · `Alt-0` window list · `F10` menu · `Alt-X` quit |
+| *(type)* | (Messages) filter the list by From / Subject · `Backspace` trims it · `Esc` clears it |
 
 Editing keys (compose body, signature): `Shift-Del` cut, `Ctrl-Ins` copy,
 `Shift-Ins` paste; **Edit** menu has Find / Replace / Find again.
 
 The **Message** menu has a few more actions with no dedicated key - Reply
-All, Forward, `Parts...`, Mark unread, `Move to...` - reach them with `F10`
-or `Alt-M`. **File ▸ Purge...** does the same for a whole folder at once.
+All, Forward, `Parts...`, Mark read / Mark unread, `Move to...` - reach them
+with `F10` or `Alt-M`. **File ▸ Purge...** does the same for a whole folder at
+once.
+
+## Reading
+
+- **Unread stays unread until you look.** Arrowing down the message list only
+  *previews* a message (its body appears below, the `N` flag stays). It's marked
+  read when the body pane takes focus — `Enter` or `Tab` — or by **Message ▸
+  Mark read**. **Mark unread** puts the `N` back and it stays put.
+- **Folder counts.** The folder pane shows what's waiting: `inbox (3)` is three
+  unread (the same for `saved` and `spam`); `drafts (2)` is two drafts. They
+  refresh on `F5`, after a pull, and as you read.
+- **Type to filter.** In the message list just start typing: the list narrows
+  to messages whose From or Subject contains the text (any case), and the
+  heading shows `filter: foo_  (3 of 120)`. `Backspace` trims it, `Esc` (or
+  **View ▸ Clear filter**) drops it. Switching folders clears it.
+- **Sorting.** **View ▸ Sort by date / from / subject / Unread first**; picking
+  the same one again, or **View ▸ Reverse order**, flips it (date is mailbox
+  order, oldest first; reversed it's newest first). The heading shows the
+  order when it isn't the default.
+- **Save message as...** (File menu) writes the raw message to a `.eml` file.
+- **Window ▸ List...** (`Alt-0`) lists every open window (compose, source,
+  parts, help...) so you can jump to one; `F6` only cycles.
+- After a reload, delete, move or mark, the highlight stays on the same
+  message instead of jumping back to the top.
 
 ## Composing
 
@@ -370,6 +395,7 @@ which *is* Dovecot's INBOX — so incoming mail lands in the one place everyone 
 
 ```
 tvmail-backend list  [MBOX]              idx <TAB> flags <TAB> date <TAB> from <TAB> subject
+tvmail-backend counts [MBOX...]          name <TAB> total <TAB> unseen (default: every folder)
 tvmail-backend show  IDX [MBOX]          decoded headers + text/plain body
 tvmail-backend raw   IDX [MBOX]          the raw RFC822 message
 tvmail-backend parts IDX [MBOX]          list MIME parts
@@ -430,8 +456,8 @@ Old school. As nature intended.
 ## Tarballs
 
 ```bash
-./dist.sh            # -> dist/tvmail-1.0.0.tar.gz              (source)
-                     #    dist/tvmail-1.0.0-<system>-<arch>.tar.gz  (binary)
+./dist.sh            # -> dist/tvmail-1.1.0.tar.gz              (source)
+                     #    dist/tvmail-1.1.0-<system>-<arch>.tar.gz  (binary)
 ```
 
 The **source** tarball builds anywhere tvision does — Linux, macOS, Cygwin
