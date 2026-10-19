@@ -190,6 +190,74 @@ cd TUIs/tvmail
 
 Every setting, with comments: `configure/tvmail.conf.example`.
 
+## 4a. Out of office (optional)
+
+`File ▸ Out of office...` switches an automatic reply on and off. It has to
+run where the mail *arrives*, so tvmail keeps one Sieve `vacation` script per
+user on the master and edits it over ManageSieve (port 4190). It keeps
+answering with tvmail closed.
+
+**On the master, once, as root** (this covers every user on it):
+
+```bash
+cd tvmail && sudo third_party/POSIX/mail-setup/scripts/configure-sieve.sh   # --listen local for localhost only
+```
+
+That is mail-setup's `configure-sieve.sh` (its wizard offers it too, after
+Dovecot). It installs Dovecot's Sieve parts, adds
+`/etc/dovecot/conf.d/95-mail-setup-sieve.conf` (checked with `doveconf`, put
+back if rejected; it replaces the `95-tvmail-sieve.conf` of tvmail 1.2.0
+pre-releases), and sets Postfix's
+`mailbox_command` to `dovecot-lda`, because Sieve only runs on mail Dovecot
+delivers. Mail still lands in the same `/var/mail/<user>` that IMAP reads;
+pop-pull, getmail and the sendmail shim all deliver through Postfix, so one
+setting covers them. If Postfix already has a `mailbox_command` the script stops
+and asks for `--force`.
+
+**On each client:** nothing but the usual `~/.mu-tickets` / `~/.netrc`
+password. The ManageSieve login is the same account and password as IMAP; add a
+`[sieve]` section to `tvmail.conf` only to override the host, `tls`, or
+`addresses`. Check it with:
+
+```bash
+tvmail-backend vacation status        # "state: none"
+tvmail-backend vacation addresses     # the address table described below
+```
+
+**Several users (chris and miche).** Each user logs into ManageSieve as
+themselves and gets their own script in their own `~/sieve`, their own
+`tvmail.conf`, and their own address list: switching chris's reply on does
+nothing for miche.
+
+**Addresses: the "NAT table".** A master like cpbee hides behind a public
+mailbox. It fetches `cwp@u-l.ca` over POP and hands the mail to a local user,
+and Postfix rewrites local senders back to the public address on the way out
+(`smtp_generic_maps`). Mail therefore arrives addressed to the *public*
+address, and the Sieve vacation test only answers mail addressed to one of
+*my* addresses, so the dialog's **Addresses** line must list it. tvmail fills it
+in from, in order: `[sieve] addresses`, `[smtp] from`, the user in `~/.mail`'s
+`mailer` URL, your own `user@host` line in `/etc/postfix/generic` (a
+domain-wide `@host` line is shared by everyone, so it is not used), and the
+local identity (`user@master`). Check the result before you save. For each local
+user, give *their* public address: chris and miche must not list each other's.
+The reply goes out From the address the mail was sent to.
+
+**Plus addressing instead.** If several users share *one* public mailbox,
+give each a tagged address: mail for `cwp+chris@u-l.ca` and `cwp+miche@u-l.ca`
+lands in `cwp@u-l.ca`, and the part after the `+` says whose it is. Set
+`[sieve] plus = true` (and optionally `tag =`, default the local user name) and
+the table lists `cwp+chris@u-l.ca` in place of `cwp@u-l.ca` (`plus = both`
+lists the two). This only changes what the vacation reply *answers*. Two other
+pieces make the tag mean something: the puller has to sort fetched mail to the
+local user named by the tag, and Postfix's generic map has to send each user
+out as their tagged address (`chris@cpbee  cwp+chris@u-l.ca`). Also check that
+u-l.ca really delivers `cwp+anything@u-l.ca` to `cwp@u-l.ca` (send yourself one).
+
+Things that can stop it working: the message was not addressed to a listed
+address (no reply, silently); only one Sieve script can be active, so tvmail
+asks before replacing another; and the smarthost must accept the public
+address as the sender of the reply.
+
 ## 5. Cygwin / Windows notes
 
 - Cygwin is **client only**: there's no Postfix or Dovecot package.

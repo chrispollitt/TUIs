@@ -76,3 +76,32 @@ subject = ***SPAM***
 # line; $TVMAIL_PULL overrides it for one run.
 #[local]
 #pull = getmail --getmaildir ~/.config/getmail
+
+# File > Out of office...  keeps a Sieve "vacation" script on the master and
+# switches it over ManageSieve (port 4190).  The master needs managesieve
+# enabled: run mail-setup's configure-sieve.sh there as root (INSTALL.md,
+# "Out of office").  Every key is optional; host and user follow [imap].
+# The password is looked up like the IMAP one (~/.mu-tickets, ~/.netrc).
+#[sieve]
+#host = cpbee
+#port = 4190
+#tls  = starttls          # none = send the password in clear (don't)
+#verify = false           # default follows [imap] verify
+# The addresses mail for you arrives at.  A master like cpbee hides behind one
+# public mailbox (cwp@u-l.ca): it fetches that mail over POP and delivers it to
+# a local user, and rewrites local senders back to it on the way out - a NAT.
+# Incoming mail is addressed to the PUBLIC address, and the server only answers
+# mail addressed to one of these, so list it.  Together with [smtp] from, your
+# ~/.mail mailer user and (on the master) your own line in /etc/postfix/generic
+# this forms the default for the dialog's Addresses field.  Per user: each
+# local user has their own tvmail.conf, script and addresses.
+#addresses = cwp@u-l.ca
+# Plus addressing: ONE public mailbox shared by several local users.  Mail for
+# cwp+chris@u-l.ca lands in cwp@u-l.ca and the part after the "+" says whose it
+# is.  plus = true lists cwp+chris@u-l.ca instead of cwp@u-l.ca; both lists the
+# two; false (default) leaves the addresses as given.  tag defaults to your
+# local user name.  This only affects what the vacation reply answers - the
+# mail still has to be sorted to the right local user on arrival (the puller
+# routes on the tag) and sent out with the tagged sender (postfix generic map).
+#plus = true
+#tag  = chris

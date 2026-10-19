@@ -46,6 +46,21 @@ INBOX/Archive/Trash/Drafts/Sent/Junk):
                             getmail; [local] pull overrides), then file tagged spam
                             remote: file tagged spam ('***SPAM***' subject ->
                             the 'spam' folder; tag/dest set in tvmail.conf)
+  vacation status|on|off|addresses
+                            out-of-office auto-reply: manages one Sieve vacation
+        [--message-file F] [--subject S] [--days N] [--start D] [--end D]
+        [--addresses A,B] [--force]
+                            script on the master over ManageSieve ([sieve] in
+                            tvmail.conf).  'on' needs --message-file; dates are
+                            YYYY-MM-DD, inclusive; --addresses lists the
+                            addresses mail reaches you at (the server only
+                            answers mail addressed to one of them).  Default:
+                            the "NAT table" - the public address(es) the
+                            master hides behind plus its local identity, from
+                            [sieve] addresses, [smtp] from, ~/.mail and (on
+                            the master) postfix's generic map.  'addresses'
+                            prints that table.  --force replaces whatever
+                            other Sieve script is active
   ping                      print 'pong' - a liveness check
   mode                      print 'local' or 'remote'
   host                      print the IMAP host (remote) or this machine's
@@ -68,7 +83,7 @@ from mailbox import mbox
 from email.header import decode_header, make_header
 
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 _log = logging.getLogger("tvmail-backend")
 
 
@@ -1456,6 +1471,419 @@ def cmd_pull(a):
     return rc
 
 
+# ==========================================================================
+# Out of office.  An auto-reply has to run on the machine that receives the
+# mail, not in this client (which is closed most of the time), so tvmail keeps
+# one Sieve "vacation" script on the master and switches it on and off over
+# ManageSieve (RFC 5804, Dovecot Pigeonhole's managesieve, port 4190).
+#
+# ~/.config/tvmail/tvmail.conf   [sieve]
+#   host      default: [imap] host, else ~/.mail's host, else localhost
+#   port      4190
+#   user      default: the [imap] user
+#   tls       starttls (default) | none  - none sends the password in clear
+#   verify    default: the [imap] verify (a self-signed LAN cert needs false)
+#   cafile    as for [imap]
+#   script    name of the managed script (default tvmail-vacation)
+#   addresses comma-separated own addresses, for :addresses (optional)
+# The password is looked up like the IMAP one (~/.mu-tickets, ~/.netrc,
+# $TVMAIL_SIEVE_PASS / $TVMAIL_IMAP_PASS).
+# ==========================================================================
+def _sieve_quote(s):
+    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+class _Sieve:
+    """Just enough ManageSieve to keep one script: STARTTLS, AUTHENTICATE
+    PLAIN, LISTSCRIPTS, GETSCRIPT, PUTSCRIPT, SETACTIVE."""
+
+    def __init__(self, host, port, tls, ctx):
+        self.host = host
+        try:
+            self.sock = socket.create_connection((host, port), timeout=15)
+        except OSError as e:
+            sys.exit("tvmail-backend: ManageSieve %s:%d - %s (is managesieve "
+                     "enabled on the server?  see INSTALL.md, \"Out of office\")"
+                     % (host, port, e))
+        self.rf = self.sock.makefile("rb")
+        self.caps = self._read_caps()
+        if tls:
+            if "STARTTLS" not in self.caps:
+                sys.exit("tvmail-backend: ManageSieve %s offers no STARTTLS, so "
+                         "the password would cross the network in clear.  Set "
+                         "[sieve] tls = none in tvmail.conf if that is really "
+                         "what you want." % host)
+            st, _, text = self.cmd("STARTTLS")
+            if st != "OK":
+                sys.exit("tvmail-backend: ManageSieve STARTTLS refused: " + (text or st))
+            import ssl as _ssl
+            try:
+                self.sock = ctx.wrap_socket(self.sock, server_hostname=host)
+            except (_ssl.SSLError, OSError) as e:
+                sys.exit("tvmail-backend: ManageSieve TLS to %s - %s" % (host, e))
+            self.rf = self.sock.makefile("rb")
+            self.caps = self._read_caps()
+
+    def _readline(self):
+        ln = self.rf.readline()
+        if not ln:
+            sys.exit("tvmail-backend: ManageSieve connection closed by the server")
+        return ln.rstrip(b"\r\n").decode("utf-8", "replace")
+
+    def _tokens(self, line):
+        """One response line -> [(kind, value)], kind 'a' (atom) or 's'
+        (quoted string / literal).  A literal {n} pulls its n bytes from the
+        socket and carries on with the rest of the line after it."""
+        import re
+        toks, i = [], 0
+        while True:
+            while i < len(line) and line[i] == " ":
+                i += 1
+            if i >= len(line):
+                return toks
+            c = line[i]
+            if c == '"':
+                j, buf = i + 1, []
+                while j < len(line) and line[j] != '"':
+                    if line[j] == "\\" and j + 1 < len(line):
+                        j += 1
+                    buf.append(line[j])
+                    j += 1
+                toks.append(("s", "".join(buf)))
+                i = j + 1
+            elif c == "{":
+                m = re.match(r"\{(\d+)\+?\}$", line[i:])
+                if not m:
+                    toks.append(("a", line[i:]))
+                    return toks
+                toks.append(("s", self.rf.read(int(m.group(1))).decode("utf-8", "replace")))
+                line, i = self._readline(), 0
+            elif c in "()":
+                toks.append(("a", c))
+                i += 1
+            else:
+                j = i
+                while j < len(line) and line[j] not in " ()":
+                    j += 1
+                toks.append(("a", line[i:j]))
+                i = j
+
+    def _response(self):
+        """Read to the OK / NO / BYE line: (status, [data lines], text)."""
+        data = []
+        while True:
+            toks = self._tokens(self._readline())
+            if toks and toks[0][0] == "a" and toks[0][1].upper() in ("OK", "NO", "BYE"):
+                text = next((v for k, v in toks[1:] if k == "s"), "")
+                return toks[0][1].upper(), data, text
+            data.append([v for _, v in toks])
+
+    def _read_caps(self):
+        st, data, text = self._response()
+        if st != "OK":
+            sys.exit("tvmail-backend: ManageSieve greeting: " + (text or st))
+        return {d[0].upper(): (d[1] if len(d) > 1 else "") for d in data if d}
+
+    def cmd(self, line):
+        self.sock.sendall(line.encode("utf-8") + b"\r\n")
+        return self._response()
+
+    def login(self, user, password):
+        import base64
+        if "PLAIN" not in self.caps.get("SASL", "").upper().split():
+            sys.exit("tvmail-backend: ManageSieve offers no PLAIN login (SASL: %s)"
+                     % (self.caps.get("SASL") or "none"))
+        tok = base64.b64encode(("\0%s\0%s" % (user, password)).encode("utf-8")).decode()
+        st, _, text = self.cmd('AUTHENTICATE "PLAIN" "%s"' % tok)
+        if st != "OK":
+            sys.exit("tvmail-backend: ManageSieve login as %s failed: %s"
+                     % (user, text or st))
+
+    def scripts(self):
+        """[(name, active)]"""
+        st, data, text = self.cmd("LISTSCRIPTS")
+        if st != "OK":
+            sys.exit("tvmail-backend: LISTSCRIPTS: " + (text or st))
+        return [(d[0], len(d) > 1 and d[1].upper() == "ACTIVE") for d in data if d]
+
+    def get(self, name):
+        st, data, text = self.cmd("GETSCRIPT " + _sieve_quote(name))
+        if st != "OK" or not data:
+            sys.exit("tvmail-backend: GETSCRIPT %s: %s" % (name, text or st))
+        return data[0][0].replace("\r\n", "\n")
+
+    def put(self, name, script):
+        raw = script.replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8")
+        self.sock.sendall(("PUTSCRIPT %s {%d+}\r\n" % (_sieve_quote(name), len(raw))).encode()
+                          + raw + b"\r\n")
+        st, _, text = self._response()
+        if st != "OK":
+            sys.exit("tvmail-backend: the server rejected the Sieve script: "
+                     + (text or st))
+
+    def activate(self, name):          # "" = no script active
+        st, _, text = self.cmd("SETACTIVE " + _sieve_quote(name))
+        if st != "OK":
+            sys.exit("tvmail-backend: SETACTIVE: " + (text or st))
+
+    def close(self):
+        try:
+            self.cmd("LOGOUT")
+            self.sock.close()
+        except Exception:
+            pass
+
+
+def _sieve_target(c=None):
+    """(host, user) of the ManageSieve account - which is also the *local*
+    identity on the master that the vacation script runs for."""
+    c = c or _conf()
+    mu = _mu_mailbox() or {}
+    host = (c.get("sieve", "host", fallback=None) or c.get("imap", "host", fallback=None)
+            or mu.get("host") or "localhost")
+    user = (c.get("sieve", "user", fallback=None) or c.get("imap", "user", fallback=None)
+            or mu.get("user") or _me())
+    return host, user
+
+
+def _postfix_generic_path():
+    return os.environ.get("TVMAIL_POSTFIX_GENERIC") or "/etc/postfix/generic"
+
+
+def _own_addresses():
+    """[(address, where-it-came-from)]: every address mail for this mailbox
+    can arrive at - the "NAT table" for the vacation reply.
+
+    A mail master like cpbee hides behind one public mailbox: it fetches
+    cwp@u-l.ca over POP and delivers it to a local user, and on the way out
+    Postfix rewrites every local sender (chris@cpbee, chris@localhost) to
+    that public address (smtp_generic_maps).  So an incoming message is
+    addressed to the *public* address, and the Sieve vacation test, which only
+    answers mail addressed to "me", must know it.  Gathered, public side
+    first:
+      [sieve] addresses     what you listed
+      [smtp] from           the public identity this client sends as
+      ~/.mail mailer user   the smarthost login, when it is an address
+      /etc/postfix/generic  (on the master) lines for THIS user only
+      user@host             the local identity (the master's name)
+    Everything here is per user: each local user has their own tvmail.conf,
+    their own Sieve script, and their own table."""
+    import email.utils as _eu
+    c = _conf()
+    out, seen = [], set()
+
+    def add(a, why):
+        a = _eu.parseaddr((a or "").strip())[1]
+        if a and "@" in a and a.lower() not in seen:
+            seen.add(a.lower())
+            out.append((a, why))
+    for a in _vac_addresses(c.get("sieve", "addresses", fallback="")):
+        add(a, "[sieve] addresses")
+    add(c.get("smtp", "from", fallback=""), "[smtp] from")
+    add((_mu_mailer() or {}).get("user"), "~/.mail mailer")
+    host, user = _sieve_target(c)
+    if not _is_remote():
+        # Only lines that name *this* user (me@host  public@domain).  A
+        # domain-wide "@host  public@domain" line rewrites every local sender
+        # to one shared address - claiming that one would make each user
+        # answer for everybody else's mail.
+        me = _me().lower()
+        try:
+            with open(_postfix_generic_path(), encoding="utf-8", errors="replace") as fh:
+                for ln in fh:
+                    f = ln.split("#")[0].split()
+                    if (len(f) >= 2 and "@" in f[1] and "@" in f[0]
+                            and f[0].split("@")[0].lower() == me):
+                        add(f[1], "postfix generic map")
+        except OSError:
+            pass
+        try:
+            add("%s@%s" % (_me(), socket.getfqdn()), "this host")
+        except OSError:
+            pass
+    elif host not in ("localhost", "127.0.0.1", "::1"):
+        add("%s@%s" % (user, host), "the master")
+    # Plus addressing: one shared public mailbox, many users.  Mail for
+    # cwp+chris@u-l.ca lands in cwp@u-l.ca and the part after the "+" says
+    # whose it is, so each user's table holds the tagged form of the public
+    # address instead of (plus=true) or as well as (plus=both) the bare one.
+    plus = c.get("sieve", "plus", fallback="false").strip().lower()
+    if plus in ("true", "yes", "1", "both"):
+        tag = c.get("sieve", "tag", fallback="").strip() or _me()
+        mine = {"this host", "the master"}              # local identities stay as they are
+        new = []
+        for a, why in out:
+            local, _, dom = a.rpartition("@")
+            if why in mine or "+" in local:
+                new.append((a, why))
+                continue
+            if plus == "both":
+                new.append((a, why))
+            new.append(("%s+%s@%s" % (local, tag, dom), "plus-address of " + a))
+        out = new
+    return out
+
+
+def _sieve_open():
+    """A logged-in _Sieve and the managed script's name."""
+    import ssl as _ssl
+    c = _conf()
+    host, user = _sieve_target(c)
+    port = c.getint("sieve", "port", fallback=4190)
+    tls = c.get("sieve", "tls", fallback="starttls").strip().lower() != "none"
+    verify = c.getboolean("sieve", "verify",
+                          fallback=c.getboolean("imap", "verify", fallback=True))
+    cafile = (c.get("sieve", "cafile", fallback="").strip()
+              or c.get("imap", "cafile", fallback="").strip() or None)
+    ctx = _ssl.create_default_context(cafile=cafile)
+    if not verify:                              # LAN box with a self-signed cert
+        ctx.check_hostname = False
+        ctx.verify_mode = _ssl.CERT_NONE
+    pw = os.environ.get("TVMAIL_SIEVE_PASS")
+    for scheme in ("sieve", "imaps", "imap"):
+        if pw is not None:
+            break
+        pw = _mu_ticket_pass(scheme, host, user)
+    if pw is None:
+        pw = _cred(host, user, "TVMAIL_IMAP_PASS", "sieve")   # netrc, or the guidance
+    s = _Sieve(host, port, tls, ctx)
+    s.login(user, pw)
+    return s, c.get("sieve", "script", fallback="tvmail-vacation").strip() or "tvmail-vacation"
+
+
+def _vac_script(subject, days, start, end, message, addresses=()):
+    """The vacation Sieve script.  The settings ride along as '# key: value'
+    header comments so _vac_parse() can read them back for the dialog."""
+    subject = " ".join(subject.split())
+    body = message.replace("\r\n", "\n").rstrip("\n")
+    stuffed = "\n".join(("." + ln) if ln.startswith(".") else ln for ln in body.split("\n"))
+    out = ["# tvmail-vacation 1",
+           "# subject: " + subject,
+           "# days: %d" % days]
+    if start:
+        out.append("# start: " + start)
+    if end:
+        out.append("# end: " + end)
+    if addresses:
+        out.append("# addresses: " + ", ".join(addresses))
+    need = ["vacation"]
+    tests = []
+    if start:
+        tests.append('currentdate :value "ge" "date" "%s"' % start)
+    if end:
+        tests.append('currentdate :value "le" "date" "%s"' % end)
+    if tests:
+        need += ["date", "relational"]
+    out.append("require [%s];" % ", ".join('"%s"' % n for n in need))
+    addr = (" :addresses [%s]" % ", ".join(_sieve_quote(x) for x in addresses)) if addresses else ""
+    act = "vacation :days %d :subject %s%s text:\n%s\n.\n;" % (
+        days, _sieve_quote(subject), addr, stuffed)
+    if tests:
+        cond = tests[0] if len(tests) == 1 else "allof (%s)" % ", ".join(tests)
+        out.append("if %s {\n%s\n}" % (cond, act))
+    else:
+        out.append(act)
+    return "\n".join(out) + "\n"
+
+
+def _vac_parse(script):
+    """Settings and message back out of a _vac_script() script."""
+    import re
+    info = {}
+    for m in re.finditer(r"^# (subject|days|start|end|addresses): (.*)$", script, re.M):
+        info[m.group(1)] = m.group(2).strip()
+    m = re.search(r"text:[ \t]*\n(.*?)\n\.\n", script, re.S)
+    msg = m.group(1) if m else ""
+    info["message"] = "\n".join(ln[1:] if ln.startswith("..") else ln
+                                for ln in msg.split("\n"))
+    return info
+
+
+def _vac_date(s, what):
+    import datetime
+    s = (s or "").strip()
+    if s:
+        try:
+            datetime.datetime.strptime(s, "%Y-%m-%d")
+        except ValueError:
+            sys.exit("tvmail-backend: %s must be a date like 2026-12-24 (got %r)" % (what, s))
+    return s
+
+
+def _vac_addresses(text):
+    """'a@x, b@y' -> ['a@x', 'b@y'], refusing anything that is not a plain
+    address (these land inside a Sieve string)."""
+    out = []
+    for x in (text or "").replace(";", ",").replace(" ", ",").split(","):
+        x = x.strip()
+        if not x:
+            continue
+        if "@" not in x or any(ch in x for ch in '"\\<>\t'):
+            sys.exit("tvmail-backend: %r is not an email address" % x)
+        out.append(x)
+    return out
+
+
+def cmd_vacation(a):
+    """vacation status | on | off  - see the section comment above."""
+    addrs = []
+    if a.action == "addresses":         # the NAT table, no server needed
+        for addr, why in _own_addresses():
+            sys.stdout.write("%s\t%s\n" % (addr, why))
+        return 0
+    if a.action == "on":
+        addrs = (_vac_addresses(a.addresses) if a.addresses is not None
+                 else [x for x, _ in _own_addresses()])
+        start, end = _vac_date(a.start, "start"), _vac_date(a.end, "end")
+        if start and end and end < start:
+            sys.exit("tvmail-backend: the end date is before the start date")
+        if not 1 <= a.days <= 365:
+            sys.exit("tvmail-backend: days between replies must be 1-365")
+        if not a.message_file:
+            sys.exit("tvmail-backend: vacation on needs --message-file")
+        try:
+            with open(a.message_file, encoding="utf-8", errors="replace") as fh:
+                message = fh.read()
+        except OSError as e:
+            sys.exit("tvmail-backend: %s" % e)
+        if not message.strip():
+            sys.exit("tvmail-backend: the out-of-office message is empty")
+    s, name = _sieve_open()
+    try:
+        have = s.scripts()
+        ours = dict(have).get(name)                 # None = absent, else active?
+        other = next((n for n, act in have if act and n != name), "")
+        if a.action == "status":
+            sys.stdout.write("state: %s\n" % ("none" if ours is None else "on" if ours else "off"))
+            if other:
+                sys.stdout.write("other_active: %s\n" % other)
+            if ours is not None:
+                info = _vac_parse(s.get(name))
+                info.setdefault("addresses", ", ".join(x for x, _ in _own_addresses()))
+                for k in ("subject", "days", "start", "end", "addresses"):
+                    sys.stdout.write("%s: %s\n" % (k, info.get(k, "")))
+                sys.stdout.write("\n" + info["message"] + "\n")
+            else:                               # nothing saved yet: offer the derived ones
+                sys.stdout.write("addresses: %s\n" % ", ".join(x for x, _ in _own_addresses()))
+            return 0
+        if a.action == "off":
+            if ours:
+                s.activate("")
+            sys.stdout.write("off\n")
+            return 0
+        if other and not a.force:
+            sys.exit("tvmail-backend: the Sieve script '%s' is active, and only one can be: "
+                     "turning on the out-of-office reply would switch it off.  Use --force "
+                     "to do that anyway." % other)
+        s.put(name, _vac_script(a.subject or "Out of office", a.days, start, end,
+                                message, addrs))
+        s.activate(name)
+        sys.stdout.write("on\n")
+        return 0
+    finally:
+        s.close()
+
+
 def cmd_ping(a):
     sys.stdout.write("pong\n")
     return 0
@@ -1510,7 +1938,7 @@ class _CapStream:
 # verbs that consume stdin or take over the terminal - never run them inside
 # the serve loop (they would eat the request stream)
 _SERVE_BLOCKED = frozenset(("serve", "send", "save-draft", "pull"))
-_COMMANDS = frozenset(("list", "show", "raw", "parts", "save", "delete",
+_COMMANDS = frozenset(("list", "counts", "vacation", "show", "raw", "parts", "save", "delete",
                        "mark", "purge", "empty-trash", "compose-template", "send",
                        "save-draft", "aliases", "pull", "ping", "mode",
                        "host", "serve"))
@@ -1648,6 +2076,11 @@ def build_parser():
     p = sub.add_parser("save-draft"); p.set_defaults(fn=cmd_save_draft)
     p = sub.add_parser("aliases");    p.set_defaults(fn=cmd_aliases)
     p = sub.add_parser("pull"); p.set_defaults(fn=cmd_pull)
+    p = sub.add_parser("vacation"); p.add_argument("action", choices=("status", "on", "off", "addresses"))
+    p.add_argument("--message-file", dest="message_file"); p.add_argument("--subject")
+    p.add_argument("--addresses")
+    p.add_argument("--days", type=int, default=7); p.add_argument("--start"); p.add_argument("--end")
+    p.add_argument("--force", action="store_true"); p.set_defaults(fn=cmd_vacation)
     p = sub.add_parser("ping"); p.set_defaults(fn=cmd_ping)
     p = sub.add_parser("mode"); p.set_defaults(fn=cmd_mode)
     p = sub.add_parser("host"); p.set_defaults(fn=cmd_host)

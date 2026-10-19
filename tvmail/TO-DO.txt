@@ -29,6 +29,7 @@ Worth doing later (higher design cost)
 20 HTML mail as a second view — Backend already has an HTML fallback; a “view HTML as text” toggle is enough. A real renderer is out of character.
 21 Multi-select — Space-tag then delete/move/mark, like Midnight Commander. Purge (5) and Move to... (6) already give bulk/any-message action without it; add it later if it's still missed.
 22 Resizable split — Drag or +/- on the folder width and the list/body ratio. The layout is currently a fixed 22-column / 2:5 split.
+23 [done] Out of office — File ▸ Out of office... edits a Sieve vacation script over ManageSieve (backend: vacation status|on|off|addresses). Needs mail-setup's configure-sieve.sh on the master; per-user, with a NAT-style address table.
 
 Done so far from this list: 1-10, 13 and 16.  A short order for
 what is left that stays in character:

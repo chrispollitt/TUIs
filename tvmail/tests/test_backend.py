@@ -301,7 +301,7 @@ class TestCli(Base):
         help_out = self.be("--help")
         self.assertEqual(help_out.returncode, 0)
         self.assertIn(b"--trace", help_out.stdout)
-        self.assertEqual(self.be("--version").stdout.strip(), b"tvmail-backend 1.1.0")
+        self.assertEqual(self.be("--version").stdout.strip(), b"tvmail-backend 1.2.0")
         debug = self.tmp / "debug.log"
         trace = self.tmp / "trace.log"
         p = self.be("--debug", str(debug), "--trace", str(trace), "ping")
@@ -1512,6 +1512,305 @@ class TestSmtpSend(Base):
             smtplib.SMTP = real
         self.assertTrue(ok)
         self.assertEqual(logged, [])                   # never attempted AUTH
+
+
+class FakeSieve:
+    """A just-enough ManageSieve server (RFC 5804) on a loopback port: login
+    with PLAIN, LISTSCRIPTS / GETSCRIPT / PUTSCRIPT / SETACTIVE.  No TLS -
+    `starttls=True` only *advertises* it, to test the client's refusal."""
+
+    def __init__(self, user="tester", password="pw", starttls=False):
+        import socket
+        import threading
+        self.user, self.password, self.starttls = user, password, starttls
+        self.scripts = {}          # name -> script text (LF)
+        self.active = ""
+        self.reject_put = None     # error text to answer PUTSCRIPT with
+        self.srv = socket.socket()
+        self.srv.bind(("127.0.0.1", 0))
+        self.srv.listen(5)
+        self.srv.settimeout(0.1)
+        self.port = self.srv.getsockname()[1]
+        self.stopped = False
+        self.thread = threading.Thread(target=self._accept, daemon=True)
+        self.thread.start()
+
+    def close(self):
+        # stop the accept loop for real: on Cygwin a close() from another
+        # thread leaves a blocked accept() listening, and the next test's
+        # server can inherit its port - and answer with its stale state
+        self.stopped = True
+        self.thread.join(5)
+        self.srv.close()
+
+    def _accept(self):
+        import socket
+        import threading
+        while not self.stopped:
+            try:
+                conn, _ = self.srv.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                return
+            conn.settimeout(None)
+            threading.Thread(target=self._serve, args=(conn,), daemon=True).start()
+
+    def _serve(self, conn):
+        import base64
+        import re
+        rf = conn.makefile("rb")
+        send = lambda s: conn.sendall(s.encode() if isinstance(s, str) else s)
+        send('"IMPLEMENTATION" "fake"\r\n"SASL" "PLAIN"\r\n'
+             + ('"STARTTLS"\r\n' if self.starttls else "")
+             + '"VERSION" "1.0"\r\nOK "ready"\r\n')
+        authed = False
+        while True:
+            line = rf.readline()
+            if not line:
+                break
+            cmd = line.decode().rstrip("\r\n")
+            verb = cmd.split(" ", 1)[0].upper()
+            if verb == "AUTHENTICATE":
+                tok = base64.b64decode(re.search(r'"([^"]*)"\s*$', cmd).group(1)).decode()
+                _, u, p = tok.split("\0")
+                authed = (u, p) == (self.user, self.password)
+                send('OK "welcome"\r\n' if authed else 'NO "Authentication failed."\r\n')
+            elif verb == "LOGOUT":
+                send('OK "bye"\r\n')
+                break
+            elif not authed:
+                send('NO "Authenticate first."\r\n')
+            elif verb == "LISTSCRIPTS":
+                for n in self.scripts:
+                    send('"%s"%s\r\n' % (n, " ACTIVE" if n == self.active else ""))
+                send('OK "done"\r\n')
+            elif verb == "GETSCRIPT":
+                n = re.search(r'"([^"]*)"', cmd).group(1)
+                if n not in self.scripts:
+                    send('NO "no such script"\r\n')
+                else:
+                    raw = self.scripts[n].replace("\n", "\r\n").encode()
+                    send(b"{%d}\r\n" % len(raw) + raw + b"\r\nOK \"done\"\r\n")
+            elif verb == "PUTSCRIPT":
+                m = re.search(r'"([^"]*)" \{(\d+)\+?\}', cmd)
+                raw = rf.read(int(m.group(2)))
+                rf.readline()                      # the CRLF after the literal
+                if self.reject_put:
+                    send('NO "%s"\r\n' % self.reject_put)
+                else:
+                    self.scripts[m.group(1)] = raw.decode().replace("\r\n", "\n")
+                    send('OK "stored"\r\n')
+            elif verb == "SETACTIVE":
+                n = re.search(r'"([^"]*)"', cmd).group(1)
+                if n and n not in self.scripts:
+                    send('NO "no such script"\r\n')
+                else:
+                    self.active = n
+                    send('OK "done"\r\n')
+            else:
+                send('NO "unknown command"\r\n')
+        conn.close()
+
+
+class TestVacation(Base):
+    def setUp(self):
+        super().setUp()
+        self.sieve = FakeSieve()
+        self.conf = self.tmp / "tvmail.conf"
+        self.write_conf()
+        os.environ["TVMAIL_CONF"] = str(self.conf)
+        os.environ["TVMAIL_IMAP_PASS"] = "pw"
+        os.environ["TVMAIL_MODE"] = "remote"          # a client, not the master
+        os.environ["TVMAIL_POSTFIX_GENERIC"] = str(self.tmp / "no-such-generic")
+        self.addCleanup(os.environ.pop, "TVMAIL_POSTFIX_GENERIC", None)
+
+    def tearDown(self):
+        self.sieve.close()
+        super().tearDown()
+
+    def write_conf(self, extra="tls = none"):
+        self.conf.write_text("[sieve]\nhost = 127.0.0.1\nport = %d\nuser = tester\n%s\n"
+                             % (self.sieve.port, extra))
+
+    def msgfile(self, text="I am away.\n"):
+        p = self.tmp / "msg.txt"
+        p.write_text(text)
+        return str(p)
+
+    def vac(self, *args):
+        return self.be("vacation", *args)
+
+    # -- the script text itself ------------------------------------------
+    def test_script_without_dates_is_a_bare_vacation(self):
+        s = be._vac_script("Away", 7, "", "", "Back soon.")
+        self.assertIn('require ["vacation"];', s)
+        self.assertNotIn("currentdate", s)
+        self.assertIn('vacation :days 7 :subject "Away" text:\nBack soon.\n.\n;', s)
+
+    def test_script_with_dates_tests_currentdate_inclusively(self):
+        s = be._vac_script("Away", 3, "2026-12-24", "2026-12-31", "x")
+        self.assertIn('require ["vacation", "date", "relational"];', s)
+        self.assertIn('currentdate :value "ge" "date" "2026-12-24"', s)
+        self.assertIn('currentdate :value "le" "date" "2026-12-31"', s)
+
+    def test_script_round_trips_quotes_and_dot_lines(self):
+        msg = 'She said "hi" \\ bye\n.\n..two dots\nlast line'
+        s = be._vac_script('Out "of" office', 5, "2026-01-02", "", msg)
+        info = be._vac_parse(s)
+        self.assertEqual(info["subject"], 'Out "of" office')
+        self.assertEqual(info["days"], "5")
+        self.assertEqual(info["start"], "2026-01-02")
+        self.assertNotIn("end", info)
+        self.assertEqual(info["message"], msg)
+        # nothing in the stuffed body can end the text: block early
+        self.assertEqual(s.count("\n.\n"), 1)
+
+    # -- the CLI against the fake server -----------------------------------
+    def test_status_none_then_on_then_off(self):
+        self.assertEqual(self.vac("status").stdout.decode().splitlines()[0], "state: none")
+        p = self.vac("on", "--message-file", self.msgfile(), "--subject", "Gone",
+                     "--days", "4", "--start", "2026-07-01", "--end", "2026-07-14")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.sieve.active, "tvmail-vacation")
+        st = self.vac("status").stdout.decode()
+        self.assertTrue(st.startswith("state: on\nsubject: Gone\ndays: 4\n"
+                                      "start: 2026-07-01\nend: 2026-07-14\naddresses: \n\n"), st)
+        self.assertTrue(st.endswith("I am away.\n"), st)
+        self.assertEqual(self.vac("off").returncode, 0)
+        self.assertEqual(self.sieve.active, "")
+        self.assertIn("tvmail-vacation", self.sieve.scripts)   # kept for next time
+        self.assertTrue(self.vac("status").stdout.decode().startswith("state: off\n"))
+
+    def test_addresses_option_and_config_default(self):
+        # the server only answers mail addressed to one of *my* addresses, and
+        # mail pulled from a POP account is addressed to the POP one
+        p = self.vac("on", "--message-file", self.msgfile(),
+                     "--addresses", "cwp@u-l.ca, cpbee@u-l.ca")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn(':addresses ["cwp@u-l.ca", "cpbee@u-l.ca"]',
+                      self.sieve.scripts["tvmail-vacation"])
+        self.assertIn("addresses: cwp@u-l.ca, cpbee@u-l.ca\n",
+                      self.vac("status").stdout.decode())
+        # no --addresses: the NAT table is the default ([sieve] addresses is
+        # one of its sources), and status offers it before anything is saved
+        self.sieve.scripts.clear()
+        self.write_conf(extra="tls = none\naddresses = me@x.org")
+        self.assertIn("addresses: me@x.org\n", self.vac("status").stdout.decode())
+        self.vac("on", "--message-file", self.msgfile())
+        self.assertIn(':addresses ["me@x.org"]', self.sieve.scripts["tvmail-vacation"])
+
+    # -- the "NAT table": public address <-> local identity ----------------
+    # cpbee fetches cwp@u-l.ca over POP and delivers it to a local user, and
+    # Postfix rewrites every local sender back to that public address, so mail
+    # arrives addressed to the public one and the vacation test must know it.
+    def test_nat_table_gathers_public_and_local_identities(self):
+        (self.home / ".mail-test").write_text(
+            'mailer { url "smtp://cpbee%40u-l.ca@mail.u-l.ca:26"; };\n')
+        os.environ["TVMAIL_MU_CONF"] = str(self.home / ".mail-test")
+        self.conf.write_text(
+            "[sieve]\nhost = cpbee\nuser = chris\naddresses = cwp@u-l.ca, CPBEE@u-l.ca\n"
+            "[smtp]\nfrom = Chris Pollitt <cwp@u-l.ca>\n")
+        got = be._own_addresses()
+        self.assertEqual([a for a, _ in got],
+                         ["cwp@u-l.ca", "CPBEE@u-l.ca", "chris@cpbee"])   # deduped, any case
+        self.assertEqual(got[0][1], "[sieve] addresses")
+        self.assertEqual(got[-1][1], "the master")
+
+    def test_nat_table_reads_the_masters_postfix_generic_map(self):
+        os.environ["TVMAIL_MODE"] = "local"
+        gen = self.tmp / "generic"
+        # two users on one master, plus the shared domain-wide rewrite: each
+        # user's table gets only their own line, never the shared address or
+        # the other user's
+        gen.write_text("# comment\n@cpbee  shared@u-l.ca\nroot@localhost   shared@u-l.ca\n"
+                       "tester@cpbee  tester@u-l.ca\nmiche@cpbee  miche@u-l.ca\n")
+        os.environ["TVMAIL_POSTFIX_GENERIC"] = str(gen)       # USER=tester here
+        out = self.vac("addresses").stdout.decode().splitlines()
+        pub = [l.split("\t") for l in out if l.endswith("postfix generic map")]
+        self.assertEqual([p[0] for p in pub], ["tester@u-l.ca"])
+        self.assertTrue(any(l.endswith("this host") for l in out))       # local identity too
+        # ... and `on` with no --addresses uses them
+        self.vac("on", "--message-file", self.msgfile())
+        script = self.sieve.scripts["tvmail-vacation"]
+        self.assertIn('"tester@u-l.ca"', script)
+        self.assertNotIn("miche@u-l.ca", script)
+        self.assertNotIn("shared@u-l.ca", script)
+
+    def test_plus_addressing_gives_each_user_a_tagged_public_address(self):
+        # cwp+chris@u-l.ca and cwp+miche@u-l.ca both land in cwp@u-l.ca; the
+        # tag says whose, so one public mailbox can serve several users
+        def table(plus, user="chris", **kw):
+            os.environ["USER"] = user
+            self.conf.write_text(
+                "[sieve]\nhost = cpbee\nuser = %s\nplus = %s\naddresses = cwp@u-l.ca, odd+x@u-l.ca\n"
+                "%s" % (user, plus, "".join("%s = %s\n" % kv for kv in kw.items())))
+            return be._own_addresses()
+        got = table("true")
+        self.assertEqual([a for a, _ in got],
+                         ["cwp+chris@u-l.ca", "odd+x@u-l.ca", "chris@cpbee"])  # bare dropped
+        self.assertEqual(got[0][1], "plus-address of cwp@u-l.ca")
+        self.assertEqual([a for a, _ in table("true", "miche")][0], "cwp+miche@u-l.ca")
+        self.assertEqual([a for a, _ in table("both")][:2], ["cwp@u-l.ca", "cwp+chris@u-l.ca"])
+        self.assertEqual([a for a, _ in table("true", tag="home")][0], "cwp+home@u-l.ca")
+        self.assertEqual([a for a, _ in table("false")][0], "cwp@u-l.ca")   # off by default
+
+    def test_junk_address_is_refused(self):
+        p = self.vac("on", "--message-file", self.msgfile(), "--addresses", 'a"b@x')
+        self.assertNotEqual(p.returncode, 0)
+        p = self.vac("on", "--message-file", self.msgfile(), "--addresses", "nobody")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertEqual(self.sieve.scripts, {})
+
+    def test_on_refuses_to_replace_another_active_script(self):
+        self.sieve.scripts["filters"] = 'require "fileinto";\n'
+        self.sieve.active = "filters"
+        self.assertIn("other_active: filters", self.vac("status").stdout.decode())
+        p = self.vac("on", "--message-file", self.msgfile())
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn(b"filters", p.stdout + p.stderr)
+        self.assertEqual(self.sieve.active, "filters")
+        self.assertNotIn("tvmail-vacation", self.sieve.scripts)
+        p = self.vac("on", "--message-file", self.msgfile(), "--force")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.sieve.active, "tvmail-vacation")
+        self.assertIn("filters", self.sieve.scripts)           # not deleted
+
+    def test_bad_input_is_refused_before_touching_the_server(self):
+        for args in (("--start", "tomorrow"),
+                     ("--start", "2026-07-14", "--end", "2026-07-01"),
+                     ("--days", "0")):
+            p = self.vac("on", "--message-file", self.msgfile(), *args)
+            self.assertNotEqual(p.returncode, 0, args)
+        p = self.vac("on", "--message-file", self.msgfile("  \n"))
+        self.assertNotEqual(p.returncode, 0)
+        self.assertEqual(self.sieve.scripts, {})
+
+    def test_server_rejecting_the_script_says_why(self):
+        self.sieve.reject_put = "line 4: unknown command 'vacatoin'"
+        p = self.vac("on", "--message-file", self.msgfile())
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn(b"unknown command", p.stdout + p.stderr)
+        self.assertEqual(self.sieve.active, "")
+
+    def test_wrong_password_is_reported(self):
+        os.environ["TVMAIL_IMAP_PASS"] = "nope"
+        p = self.vac("status")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn(b"login", p.stdout + p.stderr)
+
+    def test_no_server_says_how_to_enable_it(self):
+        self.sieve.close()
+        p = self.vac("status")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn(b"managesieve", p.stdout + p.stderr)
+
+    def test_password_is_never_sent_without_tls_unless_told_to(self):
+        self.write_conf(extra="")            # tls defaults to starttls
+        p = self.vac("status")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn(b"STARTTLS", p.stdout + p.stderr)
+        self.assertEqual(self.sieve.active, "")
 
 
 if __name__ == "__main__":

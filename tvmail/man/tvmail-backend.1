@@ -221,6 +221,68 @@ tvmail\-backend purge --subject "***SPAM***" --to-folder spam
 .EE
 .RE
 .TP
+.BI "vacation " "status" | on | off | addresses " \fR[\fP--message-file " "FILE" "\fR]\fP \fR[\fP--subject " "S" "\fR]\fP \fR[\fP--days " "N" "\fR]\fP \fR[\fP--start " "D" "\fR]\fP \fR[\fP--end " "D" "\fR]\fP \fR[\fP--addresses " "A,B" "\fR]\fP \fR[\fP--force\fR]\fP"
+Out\-of\-office auto\-reply.
+An automatic reply must be sent by the machine that receives the mail, so this
+manages one Sieve
+.B vacation
+script (default name
+.IR tvmail\-vacation )
+on the master over ManageSieve (RFC 5804, port 4190; see
+.B [sieve]
+under
+.BR MODES ),
+logged in as the invoking user.
+.B status
+prints
+.IR "state: none|off|on" ,
+.I other_active:
+(another Sieve script is active),
+.IR subject ,
+.IR days ,
+.IR start ,
+.IR end ,
+.IR addresses ,
+a blank line and the message.
+.B on
+installs and activates the script (the message comes from
+.BR \-\-message\-file );
+.B off
+deactivates it and keeps it for next time.
+Dates are
+.IR YYYY\-MM\-DD ,
+inclusive; the same sender is answered at most once every
+.B \-\-days
+(default 7).
+Only one Sieve script can be active, so
+.B on
+refuses to replace another one unless given
+.BR \-\-force .
+.IP
+The server answers only mail addressed to one of
+.BR \-\-addresses .
+A master such as cpbee hides behind one public mailbox: it fetches that
+mailbox over POP and delivers to a local user, and rewrites local senders back
+to the public address on the way out, much like a NAT.
+Mail therefore arrives addressed to the public address.
+By default the list is built from
+.BR "[sieve] addresses" ,
+.BR "[smtp] from" ,
+the user of
+.IR ~/.mail 's
+.B mailer
+URL, on the master the user's own lines in
+.IR /etc/postfix/generic
+(never the shared
+.B @host
+lines), and the local identity
+.IR user@host .
+.B addresses
+prints that table with where each entry came from.
+Everything is per user.
+Enable the server side with
+.IR configure/enable\-managesieve.sh .
+.TP
 .BR "empty\-trash " "\fR[\fP-n\fR]\fP"
 Permanently delete every message in the
 .B trash
@@ -366,6 +428,7 @@ mode   = local | remote
 [imap]   host= port=993 ssl=true verify=true cafile= user=
 [smtp]   host= port=587 starttls=true auth=true verify=true cafile= from= user=
 [folders] saved=Archive  trash=Trash  drafts=Drafts
+[sieve]  host= port=4190 user= tls=starttls verify= cafile= script=tvmail-vacation addresses= plus=false tag=
 .EE
 .RE
 .PP

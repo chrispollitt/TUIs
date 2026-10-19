@@ -240,6 +240,18 @@ folder and pressing
 .B Enter
 re\-opens it for editing; sending it then removes it from
 .BR drafts .
+.SH "OUT OF OFFICE"
+.B "File \(-> Out of office..."
+switches an automatic reply on or off: subject, message, optional first and
+last day, how often one sender is answered, and the addresses mail reaches you
+at.
+It runs on the mail server as a Sieve vacation script, set over ManageSieve,
+so it keeps answering with
+.B tvmail
+closed; each user has their own.
+The server needs managesieve enabled once (see
+.BR tvmail\-backend (1),
+.BR vacation ).
 .SH ADDRESS BOOK
 .B "Message \(-> Address book"
 .RB ( F4 )

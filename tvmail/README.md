@@ -318,6 +318,21 @@ older-than / seen-unseen, shows a dry-run preview, and asks for confirmation
 before moving the matches to trash (or **Expunge** to delete them outright).
 **Message ▸ Move to...** does the same for a single message, to any folder.
 
+## Out of office
+
+**File ▸ Out of office...** switches an automatic reply on or off, with a
+subject, a message, optional first and last day, and how often the same sender
+gets a reply. It runs **on the mail server** as a Sieve `vacation` script (set
+over ManageSieve), so it keeps answering with tvmail closed, and each user has
+their own. The server needs managesieve enabled once —
+mail-setup's `configure-sieve.sh`, see [INSTALL.md](INSTALL.md) ("Out of
+office"). The dialog's **Addresses** line is the *NAT table*: a master that
+hides behind one public mailbox receives mail addressed to that public
+address, and the server only answers mail addressed to one of your addresses.
+tvmail fills it in from `tvmail.conf`, your `~/.mail` and, on the master, your
+line in Postfix's generic map. `tvmail-backend vacation status|on|off|addresses`
+does the same from a script.
+
 **File ▸ Empty trash...** permanently deletes everything in the trash folder.
 It counts what's there first, asks you to confirm (there's no undo over
 IMAP; locally a `.bak` of the trash mbox is kept), and says so if the trash
@@ -442,8 +457,8 @@ Old school. As nature intended.
 ## Tarballs
 
 ```bash
-./dist.sh            # -> dist/tvmail-1.1.0.tar.gz              (source)
-                     #    dist/tvmail-1.1.0-<system>-<arch>.tar.gz  (binary)
+./dist.sh            # -> dist/tvmail-1.2.0.tar.gz              (source)
+                     #    dist/tvmail-1.2.0-<system>-<arch>.tar.gz  (binary)
 ```
 
 The **source** tarball builds anywhere tvision does — Linux, macOS, Cygwin

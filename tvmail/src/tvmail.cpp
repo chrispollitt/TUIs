@@ -44,6 +44,7 @@
 #define Uses_THistory
 #define Uses_TCommandSet
 #define Uses_TStaticText
+#define Uses_TMemo
 #include <tvision/tv.h>
 
 #include <string>
@@ -74,7 +75,7 @@
 #define TVMAIL_SH "/bin/sh"
 #endif
 #ifndef TVMAIL_VERSION
-#define TVMAIL_VERSION "1.1.0"
+#define TVMAIL_VERSION "1.2.0"
 #endif
 
 // ---------------------------------------------------------------- commands ---
@@ -117,6 +118,7 @@ const ushort cmSortUnread = 2038;   //             unread first
 const ushort cmSortReverse = 2039;  // flip the current order
 const ushort cmClearFilter = 2040;  // drop the type-to-filter text
 const ushort cmFilterChanged = 2041; // broadcast: list view rebuilt (title refresh)
+const ushort cmOutOfOffice = 2042;  // File > Out of office... (Sieve vacation reply)
 
 // ------------------------------------------------------ editor dialogs -----
 // Wire up the standard Find / Replace / "search failed" dialogs the TEditor
@@ -2552,6 +2554,13 @@ static const char *kHelpText =
     "  again, or View > Reverse order, flips it.  Date is mailbox order, oldest\n"
     "  first - Reverse gives newest first.  The Messages heading shows both.\n"
     "\n"
+    "OUT OF OFFICE   (File > Out of office...)\n"
+    "  Switches an automatic reply on or off.  It runs on the mail server (a Sieve\n"
+    "  vacation script, set over ManageSieve), so it keeps answering with tvmail\n"
+    "  closed.  Optional first / last day, subject, message, and how often the\n"
+    "  same sender gets a reply.  Needs managesieve enabled on the server - see\n"
+    "  INSTALL.md - and a [sieve] section in tvmail.conf only if its host differs.\n"
+    "\n"
     "WINDOWS\n"
     "  F6 / Shift-F6 cycle windows; Window > List (Alt-0) lists them all.\n"
     "\n"
@@ -2680,6 +2689,7 @@ private:
     void markRead(int row);
     void saveMsg(int row);
     void windowList();
+    void outOfOffice();
     void moveMsg(int row);
     void viewParts(int row);
     void purgeDialog();
@@ -2706,6 +2716,7 @@ TMenuBar *TVMailApp::initMenuBar(TRect r)
                                            cmPull, kbF3, hcNoContext, "F3") +
                             *new TMenuItem("~R~eload", cmReload, kbF5, hcNoContext, "F5") +
                             *new TMenuItem("Sa~v~e message as...", cmSaveMsg, kbNoKey, hcNoContext) +
+                            *new TMenuItem("~O~ut of office...", cmOutOfOffice, kbNoKey, hcNoContext) +
                             *new TMenuItem("P~u~rge...", cmPurgeMsgs, kbNoKey, hcNoContext) +
                             *new TMenuItem("Empty ~t~rash...", cmEmptyTrash, kbNoKey, hcNoContext) +
                             newLine() +
@@ -3008,6 +3019,213 @@ void TVMailApp::windowList()
     TObject::destroy(d);
     if (r != cmCancel && sel >= 0 && sel < (short)wins.size())
         wins[sel].view->select();
+}
+
+// File > Out of office...: an auto-reply has to run where the mail arrives, so
+// this edits a Sieve vacation script on the master over ManageSieve (via
+// tvmail-backend vacation).  Nothing here keeps running after tvmail exits.
+void TVMailApp::outOfOffice()
+{
+    // --- what is there now -----------------------------------------------
+    std::string st = backendRun("vacation status");
+    if (st.rfind("state: ", 0) != 0)
+    {
+        while (!st.empty() && (st.back() == '\n' || st.back() == ' '))
+            st.pop_back();
+        messageBox(st.empty() ? "Could not read the out-of-office settings\n(is tvmail-backend up to date?)."
+                              : st.c_str(),
+                   mfError | mfOKButton);
+        return;
+    }
+    std::string state, otherActive, subject = "Out of office", days = "7", start, end, addresses;
+    std::string message = "Thank you for your message.\n"
+                          "I am out of the office and will reply when I am back.\n";
+    {
+        std::vector<std::string> ls = splitLines(st);
+        size_t i = 0;
+        bool haveScript = false;
+        for (; i < ls.size() && !ls[i].empty(); ++i)
+        {
+            size_t c = ls[i].find(": ");
+            if (c == std::string::npos)
+                continue;
+            std::string k = ls[i].substr(0, c), v = ls[i].substr(c + 2);
+            if (k == "state")
+                state = v;
+            else if (k == "other_active")
+                otherActive = v;
+            else if (k == "subject" && !v.empty())
+                subject = v, haveScript = true;
+            else if (k == "days" && !v.empty())
+                days = v;
+            else if (k == "start")
+                start = v;
+            else if (k == "end")
+                end = v;
+            else if (k == "addresses")
+                addresses = v;
+        }
+        if (haveScript)
+        {
+            std::string m;
+            for (++i; i < ls.size(); ++i)
+                m += ls[i] + "\n";
+            while (m.size() > 1 && m[m.size() - 1] == '\n' && m[m.size() - 2] == '\n')
+                m.pop_back();
+            if (!m.empty() && m != "\n")
+                message = m;
+        }
+    }
+
+    // --- the dialog ------------------------------------------------------
+    const ushort kMemoMax = 4096;
+    TDialog *d = new TDialog(TRect(0, 0, 70, 24), "Out of office");
+    d->options |= ofCentered;
+
+    TCheckBoxes *onCb = new TCheckBoxes(TRect(3, 2, 60, 3), new TSItem("Automatic reply is ~O~N", 0));
+    d->insert(onCb);
+
+    TInputLine *subjIl = new TInputLine(TRect(14, 4, 67, 5), 120);
+    d->insert(subjIl);
+    d->insert(new TLabel(TRect(2, 4, 14, 5), "Su~b~ject", subjIl));
+
+    TInputLine *fromIl = new TInputLine(TRect(14, 6, 26, 7), 11);
+    d->insert(fromIl);
+    d->insert(new TLabel(TRect(2, 6, 14, 7), "~F~rom date", fromIl));
+    d->insert(new TStaticText(TRect(28, 6, 68, 7), "YYYY-MM-DD; blank = from now on"));
+
+    TInputLine *toIl = new TInputLine(TRect(14, 7, 26, 8), 11);
+    d->insert(toIl);
+    d->insert(new TLabel(TRect(2, 7, 14, 8), "~T~o date", toIl));
+    d->insert(new TStaticText(TRect(28, 7, 68, 8), "last day; blank = until switched off"));
+
+    // The server only answers mail addressed to one of these.  Mail pulled in
+    // from a POP account is addressed to *that* account, not to this one.
+    TInputLine *addrIl = new TInputLine(TRect(14, 9, 67, 10), 160);
+    d->insert(addrIl);
+    d->insert(new TLabel(TRect(2, 9, 14, 10), "~A~ddresses", addrIl));
+    d->insert(new TStaticText(TRect(14, 10, 68, 11), "public + local (comma separated); the server answers mail sent to any"));
+
+    TInputLine *daysIl = new TInputLine(TRect(43, 12, 49, 13), 4);
+    d->insert(daysIl);
+    d->insert(new TLabel(TRect(2, 12, 43, 13), "~R~eply to each sender at most every", daysIl));
+    d->insert(new TStaticText(TRect(50, 12, 56, 13), "days"));
+
+    TScrollBar *vsb = new TScrollBar(TRect(65, 15, 66, 20));
+    d->insert(vsb);
+    TMemo *memo = new TMemo(TRect(3, 15, 65, 20), nullptr, vsb, nullptr, kMemoMax);
+    d->insert(memo);
+    d->insert(new TLabel(TRect(2, 14, 20, 15), "~M~essage", memo));
+
+    d->insert(new TButton(TRect(20, 21, 32, 23), "~S~ave", cmOK, bfDefault));
+    d->insert(new TButton(TRect(36, 21, 48, 23), "Cancel", cmCancel, bfNormal));
+
+    ushort on = (state == "on") ? 1 : 0;
+    onCb->setData(&on);
+    // TInputLine::setData copies its full buffer size, so hand it one
+    auto fill = [](TInputLine *il, const std::string &s, size_t maxLen)
+    {
+        std::vector<char> b(maxLen + 1, 0);
+        std::memcpy(b.data(), s.data(), std::min(s.size(), maxLen));
+        il->setData(b.data());
+    };
+    fill(subjIl, subject, 120);
+    fill(fromIl, start, 11);
+    fill(toIl, end, 11);
+    fill(addrIl, addresses, 160);
+    fill(daysIl, days, 4);
+    {
+        std::vector<char> md(sizeof(ushort) + kMemoMax);
+        ushort len = (ushort)std::min<size_t>(message.size(), kMemoMax - 1);
+        std::memcpy(md.data(), &len, sizeof len);
+        std::memcpy(md.data() + sizeof len, message.data(), len);
+        memo->setData(md.data());
+    }
+    d->selectNext(False);
+
+    ushort r = TProgram::deskTop->execView(d);
+    if (r == cmCancel)
+    {
+        TObject::destroy(d);
+        return;
+    }
+    ushort wantOn = 0;
+    onCb->getData(&wantOn);
+    char sbuf[121], fbuf[12], tbuf[12], dbuf[5], abuf[161];
+    addrIl->getData(abuf);
+    subjIl->getData(sbuf);
+    fromIl->getData(fbuf);
+    toIl->getData(tbuf);
+    daysIl->getData(dbuf);
+    std::vector<char> md(sizeof(ushort) + kMemoMax);
+    memo->getData(md.data());
+    ushort mlen = 0;
+    std::memcpy(&mlen, md.data(), sizeof mlen);
+    std::string text(md.data() + sizeof mlen, std::min<size_t>(mlen, kMemoMax));
+    TObject::destroy(d);
+
+    auto trim = [](std::string s)
+    {
+        size_t a = s.find_first_not_of(" \t");
+        size_t b = s.find_last_not_of(" \t");
+        return a == std::string::npos ? std::string() : s.substr(a, b - a + 1);
+    };
+    // the editor may use CR or CRLF line ends; the backend wants plain LF
+    std::string msg;
+    for (size_t i = 0; i < text.size(); ++i)
+    {
+        if (text[i] == '\r')
+        {
+            msg += '\n';
+            if (i + 1 < text.size() && text[i + 1] == '\n')
+                ++i;
+        }
+        else
+            msg += text[i];
+    }
+
+    std::string out;
+    bool ok;
+    if (!(wantOn & 1))
+    {
+        out = backendRun("vacation off");
+        ok = out.rfind("off", 0) == 0;
+    }
+    else
+    {
+        bool force = false;
+        if (!otherActive.empty())
+        {
+            std::string q = "The Sieve script '" + otherActive + "' is active on the server.\n"
+                            "Only one script can be, so switching on the out-of-office\n"
+                            "reply will switch that one off.\n\nContinue?";
+            if (messageBox(mfConfirmation | mfYesNoCancel, "%s", q.c_str()) != cmYes)
+                return;
+            force = true;
+        }
+        std::string f = writeTemp(msg, ".txt");
+        std::string args = "vacation on --message-file " + shq(f) + " --subject " + shq(trim(sbuf)) +
+                           " --days " + shq(trim(dbuf).empty() ? "7" : trim(dbuf)) +
+                           " --addresses " + shq(trim(abuf));
+        if (!trim(fbuf).empty())
+            args += " --start " + shq(trim(fbuf));
+        if (!trim(tbuf).empty())
+            args += " --end " + shq(trim(tbuf));
+        if (force)
+            args += " --force";
+        out = backendRun(args);
+        ::remove(f.c_str());
+        ok = out.rfind("on", 0) == 0;
+    }
+    while (!out.empty() && (out.back() == '\n' || out.back() == ' '))
+        out.pop_back();
+    if (ok)
+        messageBox((wantOn & 1) ? "Out-of-office reply is ON.\n\nThe server answers for you from now on, even with tvmail closed."
+                                : "Out-of-office reply is OFF.",
+                   mfInformation | mfOKButton);
+    else
+        messageBox(out.empty() ? "The server did not accept the change." : out.c_str(),
+                   mfError | mfOKButton);
 }
 
 void TVMailApp::moveMsg(int row)
@@ -3324,6 +3542,9 @@ void TVMailApp::handleEvent(TEvent &e)
         break;
     case cmWindowList:
         windowList();
+        break;
+    case cmOutOfOffice:
+        outOfOffice();
         break;
     case cmSortDate:
     case cmSortFrom:
