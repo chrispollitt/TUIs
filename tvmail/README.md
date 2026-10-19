@@ -11,21 +11,7 @@ See [HISTORY.md](HISTORY.md) for the twenty-year excuse.
 setup, the mail system (via mail-setup), building, updating and uninstalling.
 The Requirements, Build and Install sections below are a short summary.
 
-```
- File  Message  Edit  Window  Help
-+---------------------------------------------------------------------+
-| inbox  (/var/mail) | N 09-06 21:14  chris@cmlaptop   test2       ^  |
-| drafts             | . 09-06 00:34  Mail Delivery..  failed      #  |
-| saved  (~/mbox)    | . 09-06 19:38  Chris Pollitt    Re: test2   v  |
-| trash              |----------------------------------------------- |
-| dead.letter        | Date:    Sat, 06 Sep 2026 19:38 -0700       ^  |
-|                    | From:    Chris Pollitt <chris.pollitt@..>      |
-|                    | Subject: Re: test2                          #  |
-|                    |                                                |
-|                    | bye                                         v  |
-+---------------------------------------------------------------------+
- F1 Help  F3 Pull  F5 Reload  ^R Reply  ^N New  F2 Send  ^D Del  F4 Book
-```
+![tvmail in a terminal: folders on the left with an unread count, the message list top right, the message below, the menu bar and F-key line](images/tvmail.png)
 
 ## What it is
 

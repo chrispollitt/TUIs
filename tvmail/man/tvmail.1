@@ -72,6 +72,24 @@ see
 .RB ( MODES )
 and the shipped
 .IR tvmail.conf.example .
+.PP
+In remote mode the IMAP/SMTP password is never kept in
+.IR tvmail.conf .
+It is looked up in
+.IR ~/.mu-tickets
+(GNU Mailutils' credentials file, which
+.BR mail (1)
+reads too: one
+.I scheme://user:pass@host
+line per server, URL\-encoded, mode 0600), then
+.IR ~/.netrc ,
+then
+.B $TVMAIL_IMAP_PASS
+and
+.BR $TVMAIL_SMTP_PASS .
+A relay that trusts your network
+.RB ( "[smtp] auth = false" )
+needs none.
 .SH THE THREE PANES
 The window is divided into a folder list on the left, a message list at the
 top right, and the body of the highlighted message below it.
@@ -258,15 +276,28 @@ Local vs. remote, and the IMAP/SMTP host in remote mode.
 See
 .BR tvmail\-backend (1).
 .TP
-.I ~/.mail ", " ~/.mu-tickets
-GNU Mailutils' own host/port and credentials, used as a fallback when
+.I ~/.mail
+GNU Mailutils' own host and port, used as a fallback when
 .I tvmail.conf
 doesn't set them.
 See
 .BR tvmail\-backend (1).
 .TP
+.I ~/.mu-tickets
+The IMAP/SMTP password in remote mode, shared with
+.BR mail (1):
+one
+.I scheme://user:pass@host
+line per server (scheme
+.B *
+matches any), URL\-encoded, mode 0600.
+Checked before
+.IR ~/.netrc .
+.TP
 .I ~/.netrc
-The IMAP/SMTP password in remote mode (mode 0600).
+The IMAP/SMTP password in remote mode if
+.I ~/.mu-tickets
+has none for the host (mode 0600).
 .TP
 .I ~/.mailrc ", " /etc/mailrc
 Read for
@@ -325,6 +356,20 @@ Base for the trash mailbox
 .RI ( $XDG_DATA_HOME/tvmail/trash.mbox ,
 default
 .IR ~/.local/share ).
+.TP
+.B TVMAIL_MU_TICKETS
+Overrides
+.I ~/.mu-tickets
+(and
+.B TVMAIL_MU_CONF
+overrides
+.IR ~/.mail ).
+.TP
+.B TVMAIL_IMAP_PASS ", " TVMAIL_SMTP_PASS
+Remote\-mode passwords, taking precedence over
+.I ~/.mu-tickets
+and
+.IR ~/.netrc .
 .TP
 .B PATH
 Must contain
