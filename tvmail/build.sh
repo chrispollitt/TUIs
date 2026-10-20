@@ -44,6 +44,20 @@ if grep -q 'readTimeoutMs = 10 ' "$ncin" 2>/dev/null; then
   sed 's/readTimeoutMs = 10 /readTimeoutMs = 50 /' "$ncin" > "$ncin.new" && mv "$ncin.new" "$ncin"
 fi
 
+# Older tvision's DisplayBuffer::validateCell turns a cell whose text starts with '\0'
+# into a space - and a wide-char trail cell is exactly that, so the trail is lost before
+# the flush looks at it.  Every CJK character then gets a space written over its right
+# half ("日 本 語", one extra column per character).  Upstream fixed it later
+# (ensureCharacterIsPrintable returns early for trails); do the same here.  (Idempotent;
+# all platforms.)
+dbuf="$tv/source/platform/dispbuff.cpp"
+if grep -q 'DisplayBuffer::validateCell' "$dbuf" 2>/dev/null \
+   && ! grep -q 'isWideCharTrail()) {} else if' "$dbuf"; then
+  echo ">> tvision: keep wide-char trail cells in validateCell (CJK gaps)"
+  sed "s/^    if (c == '\\\\0')\$/    if (cell.character.isWideCharTrail()) {} else if (c == '\\\\0')/" \
+    "$dbuf" > "$dbuf.new" && mv "$dbuf.new" "$dbuf"
+fi
+
 if [ "$is_cygwin" = 1 ]; then
   py="${PYTHON:-}"
   if [ -z "$py" ]; then
