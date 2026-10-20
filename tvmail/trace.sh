@@ -30,7 +30,7 @@ front="${1:-trace.log}"
 if [ -n "${2:-}" ]; then
   back="$2"
 else
-  # same rule as tvmail.cpp's backendPath(): insert .backend before the
+  # same rule as src/shell.cpp's backendPath(): insert .backend before the
   # extension (name.ext -> name.backend.ext), or append it if there's none.
   dir="${front%/*}"
   base="$front"

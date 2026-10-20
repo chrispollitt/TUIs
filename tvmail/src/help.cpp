@@ -1,0 +1,140 @@
+#include "tvmail.h"
+#include "views.h"
+
+// ========================================================== in-app help ====
+static const char *kHelpText =
+    "tvmail  -  a Turbo Vision mail client                (Esc / Alt-F3 closes)\n"
+    "\n"
+    "THE THREE PANES\n"
+    "  Folders (left)  .  Messages (top right)  .  Message body (bottom right).\n"
+    "  Tab / Shift-Tab move between panes.  Arrows, PgUp, PgDn move within one.\n"
+    "  Moving the highlight in Folders reloads the message list; moving it in\n"
+    "  Messages loads the body below.  Enter on a message jumps to the body.\n"
+    "\n"
+    "LOCAL / REMOTE\n"
+    "  On the mailstore host tvmail reads local mbox files and sends via\n"
+    "  sendmail.  On any other machine it is an IMAP/SMTP client of that host -\n"
+    "  same panes and keys, folders are IMAP folders, F3 files tagged spam.\n"
+    "  Set it up in ~/.config/tvmail/tvmail.conf  (see man tvmail-backend).\n"
+    "\n"
+    "FOLDERS\n"
+    "  inbox        where mail is delivered      (local: /var/mail ; remote: INBOX)\n"
+    "  drafts       messages kept unsent\n"
+    "  sent         a copy of everything you send\n"
+    "  saved        where read mail is filed     (local: ~/mbox ; remote: Archive)\n"
+    "  spam         F3 moves messages tagged ***SPAM*** by the server here\n"
+    "  trash        Ctrl-D moves here; from trash, delete is permanent\n"
+    "               (File > Empty trash... deletes it all, after a count + confirm)\n"
+    "  dead.letter  a message mail(1) or tvmail left behind - always a local file\n"
+    "\n"
+    "READING\n"
+    "  Enter    jump to the body pane and scroll it\n"
+    "  Ctrl-D   delete  (moves to trash; from trash it deletes for good)\n"
+    "  F5       reload the current folder\n"
+    "  F3       local: pull new mail (mail-pull)  .  remote: file tagged spam\n"
+    "  Message > View source shows the raw RFC822 message.\n"
+    "  File > Save message as... writes it to a .eml file.\n"
+    "  Long lines wrap at the pane edge; View > Wrap long lines turns that off\n"
+    "  (then a line cut off at the edge ends in >>, and Left / Right scroll).\n"
+    "\n"
+    "FIND AND COPY   (message body, View source, Help)\n"
+    "  Edit > Find... / Find again search the text you are reading.\n"
+    "  Shift+Up / Down / PgUp / PgDn, or a mouse drag, select whole lines;\n"
+    "  Edit > Copy (Ctrl-Ins) copies them - the whole text if none are selected.\n"
+    "  Shift-Ins pastes them into a compose window.  Esc drops the selection.\n"
+    "\n"
+    "READ AND UNREAD\n"
+    "  Arrowing through the list only previews a message: it stays unread (N).\n"
+    "  It is marked read once you look - Enter or Tab to the body pane - or by\n"
+    "  Message > Mark read.  Message > Mark unread puts the N back, and it stays.\n"
+    "  Folders show what is waiting:  inbox (3) = unread, drafts (2) = how many.\n"
+    "\n"
+    "FINDING AND ORDERING   (message list)\n"
+    "  Just type: the list narrows to messages whose From or Subject contains the\n"
+    "  text (any case).  Backspace trims it, Esc clears it (or View > Clear filter).\n"
+    "  View > Sort by date / from / subject / Unread first; choosing the same sort\n"
+    "  again, or View > Reverse order, flips it.  Date is mailbox order, oldest\n"
+    "  first - Reverse gives newest first.  The Messages heading shows both.\n"
+    "\n"
+    "OUT OF OFFICE   (File > Out of office...)\n"
+    "  Switches an automatic reply on or off.  It runs on the mail server (a Sieve\n"
+    "  vacation script, set over ManageSieve), so it keeps answering with tvmail\n"
+    "  closed.  Optional first / last day, subject, message, and how often the\n"
+    "  same sender gets a reply.  Needs managesieve enabled on the server - see\n"
+    "  INSTALL.md - and a [sieve] section in tvmail.conf only if its host differs.\n"
+    "\n"
+    "WINDOWS\n"
+    "  F6 / Shift-F6 cycle windows; Window > List (Alt-0) lists them all.\n"
+    "\n"
+    "COMPOSING\n"
+    "  Ctrl-N   new message            Ctrl-R  reply to the selected message\n"
+    "  F2       send the compose window you are in\n"
+    "  A new message starts with your ~/.signature (after the quote on replies).\n"
+    "  Message > Insert signature / Insert dead.letter add them by hand\n"
+    "  (the classic ~a / ~d escapes).\n"
+    "  Closing an unsent message offers  Save draft / Discard / Cancel.\n"
+    "  In the Drafts folder, Enter opens the draft to finish it; sending it\n"
+    "  removes it from Drafts.\n"
+    "\n"
+    "ADDRESS BOOK   (Message > Address book, F4)\n"
+    "  Lists the alias / group entries from /etc/mailrc and ~/.mailrc.\n"
+    "  Enter drops the addresses into the To: field of your compose window.\n"
+    "  You can also just type an alias name in To: - it is expanded on send.\n"
+    "\n"
+    "SIGNATURE   (File > Edit signature)\n"
+    "  Opens ~/.signature in the editor.  Ctrl-S saves.\n"
+    "\n"
+    "EDITING   (compose body, signature)\n"
+    "  Shift-Del cut   Ctrl-Ins copy   Shift-Ins paste\n"
+    "  Edit > Find / Replace / Find again\n"
+    "\n"
+    "mail(1) COMPATIBILITY\n"
+    "  tvmail reads your ~/.mailrc:  set folder, set DEAD, and the alias / group\n"
+    "  address book.  Drafts in ~/Mail/drafts open with  mail -f +drafts .\n"
+    "  It is a face on the same mailbox, not a silo.\n"
+    "\n"
+    "KEYS AT A GLANCE\n"
+    "  F1 help    F3 pull    F5 reload    F6 next window    F10 menu\n"
+    "  Ctrl-R reply   Ctrl-N new   F2 send   Ctrl-D delete   F4 address book\n"
+    "  Tab pane   Alt-X quit\n";
+
+class THelpWindow : public TViewerWindow
+{
+public:
+    THelpWindow(const TRect &b)
+        : TWindowInit(&THelpWindow::initFrame),
+          TViewerWindow(b, "Help")
+    {
+        palette = wpCyanWindow;
+        options |= ofTileable;
+        TScrollBar *v = standardScrollBar(sbVertical | sbHandleKeyboard);
+        TScrollBar *h = standardScrollBar(sbHorizontal | sbHandleKeyboard);
+        TRect r = getExtent();
+        r.grow(-1, -1);
+        insert(new TTextView(r, h, v, splitLines(kHelpText)));
+    }
+    TColorAttr mapColor(uchar i) override
+    {
+        switch (i)
+        {
+        case 1:
+            return cNorm();
+        case 2:
+        case 3:
+            return cFrame();
+        case 4:
+        case 6:
+        case 8:
+            return cNorm();
+        case 5:
+        case 7:
+            return cHi();
+        }
+        return TView::mapColor(i);
+    }
+};
+
+TWindow *newHelpWindow(const TRect &bounds)
+{
+    return new THelpWindow(bounds);
+}

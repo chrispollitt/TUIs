@@ -28,5 +28,5 @@ Turbo Vision  -  https://github.com/magiblot/tvision
     Borland released the original Turbo Vision source to the public with a
     no-warranty disclaimer (see third_party/tvision/COPYRIGHT after a build).
 
-The Find / Replace dialog builders in src/tvmail.cpp are adapted from the
+The Find / Replace dialog builders in src/dialogs.cpp are adapted from the
 `tvedit` example distributed with Turbo Vision.

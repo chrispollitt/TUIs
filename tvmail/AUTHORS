@@ -10,7 +10,7 @@ Bundled at build time (cloned by build.sh, not stored in this repository):
     Turbo Vision   --   https://github.com/magiblot/tvision
         modern C++ port by magiblot of Borland's Turbo Vision framework.
 
-Portions of src/tvmail.cpp (the Find / Replace dialog helpers) are adapted
+Portions of src/dialogs.cpp (the Find / Replace dialog helpers) are adapted
 from the `tvedit` example in the Turbo Vision distribution.
 
 No mail was harmed in the making of this program.  A few test messages to

@@ -42,16 +42,20 @@ if(NOT TARGET tvision)
     endif()
 endif()
 
-add_executable(tvmail src/tvmail.cpp)
+add_executable(tvmail
+    src/main.cpp src/app.cpp src/mailwin.cpp src/compose.cpp
+    src/addrbook.cpp src/parts.cpp src/signature.cpp src/help.cpp
+    src/dialogs.cpp src/util.cpp src/shell.cpp src/coprocess.cpp)
 target_link_libraries(tvmail PRIVATE tvision)
 # Treat tvision's own headers as system headers so ITS warnings (e.g. the
 # __cdecl/__stdcall redefinition tv.h does on non-_WIN32 builds - Cygwin's
 # GCC already has built-in definitions for both) don't show up in tvmail's
-# build output. Warnings from tvmail.cpp itself are unaffected.
+# build output. Warnings from tvmail's own sources are unaffected.
 get_target_property(TVISION_INCLUDE_DIRS tvision INTERFACE_INCLUDE_DIRECTORIES)
 if(TVISION_INCLUDE_DIRS)
     target_include_directories(tvmail SYSTEM PRIVATE ${TVISION_INCLUDE_DIRS})
 endif()
+target_include_directories(tvmail PRIVATE src)
 target_compile_definitions(tvmail PRIVATE TVMAIL_SH="${TVMAIL_SH}"
     TVMAIL_VERSION="${PROJECT_VERSION}")
 
