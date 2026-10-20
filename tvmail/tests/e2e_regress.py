@@ -228,7 +228,7 @@ class Tv:
         self.spool = self.tmp / "spool.mbox"
         self.spool.write_bytes(fixture.encode("utf-8"))
         self.env = dict(os.environ)
-        for k in ("COLORTERM", "TVMAIL_CONF", "TVMAIL_IMAP_PASS", "MAILRC",
+        for k in ("COLORTERM", "TVMAIL_CONF", "TVCHAT_CONF", "TVMAIL_IMAP_PASS", "MAILRC",
                   "TVMAIL_SIEVE_PASS", "TVMAIL_MU_CONF", "TVMAIL_MU_TICKETS"):
             self.env.pop(k, None)
         self.env.update(
@@ -966,6 +966,47 @@ def out_of_office_keeps_entries(opts):
             "saving again did not switch it on")
     c.check("AWAYTEST" in sieve.scripts.get("tvmail-vacation", ""),
             "the saved script lacks the typed subject")
+    return tv
+
+
+@case(42)
+def resize_keeps_backend(opts):
+    # Resizes rain on tvmail while a co-process starts.  Each one used to
+    # fail the pipe read (EINTR) as if the backend had died, and a failed
+    # start gave the co-process up for the session.  The chat backend shows
+    # it: it starts inside the running app (the mail one starts before the
+    # resize handler exists).  A shim holds its banner back a second and
+    # logs what tvmail asks it - the event polls only come if it survived.
+    def setup(t):
+        b = t.home / "bin"
+        shutil.copy2(os.path.join(opts.backend_dir, "tvchat-backend"),
+                     b / "tvchat-backend.real")
+        shim = b / "tvchat-backend"
+        shim.write_text(
+            '#!/bin/sh\n'
+            '[ "$1" = serve ] && sleep 1\n'
+            'tee -a "$HOME/chat-requests" | "$HOME/bin/tvchat-backend.real" "$@"\n')
+        shim.chmod(0o755)
+        conf = t.tmp / "tvchat.conf"
+        conf.write_text("[account:idle]\nprotocol = irc\nhost = 127.0.0.1\n")
+        t.env["TVCHAT_CONF"] = str(conf)
+    tv = Tv(opts, setup=setup)
+    c = Case(tv)
+    end = time.monotonic() + 3
+    while time.monotonic() < end:
+        try:
+            os.kill(tv.pid, signal.SIGWINCH)
+        except OSError:
+            break
+        tv.pump(0.03)
+    started(tv, c)
+    reqs = tv.home / "chat-requests"
+    polls = lambda: [l for l in reqs.read_text().split("\n")
+                     if l.startswith("events")] if reqs.exists() else []
+    c.check(tv.wait(lambda: len(polls()) >= 3, 8),   # sync's, then the idle polls
+            "#42 a resize while the chat backend started lost it: tvmail "
+            "never polled (requests: %r)"
+            % (reqs.read_text() if reqs.exists() else None))
     return tv
 
 

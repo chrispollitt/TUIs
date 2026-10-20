@@ -189,15 +189,42 @@ bool CoProcess::restart()
     return start();
 }
 
-bool CoProcess::writeLine(const std::string &s)
+// A signal (SIGWINCH from a terminal resize, SIGCHLD from the background
+// pull...) can land in the middle of any of these calls.  Unless its handler
+// was installed with SA_RESTART, the call then fails with EINTR - which is not
+// the co-process dying, so every step below retries it.  (Treating it as a
+// death threw a healthy backend away, and during start-up - a resize while
+// tvmail opens - gave the co-process up for the whole session.)
+static bool interrupted(FILE *f)
+{
+    if (errno != EINTR || !std::ferror(f))
+        return false;
+    std::clearerr(f);
+    return true;
+}
+
+bool CoProcess::writeLine(const std::string &s0)
 {
     if (!wr)
         return false;
-    if (std::fwrite(s.data(), 1, s.size(), wr) != s.size())
-        return false;
-    if (std::fputc('\n', wr) == EOF)
-        return false;
-    return std::fflush(wr) == 0;
+    std::string s = s0 + "\n";
+    size_t done = 0;
+    while (done < s.size())
+    {
+        errno = 0;
+        size_t w = std::fwrite(s.data() + done, 1, s.size() - done, wr);
+        done += w;
+        if (done < s.size() && !interrupted(wr))
+            return false;
+    }
+    for (;;)
+    {
+        errno = 0;
+        if (std::fflush(wr) == 0)
+            return true;
+        if (!interrupted(wr))
+            return false;
+    }
 }
 
 // "<status> <nbytes>\n" then exactly <nbytes> bytes.  poll() before the
@@ -210,14 +237,32 @@ bool CoProcess::readFrame(std::string &body, int &status)
     struct pollfd pfd;
     pfd.fd = ::fileno(rd);
     pfd.events = POLLIN;
-    pfd.revents = 0;
-    if (::poll(&pfd, 1, 8000) <= 0)
-        return false;
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(8000);
+    for (;;)
+    {
+        long left = (long)std::chrono::duration_cast<std::chrono::milliseconds>(
+                        deadline - std::chrono::steady_clock::now())
+                        .count();
+        if (left <= 0)
+            return false;
+        pfd.revents = 0;
+        int r = ::poll(&pfd, 1, (int)left);
+        if (r > 0)
+            break;
+        if (r == 0 || errno != EINTR)
+            return false;
+    }
 
     std::string hdr;
     int c;
-    while ((c = std::fgetc(rd)) != EOF && c != '\n')
+    for (;;)
     {
+        errno = 0;
+        c = std::fgetc(rd);
+        if (c == EOF && interrupted(rd))
+            continue;
+        if (c == EOF || c == '\n')
+            break;
         hdr += char(c);
         if (hdr.size() > 64)
             return false;
@@ -234,10 +279,11 @@ bool CoProcess::readFrame(std::string &body, int &status)
     size_t got = 0;
     while (got < (size_t)n)
     {
+        errno = 0;
         size_t r = std::fread(&body[got], 1, (size_t)n - got, rd);
-        if (r == 0)
-            return false;
         got += r;
+        if (r == 0 && !interrupted(rd))
+            return false;
     }
     return true;
 }

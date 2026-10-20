@@ -4,6 +4,7 @@
 #include "app.h"
 #include "views.h"
 #include "coprocess.h"
+#include "chat.h"
 
 // ------------------------------------------------------- blue desktop ------
 // Some terminals map Turbo Vision's default desktop palette to a jarring
@@ -820,9 +821,31 @@ void TVMailApp::pullMail()
 }
 
 #ifndef _WIN32
+// putEvent() holds one event, so idle() posts at most one per call; anything
+// else that is due goes on the next idle round, a moment later.
+void TVMailApp::post(ushort command)
+{
+    TEvent ev;
+    ev.what = evCommand;
+    ev.message.command = command;
+    ev.message.infoPtr = nullptr;
+    putEvent(ev);
+}
+
 void TVMailApp::idle()
 {
     TApplication::idle();
+    auto now = std::chrono::steady_clock::now();
+    for (IdleTick &t : ticks)
+    {
+        int ms = t.intervalMs();
+        if (ms > 0 && now - t.last >= std::chrono::milliseconds(ms))
+        {
+            t.last = now;
+            post(t.command);
+            return;
+        }
+    }
     if (pullPid <= 0)
         return;
     int st = 0;
@@ -831,11 +854,7 @@ void TVMailApp::idle()
         return; // still pulling
     pullExit = (r == pullPid && WIFEXITED(st)) ? WEXITSTATUS(st) : -1;
     pullPid = -1;
-    TEvent ev; // finish outside idle()
-    ev.what = evCommand;
-    ev.message.command = cmPullDone;
-    ev.message.infoPtr = nullptr;
-    putEvent(ev);
+    post(cmPullDone); // finish outside idle()
 }
 #endif
 
@@ -870,6 +889,19 @@ void TVMailApp::pullFinished()
 #endif
 }
 
+// Poll tvchat-backend and hand each event to every window as a broadcast;
+// a window that shows the conversation (or the list of them) takes it from
+// there.  A restarted backend is announced first, so windows re-read.
+void TVMailApp::chatEvents()
+{
+    bool reset = false;
+    std::vector<ChatEvent> evs = ChatClient::instance().poll(reset);
+    if (reset)
+        message(deskTop, evBroadcast, cmChatReset, nullptr);
+    for (const ChatEvent &ev : evs)
+        message(deskTop, evBroadcast, cmChatEvent, (void *)&ev);
+}
+
 void TVMailApp::reload()
 {
     mailReload();
@@ -897,6 +929,9 @@ void TVMailApp::handleEvent(TEvent &e)
         break;
     case cmPullDone:
         pullFinished();
+        break;
+    case cmChatEvents:
+        chatEvents();
         break;
     case cmReload:
         reload();

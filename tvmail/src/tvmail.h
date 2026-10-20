@@ -119,6 +119,11 @@ const ushort cmFilterChanged = 2041; // broadcast: list view rebuilt (title refr
 const ushort cmOutOfOffice = 2042;  // File > Out of office... (Sieve vacation reply)
 const ushort cmToggleWrap = 2043;   // View > Wrap long lines (body pane / focused text window)
 
+// chat: 2100-2149
+const ushort cmChatEvents = 2100; // self-posted from idle(): poll tvchat-backend
+const ushort cmChatEvent = 2101;  // broadcast, one per event: infoPtr = const ChatEvent *
+const ushort cmChatReset = 2102;  // broadcast: the chat backend restarted, re-read everything
+
 // -------------------------------------------------------- classic colors ----
 // The Turbo Vision DOS look, in exact RGB.  BIOS colour numbers are not
 // enough: the terminal's theme decides what "grey" or "green" look like, and

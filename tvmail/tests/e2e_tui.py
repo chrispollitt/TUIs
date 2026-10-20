@@ -161,6 +161,7 @@ def main():
 
         env = dict(os.environ)
         env["HOME"] = str(home)
+        env.pop("TVCHAT_CONF", None)   # no chat co-process from the host's config
         env["XDG_DATA_HOME"] = str(tmp / "xdg")
         env["MAIL"] = str(spool)
         term = env.get("TERM", "")

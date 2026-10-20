@@ -45,7 +45,7 @@ endif()
 add_executable(tvmail
     src/main.cpp src/app.cpp src/mailwin.cpp src/compose.cpp
     src/addrbook.cpp src/parts.cpp src/signature.cpp src/help.cpp
-    src/dialogs.cpp src/util.cpp src/shell.cpp src/coprocess.cpp)
+    src/dialogs.cpp src/util.cpp src/shell.cpp src/coprocess.cpp src/chat.cpp)
 target_link_libraries(tvmail PRIVATE tvision)
 # Treat tvision's own headers as system headers so ITS warnings (e.g. the
 # __cdecl/__stdcall redefinition tv.h does on non-_WIN32 builds - Cygwin's
@@ -70,11 +70,15 @@ endif()
 # chat_unit    : stdlib unittest over tvchat-backend (config, event queue,
 #                wire escaping, selectors loop, serve framing) - no network
 # backend_pipe : `tvmail --selftest` - the C++ side forks the serve
-#                co-process, handshakes, round-trips a request, spawnLogged
+#                co-process, handshakes, round-trips a request, spawnLogged;
+#                then the same for tvchat-backend (start, accounts, a poll)
 # e2e_tui      : drives the built tvmail in a pty (launch, panes, Tab, body
 #                scroll, background F3); exits 77 = skipped where no pty
 # e2e_regress  : one pty case per squashed BUGS.md entry, read through a
 #                pyte screen model (columns, colours); 77 = no pty or no pyte
+# e2e_chat     : tvmail in a pty with a tvchat.conf aimed at a fake IRC server:
+#                the chat co-process starts, is polled while idle, and QUITs
+#                on Alt-X; 77 = no pty
 find_program(TVMAIL_PYTHON
     NAMES python3 python3.13 python3.12 python3.11 python3.10 python3.9 python)
 
@@ -93,8 +97,8 @@ if(NOT WIN32)
     # --selftest doesn't wander off to a live IMAP server.
     add_test(NAME backend_pipe COMMAND tvmail --selftest)
     set_tests_properties(backend_pipe PROPERTIES
-        ENVIRONMENT "PATH=${CMAKE_CURRENT_SOURCE_DIR}/backend:$ENV{PATH};TVMAIL_MODE=local"
-        PASS_REGULAR_EXPRESSION "served=1 status=0")
+        ENVIRONMENT "PATH=${CMAKE_CURRENT_SOURCE_DIR}/backend:$ENV{PATH};TVMAIL_MODE=local;TVCHAT_CONF=${CMAKE_CURRENT_SOURCE_DIR}/tests/tvchat-selftest.conf"
+        PASS_REGULAR_EXPRESSION "selftest: served=1 status=0.*selftest: chat served=1 status=0 accounts=1")
     if(TVMAIL_PYTHON)
         add_test(NAME e2e_tui
                  COMMAND ${TVMAIL_PYTHON}
@@ -108,6 +112,12 @@ if(NOT WIN32)
                          --bin $<TARGET_FILE:tvmail>
                          --backend-dir "${CMAKE_CURRENT_SOURCE_DIR}/backend")
         set_tests_properties(e2e_regress PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 400)
+        add_test(NAME e2e_chat
+                 COMMAND ${TVMAIL_PYTHON}
+                         "${CMAKE_CURRENT_SOURCE_DIR}/tests/e2e_chat.py"
+                         --bin $<TARGET_FILE:tvmail>
+                         --backend-dir "${CMAKE_CURRENT_SOURCE_DIR}/backend")
+        set_tests_properties(e2e_chat PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
     endif()
     # install_roundtrip : cmake --install into a temp prefix, ./uninstall.sh it
     add_test(NAME install_roundtrip

@@ -13,6 +13,7 @@
 
 #include "app.h"
 #include "coprocess.h"
+#include "chat.h"
 
 static void printUsage(FILE *out)
 {
@@ -98,8 +99,9 @@ int main(int argc, char **argv)
     startDiagnostics(options);
     debugLog("starting tvmail %s", TVMAIL_VERSION);
 
-    // Dev aid: exercise the persistent-backend pipe without the full TUI.
-    //   tvmail --selftest   -> prints the raw `list spool` reply on stdout
+    // Dev aid: exercise both persistent-backend pipes without the full TUI.
+    //   tvmail --selftest   -> prints the raw `list spool` reply on stdout,
+    //                          then checks tvchat-backend the same way
     if (options.selftest)
     {
         long long selftestStarted = gTraceLog ? traceMicros() : 0;
@@ -123,9 +125,21 @@ int main(int argc, char **argv)
         ::remove(log.c_str());
 #endif
         mailBackend().stop();
+
+        // the chat co-process, as the app drives it: start + read the
+        // accounts, then one event poll
+        bool chatOk = ChatClient::instance().start();
+        bool reset = false;
+        size_t nev = ChatClient::instance().poll(reset).size();
+        int cst = -1;
+        chatOk = chatOk && !reset && ChatClient::instance().request("ping", body, cst) &&
+                 body == "pong\n";
+        std::fprintf(stderr, "\nselftest: chat served=%d status=%d accounts=%zu events=%zu\n",
+                     (int)chatOk, cst, ChatClient::instance().accounts().size(), nev);
+        ChatClient::instance().stop();
         traceSpan("selftest", selftestStarted);
         stopDiagnostics();
-        return ok ? 0 : 1;
+        return ok && chatOk ? 0 : 1;
     }
 
     gRemote = backendRun("mode").rfind("remote", 0) == 0;
@@ -136,6 +150,7 @@ int main(int argc, char **argv)
     app.run();
     traceSpan("tui", tuiStarted);
     app.shutDown();
+    ChatClient::instance().stop();
     mailBackend().stop();
     stopDiagnostics();
     return 0;
