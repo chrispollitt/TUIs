@@ -60,4 +60,4 @@ regression suite should close).
 | 34 | The backend restart budget (3) never reset - three hiccups over a long session left every call on the slow shell path | 00c1ae9 | manual |
 | 40 | Sent folder: blank date and sender columns - send left Date / Message-ID to the server, which adds them only to the delivered copy, so the Sent copy had none (and no From); the list also showed your own name, not the recipient | 394d25f | unit |
 | 41 | Help > About cut its credits off (messageBox holds about five lines) and called tvmail a client "for a local mailbox"; no link to the repo | e915646 | e2e |
-| 42 | A terminal resize (SIGWINCH) during a backend round trip was taken for a dead co-process: the call fell back to the slow shell path, and during start-up tvmail gave up the warm backend for the whole session | 62347cf | e2e |
+| 43 | A terminal resize (SIGWINCH) during a backend round trip was taken for a dead co-process: the call fell back to the slow shell path, and during start-up tvmail gave up the warm backend for the whole session | 62347cf | e2e |

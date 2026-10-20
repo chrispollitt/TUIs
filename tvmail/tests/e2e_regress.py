@@ -969,7 +969,7 @@ def out_of_office_keeps_entries(opts):
     return tv
 
 
-@case(42)
+@case(43)
 def resize_keeps_backend(opts):
     # Resizes rain on tvmail while a co-process starts.  Each one used to
     # fail the pipe read (EINTR) as if the backend had died, and a failed
@@ -1004,7 +1004,7 @@ def resize_keeps_backend(opts):
     polls = lambda: [l for l in reqs.read_text().split("\n")
                      if l.startswith("events")] if reqs.exists() else []
     c.check(tv.wait(lambda: len(polls()) >= 3, 8),   # sync's, then the idle polls
-            "#42 a resize while the chat backend started lost it: tvmail "
+            "#43 a resize while the chat backend started lost it: tvmail "
             "never polled (requests: %r)"
             % (reqs.read_text() if reqs.exists() else None))
     return tv
