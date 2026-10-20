@@ -337,6 +337,34 @@ def _short_date(raw):
         return dt.strftime("%Y-%m-%d %H:%M")
 
 
+def _from_line_date(msg):
+    """The date on an mbox message's "From sender date" separator line -
+    when the message was filed - as the list shows dates, or ""."""
+    import time
+    try:
+        line = msg.get_from() or ""
+    except AttributeError:
+        return ""
+    parts = line.split(None, 1)
+    if len(parts) < 2:
+        return ""
+    try:
+        t = time.strptime(" ".join(parts[1].split()[:5]), "%a %b %d %H:%M:%S %Y")
+    except ValueError:
+        return ""
+    return time.strftime("%Y-%m-%d %H:%M", t)
+
+
+def _list_who(msg, mbox):
+    """The list's second column: who sent it - or, in sent and drafts, who
+    it is for ("to Bob"), since your own name on every row says nothing."""
+    if mbox in ("sent", "drafts"):
+        to = _short_from(_hraw(msg, "To"))
+        if to:
+            return _clean("to " + to, 28)
+    return _clean(_short_from(_hraw(msg, "From")), 28)
+
+
 # --------------------------------------------------------------------------
 # GNU Mailutils interop:  ~/.mail  and  ~/.mu-tickets.
 #
@@ -699,8 +727,9 @@ def _imap_msg(folder, idx, readonly=True):
     sys.exit("tvmail-backend: IMAP FETCH %d failed" % idx)
 
 
-def _imap_list(folder):
-    import re
+def _imap_list(folder, kind=None):
+    """`kind` is the tvmail shorthand (sent, drafts, ...) for _list_who()."""
+    import re, imaplib, time
     M = _imap()
     # Mail can leave this folder through another connection: the TUI runs
     # delete / move / purge as one-shot backends, and other clients exist.
@@ -720,8 +749,10 @@ def _imap_list(folder):
     uids = _imap_uids(folder)
     if not uids:
         return
+    # INTERNALDATE: when the server filed it - the date to show for mail
+    # with no Date: header (Sent copies from before send stamped one)
     typ, data = M.uid("FETCH", ",".join(map(str, uids)),
-                      "(FLAGS BODY.PEEK[HEADER.FIELDS (DATE FROM SUBJECT)])")
+                      "(FLAGS INTERNALDATE BODY.PEEK[HEADER.FIELDS (DATE FROM TO SUBJECT)])")
     meta = {}
     for item in (data or []):
         if not (isinstance(item, tuple) and item[1]):
@@ -729,23 +760,28 @@ def _imap_list(folder):
         head = item[0].decode("latin-1", "replace")
         mu = re.search(r"UID (\d+)", head)
         mf = re.search(r"FLAGS \(([^)]*)\)", head)
+        filed = ""
+        t = imaplib.Internaldate2tuple(item[0])
+        if t:
+            filed = time.strftime("%Y-%m-%d %H:%M", t)
         if mu:
-            meta[int(mu.group(1))] = (mf.group(1) if mf else "",
+            meta[int(mu.group(1))] = (mf.group(1) if mf else "", filed,
                                       email.message_from_bytes(item[1]))
     for i, u in enumerate(uids):
-        fl, msg = meta.get(u, ("", email.message.Message()))
+        fl, filed, msg = meta.get(u, ("", "", email.message.Message()))
         print("\t".join((
             str(i),
             "." if "\\Seen" in fl else "N",
-            _short_date(msg.get("Date", "")),
-            _clean(_short_from(_hraw(msg, "From")), 28),
+            _short_date(msg.get("Date", "")) or filed,
+            _list_who(msg, kind),
             _clean(_hdr(msg, "Subject", "(no subject)"), 200),
         )))
 
 
 def _smtp_send(msg, rcpts):
-    """Submit via [smtp] (or ~/.mail's mailer{}) to the master.  False -> no
-    host configured, caller falls back to local sendmail."""
+    """Submit via [smtp] (or ~/.mail's mailer{}) to the master.  Returns the
+    envelope sender used (truthy); False -> no host configured, caller falls
+    back to local sendmail."""
     c = _conf()
     mu = _mu_mailer() or {}
     host = c.get("smtp", "host", fallback=None) or mu.get("host")
@@ -797,7 +833,7 @@ def _smtp_send(msg, rcpts):
                 pass    # don't let a failed cleanup mask the real error above
     except (smtplib.SMTPException, OSError) as e:
         sys.exit("tvmail-backend: SMTP %s:%d - %s" % (host, port, e))
-    return True
+    return frm
 
 
 def _save_sent(msg):
@@ -888,7 +924,7 @@ def cmd_list(a):
                          _clean(_hdr(m, "Subject", "(dead.letter)"), 200))))
         return 0
     if _is_remote():
-        _imap_list(_imap_folder(a.mbox))
+        _imap_list(_imap_folder(a.mbox), a.mbox)
         return 0
     path = mbox_path(a.mbox)
     if not os.path.exists(path):
@@ -900,8 +936,9 @@ def cmd_list(a):
         print("\t".join((
             str(i),
             flags,
-            _short_date(msg.get("Date", "")),
-            _clean(_short_from(_hraw(msg, "From")), 28),
+            # no Date: header (older Sent copies) - when it was filed
+            _short_date(msg.get("Date", "")) or _from_line_date(msg),
+            _list_who(msg, a.mbox),
             _clean(_hdr(msg, "Subject", "(no subject)"), 200),
         )))
     return 0
@@ -1398,6 +1435,14 @@ def cmd_send(a):
         msg["Subject"] = a.subject
     for t in a.to:
         msg["To"] = t
+    # Every mail client dates and numbers its own mail.  Left to the server,
+    # only the delivered copy got a Date / Message-ID - the copy filed in
+    # Sent had none, so the Sent list showed no dates and could not sort.
+    if "Date" not in msg:
+        msg["Date"] = email.utils.formatdate(localtime=True)
+    if "Message-ID" not in msg:
+        dom = email.utils.parseaddr(msg.get("From", ""))[1].rpartition("@")[2]
+        msg["Message-ID"] = email.utils.make_msgid(domain=dom or None)
     _stamp(msg)
 
     # Address book: expand ~/.mailrc alias/group names in To:/Cc:/Bcc:
@@ -1414,10 +1459,17 @@ def cmd_send(a):
     if not rcpts:
         sys.exit("tvmail-backend send: no recipients (--to or a To: header)")
 
-    if _is_remote() and _smtp_send(msg, rcpts):
-        _save_sent(msg)
-        print("sent")
-        return 0
+    if _is_remote():
+        sender = _smtp_send(msg, rcpts)
+        if sender:
+            # No From: the server adds one to the delivered copy (with its
+            # own idea of the domain, so we don't guess one for it), but the
+            # copy filed in Sent should still say who sent it.
+            if "From" not in msg and isinstance(sender, str) and "@" in sender:
+                msg["From"] = sender
+            _save_sent(msg)
+            print("sent")
+            return 0
 
     sm = _sendmail()
     if not (os.path.exists(sm) or shutil.which(sm)):

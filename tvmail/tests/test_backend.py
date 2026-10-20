@@ -712,6 +712,7 @@ class FakeIMAP:
         self.copied = []
         self.appended = []
         self.created = []
+        self.internaldate = "19-Oct-2026 18:25:29 -0700"   # when "filed"
 
     def add(self, folder, raw, flags=()):
         self.folders.setdefault(folder, []).append([self._uid, set(flags), raw])
@@ -777,12 +778,18 @@ class FakeIMAP:
                     continue
                 fl = " ".join(sorted(flags))
                 if "HEADER.FIELDS" in spec:
+                    import re
                     m = email.message_from_bytes(raw)
-                    hdr = ("".join("%s: %s\r\n" % (h, m.get(h, ""))
-                                   for h in ("Date", "From", "Subject"))
+                    # the fields asked for, and only those the message has -
+                    # as a real server answers HEADER.FIELDS
+                    names = re.search(r"HEADER\.FIELDS \(([^)]*)\)", spec).group(1).split()
+                    hdr = ("".join("%s: %s\r\n" % (h.capitalize(), m.get(h))
+                                   for h in names if m.get(h) is not None)
                            ).encode() + b"\r\n"
-                    meta = ("%d (UID %d FLAGS (%s) BODY[] {%d}"
-                            % (uid, uid, fl, len(hdr))).encode()
+                    idate = (' INTERNALDATE "%s"' % self.internaldate
+                             if "INTERNALDATE" in spec else "")
+                    meta = ("%d (UID %d FLAGS (%s)%s BODY[] {%d}"
+                            % (uid, uid, fl, idate, len(hdr))).encode()
                     out += [(meta, hdr), b")"]
                 else:
                     meta = ("%d (UID %d BODY[] {%d}"
@@ -1069,6 +1076,57 @@ class TestRemoteIMAP(Base):
         self.assertIn(b"sent", out)
         self.assertEqual(seen["rcpts"], ["a@b"])
         self.assertIn("Sent", [n for n, _ in self.imap.appended])   # copy filed
+
+
+    def test_send_dates_numbers_and_signs_the_sent_copy(self):
+        # Regression: send left Date / Message-ID to the server, which adds
+        # them only to the delivered copy - the Sent copy had neither (and no
+        # From), so the Sent list showed blank date and sender columns.
+        real, be._smtp_send = be._smtp_send, lambda m, r: "chris@cpbee"
+        self.addCleanup(lambda: setattr(be, "_smtp_send", real))
+        self.imap.create("Sent")
+        self._feed_stdin(b"X-Mailer: tvmail\nTo: a@b\nSubject: s\n\nhi\n")
+        self._run(be.cmd_send, self.ns(getfrom=None, to=[], subject=None))
+        copy = email.message_from_bytes([raw for n, raw in self.imap.appended if n == "Sent"][-1])
+        self.assertTrue(email.utils.parsedate_to_datetime(copy["Date"]))
+        self.assertRegex(copy["Message-ID"], r"^<.+@.+>$")
+        self.assertEqual(copy["From"], "chris@cpbee")    # the envelope sender
+
+    def test_send_does_not_invent_a_from_without_an_address(self):
+        real, be._smtp_send = be._smtp_send, lambda m, r: "chris"   # bare login
+        self.addCleanup(lambda: setattr(be, "_smtp_send", real))
+        self.imap.create("Sent")
+        self._feed_stdin(b"To: a@b\nSubject: s\n\nhi\n")
+        self._run(be.cmd_send, self.ns(getfrom=None, to=[], subject=None))
+        copy = email.message_from_bytes([raw for n, raw in self.imap.appended if n == "Sent"][-1])
+        self.assertIsNone(copy["From"])
+
+    def test_sent_list_shows_recipient_and_filed_date(self):
+        # Sent / Drafts list who it went to; a copy with no Date: header
+        # (filed before send stamped one) shows when the server filed it.
+        import imaplib
+        self.imap.add("Sent", b"To: Bob Jones <bob@x>\r\nSubject: to bob\r\n\r\nhi\r\n")
+        row = self._run(be.cmd_list, self.ns(mbox="sent")).decode().splitlines()[0].split("\t")
+        want = time.strftime("%Y-%m-%d %H:%M", imaplib.Internaldate2tuple(
+            b'INTERNALDATE "%s"' % self.imap.internaldate.encode()))
+        self.assertEqual(row[2], want)
+        self.assertEqual(row[3], "to Bob Jones")
+        self.assertEqual(row[4], "to bob")
+
+
+class TestSentFolderLocal(Base):
+    def test_local_sent_list_shows_recipient_and_from_line_date(self):
+        p = Path(be.mbox_path("sent"))
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("From tester Mon Oct 19 18:25:29 2026\n"
+                     "To: Bob Jones <bob@x>\nSubject: to bob\n\nhi\n\n")
+        row = self.rows("sent")[0].split("\t")
+        self.assertEqual(row[2], "2026-10-19 18:25")
+        self.assertEqual(row[3], "to Bob Jones")
+
+    def test_inbox_still_shows_the_sender(self):
+        row = self.rows("spool")[0].split("\t")
+        self.assertFalse(row[3].startswith("to "))
 
 
 class TestDispatchReconnect(Base):
