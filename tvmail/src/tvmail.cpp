@@ -4352,13 +4352,29 @@ void TVMailApp::handleEvent(TEvent &e)
         break;
     }
     case cmAboutBox:
-        messageBox("tvmail " TVMAIL_VERSION "\n\n"
-                   "A Turbo Vision mail client for a local mailbox.\n"
-                   "Chris Pollitt  -  MIT licence, no warranty.\n\n"
-                   "Turbo Vision by magiblot.  Plumbing: Postfix +\n"
-                   "tvmail-backend + pop-pull.  See HISTORY.md.",
-                   mfInformation | mfOKButton);
+    {
+        // its own dialog, sized to the text: messageBox() holds about five
+        // lines and silently cut the credits off
+        static const char *kAbout =
+            "\003tvmail " TVMAIL_VERSION "\n" // \003 centres a line (each one)
+            "\n"
+            "\003A Turbo Vision mail client - a local mbox\n"
+            "\003on the mail host, IMAP / SMTP anywhere else.\n"
+            "\n"
+            "\003Chris Pollitt  -  MIT licence, no warranty.\n"
+            "\003https://github.com/chrispollitt/TUIs\n"
+            "\n"
+            "\003Turbo Vision by magiblot.\n"
+            "\003Plumbing: Postfix + tvmail-backend + pop-pull.\n"
+            "\003See HISTORY.md.";
+        TDialog *d = new TDialog(TRect(0, 0, 54, 18), "About tvmail");
+        d->options |= ofCentered;
+        d->insert(new TStaticText(TRect(2, 2, 52, 13), kAbout)); // \003: centred
+        d->insert(new TButton(TRect(21, 14, 33, 16), "O~K~", cmOK, bfDefault));
+        deskTop->execView(d);
+        TObject::destroy(d);
         break;
+    }
     default:
         handled = false;
     }
