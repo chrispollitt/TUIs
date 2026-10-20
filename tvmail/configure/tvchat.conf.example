@@ -3,9 +3,11 @@
 # Copy to  ~/.config/tvmail/tvchat.conf  and edit.  $TVCHAT_CONF points one
 # run at another file.  No file at all simply means no chat accounts.
 #
-# NO PASSWORDS HERE.  They are looked up like tvmail's own: ~/.netrc
-# (chmod 600), ~/.mu-tickets, or the environment.  The values below are
-# placeholders - pick your own nick, channel and address.
+# NO PASSWORDS HERE.  They are looked up like tvmail's own, first match wins:
+#   $TVCHAT_PASS_<ACCOUNT>   e.g. $TVCHAT_PASS_LIBERA for [account:libera]
+#   ~/.mu-tickets            irc://yournick:PASS@irc.libera.chat
+#   ~/.netrc  (chmod 600)    machine irc.libera.chat login yournick password PASS
+# The values below are placeholders - pick your own nick, channel and address.
 
 [chat]
 # connect these accounts when tvmail starts (comma-separated section names)
@@ -28,10 +30,12 @@ verify   = true
 #cafile  = /etc/ssl/certs/my-ircd.pem
 nick     = yournick
 realname = Your Name
-# SASL account name; password from ~/.netrc:
-#     machine irc.libera.chat  login yournick  password ...
+# SASL account name (a nick registered with NickServ); leave it out to
+# connect unauthenticated.  The password comes from one of the places above.
 sasl     = yournick
+# joined on every connect, comma-separated
 channels = #tvmail-test
+# plain-text port 6667 only if you mean it:  tls = false  (port follows)
 
 [account:delta]
 protocol = deltachat

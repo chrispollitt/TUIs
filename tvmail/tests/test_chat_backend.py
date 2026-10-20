@@ -5,13 +5,19 @@ no network and no real account.
     python3 -m unittest discover -s tests -p test_chat_backend.py
     ./test.sh -R chat_unit
 """
+import base64
 import importlib.machinery
 import importlib.util
 import os
+import shutil
+import socket
+import ssl
 import subprocess
 import sys
 import tempfile
 import textwrap
+import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -60,9 +66,12 @@ class Base(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp(prefix="tvchat-t-"))
         self.home = self.tmp / "home"
         self.home.mkdir()
-        self._saved = {k: os.environ.get(k) for k in ("HOME", "TVCHAT_CONF")}
+        keys = ("HOME", "TVCHAT_CONF", "TVMAIL_MU_TICKETS", "TVCHAT_PASS_LIBERA")
+        self._saved = {k: os.environ.get(k) for k in keys}
         os.environ["HOME"] = str(self.home)
-        os.environ.pop("TVCHAT_CONF", None)
+        os.environ["TVMAIL_MU_TICKETS"] = str(self.tmp / "no-tickets")
+        for k in ("TVCHAT_CONF", "TVCHAT_PASS_LIBERA"):
+            os.environ.pop(k, None)
         cb._CHAT = None
 
     def tearDown(self):
@@ -72,7 +81,6 @@ class Base(unittest.TestCase):
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
-        import shutil
         shutil.rmtree(str(self.tmp), ignore_errors=True)
 
     def conf(self, text):
@@ -333,7 +341,7 @@ class TestServe(Base):
         self.assertEqual(self._frame(p.stdout), (0, b"ready"))
 
     def test_accounts_and_events_over_pipe(self):
-        self.conf(CONF)
+        self.conf(CONF.replace("autoconnect = libera", ""))   # no network
         p = self._serve()
         self._frame(p.stdout)
         st, body = self._req(p, "accounts")
@@ -382,6 +390,533 @@ class TestServe(Base):
         self._frame(p.stdout)
         p.stdin.close()
         self.assertEqual(p.wait(timeout=5), 0)
+
+
+# --------------------------------------------------------------------------
+# IRC: the pure helpers
+# --------------------------------------------------------------------------
+class TestIrcParse(unittest.TestCase):
+    def test_full_line(self):
+        m = cb.parse_line("@time=2026-10-20T12:00:00.500Z;msgid=abc;+x=a\\sb\\:c "
+                          ":alice!a@host PRIVMSG #chan :hello there :)\r\n")
+        self.assertEqual(m.tags, {"time": "2026-10-20T12:00:00.500Z",
+                                  "msgid": "abc", "+x": "a b;c"})
+        self.assertEqual((m.prefix, m.nick, m.command), ("alice!a@host", "alice", "PRIVMSG"))
+        self.assertEqual(m.params, ["#chan", "hello there :)"])
+
+    def test_no_prefix_no_trailing(self):
+        m = cb.parse_line("ping   irc.example")
+        self.assertEqual((m.prefix, m.command, m.params), ("", "PING", ["irc.example"]))
+
+    def test_empty_trailing_and_numeric(self):
+        m = cb.parse_line(":srv 332 me #c :")
+        self.assertEqual((m.command, m.params), ("332", ["me", "#c", ""]))
+
+    def test_bare_tag_and_blank(self):
+        self.assertEqual(cb.parse_line("@draft/bot :n!u@h JOIN #c").tags, {"draft/bot": ""})
+        self.assertIsNone(cb.parse_line(""))
+        self.assertIsNone(cb.parse_line(":prefix-only"))
+
+    def test_cap_ls_line(self):
+        m = cb.parse_line(":srv CAP * LS * :sasl=PLAIN,EXTERNAL server-time")
+        self.assertEqual(m.params, ["*", "LS", "*", "sasl=PLAIN,EXTERNAL server-time"])
+
+    def test_formatting_stripped(self):
+        self.assertEqual(cb.strip_formatting("\x02bold\x02 \x0304,12red\x03 "
+                                             "\x1ditalic\x0f \x04FF0000hex"),
+                         "bold red italic hex")
+        self.assertEqual(cb.strip_formatting("\x0399 bottles"), " bottles")
+
+    def test_split_utf8(self):
+        self.assertEqual(cb.split_utf8("short"), ["short"])
+        text = "é" * 300                                   # 600 bytes
+        parts = cb.split_utf8(text, 401)
+        self.assertEqual("".join(parts), text)
+        self.assertTrue(all(len(p.encode()) <= 401 for p in parts))
+        self.assertEqual(len(parts[0].encode()), 400)      # never half a char
+        emoji = "😀" * 150
+        self.assertEqual("".join(cb.split_utf8(emoji, 10)), emoji)
+
+    def test_server_time(self):
+        self.assertEqual(cb.parse_server_time("1970-01-01T00:01:00Z"), 60)
+        self.assertAlmostEqual(cb.parse_server_time("1970-01-01T00:00:01.250Z"), 1.25)
+        self.assertIsNone(cb.parse_server_time("yesterday"))
+        self.assertIsNone(cb.parse_server_time(None))
+
+    def test_casemapping(self):
+        self.assertEqual(cb.irc_lower("Nick[]\\~"), "nick{}|^")
+        self.assertEqual(cb.irc_lower("Nick[]", "ascii"), "nick[]")
+
+
+# --------------------------------------------------------------------------
+# IRC against a fake server.  It speaks plain TCP on 127.0.0.1 (TLS is the
+# stdlib's job) and runs a scripted conversation on its own thread while the
+# test thread turns the chat Loop.
+# --------------------------------------------------------------------------
+class FakeIrc:
+    def __init__(self, script, tls=None):
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen(1)
+        self.port = self.sock.getsockname()[1]
+        self.script = script
+        self.tls = tls
+        self.got = []                    # every line the client sent
+        self.error = None
+        self.conn = None
+        self.buf = b""
+        self.pending = []
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def _run(self):
+        try:
+            self.sock.settimeout(10)
+            self.conn, _ = self.sock.accept()
+            self.conn.settimeout(10)
+            if self.tls is not None:
+                self.conn = self.tls.wrap_socket(self.conn, server_side=True)
+            self.script(self)
+        except Exception as e:           # surfaced by the test via .error
+            self.error = e
+
+    def send(self, text):
+        self.conn.sendall(text.encode("utf-8") + b"\r\n")
+
+    def expect(self, prefix):
+        """The first not-yet-expected client line starting with prefix (in
+        arrival order, so the script needn't mirror the client's exact
+        interleaving of e.g. NICK/USER with CAP); reads more as needed."""
+        while True:
+            for i, ln in enumerate(self.pending):
+                if ln.startswith(prefix):
+                    del self.pending[i]
+                    return ln
+            while b"\n" not in self.buf:
+                data = self.conn.recv(4096)
+                if not data:
+                    raise AssertionError("client hung up waiting for %r" % prefix)
+                self.buf += data
+            ln, self.buf = self.buf.split(b"\n", 1)
+            ln = ln.decode("utf-8").rstrip("\r")
+            self.got.append(ln)
+            self.pending.append(ln)
+
+    def hang_up(self):
+        self.conn.close()
+
+    def close(self):
+        for s in (self.conn, self.sock):
+            try:
+                s.close()
+            except Exception:
+                pass
+
+
+def welcome(srv, nick="tester"):
+    """Registration with no CAPs on offer."""
+    srv.expect("CAP LS 302")
+    srv.send(":srv CAP * LS :")
+    srv.expect("CAP END")
+    srv.expect("USER ")
+    srv.send(":srv 001 %s :Welcome to FakeNet" % nick)
+    srv.send(":srv 005 %s CASEMAPPING=rfc1459 CHANTYPES=# PREFIX=(ov)@+ :are supported" % nick)
+
+
+class IrcBase(Base):
+    def setup_irc(self, script, extra=""):
+        srv = FakeIrc(script)
+        self.addCleanup(srv.close)
+        self.conf("""\
+            [account:libera]
+            protocol = irc
+            display  = FakeNet
+            host     = 127.0.0.1
+            port     = %d
+            tls      = false
+            nick     = tester
+            channels = #Test
+            %s
+            """ % (srv.port, extra))
+        self.chat = cb._chat()
+        self.acct = self.chat.by_id["libera"]
+        self.srv = srv
+        return srv
+
+    def turn(self, pred, timeout=8):
+        loop = self.chat.loop
+        loop.running = True
+        deadline = time.time() + timeout
+        while not pred():
+            if self.srv.error:
+                raise self.srv.error
+            if time.time() > deadline:
+                self.fail("timed out; events: %r\nserver got: %r"
+                          % (self.chat.events.items[-8:], self.srv.got))
+            loop.run_once(0.05)
+
+    def events(self, etype=None):
+        return [f for _, f in self.chat.events.items if etype is None or f[0] == etype]
+
+    def msgs(self):
+        return [f[1:] for f in self.events("msg")]
+
+    def verb(self, *argv):
+        return cb.dispatch(cb.build_parser(), list(argv))
+
+
+class TestIrcSession(IrcBase):
+    def test_cap_sasl_join_and_traffic(self):
+        os.environ["TVCHAT_PASS_LIBERA"] = "s3cret"
+        stage = {}
+
+        def script(srv):
+            srv.expect("CAP LS 302")
+            srv.send(":srv CAP * LS * :multi-prefix sasl=PLAIN,EXTERNAL")
+            srv.send(":srv CAP * LS :server-time message-tags echo-message unknown-cap")
+            req = srv.expect("CAP REQ")
+            stage["req"] = req.split(":", 1)[1].split()
+            srv.send(":srv CAP * ACK :%s" % " ".join(stage["req"]))
+            srv.expect("AUTHENTICATE PLAIN")
+            srv.send("AUTHENTICATE +")
+            stage["auth"] = srv.expect("AUTHENTICATE ").split(" ", 1)[1]
+            srv.send(":srv 900 tester tester!u@h chrisp :You are now logged in as chrisp")
+            srv.send(":srv 903 tester :SASL authentication successful")
+            srv.expect("CAP END")
+            srv.expect("USER ")
+            srv.send(":srv 433 * tester :Nickname is already in use")
+            srv.expect("NICK tester_")
+            srv.send(":srv 001 tester_ :Welcome to FakeNet")
+            srv.send(":srv 005 tester_ PREFIX=(ov)@+ CHANTYPES=# :are supported")
+            srv.expect("JOIN #Test")
+            srv.send(":tester_!u@h JOIN #Test")
+            srv.send(":srv 332 tester_ #Test :the \x02topic\x02")
+            srv.send(":srv 353 tester_ = #Test :@+alice tester_ +bob")
+            srv.send(":srv 366 tester_ #Test :End of /NAMES list.")
+            srv.send("@time=2026-10-20T12:00:00.000Z;msgid=m1 "
+                     ":alice!a@h PRIVMSG #test :\x0304hello\x03\tthere")
+            srv.send(":bob!b@h PRIVMSG #Test :\x01ACTION waves\x01")
+            srv.send(":carol!c@h PRIVMSG tester_ :psst")
+            srv.send(":carol!c@h PRIVMSG tester_ :\x01VERSION\x01")
+            srv.expect("NOTICE carol :\x01VERSION tvmail")
+            srv.send("PING :keepalive-1")
+            srv.expect("PONG :keepalive-1")
+            line = srv.expect("PRIVMSG #Test :")
+            srv.send("@msgid=m9 :tester_!u@h " + line)       # echo-message
+            srv.expect("QUIT")
+
+        self.setup_irc(script, "sasl = chrisp")
+        self.assertEqual(self.verb("connect", "libera"), (0, b""))
+        self.turn(lambda: any(m[6] == "psst" for m in self.msgs()))
+        self.assertEqual(self.acct.state, "connected")
+        self.assertEqual(sorted(stage["req"]), sorted(
+            ["multi-prefix", "sasl", "server-time", "message-tags", "echo-message"]))
+        self.assertEqual(base64.b64decode(stage["auth"]), b"chrisp\0chrisp\0s3cret")
+
+        states = [f[2] for f in self.events("state")]
+        self.assertEqual(states[-1], "connected")
+        self.assertIn("connecting", states)
+
+        convs = self.verb("convs", "libera")[1].decode().splitlines()
+        self.assertEqual(convs, ["libera/*\tserver\t0\tFakeNet",
+                                 "libera/#test\tchannel\t2\t#Test",
+                                 "libera/carol\tdirect\t1\tcarol"])
+        self.assertEqual(self.events("topic")[-1], ("topic", "libera/#test", "the topic"))
+        self.assertEqual(self.verb("members", "libera/#test")[1].decode().splitlines(),
+                         ["alice\talice\top", "bob\tbob\tvoice", "tester_\ttester_\tmember"])
+
+        hello = [m for m in self.msgs() if m[0] == "m1"][0]
+        self.assertEqual(hello, ("m1", "libera/#test", "2026-10-20T12:00:00Z",
+                                 "alice", "alice", "", "hello\tthere"))
+        action = [m for m in self.msgs() if m[6] == "waves"][0]
+        self.assertEqual((action[3], action[5]), ("bob", "a"))
+
+        # send: echo-message is on, so nothing is inserted until the echo
+        st, body = self.verb("send", "libera/#test", "hi all")
+        self.assertEqual(st, 0)
+        self.assertTrue(body.strip())
+        self.turn(lambda: any(m[0] == "m9" for m in self.msgs()))
+        mine = [m for m in self.msgs() if m[6] == "hi all"]
+        self.assertEqual(len(mine), 1)
+        self.assertEqual((mine[0][0], mine[0][5]), ("m9", "s"))
+
+        # history (this session's ring), --before, --limit
+        hist = self.verb("history", "libera/#test")[1].decode().splitlines()
+        self.assertTrue(hist[-1].endswith("\ts\thi all"))
+        self.assertTrue(any("\\t" in h for h in hist))     # escaped TAB
+        older = self.verb("history", "libera/#test", "--before", "m9", "--limit", "1")[1]
+        self.assertEqual(len(older.decode().splitlines()), 1)
+        self.assertNotIn(b"hi all", older)
+        self.assertEqual(self.verb("history", "libera/#test", "--before", "nope"), (0, b""))
+
+        # unread and mark-read
+        self.assertEqual(self.events("unread")[-1], ("unread", "libera/carol", 1))
+        self.assertEqual(self.acct.convs["libera/#test"].unread, 2)
+        self.assertEqual(self.verb("mark-read", "libera/#test"), (0, b""))
+        self.assertEqual(self.events("unread")[-1], ("unread", "libera/#test", 0))
+
+        self.assertEqual(self.verb("disconnect", "libera"), (0, b""))
+        self.assertEqual(self.acct.state, "disconnected")
+        self.srv.thread.join(5)
+        self.assertIsNone(self.srv.error)
+
+    def test_no_sasl_without_an_account_name(self):
+        stage = {}
+
+        def script(srv):
+            srv.expect("CAP LS 302")
+            srv.send(":srv CAP * LS :sasl server-time")
+            stage["req"] = srv.expect("CAP REQ")
+            srv.send(":srv CAP * ACK :server-time")
+            srv.expect("CAP END")
+            srv.expect("USER ")
+            srv.send(":srv 001 tester :hi")
+            srv.expect("JOIN #Test")
+            srv.expect("QUIT")
+
+        self.setup_irc(script)
+        self.verb("connect", "libera")
+        self.turn(lambda: self.acct.state == "connected" and "req" in stage)
+        self.assertEqual(stage["req"], "CAP REQ :server-time")
+        self.assertFalse(any(g.startswith("AUTHENTICATE") for g in self.srv.got))
+        self.chat.close()
+
+    def test_missing_sasl_password_is_a_user_error(self):
+        self.setup_irc(lambda srv: None, "sasl = chrisp")
+        st, body = self.verb("connect", "libera")
+        self.assertEqual(st, 1)
+        self.assertIn(b"TVCHAT_PASS_LIBERA", body)
+        self.assertIn(b"~/.netrc", body)
+        self.assertEqual(self.events("state")[-1][2], "error")
+
+    def test_sasl_password_from_netrc(self):
+        n = self.home / ".netrc"
+        n.write_text("machine 127.0.0.1 login chrisp password fromnetrc\n")
+        n.chmod(0o600)
+        self.assertEqual(cb.find_password("libera", "127.0.0.1", "chrisp", "irc"),
+                         "fromnetrc")
+        os.environ["TVCHAT_PASS_LIBERA"] = "fromenv"         # env wins
+        self.assertEqual(cb.find_password("libera", "127.0.0.1", "chrisp", "irc"),
+                         "fromenv")
+
+    def test_sasl_failure_is_reported_and_registration_continues(self):
+        os.environ["TVCHAT_PASS_LIBERA"] = "wrong"
+
+        def script(srv):
+            srv.expect("CAP LS 302")
+            srv.send(":srv CAP * LS :sasl")
+            srv.expect("CAP REQ :sasl")
+            srv.send(":srv CAP * ACK :sasl")
+            srv.expect("AUTHENTICATE PLAIN")
+            srv.send("AUTHENTICATE +")
+            srv.expect("AUTHENTICATE ")
+            srv.send(":srv 904 tester :SASL authentication failed")
+            srv.expect("CAP END")
+            srv.send(":srv 001 tester :hi")
+            srv.expect("QUIT")
+
+        self.setup_irc(script, "sasl = chrisp")
+        self.verb("connect", "libera")
+        self.turn(lambda: self.acct.state == "connected")
+        self.assertTrue(any("SASL login failed" in m[6] for m in self.msgs()))
+        self.chat.close()
+
+    def test_server_hangup_is_disconnected(self):
+        def script(srv):
+            welcome(srv)
+            srv.expect("JOIN #Test")
+            srv.send(":tester!u@h JOIN #Test")
+            srv.send(":srv 353 tester = #Test :tester alice")
+            srv.send(":srv 366 tester #Test :end")
+            srv.send(":alice!a@h QUIT :bye")
+            srv.send(":alice!a@h NICK :ignored")
+            srv.send("ERROR :Closing Link: too many cooks")
+            srv.hang_up()
+
+        self.setup_irc(script)
+        self.verb("connect", "libera")
+        self.turn(lambda: self.acct.state == "disconnected")
+        self.assertIn("too many cooks", self.events("state")[-1][3])
+        self.assertTrue(any("alice has quit (bye)" == m[6] for m in self.msgs()))
+        self.assertEqual(self.acct.convs["libera/#test"].members, {})
+        # the conversation outlives the connection, so its window stays put
+        self.assertIn("libera/#test", self.acct.convs)
+        st, body = self.verb("send", "libera/#test", "anyone?")
+        self.assertEqual(st, 1)
+        self.assertIn(b"not connected", body)
+
+    def test_join_query_part_and_local_echo(self):
+        def script(srv):
+            welcome(srv)
+            srv.expect("JOIN #Test")
+            srv.expect("JOIN #more")
+            srv.send(":tester!u@h JOIN #more")
+            srv.expect("PRIVMSG dave :line one")
+            srv.expect("PRIVMSG dave :line two")
+            srv.expect("PART #more")
+            srv.send(":tester!u@h PART #more")
+            srv.expect("QUIT")
+
+        self.setup_irc(script)
+        self.verb("connect", "libera")
+        self.turn(lambda: self.acct.state == "connected")
+        self.assertEqual(self.verb("join", "libera", "#more"), (0, b"libera/#more\n"))
+        self.assertEqual(self.verb("join", "libera", "Dave"), (0, b"libera/dave\n"))
+        st, _ = self.verb("send", "libera/dave", "line one\nline two")
+        self.assertEqual(st, 0)
+        # no echo-message: our own lines are inserted locally, not counted unread
+        mine = [m for m in self.msgs() if m[1] == "libera/dave"]
+        self.assertEqual([(m[5], m[6]) for m in mine], [("s", "line one"), ("s", "line two")])
+        self.assertEqual(self.acct.convs["libera/dave"].unread, 0)
+        self.assertEqual(self.verb("part", "libera/#more"), (0, b""))
+        self.assertIn(("conv-gone", "libera/#more", "channel", 0, "#more"), self.events())
+        self.assertEqual(self.verb("part", "libera/*")[0], 1)
+        self.assertEqual(self.verb("send", "libera/*", "x")[0], 1)
+        self.assertEqual(self.verb("send", "libera/nope", "x")[0], 1)
+        self.turn(lambda: any(g.startswith("PART") for g in self.srv.got))
+        self.chat.close()
+
+    def test_long_line_is_split(self):
+        got = {}
+
+        def script(srv):
+            welcome(srv)
+            srv.expect("JOIN #Test")
+            got["a"] = srv.expect("PRIVMSG #Test :")
+            got["b"] = srv.expect("PRIVMSG #Test :")
+            srv.expect("QUIT")
+
+        self.setup_irc(script)
+        self.verb("connect", "libera")
+        self.turn(lambda: self.acct.state == "connected")
+        self.verb("join", "libera", "#Test")
+        self.verb("send", "libera/#test", "ü" * 300)
+        self.turn(lambda: "b" in got)
+        body = got["a"].split(" :", 1)[1] + got["b"].split(" :", 1)[1]
+        self.assertEqual(body, "ü" * 300)
+        self.chat.close()
+
+    def test_tail_format(self):
+        f = cb._tail_format
+        self.assertEqual(f(("msg", "1", "libera/#c", "1970-01-01T00:00:00Z", "a", "alice",
+                            "", "hi"))[5:], " #c <alice> hi")
+        self.assertIn("* bob waves", f(("msg", "1", "libera/#c", "1970-01-01T00:00:00Z",
+                                         "b", "bob", "a", "waves")))
+        self.assertEqual(f(("state", "libera", "connected", "srv")),
+                         "** state libera connected srv")
+
+
+class TestIrcTls(IrcBase):
+    """TLS with certificate verification against a throwaway self-signed
+    cert - the cafile= path a LAN server needs.  openssl makes the cert."""
+
+    def make_cert(self):
+        if not shutil.which("openssl"):
+            self.skipTest("no openssl to make a test certificate")
+        cert, key = self.tmp / "cert.pem", self.tmp / "key.pem"
+        r = subprocess.run(
+            ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+             "-days", "1", "-subj", "/CN=127.0.0.1",
+             "-addext", "subjectAltName=IP:127.0.0.1",
+             "-keyout", str(key), "-out", str(cert)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if r.returncode != 0:
+            self.skipTest("openssl could not make a test certificate")
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(str(cert), str(key))
+        return cert, ctx
+
+    def tls_setup(self, script, ctx, extra):
+        srv = FakeIrc(script, tls=ctx)
+        self.addCleanup(srv.close)
+        self.conf("""\
+            [account:libera]
+            protocol = irc
+            host = 127.0.0.1
+            port = %d
+            nick = tester
+            %s
+            """ % (srv.port, extra))
+        self.chat = cb._chat()
+        self.acct = self.chat.by_id["libera"]
+        self.srv = srv
+
+    def test_verified_with_cafile(self):
+        cert, ctx = self.make_cert()
+
+        def script(srv):
+            welcome(srv)
+            srv.send(":alice!a@h PRIVMSG tester :over tls")
+            srv.expect("QUIT")
+
+        self.tls_setup(script, ctx, "tls = true\ncafile = %s" % cert)
+        self.verb("connect", "libera")
+        self.turn(lambda: any(m[6] == "over tls" for m in self.msgs()))
+        self.chat.close()
+        self.srv.thread.join(5)
+        self.assertIsNone(self.srv.error)
+
+    def test_untrusted_cert_is_refused(self):
+        _, ctx = self.make_cert()
+        self.tls_setup(lambda srv: None, ctx, "tls = true")
+        self.verb("connect", "libera")
+        self.turn(lambda: self.acct.state == "error")
+        self.assertIn("TLS", self.acct.detail)
+        self.assertIn("CERTIFICATE_VERIFY_FAILED", self.acct.detail)
+
+
+
+class TestServeIrc(IrcBase):
+    """autoconnect through the real serve process, then events over the pipe."""
+
+    def test_autoconnect_and_events(self):
+        def script(srv):
+            welcome(srv)
+            srv.expect("JOIN #Test")
+            srv.send(":tester!u@h JOIN #Test")
+            srv.send(":alice!a@h PRIVMSG #Test :hi from fake")
+            srv.expect("QUIT")
+
+        srv = FakeIrc(script)
+        self.addCleanup(srv.close)
+        self.conf("""\
+            [chat]
+            autoconnect = libera
+            [account:libera]
+            protocol = irc
+            host = 127.0.0.1
+            port = %d
+            tls = false
+            nick = tester
+            channels = #Test
+            """ % srv.port)
+        p = subprocess.Popen([sys.executable, str(BACKEND), "serve"],
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                             stderr=subprocess.DEVNULL, env=dict(os.environ))
+        self.addCleanup(TestServe._reap, p)
+        self.assertEqual(TestServe._frame(p.stdout), (0, b"ready"))
+        seen, last = [], None
+        deadline = time.time() + 8
+        while not any(l.endswith("\thi from fake") for l in seen):
+            self.assertLess(time.time(), deadline, seen)
+            req = "events" if last is None else "events --after %d" % last
+            p.stdin.write(req.encode() + b"\n")
+            p.stdin.flush()
+            st, body = TestServe._frame(p.stdout)
+            self.assertEqual(st, 0)
+            for l in body.decode().splitlines():
+                seq = int(l.split("\t", 1)[0])
+                self.assertTrue(last is None or seq > last)     # never twice
+                last = seq
+                seen.append(l)
+            time.sleep(0.05)
+        self.assertTrue(any("\tstate\tlibera\tconnected\t" in l for l in seen))
+        p.stdin.write(b"quit\n")
+        p.stdin.flush()
+        self.assertEqual(p.wait(timeout=5), 0)
+        srv.thread.join(5)
+        self.assertIsNone(srv.error)          # QUIT reached the server
 
 
 if __name__ == "__main__":

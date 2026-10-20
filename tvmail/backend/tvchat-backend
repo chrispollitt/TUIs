@@ -19,15 +19,38 @@ carriage return or backslash inside a field is escaped as \\t \\n \\r \\\\):
   accounts                  one line per account:
                             id <TAB> protocol <TAB> state <TAB> display
                             (state: disconnected, connecting, connected, error)
+  connect ACCOUNT           start connecting; replies at once, progress
+                            arrives as 'state' events
+  disconnect ACCOUNT
+  convs [ACCOUNT]           conv <TAB> kind <TAB> unread <TAB> title
+                            (conv = ACCOUNT/target; kind: server, channel,
+                            direct, group; every account if none is named)
+  join ACCOUNT TARGET       open a channel or a query; prints the conv id
+  part CONV                 leave it
+  send CONV TEXT            prints the local message id; with IRCv3
+                            echo-message the server's copy arrives as an event
+  history CONV [--before MSGID] [--limit N]
+                            message lines, oldest first:
+                            msgid <TAB> conv <TAB> utc-iso8601 <TAB>
+                            sender-address <TAB> sender-display <TAB>
+                            flags <TAB> text
+                            (flags: s self, n notice/system, a /me action,
+                            e encrypted, r read)
+  members CONV              address <TAB> display <TAB> role
+  mark-read CONV [MSGID]
   events [--after SEQ]      queued events, oldest first: seq <TAB> type <TAB> ...
                             --after SEQ also forgets every event up to SEQ -
                             the UI passes the last seq it applied, so nothing
                             is ever applied twice.  Empty when nothing is queued.
   ping                      print 'pong' - a liveness check
+  irc-tail ACCOUNT          debugging: connect one IRC account and print its
+                            events in a plain terminal; typed lines go to the
+                            newest channel ('/join #chan', '/quit')
   serve                     persistent mode: one shell-quoted request (an argv)
                             per line on stdin, one framed reply per request:
                                 <status> <nbytes>\\n  then <nbytes> bytes
-                            A '0 5\\nready' banner is sent first.  'quit' (or
+                            A '0 5\\nready' banner is sent first, then the
+                            [chat] autoconnect accounts start connecting.  'quit' (or
                             EOF) closes every connection and exits, no reply.
                             One selectors loop multiplexes stdin and every
                             protocol socket - no threads.
@@ -36,7 +59,9 @@ Exit / frame status: 0 ok, 1 user-facing error (the body says what to tell
 the user), 2 internal error (bad request, bug).
 """
 
-import sys, os, io, argparse, configparser, heapq, selectors, shlex, time
+import sys, os, io, argparse, base64, configparser, heapq, re, selectors, shlex, socket
+import errno, ssl, threading, time
+from collections import deque
 
 
 __version__ = "1.2.0"
@@ -48,6 +73,8 @@ STATES = ("disconnected", "connecting", "connected", "error")
 # not grow without bound; the oldest events go first.  The UI re-requests
 # accounts/convs when it sees a gap, so losing very old events is harmless.
 EVENT_CAP = 10000
+# messages kept per conversation for `history` when the server keeps none
+HISTORY_CAP = 2000
 
 
 class UserError(Exception):
@@ -119,9 +146,11 @@ class Contact:
 
 
 class Conversation:
-    """An IRC channel or query, or a Delta Chat chat.  kind: channel, direct,
-    group.  The id is globally unique - '<account>/<target>' - so one verb
-    argument names it without also naming the account."""
+    """An IRC channel or query, or a Delta Chat chat.  kind: server (an IRC
+    network's own messages), channel, direct, group.  The id is globally
+    unique - '<account>/<target>' - so one verb argument names it without
+    also naming the account.  history is this session's messages, a capped
+    ring; members maps a normalized address to (address, display, role)."""
 
     def __init__(self, account, target, kind, title=None):
         self.account = account
@@ -131,6 +160,8 @@ class Conversation:
         self.title = title or target
         self.unread = 0
         self.topic = ""
+        self.history = deque(maxlen=HISTORY_CAP)
+        self.members = {}
 
     def wire(self):
         return line(self.id, self.kind, self.unread, self.title)
@@ -201,15 +232,35 @@ class Loop:
         self.timers = []                 # heap of [when, n, fn, live]
         self._n = 0
         self.running = False
+        self._wake = None                # self-pipe for run_in_thread
+        self._done = []                  # [(callback, result, error)]
+        self._lock = threading.Lock()
+
+    def watch(self, fileobj, on_read=None, on_write=None):
+        """Call on_read() / on_write() while fileobj is readable / writable;
+        watching again replaces both, and with neither it unwatches."""
+        mask = ((selectors.EVENT_READ if on_read else 0)
+                | (selectors.EVENT_WRITE if on_write else 0))
+        try:
+            key = self.sel.get_key(fileobj)
+        except (KeyError, ValueError):
+            key = None
+        if not mask:
+            if key is not None:
+                self.sel.unregister(fileobj)
+        elif key is None:
+            self.sel.register(fileobj, mask, (on_read, on_write))
+        else:
+            self.sel.modify(fileobj, mask, (on_read, on_write))
 
     def add_reader(self, fileobj, fn):
         """fn() is called whenever fileobj is readable."""
-        self.sel.register(fileobj, selectors.EVENT_READ, fn)
+        self.watch(fileobj, on_read=fn)
 
     def remove_reader(self, fileobj):
         try:
-            self.sel.unregister(fileobj)
-        except (KeyError, ValueError):
+            self.watch(fileobj)
+        except (KeyError, ValueError, OSError):
             pass
 
     def call_later(self, delay, fn):
@@ -223,6 +274,38 @@ class Loop:
     def cancel(handle):
         if handle is not None:
             handle[3] = False
+
+    def run_in_thread(self, fn, callback):
+        """The one escape hatch for a call that can only block - DNS lookup
+        (getaddrinfo has no non-blocking form in the stdlib).  fn() runs on a
+        daemon thread; callback(result, error) runs back on the loop."""
+        if self._wake is None:
+            self._wake = os.pipe()
+            os.set_blocking(self._wake[0], False)
+            self.add_reader(self._wake[0], self._drain_threads)
+
+        def work():
+            try:
+                res, err = fn(), None
+            except Exception as e:
+                res, err = None, e
+            with self._lock:
+                self._done.append((callback, res, err))
+            try:
+                os.write(self._wake[1], b"!")
+            except OSError:
+                pass
+        threading.Thread(target=work, daemon=True).start()
+
+    def _drain_threads(self):
+        try:
+            os.read(self._wake[0], 512)
+        except OSError:
+            pass
+        with self._lock:
+            done, self._done = self._done, []
+        for cb, res, err in done:
+            cb(res, err)
 
     def run_due(self):
         """Fire every timer whose time has come; returns how many ran."""
@@ -242,14 +325,35 @@ class Loop:
             return None
         return max(0.0, self.timers[0][0] - self.clock())
 
+    def run_once(self, timeout=None):
+        """One select() round plus due timers.  A callback may unwatch other
+        files, so each ready key is re-checked before it is called."""
+        t = self._timeout()
+        if timeout is not None:
+            t = timeout if t is None else min(t, timeout)
+        for key, mask in self.sel.select(t):
+            try:
+                cur = self.sel.get_key(key.fileobj)
+            except (KeyError, ValueError):
+                continue
+            on_read, on_write = cur.data
+            if mask & selectors.EVENT_WRITE and on_write:
+                on_write()
+            if mask & selectors.EVENT_READ and on_read:
+                try:                             # on_write may have unwatched it
+                    on_read = self.sel.get_key(key.fileobj).data[0]
+                except (KeyError, ValueError):
+                    on_read = None
+                if on_read:
+                    on_read()
+            if not self.running:
+                break
+        self.run_due()
+
     def run(self):
         self.running = True
         while self.running:
-            for key, _ in self.sel.select(self._timeout()):
-                key.data()
-                if not self.running:
-                    break
-            self.run_due()
+            self.run_once()
 
     def stop(self):
         self.running = False
@@ -303,8 +407,772 @@ def load_config(path=None):
 
 
 # --------------------------------------------------------------------------
-# The chat service: the accounts, the event queue and (from milestone 2) the
-# protocol adapters, behind the verbs the UI calls.  One instance per process.
+# Passwords.  Same places tvmail-backend looks, in the same order: the
+# environment ($TVCHAT_PASS_<ACCOUNT>, e.g. $TVCHAT_PASS_LIBERA), then
+# ~/.mu-tickets (borrowed from a tvmail-backend installed beside this file -
+# chat may lean on the mail backend, never the other way round), then
+# ~/.netrc (machine <host> login <user> password <p>, chmod 600).
+# --------------------------------------------------------------------------
+def _env_name(account_id):
+    return "TVCHAT_PASS_" + re.sub(r"[^A-Za-z0-9]", "_", account_id).upper()
+
+
+def _mail_backend():
+    here = os.path.dirname(os.path.realpath(__file__))
+    path = os.path.join(here, "tvmail-backend")
+    if not os.path.exists(path):
+        return None
+    try:
+        import importlib.machinery, importlib.util
+        loader = importlib.machinery.SourceFileLoader("tvmail_backend", path)
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        mod = importlib.util.module_from_spec(spec)
+        loader.exec_module(mod)
+        return mod
+    except Exception:
+        return None
+
+
+def find_password(account_id, host, login, scheme):
+    """The password, or None.  Never raises for a missing file."""
+    v = os.environ.get(_env_name(account_id))
+    if v:
+        return v
+    mb = _mail_backend()
+    if mb is not None and hasattr(mb, "_mu_ticket_pass"):
+        try:
+            pw = mb._mu_ticket_pass(scheme, host, login)
+        except Exception:
+            pw = None
+        if pw:
+            return pw
+    try:
+        import netrc
+        auth = netrc.netrc(os.path.expanduser("~/.netrc")).authenticators(host)
+        if auth and auth[2]:
+            return auth[2]
+    except (OSError, netrc.NetrcParseError):
+        pass
+    return None
+
+
+def _bool(v, default):
+    if v is None or str(v).strip() == "":
+        return default
+    return str(v).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _me():
+    for k in ("USER", "LOGNAME"):
+        if os.environ.get(k):
+            return os.environ[k]
+    return "tvmail"
+
+
+# --------------------------------------------------------------------------
+# IRC: the line grammar, IRCv3 tags, mIRC formatting, UTF-8-safe splitting.
+# --------------------------------------------------------------------------
+class IrcMsg:
+    def __init__(self, tags, prefix, command, params):
+        self.tags = tags                 # {name: value} - value "" if bare
+        self.prefix = prefix             # "nick!user@host", "server", or ""
+        self.command = command           # upper-cased; numerics stay "001"
+        self.params = params             # trailing parameter included last
+
+    @property
+    def nick(self):
+        return self.prefix.split("!", 1)[0].split("@", 1)[0]
+
+    def __repr__(self):
+        return "IrcMsg(%r, %r, %r, %r)" % (self.tags, self.prefix,
+                                           self.command, self.params)
+
+
+_TAG_UNESC = {":": ";", "s": " ", "\\": "\\", "r": "\r", "n": "\n"}
+
+
+def _tag_value(v):
+    out, i = [], 0
+    while i < len(v):
+        if v[i] == "\\":
+            if i + 1 < len(v):
+                out.append(_TAG_UNESC.get(v[i + 1], v[i + 1]))
+            i += 2                       # a lone trailing backslash is dropped
+        else:
+            out.append(v[i])
+            i += 1
+    return "".join(out)
+
+
+def parse_line(text):
+    """One IRC line (no CR/LF) -> IrcMsg, or None if it is empty.  Grammar:
+    ['@' tags SPACE] [':' prefix SPACE] command *(SPACE param) [SPACE ':' trailing]"""
+    text = text.rstrip("\r\n")
+    tags, prefix = {}, ""
+    if text.startswith("@"):
+        raw, _, text = text[1:].partition(" ")
+        for item in raw.split(";"):
+            if item:
+                k, _, v = item.partition("=")
+                tags[k] = _tag_value(v)
+        text = text.lstrip(" ")
+    if text.startswith(":"):
+        prefix, _, text = text[1:].partition(" ")
+        text = text.lstrip(" ")
+    if not text:
+        return None
+    params = []
+    while text:
+        if text.startswith(":"):
+            params.append(text[1:])
+            break
+        p, _, text = text.partition(" ")
+        params.append(p)
+        text = text.lstrip(" ")
+    return IrcMsg(tags, prefix, params[0].upper(), params[1:])
+
+
+_FMT = re.compile(r"\x03(?:\d{1,2}(?:,\d{1,2})?)?"         # mIRC colour
+                  r"|\x04(?:[0-9A-Fa-f]{6}(?:,[0-9A-Fa-f]{6})?)?"   # hex colour
+                  r"|[\x02\x0f\x11\x16\x1d\x1e\x1f]")      # bold, reset, ...
+
+
+def strip_formatting(s):
+    return _FMT.sub("", s)
+
+
+def split_utf8(text, limit=400):
+    """Pieces of at most `limit` UTF-8 bytes, never cutting a character."""
+    data = text.encode("utf-8")
+    out = []
+    while len(data) > limit:
+        cut = limit
+        while cut > 0 and (data[cut] & 0xC0) == 0x80:      # continuation byte
+            cut -= 1
+        out.append(data[:cut].decode("utf-8"))
+        data = data[cut:]
+    out.append(data.decode("utf-8"))
+    return out
+
+
+def parse_server_time(v):
+    """IRCv3 server-time 'YYYY-MM-DDThh:mm:ss[.sss]Z' -> epoch seconds."""
+    import calendar
+    m = re.match(r"(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)(\.\d+)?Z?$", v or "")
+    if not m:
+        return None
+    t = calendar.timegm(tuple(int(x) for x in m.groups()[:6]))
+    return t + (float(m.group(7)) if m.group(7) else 0.0)
+
+
+def irc_lower(s, casemapping="rfc1459"):
+    s = "".join(chr(ord(c) + 32) if "A" <= c <= "Z" else c for c in s)
+    if casemapping == "ascii":
+        return s
+    return s.translate(_RFC1459)
+
+
+_RFC1459 = str.maketrans("[]\\~", "{}|^")
+
+ROLE_RANK = {"owner": 0, "admin": 1, "op": 2, "halfop": 3, "voice": 4, "member": 5}
+_PREFIX_ROLE = {"~": "owner", "&": "admin", "@": "op", "%": "halfop", "+": "voice"}
+
+
+# --------------------------------------------------------------------------
+# The IRC adapter: one non-blocking socket (TLS by default) on the shared
+# loop.  Everything server-specific is negotiated (CAP LS 302, ISUPPORT),
+# never assumed, so the same code serves Libera.Chat today and a home Ergo
+# server later.
+# --------------------------------------------------------------------------
+class IrcAdapter:
+    # requested when the server offers them; sasl only with an account name
+    # and a password to send
+    WANT_CAPS = ("sasl", "server-time", "message-tags", "echo-message", "batch",
+                 "chathistory", "draft/chathistory", "away-notify",
+                 "account-tag", "multi-prefix", "labeled-response")
+    TIMEOUT = 60                         # connect + TLS + registration
+
+    def __init__(self, chat, account):
+        self.chat = chat
+        self.account = account
+        self.loop = chat.loop
+        o = account.opts
+        self.host = (o.get("host") or "").strip()
+        self.tls = _bool(o.get("tls"), True)
+        self.port = int(o.get("port") or (6697 if self.tls else 6667))
+        self.verify = _bool(o.get("verify"), True)
+        self.cafile = (o.get("cafile") or "").strip() or None
+        self.want_nick = (o.get("nick") or "").strip() or _me()
+        self.username = (o.get("username") or "").strip() or self.want_nick
+        self.realname = (o.get("realname") or "").strip() or self.want_nick
+        self.sasl_user = (o.get("sasl") or "").strip()
+        self.channels = [c.strip() for c in (o.get("channels") or "").split(",")
+                         if c.strip()]
+        self.gen = 0                     # bumped on close: stale callbacks no-op
+        self._ids = 0
+        self._reset()
+
+    def _reset(self):
+        self.sock = None
+        self.phase = "down"              # down, resolving, connecting, tls,
+        self.rbuf = b""                  # registering, up
+        self.wbuf = b""
+        self.timer = None
+        self.addrs = []
+        self.nick = self.want_nick
+        self.caps = set()
+        self.offered = {}
+        self.ls_acc = []
+        self.cap_done = False
+        self.password = None
+        self.server = self.host
+        self.casemapping = "rfc1459"
+        self.chantypes = "#&"
+        self.prefixes = dict(_PREFIX_ROLE)
+
+    # -- lifecycle ----------------------------------------------------------
+    def connect(self):
+        if self.phase != "down":
+            return
+        if not self.host:
+            raise UserError("[account:%s] has no host=" % self.account.id)
+        self.password = None
+        if self.sasl_user:
+            self.password = find_password(self.account.id, self.host,
+                                          self.sasl_user, "irc")
+            if not self.password:
+                raise UserError(
+                    "no SASL password for %s on %s - add it to ~/.netrc "
+                    "(machine %s login %s password ...), ~/.mu-tickets, or "
+                    "set $%s; or drop sasl= from [account:%s]"
+                    % (self.sasl_user, self.host, self.host, self.sasl_user,
+                       _env_name(self.account.id), self.account.id))
+        self.server_conv()
+        self.phase = "resolving"
+        gen = self.gen
+        self.timer = self.loop.call_later(self.TIMEOUT,
+                                          lambda: self._fail("timed out"))
+        self.chat.set_state(self.account, "connecting",
+                            "looking up %s" % self.host)
+        host, port = self.host, self.port
+        self.loop.run_in_thread(
+            lambda: socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM),
+            lambda res, err: gen == self.gen and self._resolved(res, err))
+
+    def _resolved(self, res, err):
+        if err is not None or not res:
+            self._fail("cannot look up %s: %s" % (self.host, err))
+            return
+        self.addrs = list(res)
+        self._try_next(None)
+
+    def _try_next(self, why):
+        while self.addrs:
+            family, stype, proto, _, addr = self.addrs.pop(0)
+            try:
+                s = socket.socket(family, stype, proto)
+            except OSError as e:
+                why = e
+                continue
+            s.setblocking(False)
+            rc = s.connect_ex(addr)
+            if rc in (0, errno.EINPROGRESS, errno.EWOULDBLOCK):
+                self.sock = s
+                self.phase = "connecting"
+                self.chat.set_state(self.account, "connecting",
+                                    "connecting to %s port %d" % (addr[0], self.port))
+                self.loop.watch(s, on_write=self._connected)
+                return
+            why = os.strerror(rc)
+            s.close()
+        self._fail("cannot connect to %s port %d: %s" % (self.host, self.port, why))
+
+    def _connected(self):
+        err = self.sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+        if err:
+            self.loop.watch(self.sock)
+            self.sock.close()
+            self.sock = None
+            self._try_next(os.strerror(err))
+            return
+        if not self.tls:
+            self._register()
+            return
+        try:
+            if self.verify:
+                ctx = ssl.create_default_context(cafile=self.cafile)
+            else:
+                ctx = ssl.create_default_context()
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+            raw = self.sock
+            self.loop.watch(raw)
+            self.sock = ctx.wrap_socket(raw, server_hostname=self.host,
+                                        do_handshake_on_connect=False)
+        except (OSError, ssl.SSLError) as e:
+            self._fail("TLS: %s" % e)
+            return
+        self.phase = "tls"
+        self._handshake()
+
+    def _handshake(self):
+        try:
+            self.sock.do_handshake()
+        except ssl.SSLWantReadError:
+            self.loop.watch(self.sock, on_read=self._handshake)
+            return
+        except ssl.SSLWantWriteError:
+            self.loop.watch(self.sock, on_write=self._handshake)
+            return
+        except (OSError, ssl.SSLError, ssl.CertificateError) as e:
+            self._fail("TLS: %s" % (getattr(e, "reason", None) or e))
+            return
+        self._register()
+
+    def _register(self):
+        self.phase = "registering"
+        self.chat.set_state(self.account, "connecting", "registering")
+        self.send_raw("CAP LS 302")
+        self.send_raw("NICK %s" % self.nick)
+        self.send_raw("USER %s 0 * :%s" % (self.username, self.realname))
+
+    def disconnect(self, message="tvmail"):
+        if self.phase in ("registering", "up") and self.sock is not None:
+            self.send_raw("QUIT :%s" % message)
+            try:                         # best effort: one push of what's queued
+                self.sock.setblocking(True)
+                self.sock.settimeout(2)
+                self.sock.sendall(self.wbuf)
+            except (OSError, ssl.SSLError):
+                pass
+        was = self.phase
+        self._close()
+        if was != "down":
+            self.chat.set_state(self.account, "disconnected", "")
+
+    def _close(self):
+        self.gen += 1
+        self.loop.cancel(self.timer)
+        if self.sock is not None:
+            try:
+                self.loop.watch(self.sock)
+            except (OSError, ValueError, KeyError):
+                pass
+            try:
+                self.sock.close()
+            except OSError:
+                pass
+        for conv in self.account.convs.values():
+            if conv.members:
+                conv.members.clear()
+                self.chat.events.push("members", conv.id)
+        self._reset()
+
+    def _fail(self, why):
+        self._close()
+        self.chat.set_state(self.account, "error", why)
+
+    def _lost(self, why):
+        # (milestone 5 reconnects from here with backoff)
+        self._close()
+        self.chat.set_state(self.account, "disconnected", why)
+
+    # -- the socket ---------------------------------------------------------
+    def send_raw(self, text):
+        data = text.encode("utf-8", "replace")[:510] + b"\r\n"
+        self.wbuf += data
+        self._rewatch()
+
+    def _rewatch(self):
+        if self.sock is not None and self.phase in ("registering", "up"):
+            self.loop.watch(self.sock, on_read=self._on_read,
+                            on_write=self._on_write if self.wbuf else None)
+
+    def _on_write(self):
+        try:
+            n = self.sock.send(self.wbuf)
+            self.wbuf = self.wbuf[n:]
+        except (BlockingIOError, ssl.SSLWantWriteError, ssl.SSLWantReadError):
+            pass
+        except (OSError, ssl.SSLError) as e:
+            self._lost(str(e))
+            return
+        self._rewatch()
+
+    def _on_read(self):
+        gen = self.gen
+        gone = None
+        while True:                      # drain the socket (and TLS's buffer)
+            try:
+                data = self.sock.recv(16384)
+            except (BlockingIOError, ssl.SSLWantReadError, ssl.SSLWantWriteError):
+                break
+            except (OSError, ssl.SSLError) as e:
+                gone = str(e)
+                break
+            if not data:
+                gone = "connection closed by the server"
+                break
+            self.rbuf += data
+        # what arrived before a hang-up still counts - above all the server's
+        # ERROR line, which says why it hung up
+        while b"\n" in self.rbuf and gen == self.gen:
+            raw, self.rbuf = self.rbuf.split(b"\n", 1)
+            m = parse_line(raw.decode("utf-8", "replace"))
+            if m is not None:
+                self.handle(m)
+        if gone is not None and gen == self.gen:
+            self._lost(gone)
+
+    # -- the shared model ---------------------------------------------------
+    def lower(self, s):
+        return irc_lower(s, self.casemapping)
+
+    def is_channel(self, target):
+        return bool(target) and target[0] in self.chantypes
+
+    def is_me(self, nick):
+        return self.lower(nick) == self.lower(self.nick)
+
+    def server_conv(self):
+        return self.chat.ensure_conv(self.account, "*", "server", self.account.display)
+
+    def conv_for(self, target, kind=None):
+        kind = kind or ("channel" if self.is_channel(target) else "direct")
+        return self.chat.ensure_conv(self.account, self.lower(target), kind, target)
+
+    def find_conv(self, target):
+        return self.account.convs.get("%s/%s" % (self.account.id, self.lower(target)))
+
+    def local_id(self):
+        self._ids += 1
+        return "%s:%d" % (self.account.id, self._ids)
+
+    def system(self, conv, text, when=None):
+        self.chat.add_message(conv, Message(
+            self.local_id(), conv.id, when or time.time(),
+            Contact(self.server), text, "n"), count=False)
+
+    # -- protocol -----------------------------------------------------------
+    def handle(self, m):
+        fn = getattr(self, "on_" + m.command, None)
+        if fn is not None:
+            fn(m)
+        elif m.command.isdigit():
+            self.on_numeric(m)
+
+    def on_PING(self, m):
+        self.send_raw("PONG :%s" % (m.params[-1] if m.params else ""))
+
+    def on_ERROR(self, m):
+        self._lost(m.params[-1] if m.params else "ERROR")
+
+    def on_CAP(self, m):
+        sub = m.params[1].upper() if len(m.params) > 1 else ""
+        if sub == "LS":
+            if len(m.params) > 3 and m.params[2] == "*":   # more LS lines follow
+                self.ls_acc.append(m.params[3])
+                return
+            self.ls_acc.append(m.params[-1])
+            for tok in " ".join(self.ls_acc).split():
+                k, _, v = tok.partition("=")
+                self.offered[k] = v
+            self.ls_acc = []
+            want = [c for c in self.WANT_CAPS if c in self.offered]
+            if "sasl" in want:
+                mechs = self.offered["sasl"]
+                if not (self.sasl_user and self.password) or \
+                        (mechs and "PLAIN" not in mechs.upper().split(",")):
+                    want.remove("sasl")
+            if want:
+                self.send_raw("CAP REQ :%s" % " ".join(want))
+            else:
+                self.cap_end()
+        elif sub == "ACK":
+            for c in m.params[-1].split():
+                if c.startswith("-"):
+                    self.caps.discard(c[1:])
+                else:
+                    self.caps.add(c)
+            if "sasl" in self.caps and self.phase == "registering" and not self.cap_done:
+                self.send_raw("AUTHENTICATE PLAIN")
+            else:
+                self.cap_end()
+        elif sub == "NAK":
+            self.cap_end()
+        elif sub == "DEL":
+            for c in m.params[-1].split():
+                self.caps.discard(c)
+
+    def cap_end(self):
+        if not self.cap_done and self.phase == "registering":
+            self.cap_done = True
+            self.send_raw("CAP END")
+
+    def on_AUTHENTICATE(self, m):
+        if m.params and m.params[0] == "+":
+            blob = ("%s\0%s\0%s" % (self.sasl_user, self.sasl_user,
+                                    self.password)).encode("utf-8")
+            b64 = base64.b64encode(blob).decode("ascii")
+            for i in range(0, len(b64), 400):
+                self.send_raw("AUTHENTICATE %s" % b64[i:i + 400])
+            if len(b64) % 400 == 0:
+                self.send_raw("AUTHENTICATE +")
+
+    def on_numeric(self, m):
+        n = m.command
+        p = m.params
+        if n in ("903", "907"):          # SASL ok / already authenticated
+            self.cap_end()
+        elif n in ("902", "904", "905", "906", "908"):
+            self.system(self.server_conv(), "SASL login failed: %s" % p[-1])
+            self.cap_end()
+        elif n in ("432", "433", "436", "437") and self.phase == "registering":
+            self.nick = self.nick + "_"
+            self.send_raw("NICK %s" % self.nick)
+        elif n == "001":
+            self.on_welcome(m)
+        elif n == "005":
+            self.on_isupport(m)
+        elif n == "332" and len(p) >= 3:
+            conv = self.find_conv(p[1])
+            if conv is not None:
+                self.chat.set_topic(conv, strip_formatting(p[2]))
+        elif n == "353" and len(p) >= 3:
+            conv = self.find_conv(p[-2])
+            if conv is not None:
+                for name in p[-1].split():
+                    role, i = "member", 0
+                    while i < len(name) and name[i] in self.prefixes:
+                        if role == "member":
+                            role = self.prefixes[name[i]]
+                        i += 1
+                    nick = name[i:].split("!", 1)[0]
+                    conv.members[self.lower(nick)] = (nick, nick, role)
+        elif n == "366" and len(p) >= 2:
+            conv = self.find_conv(p[1])
+            if conv is not None:
+                self.chat.events.push("members", conv.id)
+        elif n in ("333", "329", "315", "352", "900", "901"):
+            if n == "900":
+                self.system(self.server_conv(), p[-1])
+        else:                            # MOTD, errors &c: the server window
+            self.system(self.server_conv(), " ".join(p[1:]),
+                        parse_server_time(m.tags.get("time")))
+
+    def on_welcome(self, m):
+        self.phase = "up"
+        self.nick = m.params[0] if m.params else self.nick
+        self.server = m.prefix or self.host
+        self.loop.cancel(self.timer)
+        self.timer = None
+        self.cap_done = True
+        self.chat.set_state(self.account, "connected", self.server)
+        self.system(self.server_conv(), " ".join(m.params[1:]))
+        # the configured channels, plus any still open from before a reconnect
+        want = list(self.channels)
+        for conv in self.account.convs.values():
+            if conv.kind == "channel" and conv.title not in want:
+                want.append(conv.title)
+        for ch in want:
+            self.send_raw("JOIN %s" % ch)
+
+    def on_isupport(self, m):
+        for tok in m.params[1:-1]:
+            k, _, v = tok.partition("=")
+            if k == "CASEMAPPING" and v:
+                self.casemapping = v.lower()
+            elif k == "CHANTYPES" and v:
+                self.chantypes = v
+            elif k == "PREFIX" and v.startswith("("):
+                modes, _, syms = v[1:].partition(")")
+                names = {"q": "owner", "a": "admin", "o": "op", "h": "halfop",
+                         "v": "voice"}
+                self.prefixes = dict((s, names.get(md, "op"))
+                                     for md, s in zip(modes, syms))
+
+    def on_JOIN(self, m):
+        if not m.params:
+            return
+        chan = m.params[0]
+        if self.is_me(m.nick):
+            conv = self.conv_for(chan, "channel")
+            conv.title = chan
+            conv.members.clear()
+        else:
+            conv = self.find_conv(chan)
+            if conv is None:
+                return
+            conv.members[self.lower(m.nick)] = (m.nick, m.nick, "member")
+            self.chat.events.push("members", conv.id)
+        self.system(conv, "%s has joined %s" % (m.nick, chan), self.when(m))
+
+    def on_PART(self, m):
+        conv = self.find_conv(m.params[0]) if m.params else None
+        if conv is None:
+            return
+        if self.is_me(m.nick):
+            self.chat.remove_conv(conv)
+            return
+        conv.members.pop(self.lower(m.nick), None)
+        self.chat.events.push("members", conv.id)
+        why = " (%s)" % m.params[1] if len(m.params) > 1 and m.params[1] else ""
+        self.system(conv, "%s has left%s" % (m.nick, why), self.when(m))
+
+    def on_KICK(self, m):
+        conv = self.find_conv(m.params[0]) if m.params else None
+        if conv is None or len(m.params) < 2:
+            return
+        victim = m.params[1]
+        why = m.params[2] if len(m.params) > 2 else ""
+        conv.members.pop(self.lower(victim), None)
+        if self.is_me(victim):
+            conv.members.clear()
+        self.chat.events.push("members", conv.id)
+        self.system(conv, "%s was kicked by %s (%s)" % (victim, m.nick, why),
+                    self.when(m))
+
+    def on_QUIT(self, m):
+        why = m.params[0] if m.params else ""
+        key = self.lower(m.nick)
+        for conv in list(self.account.convs.values()):
+            if key in conv.members or (conv.kind == "direct" and conv.target == key):
+                if conv.members.pop(key, None) is not None:
+                    self.chat.events.push("members", conv.id)
+                self.system(conv, "%s has quit (%s)" % (m.nick, why), self.when(m))
+
+    def on_NICK(self, m):
+        new = m.params[0] if m.params else ""
+        if not new:
+            return
+        old = self.lower(m.nick)
+        if self.is_me(m.nick):
+            self.nick = new
+            self.system(self.server_conv(), "you are now known as %s" % new)
+        for conv in list(self.account.convs.values()):
+            ent = conv.members.pop(old, None)
+            if ent is not None:
+                conv.members[self.lower(new)] = (new, new, ent[2])
+                self.chat.events.push("members", conv.id)
+                self.system(conv, "%s is now known as %s" % (m.nick, new), self.when(m))
+
+    def on_TOPIC(self, m):
+        conv = self.find_conv(m.params[0]) if m.params else None
+        if conv is None:
+            return
+        text = strip_formatting(m.params[1] if len(m.params) > 1 else "")
+        self.chat.set_topic(conv, text)
+        self.system(conv, "%s set the topic: %s" % (m.nick, text), self.when(m))
+
+    def on_MODE(self, m):
+        if len(m.params) >= 2 and self.is_channel(m.params[0]):
+            conv = self.find_conv(m.params[0])
+            if conv is not None:
+                self.system(conv, "%s sets mode %s" % (m.nick, " ".join(m.params[1:])),
+                            self.when(m))
+                if len(m.params) > 2:    # a user's role may have changed
+                    self.send_raw("NAMES %s" % m.params[0])
+
+    def when(self, m):
+        return parse_server_time(m.tags.get("time")) or time.time()
+
+    def on_PRIVMSG(self, m, notice=False):
+        if len(m.params) < 2:
+            return
+        target, text = m.params[0], m.params[1]
+        flags = "n" if notice else ""
+        if text.startswith("\x01"):      # CTCP
+            inner = text.strip("\x01")
+            verb, _, rest = inner.partition(" ")
+            if verb.upper() != "ACTION":
+                if verb.upper() == "VERSION" and not notice and not self.is_me(m.nick):
+                    self.send_raw("NOTICE %s :\x01VERSION tvmail %s\x01"
+                                  % (m.nick, __version__))
+                return
+            text, flags = rest, flags + "a"
+        mine = self.is_me(m.nick)
+        bare = target.lstrip("".join(self.prefixes))      # STATUSMSG: @#chan
+        if self.is_channel(bare):
+            conv = self.conv_for(bare, "channel")
+        elif "!" not in m.prefix and not mine or self.phase != "up" or target == "*":
+            conv = self.server_conv()    # server notices
+        elif mine:
+            conv = self.conv_for(target, "direct")         # our echo of a query
+        else:
+            conv = self.conv_for(m.nick, "direct")
+        if mine:
+            flags += "s"
+        msg = Message(m.tags.get("msgid") or self.local_id(), conv.id, self.when(m),
+                      Contact(m.nick), strip_formatting(text), flags)
+        self.chat.add_message(conv, msg, count=not mine and conv.kind != "server")
+
+    def on_NOTICE(self, m):
+        self.on_PRIVMSG(m, notice=True)
+
+    # -- what the UI asks for -----------------------------------------------
+    def need_up(self):
+        if self.phase != "up":
+            raise UserError("%s is not connected" % self.account.display)
+
+    def join(self, target):
+        self.need_up()
+        target = target.strip()
+        if not target or " " in target or "," in target:
+            raise UserError("not a channel or nick: %r" % target)
+        if self.is_channel(target):
+            self.send_raw("JOIN %s" % target)
+            return self.conv_for(target, "channel")
+        return self.conv_for(target, "direct")
+
+    def part(self, conv):
+        if conv.kind == "server":
+            raise UserError("the server window cannot be left - disconnect instead")
+        if conv.kind == "channel" and self.phase == "up":
+            self.send_raw("PART %s" % conv.title)
+        self.chat.remove_conv(conv)
+
+    def send(self, conv, text):
+        if conv.kind == "server":
+            raise UserError("the server window takes no messages")
+        self.need_up()
+        msgid = None
+        for ln in text.split("\n"):
+            ln = ln.rstrip("\r")
+            if not ln:
+                continue
+            for piece in split_utf8(ln, 400):
+                self.send_raw("PRIVMSG %s :%s" % (conv.title, piece))
+                msgid = self.local_id()
+                if "echo-message" not in self.caps:  # else the server echoes it
+                    self.chat.add_message(conv, Message(
+                        msgid, conv.id, time.time(), Contact(self.nick), piece, "s"),
+                        count=False)
+        if msgid is None:
+            raise UserError("nothing to send")
+        return msgid
+
+
+class DeltaChatAdapter:
+    """Placeholder until milestone 6 (deltachat-rpc-server over JSON-RPC)."""
+
+    def __init__(self, chat, account):
+        self.chat, self.account = chat, account
+
+    def connect(self):
+        raise UserError("Delta Chat is not supported yet")
+
+    def disconnect(self):
+        pass
+
+    join = part = send = lambda self, *a: self.connect()
+
+
+ADAPTERS = {"irc": IrcAdapter, "deltachat": DeltaChatAdapter}
+
+
+# --------------------------------------------------------------------------
+# The chat service: the accounts, the event queue and the protocol adapters,
+# behind the verbs the UI calls.  One instance per process.
 # --------------------------------------------------------------------------
 class Chat:
     def __init__(self, loop=None, clock=time.time):
@@ -320,6 +1188,7 @@ class Chat:
             self.conf_error = e
             self.accounts, self.autoconnect = [], []
         self.by_id = dict((a.id, a) for a in self.accounts)
+        self.adapters = {}
 
     def check_config(self):
         if self.conf_error is not None:
@@ -332,12 +1201,78 @@ class Chat:
             raise UserError("no chat account %r - see tvchat.conf" % ident)
         return a
 
+    def adapter(self, account):
+        ad = self.adapters.get(account.id)
+        if ad is None:
+            ad = self.adapters[account.id] = ADAPTERS[account.protocol](self, account)
+        return ad
+
+    def conv(self, conv_id):
+        ident, _, target = conv_id.partition("/")
+        acct = self.account(ident)
+        conv = acct.convs.get(conv_id)
+        if conv is None:
+            raise UserError("no conversation %r" % conv_id)
+        return conv
+
     def set_state(self, account, state, detail=""):
         account.state, account.detail = state, detail
         self.events.push("state", account.id, state, detail)
 
+    def ensure_conv(self, account, target, kind, title=None):
+        cid = "%s/%s" % (account.id, target)
+        conv = account.convs.get(cid)
+        if conv is None:
+            conv = account.convs[cid] = Conversation(account, target, kind, title)
+            self.events.push("conv-new", conv.id, conv.kind, conv.unread, conv.title)
+        return conv
+
+    def remove_conv(self, conv):
+        if conv.account.convs.pop(conv.id, None) is not None:
+            self.events.push("conv-gone", conv.id, conv.kind, conv.unread, conv.title)
+
+    def add_message(self, conv, msg, count=True):
+        conv.history.append(msg)
+        self.events.push("msg", *msg.fields())
+        if count:
+            conv.unread += 1
+            self.events.push("unread", conv.id, conv.unread)
+
+    def set_topic(self, conv, text):
+        conv.topic = text
+        self.events.push("topic", conv.id, text)
+
+    def mark_read(self, conv, msgid=None):
+        for msg in conv.history:
+            if "r" not in msg.flags:
+                msg.flags += "r"
+            if msgid is not None and msg.id == msgid:
+                break
+        if conv.unread:
+            conv.unread = 0
+            self.events.push("unread", conv.id, 0)
+
+    def connect(self, account):
+        try:
+            self.adapter(account).connect()
+        except UserError as e:
+            self.set_state(account, "error", str(e))
+            raise
+
+    def start(self):
+        """Connect the [chat] autoconnect accounts; a failure is an event."""
+        for ident in self.autoconnect:
+            try:
+                self.connect(self.by_id[ident])
+            except UserError:
+                pass                     # already reported as a state event
+
     def close(self):
-        """Close every connection.  Nothing to close until the adapters land."""
+        for ad in self.adapters.values():
+            try:
+                ad.disconnect()
+            except Exception:
+                pass
 
 
 _CHAT = None
@@ -358,6 +1293,73 @@ def cmd_accounts(a):
     return 0
 
 
+def cmd_connect(a):
+    chat = _chat()
+    chat.connect(chat.account(a.account))
+    return 0
+
+
+def cmd_disconnect(a):
+    chat = _chat()
+    chat.adapter(chat.account(a.account)).disconnect()
+    return 0
+
+
+def cmd_convs(a):
+    chat = _chat()
+    accts = [chat.account(a.account)] if a.account else (chat.check_config() or chat.accounts)
+    for acct in accts:
+        for conv in acct.convs.values():
+            sys.stdout.write(conv.wire())
+    return 0
+
+
+def cmd_join(a):
+    chat = _chat()
+    acct = chat.account(a.account)
+    sys.stdout.write(chat.adapter(acct).join(a.target).id + "\n")
+    return 0
+
+
+def cmd_part(a):
+    chat = _chat()
+    conv = chat.conv(a.conv)
+    chat.adapter(conv.account).part(conv)
+    return 0
+
+
+def cmd_send(a):
+    chat = _chat()
+    conv = chat.conv(a.conv)
+    sys.stdout.write(chat.adapter(conv.account).send(conv, a.text) + "\n")
+    return 0
+
+
+def cmd_history(a):
+    conv = _chat().conv(a.conv)
+    msgs = list(conv.history)
+    if a.before:
+        ids = [m.id for m in msgs]
+        msgs = msgs[:ids.index(a.before)] if a.before in ids else []
+    for msg in msgs[-a.limit:] if a.limit > 0 else []:
+        sys.stdout.write(line(*msg.fields()))
+    return 0
+
+
+def cmd_members(a):
+    conv = _chat().conv(a.conv)
+    for addr, disp, role in sorted(conv.members.values(),
+                                   key=lambda e: (ROLE_RANK.get(e[2], 9), e[0].lower())):
+        sys.stdout.write(line(addr, disp, role))
+    return 0
+
+
+def cmd_mark_read(a):
+    chat = _chat()
+    chat.mark_read(chat.conv(a.conv), a.msgid)
+    return 0
+
+
 def cmd_events(a):
     for ev in _chat().events.drain(a.after):
         sys.stdout.write(EventQueue.wire(ev))
@@ -366,6 +1368,78 @@ def cmd_events(a):
 
 def cmd_ping(a):
     sys.stdout.write("pong\n")
+    return 0
+
+
+# --------------------------------------------------------------------------
+# irc-tail: a debugging aid, no tvmail needed.  Connects one account and
+# prints its events as plain text; a typed line is sent to the newest
+# channel or query ("/join #chan" and "/quit" also work).
+# --------------------------------------------------------------------------
+def _tail_format(fields):
+    etype, rest = fields[0], fields[1:]
+    if etype == "msg":
+        _, conv, when, _, who, flags, text = rest
+        hhmm = time.strftime("%H:%M", time.localtime(parse_server_time(when) or 0))
+        where = conv.split("/", 1)[1]
+        if "a" in flags:
+            return "%s %s * %s %s" % (hhmm, where, who, text)
+        if "n" in flags and not who:
+            return "%s %s -- %s" % (hhmm, where, text)
+        mark = "-%s-" if "n" in flags else "<%s>"
+        return "%s %s %s %s" % (hhmm, where, mark % who, text)
+    return "** %s %s" % (etype, " ".join(str(x) for x in rest))
+
+
+def cmd_irc_tail(a):
+    chat = _chat()
+    acct = chat.account(a.account)
+    if acct.protocol != "irc":
+        raise UserError("%s is not an IRC account" % acct.id)
+    loop = chat.loop
+    out = sys.stdout
+    cur = [None]
+    seen = [None]
+    fd = sys.stdin.fileno()
+
+    def pump():
+        for seq, fields in chat.events.drain(seen[0]):
+            seen[0] = seq
+            if fields[0] == "conv-new" and fields[2] != "server":
+                cur[0] = fields[1]
+            out.write(_tail_format(fields) + "\n")
+        out.flush()
+        loop.call_later(0.1, pump)
+
+    def on_stdin():
+        data = os.read(fd, 4096)
+        if not data:
+            loop.stop()
+            return
+        for ln in data.decode("utf-8", "replace").splitlines():
+            try:
+                if ln.startswith("/quit"):
+                    loop.stop()
+                elif ln.startswith("/join "):
+                    cur[0] = chat.adapter(acct).join(ln[6:]).id
+                elif ln.strip() and cur[0]:
+                    chat.adapter(acct).send(chat.conv(cur[0]), ln)
+                elif ln.strip():
+                    out.write("** nothing to send to yet - /join a channel\n")
+            except UserError as e:
+                out.write("** %s\n" % e)
+
+    chat.connect(acct)
+    loop.add_reader(fd, on_stdin)
+    loop.call_later(0, pump)
+    try:
+        loop.run()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        chat.close()
+        for seq, fields in chat.events.drain(seen[0]):
+            out.write(_tail_format(fields) + "\n")
     return 0
 
 
@@ -394,7 +1468,7 @@ class _CapStream:
         return False
 
 
-_SERVE_BLOCKED = frozenset(("serve",))
+_SERVE_BLOCKED = frozenset(("serve", "irc-tail"))
 
 
 def dispatch(parser, argv):
@@ -479,6 +1553,7 @@ def cmd_serve(a):
 
     emit(0, b"ready")                            # handshake banner
     loop.add_reader(fd, on_stdin)
+    chat.start()                                 # [chat] autoconnect
     try:
         loop.run()
     finally:
@@ -495,9 +1570,21 @@ def build_parser():
     sub.required = True
 
     p = sub.add_parser("accounts"); p.set_defaults(fn=cmd_accounts)
+    p = sub.add_parser("connect"); p.add_argument("account"); p.set_defaults(fn=cmd_connect)
+    p = sub.add_parser("disconnect"); p.add_argument("account"); p.set_defaults(fn=cmd_disconnect)
+    p = sub.add_parser("convs"); p.add_argument("account", nargs="?"); p.set_defaults(fn=cmd_convs)
+    p = sub.add_parser("join"); p.add_argument("account"); p.add_argument("target"); p.set_defaults(fn=cmd_join)
+    p = sub.add_parser("part"); p.add_argument("conv"); p.set_defaults(fn=cmd_part)
+    p = sub.add_parser("send"); p.add_argument("conv"); p.add_argument("text"); p.set_defaults(fn=cmd_send)
+    p = sub.add_parser("history"); p.add_argument("conv"); p.add_argument("--before")
+    p.add_argument("--limit", type=int, default=50); p.set_defaults(fn=cmd_history)
+    p = sub.add_parser("members"); p.add_argument("conv"); p.set_defaults(fn=cmd_members)
+    p = sub.add_parser("mark-read"); p.add_argument("conv"); p.add_argument("msgid", nargs="?")
+    p.set_defaults(fn=cmd_mark_read)
     p = sub.add_parser("events"); p.add_argument("--after", type=int); p.set_defaults(fn=cmd_events)
     p = sub.add_parser("ping"); p.set_defaults(fn=cmd_ping)
     p = sub.add_parser("serve"); p.set_defaults(fn=cmd_serve)
+    p = sub.add_parser("irc-tail"); p.add_argument("account"); p.set_defaults(fn=cmd_irc_tail)
     return ap
 
 
