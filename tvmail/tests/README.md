@@ -1,11 +1,12 @@
 # tvmail tests
 
-Six layers, no dependencies beyond a Python 3, bash and — for `e2e_tui` — a pty
+Seven layers, no dependencies beyond a Python 3, bash and — for `e2e_tui` — a pty
 (`e2e_regress` also wants [pyte](https://pypi.org/project/pyte/), and skips without it).
 
 | test | kind | what it covers |
 |---|---|---|
 | **`backend_unit`** (`test_backend.py`) | stdlib `unittest` | `tvmail-backend` logic: mbox parsing + flags, RFC2047 subjects, best-body / HTML fallback, `mbox_path` shorthands, `~/.mailrc` `folder`/`DEAD`/recursive `alias`/`group`, `_sweep_locks`, `delete` → trash + backup, `save-draft`, and the **`serve` frame protocol** (handshake, `list`/`show` over the pipe, blocked verbs, clean `quit`) |
+| **`chat_unit`** (`test_chat_backend.py`) | stdlib `unittest` | `tvchat-backend` (the chat co-process): `tvchat.conf` loading and its errors (the shipped example too), TAB/newline wire escaping, the event queue's sequence numbers and `--after`, the `selectors` loop and its timers on a fake clock, and the **`serve` frame protocol** (handshake even with a broken config, `accounts`/`events`, an unknown verb, several requests in one write, clean `quit` and EOF) - no network, no real account |
 | **`backend_pipe`** | `ctest` → `tvmail --selftest` | the C++ side: forks the `serve` co-process, handshakes, sends a framed request, then `spawnLogged` (the background-pull mechanism) |
 | **`e2e_tui`** (`e2e_tui.py`) | stdlib `pty` | drives the built `tvmail` in a real terminal: it launches and fills all three panes, `Tab` walks the active-pane marker `Folders → Messages → Message`, arrows/PgDn scroll the body, and `F3` pulls in the background (completion box appears, the blocking suspend path is never taken) |
 | **`e2e_regress`** (`e2e_regress.py`) | `pty` + pyte screen model | one case per squashed bug in [BUGS.md](../BUGS.md) (`-k 27` runs one): it reads the cells actually on screen, their columns and colours - newest message on open, Esc closes Help / Source / Parts / Address book, the delete prompt, filter and body scroll kept, compose hotkeys, UTF-8 / CJK columns with no gaps, wrap / `»` / tabs, Find and copy → paste, Help and menu text, every painted cell >= 3:1 contrast (themed colours 0-15 as Windows Terminal Dark+, 16-255 as xterm), and the unsaved-work prompts (Alt-X, header edits, a failed save, the source draft found by content, out of office against a fake ManageSieve server) |
@@ -17,6 +18,7 @@ Six layers, no dependencies beyond a Python 3, bash and — for `e2e_tui` — a 
 ```sh
 ./test.sh                    # build + ctest, every layer
 ./test.sh -R backend_unit    # one by name
+./test.sh -R chat_unit       # just the chat backend
 ./test.sh -LE mail_setup     # skip mail-setup's suites (~30-60 s)
 cd build && ctest -V         # verbose
 

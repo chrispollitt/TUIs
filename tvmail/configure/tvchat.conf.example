@@ -1,0 +1,43 @@
+# tvchat-backend configuration - the chat side of tvmail.
+#
+# Copy to  ~/.config/tvmail/tvchat.conf  and edit.  $TVCHAT_CONF points one
+# run at another file.  No file at all simply means no chat accounts.
+#
+# NO PASSWORDS HERE.  They are looked up like tvmail's own: ~/.netrc
+# (chmod 600), ~/.mu-tickets, or the environment.  The values below are
+# placeholders - pick your own nick, channel and address.
+
+[chat]
+# connect these accounts when tvmail starts (comma-separated section names)
+autoconnect = libera
+
+# One section per account, [account:NAME].  NAME is the account's id in the
+# UI and in conversation ids, so no '/', '\' or spaces in it.
+#   protocol = irc | deltachat      (required)
+#   display  = shown in titles      (default: NAME)
+
+[account:libera]
+protocol = irc
+display  = Libera
+host     = irc.libera.chat
+port     = 6697
+tls      = true
+# verify the server certificate (default true); for a LAN server with a
+# self-signed cert, point cafile at its .pem instead of turning this off
+verify   = true
+#cafile  = /etc/ssl/certs/my-ircd.pem
+nick     = yournick
+realname = Your Name
+# SASL account name; password from ~/.netrc:
+#     machine irc.libera.chat  login yournick  password ...
+sasl     = yournick
+channels = #tvmail-test
+
+[account:delta]
+protocol = deltachat
+display  = Delta Chat
+# a DEDICATED address: Delta Chat moves (and may delete) chat mail on the
+# server, which would confuse tvmail's view of an everyday inbox
+addr     = chat@example.org
+# password from ~/.netrc:  machine mail.example.org  login chat@example.org  password ...
+rpc_server = deltachat-rpc-server

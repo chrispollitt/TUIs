@@ -1,0 +1,517 @@
+#!/usr/bin/env python3
+
+"""tvchat-backend - chat helper for the tvmail Turbo Vision client.
+
+The chat counterpart of tvmail-backend: every live connection (IRC today,
+Delta Chat later) and all protocol work lives here, so the C++ front end only
+ever sees one small, protocol-neutral chat model.  It runs as a SEPARATE
+co-process from tvmail-backend, so a slow IMAP round trip never stalls chat.
+Stdlib only, Python >= 3.6.
+
+Configuration: ~/.config/tvmail/tvchat.conf ($TVCHAT_CONF overrides it for one
+run; see the shipped tvchat.conf.example).  One [account:NAME] section per
+account; NO PASSWORDS in that file - they come from ~/.netrc, ~/.mu-tickets or
+the environment, exactly as tvmail-backend looks them up.
+
+Sub-commands (all reply bodies are TAB-separated lines; a TAB, newline,
+carriage return or backslash inside a field is escaped as \\t \\n \\r \\\\):
+
+  accounts                  one line per account:
+                            id <TAB> protocol <TAB> state <TAB> display
+                            (state: disconnected, connecting, connected, error)
+  events [--after SEQ]      queued events, oldest first: seq <TAB> type <TAB> ...
+                            --after SEQ also forgets every event up to SEQ -
+                            the UI passes the last seq it applied, so nothing
+                            is ever applied twice.  Empty when nothing is queued.
+  ping                      print 'pong' - a liveness check
+  serve                     persistent mode: one shell-quoted request (an argv)
+                            per line on stdin, one framed reply per request:
+                                <status> <nbytes>\\n  then <nbytes> bytes
+                            A '0 5\\nready' banner is sent first.  'quit' (or
+                            EOF) closes every connection and exits, no reply.
+                            One selectors loop multiplexes stdin and every
+                            protocol socket - no threads.
+
+Exit / frame status: 0 ok, 1 user-facing error (the body says what to tell
+the user), 2 internal error (bad request, bug).
+"""
+
+import sys, os, io, argparse, configparser, heapq, selectors, shlex, time
+
+
+__version__ = "1.2.0"
+
+PROTOCOLS = ("irc", "deltachat")
+STATES = ("disconnected", "connecting", "connected", "error")
+
+# An event queue the UI never drains (no chat window open for a day) must
+# not grow without bound; the oldest events go first.  The UI re-requests
+# accounts/convs when it sees a gap, so losing very old events is harmless.
+EVENT_CAP = 10000
+
+
+class UserError(Exception):
+    """A failure the user should read (status 1), as opposed to a bug or a
+    malformed request (status 2)."""
+
+
+# --------------------------------------------------------------------------
+# Wire escaping.  Reply bodies are TAB-separated lines, so a field may not
+# hold a raw TAB or newline.  Backslash is escaped too, else a literal "\n"
+# typed into a chat could not be told from an escaped newline.
+# --------------------------------------------------------------------------
+_ESC = {"\\": "\\\\", "\t": "\\t", "\n": "\\n", "\r": "\\r"}
+_UNESC = {"\\": "\\", "t": "\t", "n": "\n", "r": "\r"}
+
+
+def esc(s):
+    s = "" if s is None else str(s)
+    return "".join(_ESC.get(ch, ch) for ch in s)
+
+
+def unesc(s):
+    out, i = [], 0
+    while i < len(s):
+        ch = s[i]
+        if ch == "\\" and i + 1 < len(s) and s[i + 1] in _UNESC:
+            out.append(_UNESC[s[i + 1]])
+            i += 2
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out)
+
+
+def line(*fields):
+    return "\t".join(esc(f) for f in fields) + "\n"
+
+
+# --------------------------------------------------------------------------
+# The shared chat model.  Both adapters map onto these; the UI only ever sees
+# them, through the TAB-separated lines above - nothing terminal-specific
+# (no colours, widths or escape codes) so a later web front end can reuse the
+# same verbs unchanged.
+# --------------------------------------------------------------------------
+class Account:
+    """One [account:NAME] section.  `opts` keeps the raw section so each
+    adapter reads the keys it understands; the model only needs these."""
+
+    def __init__(self, ident, protocol, display, opts):
+        self.id = ident
+        self.protocol = protocol
+        self.display = display
+        self.opts = opts
+        self.state = "disconnected"
+        self.detail = ""
+        self.convs = {}                  # conv id -> Conversation
+
+    def wire(self):
+        return line(self.id, self.protocol, self.state, self.display)
+
+
+class Contact:
+    """A person: display name kept apart from the protocol address (an IRC
+    nick, a Delta Chat email address)."""
+
+    def __init__(self, address, display=None):
+        self.address = address
+        self.display = display or address
+
+
+class Conversation:
+    """An IRC channel or query, or a Delta Chat chat.  kind: channel, direct,
+    group.  The id is globally unique - '<account>/<target>' - so one verb
+    argument names it without also naming the account."""
+
+    def __init__(self, account, target, kind, title=None):
+        self.account = account
+        self.target = target
+        self.id = "%s/%s" % (account.id, target)
+        self.kind = kind
+        self.title = title or target
+        self.unread = 0
+        self.topic = ""
+
+    def wire(self):
+        return line(self.id, self.kind, self.unread, self.title)
+
+
+class Message:
+    """flags: s self, n notice/system, a action (/me), e encrypted, r read."""
+
+    def __init__(self, msgid, conv, when, sender, text, flags=""):
+        self.id = msgid
+        self.conv = conv                 # conversation id
+        self.when = when                 # epoch seconds (float)
+        self.sender = sender             # Contact
+        self.text = text
+        self.flags = flags
+
+    def fields(self):
+        return (self.id, self.conv, utc_iso(self.when), self.sender.address,
+                self.sender.display, self.flags, self.text)
+
+
+def utc_iso(t):
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+
+
+class EventQueue:
+    """Normalized events with a monotonically increasing sequence number.
+
+    Numbering starts at the wall clock in milliseconds rather than at 1, so
+    the numbers keep climbing across a backend restart too: a UI that still
+    holds a seq from the backend it lost can never skip the new one's events
+    by passing a stale --after."""
+
+    def __init__(self, clock=time.time, cap=EVENT_CAP):
+        self.seq = int(clock() * 1000)
+        self.cap = cap
+        self.items = []                  # [(seq, fields tuple)], oldest first
+
+    def push(self, etype, *fields):
+        self.seq += 1
+        self.items.append((self.seq, (etype,) + tuple(fields)))
+        if len(self.items) > self.cap:
+            del self.items[:len(self.items) - self.cap]
+        return self.seq
+
+    def drain(self, after=None):
+        """Events newer than `after`, oldest first.  Passing `after` is the
+        UI's acknowledgement, so everything up to it is dropped for good."""
+        if after is not None:
+            self.items = [e for e in self.items if e[0] > after]
+        return list(self.items)
+
+    @staticmethod
+    def wire(ev):
+        seq, fields = ev
+        return line(seq, *fields)
+
+
+# --------------------------------------------------------------------------
+# The event loop: one selectors.DefaultSelector over stdin and every protocol
+# socket/pipe, plus a timer heap (keepalive PINGs, reconnect backoff).  The
+# clock is injectable so timer behaviour can be tested without sleeping.
+# --------------------------------------------------------------------------
+class Loop:
+    def __init__(self, clock=time.monotonic):
+        self.clock = clock
+        self.sel = selectors.DefaultSelector()
+        self.timers = []                 # heap of [when, n, fn, live]
+        self._n = 0
+        self.running = False
+
+    def add_reader(self, fileobj, fn):
+        """fn() is called whenever fileobj is readable."""
+        self.sel.register(fileobj, selectors.EVENT_READ, fn)
+
+    def remove_reader(self, fileobj):
+        try:
+            self.sel.unregister(fileobj)
+        except (KeyError, ValueError):
+            pass
+
+    def call_later(self, delay, fn):
+        """Run fn() after `delay` seconds.  Returns a handle for cancel()."""
+        self._n += 1
+        t = [self.clock() + delay, self._n, fn, True]
+        heapq.heappush(self.timers, t)
+        return t
+
+    @staticmethod
+    def cancel(handle):
+        if handle is not None:
+            handle[3] = False
+
+    def run_due(self):
+        """Fire every timer whose time has come; returns how many ran."""
+        ran = 0
+        now = self.clock()
+        while self.timers and self.timers[0][0] <= now:
+            t = heapq.heappop(self.timers)
+            if t[3]:
+                t[2]()
+                ran += 1
+        return ran
+
+    def _timeout(self):
+        while self.timers and not self.timers[0][3]:
+            heapq.heappop(self.timers)
+        if not self.timers:
+            return None
+        return max(0.0, self.timers[0][0] - self.clock())
+
+    def run(self):
+        self.running = True
+        while self.running:
+            for key, _ in self.sel.select(self._timeout()):
+                key.data()
+                if not self.running:
+                    break
+            self.run_due()
+
+    def stop(self):
+        self.running = False
+
+
+# --------------------------------------------------------------------------
+# Configuration:  ~/.config/tvmail/tvchat.conf  (or $TVCHAT_CONF)
+#
+#   [chat]           autoconnect = libera, delta   (section names, comma-separated)
+#   [account:NAME]   protocol = irc | deltachat,  display = (default: NAME)
+#                    ...plus the protocol's own keys (host, port, nick, addr ...)
+#
+# Passwords are NEVER in this file - see the module docstring.
+# --------------------------------------------------------------------------
+def _conf_path():
+    return os.environ.get("TVCHAT_CONF") or os.path.expanduser(
+        "~/.config/tvmail/tvchat.conf")
+
+
+def load_config(path=None):
+    """(accounts in file order, autoconnect ids).  A missing file is simply no
+    accounts; a malformed one is a UserError naming the file and the fault."""
+    path = path or _conf_path()
+    c = configparser.ConfigParser(interpolation=None)
+    try:
+        c.read(path, encoding="utf-8")
+    except configparser.Error as e:
+        raise UserError("%s: %s" % (path, str(e).splitlines()[0]))
+    accounts = []
+    for sect in c.sections():
+        if not sect.startswith("account:"):
+            continue
+        ident = sect[len("account:"):].strip()
+        if not ident or any(ch in ident for ch in "/\t\n \\"):
+            raise UserError("%s: [%s]: an account name may not be empty or "
+                            "hold '/', '\\' or whitespace" % (path, sect))
+        proto = c.get(sect, "protocol", fallback="").strip().lower()
+        if proto not in PROTOCOLS:
+            raise UserError("%s: [%s] protocol must be one of %s (got %r)"
+                            % (path, sect, ", ".join(PROTOCOLS), proto))
+        display = c.get(sect, "display", fallback="").strip() or ident
+        accounts.append(Account(ident, proto, display, dict(c.items(sect))))
+    ids = set(a.id for a in accounts)
+    auto = [x.strip() for x in c.get("chat", "autoconnect", fallback="").split(",")
+            if x.strip()]
+    for x in auto:
+        if x not in ids:
+            raise UserError("%s: [chat] autoconnect names %r, but there is no "
+                            "[account:%s] section" % (path, x, x))
+    return accounts, auto
+
+
+# --------------------------------------------------------------------------
+# The chat service: the accounts, the event queue and (from milestone 2) the
+# protocol adapters, behind the verbs the UI calls.  One instance per process.
+# --------------------------------------------------------------------------
+class Chat:
+    def __init__(self, loop=None, clock=time.time):
+        self.loop = loop or Loop()
+        self.events = EventQueue(clock)
+        # A broken tvchat.conf must not kill the co-process before its banner
+        # (tvmail would just see a dead backend); keep the complaint and give
+        # it, as a user-facing error, to every verb that needs the accounts.
+        self.conf_error = None
+        try:
+            self.accounts, self.autoconnect = load_config()
+        except UserError as e:
+            self.conf_error = e
+            self.accounts, self.autoconnect = [], []
+        self.by_id = dict((a.id, a) for a in self.accounts)
+
+    def check_config(self):
+        if self.conf_error is not None:
+            raise self.conf_error
+
+    def account(self, ident):
+        self.check_config()
+        a = self.by_id.get(ident)
+        if a is None:
+            raise UserError("no chat account %r - see tvchat.conf" % ident)
+        return a
+
+    def set_state(self, account, state, detail=""):
+        account.state, account.detail = state, detail
+        self.events.push("state", account.id, state, detail)
+
+    def close(self):
+        """Close every connection.  Nothing to close until the adapters land."""
+
+
+_CHAT = None
+
+
+def _chat():
+    global _CHAT
+    if _CHAT is None:
+        _CHAT = Chat()
+    return _CHAT
+
+
+def cmd_accounts(a):
+    chat = _chat()
+    chat.check_config()
+    for acct in chat.accounts:
+        sys.stdout.write(acct.wire())
+    return 0
+
+
+def cmd_events(a):
+    for ev in _chat().events.drain(a.after):
+        sys.stdout.write(EventQueue.wire(ev))
+    return 0
+
+
+def cmd_ping(a):
+    sys.stdout.write("pong\n")
+    return 0
+
+
+# --------------------------------------------------------------------------
+# serve: the persistent co-process tvmail talks to.  Same framing as
+# tvmail-backend serve, but stdin is one of several sources in the selectors
+# loop, so incoming chat traffic is read (and queued) while the UI is idle.
+# Every request is answered at once - anything slow (connecting) replies
+# immediately and reports progress as events - so a reply always beats the
+# UI's 8 s read timeout.
+# --------------------------------------------------------------------------
+class _CapStream:
+    """stdout stand-in while a verb runs: its output becomes the reply body."""
+
+    def __init__(self):
+        self.buffer = io.BytesIO()
+
+    def write(self, s):
+        self.buffer.write(s.encode("utf-8", "replace") if isinstance(s, str) else s)
+        return len(s)
+
+    def flush(self):
+        pass
+
+    def isatty(self):
+        return False
+
+
+_SERVE_BLOCKED = frozenset(("serve",))
+
+
+def dispatch(parser, argv):
+    """Run one request argv.  Returns (status:int, body:bytes)."""
+    if argv and argv[0] in _SERVE_BLOCKED:
+        return 2, ("tvchat-backend: '%s' is not available in serve mode\n"
+                   % argv[0]).encode("utf-8")
+    real = sys.stdout
+    cap = _CapStream()
+    sys.stdout = cap
+    try:
+        ns = parser.parse_args(argv)
+        return (ns.fn(ns) or 0), cap.buffer.getvalue()
+    except UserError as e:
+        return 1, (str(e) + "\n").encode("utf-8", "replace")
+    except SystemExit as e:                      # argparse: unknown verb &c
+        code = e.code
+        if isinstance(code, str):
+            cap.write(code if code.endswith("\n") else code + "\n")
+            return 2, cap.buffer.getvalue()
+        return (int(code) if code else 0), cap.buffer.getvalue()
+    except Exception as e:                       # keep the server alive
+        cap.write("tvchat-backend: %s: %s\n" % (type(e).__name__, e))
+        return 2, cap.buffer.getvalue()
+    finally:
+        sys.stdout = real
+
+
+class _ArgParser(argparse.ArgumentParser):
+    """argparse that says what went wrong in the reply body (serve mode has
+    stderr pointed at /dev/null) instead of printing usage to stderr."""
+
+    def error(self, message):
+        raise SystemExit("%s: %s" % (self.prog, message))
+
+
+def cmd_serve(a):
+    raw_out = getattr(sys.stdout, "buffer", sys.stdout)
+    try:                                         # stray output mustn't hit the TUI
+        sys.stderr = open(os.devnull, "w")
+    except OSError:
+        pass
+    parser = build_parser()
+    chat = _chat()
+    loop = chat.loop
+    fd = sys.stdin.fileno()
+    pending = [b""]
+
+    def emit(status, body):
+        raw_out.write(("%d %d\n" % (status, len(body))).encode("ascii") + body)
+        raw_out.flush()
+
+    def handle(text):
+        text = text.strip()
+        if not text:
+            return
+        if text in ("quit", "exit"):
+            loop.stop()
+            return
+        try:
+            argv = shlex.split(text)
+        except ValueError:
+            emit(2, b"tvchat-backend serve: unparseable request line\n")
+            return
+        try:
+            st, body = dispatch(parser, argv)
+        except Exception as e:
+            st, body = 2, ("tvchat-backend serve: %s\n" % e).encode("utf-8")
+        emit(st, body)
+
+    def on_stdin():
+        data = os.read(fd, 65536)
+        if not data:                             # parent closed the pipe
+            if pending[0]:
+                handle(pending[0].decode("utf-8", "replace"))
+            loop.stop()
+            return
+        pending[0] += data
+        while b"\n" in pending[0] and loop.running:
+            req, pending[0] = pending[0].split(b"\n", 1)
+            handle(req.decode("utf-8", "replace"))
+
+    emit(0, b"ready")                            # handshake banner
+    loop.add_reader(fd, on_stdin)
+    try:
+        loop.run()
+    finally:
+        loop.remove_reader(fd)
+        chat.close()
+    return 0
+
+
+def build_parser():
+    ap = _ArgParser(prog="tvchat-backend", add_help=True)
+    ap.add_argument("--version", action="version",
+                    version="tvchat-backend %s" % __version__)
+    sub = ap.add_subparsers(dest="cmd", parser_class=_ArgParser)
+    sub.required = True
+
+    p = sub.add_parser("accounts"); p.set_defaults(fn=cmd_accounts)
+    p = sub.add_parser("events"); p.add_argument("--after", type=int); p.set_defaults(fn=cmd_events)
+    p = sub.add_parser("ping"); p.set_defaults(fn=cmd_ping)
+    p = sub.add_parser("serve"); p.set_defaults(fn=cmd_serve)
+    return ap
+
+
+def main():
+    a = build_parser().parse_args(sys.argv[1:])
+    try:
+        sys.exit(a.fn(a))
+    except UserError as e:
+        sys.exit("tvchat-backend: %s" % e)
+    except BrokenPipeError:
+        sys.exit(0)
+    except KeyboardInterrupt:
+        sys.exit(130)
+
+
+if __name__ == "__main__":
+    main()

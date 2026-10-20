@@ -63,6 +63,8 @@ endif()
 # --- tests (ctest) -------------------------------------------------------
 # backend_unit : stdlib unittest over tvmail-backend (mbox parsing, delete,
 #                aliases, lock-sweep, serve framing) - no build needed
+# chat_unit    : stdlib unittest over tvchat-backend (config, event queue,
+#                wire escaping, selectors loop, serve framing) - no network
 # backend_pipe : `tvmail --selftest` - the C++ side forks the serve
 #                co-process, handshakes, round-trips a request, spawnLogged
 # e2e_tui      : drives the built tvmail in a pty (launch, panes, Tab, body
@@ -75,7 +77,10 @@ find_program(TVMAIL_PYTHON
 if(TVMAIL_PYTHON)
     add_test(NAME backend_unit
              COMMAND ${TVMAIL_PYTHON} -m unittest discover
-                     -s "${CMAKE_CURRENT_SOURCE_DIR}/tests" -p "test_*.py")
+                     -s "${CMAKE_CURRENT_SOURCE_DIR}/tests" -p "test_backend.py")
+    add_test(NAME chat_unit
+             COMMAND ${TVMAIL_PYTHON} -m unittest discover
+                     -s "${CMAKE_CURRENT_SOURCE_DIR}/tests" -p "test_chat_backend.py")
 endif()
 
 if(NOT WIN32)
@@ -114,11 +119,11 @@ endif()
 
 include(GNUInstallDirs)
 install(TARGETS tvmail RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-install(PROGRAMS backend/tvmail-backend DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(PROGRAMS backend/tvmail-backend backend/tvchat-backend DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES man/tvmail.1 man/tvmail-backend.1
         DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
 install(FILES README.md INSTALL.md HISTORY.md LICENSE AUTHORS WARRANTY
-              configure/tvmail.conf.example
+              configure/tvmail.conf.example configure/tvchat.conf.example
         DESTINATION ${CMAKE_INSTALL_DOCDIR})
 
 # --- tarballs (CPack) -------------------------------------------------------

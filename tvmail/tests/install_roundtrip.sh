@@ -19,6 +19,7 @@ P="$tmp/prefix"
 
 cmake --install "$build" --prefix "$P" >/dev/null || fail "cmake --install"
 [ -e "$P/bin/tvmail-backend" ] || fail "nothing installed"
+[ -x "$P/bin/tvchat-backend" ] || fail "tvchat-backend not installed"
 n=$(find "$P" -type f | wc -l)
 
 # a legacy pop-pull that a mail-pull wrapper still uses must be kept

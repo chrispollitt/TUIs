@@ -3,10 +3,10 @@
 # uninstall.sh - remove an installed tvmail (the reverse of install.sh / setup.sh).
 #
 # Looks in ~/.local and /usr/local (or just --prefix) for what
-# `cmake --install` put there: bin/tvmail[.exe], bin/tvmail-backend, the two
-# man pages and share/doc/tvmail/ - plus anything else build/install_manifest.txt
-# lists under that prefix.  Shows the list, asks, then removes it (with sudo
-# if the prefix isn't writable).
+# `cmake --install` put there: bin/tvmail[.exe], bin/tvmail-backend,
+# bin/tvchat-backend, the two man pages and share/doc/tvmail/ - plus anything
+# else build/install_manifest.txt lists under that prefix.  Shows the list,
+# asks, then removes it (with sudo if the prefix isn't writable).
 #
 # Also offered, never by default:
 #   * <prefix>/bin/pop-pull that tvmail itself installed before the mail setup
@@ -90,7 +90,7 @@ for P in "${PREFIXES[@]}"; do
   }
   # (on Cygwin "bin/tvmail" also "exists" when only tvmail.exe does)
   if [ -e "$P/bin/tvmail.exe" ]; then add "$P/bin/tvmail.exe"; else add "$P/bin/tvmail"; fi
-  for f in bin/tvmail-backend \
+  for f in bin/tvmail-backend bin/tvchat-backend \
            share/man/man1/tvmail.1 share/man/man1/tvmail-backend.1 \
            share/doc/tvmail; do
     add "$P/$f"
