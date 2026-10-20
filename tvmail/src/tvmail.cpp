@@ -45,6 +45,9 @@
 #define Uses_TCommandSet
 #define Uses_TStaticText
 #define Uses_TMemo
+#define Uses_TText
+#define Uses_TClipboard
+#define Uses_TFindDialogRec
 #include <tvision/tv.h>
 
 #include <string>
@@ -119,6 +122,7 @@ const ushort cmSortReverse = 2039;  // flip the current order
 const ushort cmClearFilter = 2040;  // drop the type-to-filter text
 const ushort cmFilterChanged = 2041; // broadcast: list view rebuilt (title refresh)
 const ushort cmOutOfOffice = 2042;  // File > Out of office... (Sieve vacation reply)
+const ushort cmToggleWrap = 2043;   // View > Wrap long lines (body pane / focused text window)
 
 // ------------------------------------------------------ editor dialogs -----
 // Wire up the standard Find / Replace / "search failed" dialogs the TEditor
@@ -922,6 +926,165 @@ static std::string lowered(std::string s)
     return s;
 }
 
+// ------------------------------------------------------ text by columns ----
+// Mail text is UTF-8, so a byte count is not a screen width: these measure
+// and cut by display columns (TText), keeping accented / wide characters
+// whole and the list columns lined up.
+
+// `s` cut or space-padded to exactly `w` columns
+static std::string fitCols(const std::string &s, int w)
+{
+    size_t len = 0, width = 0;
+    TText::scroll(s, w, False, len, width);
+    std::string r = s.substr(0, len);
+    if ((int)width < w)
+        r.append(w - width, ' ');
+    return r;
+}
+
+// Copy into a getText() buffer without splitting a UTF-8 character.
+static void putText(char *dest, const std::string &s, short maxLen)
+{
+    size_t n = std::min(s.size(), (size_t)std::max<short>(maxLen, 0));
+    if (n < s.size())
+        while (n > 0 && ((uchar)s[n] & 0xC0) == 0x80)
+            --n;
+    std::memcpy(dest, s.data(), n);
+    dest[n] = 0;
+}
+
+// Tabs to spaces, stops every 8 columns (counted in columns, not bytes).
+static std::string expandTabs(const std::string &s)
+{
+    if (s.find('\t') == std::string::npos)
+        return s;
+    std::string r;
+    size_t col = 0, i = 0;
+    while (i < s.size())
+    {
+        if (s[i] == '\t')
+        {
+            size_t n = 8 - col % 8;
+            r.append(n, ' ');
+            col += n;
+            ++i;
+            continue;
+        }
+        size_t j = i;
+        if (!TText::next(s, j, col))
+            break;
+        r.append(s, i, j - i);
+        i = j;
+    }
+    return r;
+}
+
+// A short note on the status line ("Copied 12 lines"), wiped by a timer.
+static TTimerId gFlashTimer = nullptr;
+static void flashStatus(const std::string &msg)
+{
+    if (!TProgram::statusLine || !TProgram::application)
+        return;
+    TColorAttr c(TColorBIOS(0x0F), TColorBIOS(0x01));
+    TDrawBuffer b;
+    ushort w = b.moveStr(0, " " + msg + " ", c);
+    TProgram::statusLine->writeLine(0, 0, w, 1, b);
+    TScreen::flushScreen();
+    if (gFlashTimer)
+        TProgram::application->killTimer(gFlashTimer);
+    gFlashTimer = TProgram::application->setTimer(2000);
+}
+
+// Put copied text on the desktop clipboard as well, for other programs.
+// Native Windows: tvision's Win32 call, which is instant.  Elsewhere
+// TClipboard::setText runs its helper in the foreground and freezes the UI
+// until it answers (under Cygwin's pty: the full 1.5 s timeout, and the text
+// never arrived), so do it without waiting:
+//  - an OSC 52 escape to the terminal - what reaches the local clipboard
+//    over ssh (Windows Terminal, kitty, iTerm2, xterm with it enabled...);
+//    terminals without it ignore it, as they did when tvision sent it;
+//  - a detached shell for the machine's own clipboard: Cygwin's
+//    /dev/clipboard, Wayland, X11, macOS, WSL.  Best effort and silent.
+// tvmail's own clipboard (Shift-Ins in a compose window) has it either way.
+static void systemClipboard(const std::string &text)
+{
+#ifdef _WIN32
+    TClipboard::setText(text);
+#else
+    static const char b64[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string osc = "\x1b]52;c;";
+    for (size_t i = 0; i < text.size(); i += 3)
+    {
+        unsigned v = (unsigned char)text[i] << 16;
+        if (i + 1 < text.size())
+            v |= (unsigned char)text[i + 1] << 8;
+        if (i + 2 < text.size())
+            v |= (unsigned char)text[i + 2];
+        osc += b64[(v >> 18) & 63];
+        osc += b64[(v >> 12) & 63];
+        osc += i + 1 < text.size() ? b64[(v >> 6) & 63] : '=';
+        osc += i + 2 < text.size() ? b64[v & 63] : '=';
+    }
+    osc += '\x07';
+    int tty = ::isatty(1) ? 1 : ::open("/dev/tty", O_WRONLY);
+    if (tty >= 0)
+    {
+        for (size_t done = 0; done < osc.size();)
+        {
+            ssize_t w = ::write(tty, osc.data() + done, osc.size() - done);
+            if (w < 0 && errno == EINTR)
+                continue;
+            if (w <= 0)
+                break;
+            done += (size_t)w;
+        }
+        if (tty != 1)
+            ::close(tty);
+    }
+
+    std::string f = writeTemp(text, ".clip");
+    std::string sc = std::string(kPreamble) +
+                     "f=" + shq(f) + "\n"
+                     // Cygwin / WSL: clip.exe takes BOM-less UTF-16 (a BOM would
+                     // land in the clipboard); Windows programs want CRLF
+                     "if command -v clip.exe >/dev/null && command -v iconv >/dev/null; then\n"
+                     "  sed 's/$/\\r/' \"$f\" | iconv -f UTF-8 -t UTF-16LE | clip.exe\n"
+                     "elif [ -w /dev/clipboard ]; then cat \"$f\" > /dev/clipboard\n"
+                     "elif [ -n \"$WAYLAND_DISPLAY\" ] && command -v wl-copy >/dev/null; then wl-copy < \"$f\"\n"
+                     "elif [ -n \"$DISPLAY\" ] && command -v xclip >/dev/null; then xclip -in -selection clipboard < \"$f\"\n"
+                     "elif [ -n \"$DISPLAY\" ] && command -v xsel >/dev/null; then xsel --input --clipboard < \"$f\"\n"
+                     "elif command -v pbcopy >/dev/null; then pbcopy < \"$f\"\n"
+                     "fi\n"
+                     "rm -f \"$f\"\n";
+    pid_t p = ::fork();
+    if (p == 0)
+    {
+        if (::fork() == 0) // the grandchild does it, so nobody need reap it
+        {
+            ::setsid();
+            int n = ::open("/dev/null", O_RDWR);
+            if (n >= 0)
+            {
+                ::dup2(n, 0);
+                ::dup2(n, 1);
+                ::dup2(n, 2);
+                if (n > 2)
+                    ::close(n);
+            }
+            ::execl(TVMAIL_SH, TVMAIL_SH, "-c", sc.c_str(), (char *)nullptr);
+        }
+        ::_exit(0);
+    }
+    if (p > 0)
+        while (::waitpid(p, nullptr, 0) < 0 && errno == EINTR)
+        {
+        }
+    else
+        ::remove(f.c_str());
+#endif
+}
+
 // Rebuild gRows from gAll: apply the type-to-filter text, then the sort.
 static void applyView()
 {
@@ -1102,8 +1265,7 @@ public:
             n = gTotal[item];
         if (n > 0)
             label += " (" + std::to_string(n) + ")";
-        std::strncpy(dest, label.c_str(), maxLen);
-        dest[maxLen] = 0;
+        putText(dest, label, maxLen);
     }
     void focusItem(short item) override
     {
@@ -1152,11 +1314,9 @@ public:
             return;
         }
         const MsgRow &r = gRows[item];
-        char line[600];
-        std::snprintf(line, sizeof line, "%c %-16.16s %-20.20s %s",
-                      r.flag, r.date.c_str(), r.from.c_str(), r.subj.c_str());
-        std::strncpy(dest, line, maxLen);
-        dest[maxLen] = 0;
+        putText(dest, std::string(1, r.flag) + " " + fitCols(r.date, 16) + " " +
+                          fitCols(r.from, 20) + " " + r.subj,
+                maxLen);
     }
     void focusItem(short item) override
     {
@@ -1262,109 +1422,476 @@ public:
     }
 };
 
-class TContentPane : public TScroller
+// ------------------------------------------------------- mail text view ----
+// Read-only text for the body pane and the Source / Help / Purge-preview
+// windows.  Lines are measured in screen columns (UTF-8 safe, tabs
+// expanded) and can be word-wrapped to the view width (View > Wrap long
+// lines); unwrapped, a line that runs past the edge ends in a ">>" mark.
+// Edit > Find / Find again search the text.  Shift+arrows / Shift+PgUp/PgDn
+// or a mouse drag select whole lines; Edit > Copy (Ctrl-Ins) puts them on
+// the clipboard - the whole text when nothing is selected.  Esc drops the
+// selection.
+static bool gWrap = true; // the body pane's wrap setting
+
+class TMailText : public TScroller
 {
-    std::vector<std::string> lines;
+    struct Seg // one screen row: a piece of source line `line`
+    {
+        int line;
+        size_t off, len;
+        bool cont; // continues the row above (a wrapped line)
+    };
+    std::vector<std::string> src; // tab-expanded source lines
+    std::vector<int> srcWidth;    // their widths in columns
+    std::vector<Seg> segs;
+    bool wrap;
+    int selA = -1, selB = -1; // selected rows: anchor, moving end
+    int hlLine = -1;          // last Find match, in source coordinates
+    size_t hlOff = 0, hlLen = 0;
+
+    int dx() const { return wrap ? 0 : delta.x; }
+    int topLine() const
+    {
+        return delta.y >= 0 && delta.y < (int)segs.size() ? segs[delta.y].line : 0;
+    }
+
+    // Rebuild the screen rows from src; keepLine = the source line to show
+    // at the top afterwards (-1: leave the scroll position to the caller).
+    void layout(int keepLine)
+    {
+        segs.clear();
+        selA = selB = -1;
+        int W = size.x > 0 ? size.x : 1, maxW = 1;
+        for (int i = 0; i < (int)src.size(); ++i)
+        {
+            const std::string &s = src[i];
+            maxW = std::max(maxW, srcWidth[i]);
+            if (!wrap || srcWidth[i] <= W)
+            {
+                segs.push_back({i, 0, s.size(), false});
+                continue;
+            }
+            size_t pos = 0;
+            bool cont = false;
+            while (pos < s.size())
+            {
+                TStringView rest(s.data() + pos, s.size() - pos);
+                size_t len = TText::scroll(rest, W, False);
+                if (len == 0) // one character wider than the view
+                    len = std::max<size_t>(1, TText::next(rest));
+                if (pos + len < s.size())
+                {
+                    if (s[pos + len] == ' ')
+                        ++len; // break on the space: it ends this row
+                    else
+                    {
+                        size_t sp = s.rfind(' ', pos + len - 1);
+                        if (sp != std::string::npos && sp > pos)
+                            len = sp + 1 - pos; // whole words only
+                    }
+                }
+                segs.push_back({i, pos, len, cont});
+                pos += len;
+                cont = true;
+            }
+        }
+        if (segs.empty())
+            segs.push_back({0, 0, 0, false});
+        setLimit(wrap ? W : maxW + 1, (int)segs.size());
+        if (keepLine >= 0)
+            for (size_t r = 0; r < segs.size(); ++r)
+                if (segs[r].line >= keepLine)
+                {
+                    scrollTo(0, (int)r);
+                    break;
+                }
+    }
+
+    int rowOf(int line, size_t off) const
+    {
+        int row = 0;
+        for (size_t r = 0; r < segs.size(); ++r)
+            if (segs[r].line == line && segs[r].off <= off)
+                row = (int)r;
+        return row;
+    }
+
+    // Move the selection's free end to `row` and keep it on screen.
+    void extendTo(int row)
+    {
+        row = std::max(0, std::min(row, (int)segs.size() - 1));
+        if (selA < 0)
+            selA = row;
+        selB = row;
+        if (row < delta.y)
+            scrollTo(delta.x, row);
+        else if (row >= delta.y + size.y)
+            scrollTo(delta.x, row - size.y + 1);
+        drawView();
+    }
+
+    void trackMouse(TEvent &e)
+    {
+        if (!(state & sfFocused))
+            select();
+        bool extend = (e.mouse.controlKeyState & kbShift) && selA >= 0;
+        int anchor = -1;
+        bool moved = false;
+        do
+        {
+            TPoint p = makeLocal(e.mouse.where);
+            if (p.y < 0)
+                scrollTo(delta.x, delta.y - 1);
+            else if (p.y >= size.y)
+                scrollTo(delta.x, delta.y + 1);
+            int row = delta.y + std::max(0, std::min<int>(p.y, size.y - 1));
+            row = std::max(0, std::min(row, (int)segs.size() - 1));
+            if (anchor < 0)
+                anchor = extend ? selA : row;
+            if (row != anchor)
+                moved = true;
+            if (moved || extend)
+            {
+                selA = anchor;
+                selB = row;
+                drawView();
+            }
+        } while (mouseEvent(e, evMouseMove | evMouseAuto));
+        if (!moved && !extend && selA >= 0)
+        {
+            selA = selB = -1; // a plain click drops the selection
+            drawView();
+        }
+    }
+
+    void copy()
+    {
+        int a = selA, b = selB;
+        if (a < 0)
+        {
+            a = 0;
+            b = (int)segs.size() - 1;
+        }
+        if (a > b)
+            std::swap(a, b);
+        std::string out;
+        for (int r = a; r <= b; ++r)
+        {
+            const Seg &g = segs[r];
+            if (r > a && !g.cont)
+                out += '\n';
+            out.append(src[g.line], g.off, g.len);
+        }
+        out += '\n';
+        // tvmail's own clipboard: what Shift-Ins pastes into a compose window
+        if (TEditor::clipboard && out.size() < TEditor::clipboard->bufSize)
+            TEditor::clipboard->insertText(out.data(), (uint)out.size(), True);
+        systemClipboard(out); // and the desktop's, for other programs
+        int n = 0;
+        for (int r = a; r <= b; ++r)
+            n += !segs[r].cont;
+        flashStatus(selA < 0 ? "Copied the whole text (" + std::to_string(n) + " lines)"
+                             : "Copied " + std::to_string(n) + (n == 1 ? " line" : " lines"));
+    }
+
+    static bool isWordChar(char c)
+    {
+        return std::isalnum((unsigned char)c) || c == '_' || (c & 0x80);
+    }
+
+    // Edit > Find (ask) / Find again (reuse TEditor's last search, which
+    // the compose editor shares).  Searches on from the last match, or from
+    // the top of the view, and wraps around to the start once.
+    void find(bool ask)
+    {
+        if (ask || !*TEditor::findStr)
+        {
+            TFindDialogRec rec(TEditor::findStr, TEditor::editorFlags);
+            if (TEditor::editorDialog(edFind, &rec) == cmCancel)
+                return;
+            std::strcpy(TEditor::findStr, rec.find);
+            TEditor::editorFlags = rec.options & ~efDoReplace;
+        }
+        std::string pat = TEditor::findStr;
+        if (pat.empty() || src.empty())
+            return;
+        bool cs = TEditor::editorFlags & efCaseSensitive;
+        bool ww = TEditor::editorFlags & efWholeWordsOnly;
+        if (!cs)
+            pat = lowered(pat);
+
+        int n = (int)src.size(), start = hlLine >= 0 ? hlLine : topLine();
+        size_t from = hlLine >= 0 ? hlOff + 1 : 0;
+        for (int k = 0; k <= n; ++k)
+        {
+            int L = (start + k) % n;
+            std::string s = cs ? src[L] : lowered(src[L]);
+            size_t p = (k == 0) ? from : 0;
+            while ((p = s.find(pat, p)) != std::string::npos)
+            {
+                if (k == n && p >= from)
+                    break; // back where we began
+                bool okWord = !ww || ((p == 0 || !isWordChar(s[p - 1])) &&
+                                      (p + pat.size() >= s.size() || !isWordChar(s[p + pat.size()])));
+                if (okWord)
+                {
+                    hlLine = L;
+                    hlOff = p;
+                    hlLen = pat.size();
+                    int row = rowOf(L, p), x = delta.x;
+                    if (!wrap)
+                    {
+                        int col = (int)TText::width(TStringView(src[L].data(), p));
+                        if (col < delta.x || col + (int)hlLen > delta.x + size.x)
+                            x = std::max(0, col - size.x / 3);
+                    }
+                    int y = delta.y;
+                    if (row < delta.y || row >= delta.y + size.y)
+                        y = std::max(0, row - size.y / 3);
+                    scrollTo(x, y);
+                    drawView();
+                    return;
+                }
+                ++p;
+            }
+        }
+        TEditor::editorDialog(edSearchFailed);
+    }
+
+    bool keyDown(const KeyDownEvent &k)
+    {
+        int page = size.y > 1 ? size.y - 1 : 1;
+        ushort code = k.keyCode;
+        if ((k.controlKeyState & kbShift) &&
+            (code == kbUp || code == kbDown || code == kbPgUp || code == kbPgDn))
+        {
+            bool up = code == kbUp || code == kbPgUp;
+            if (selA < 0) // start at the edge of the view you move away from
+                extendTo(up ? delta.y + size.y - 1 : delta.y);
+            else
+                extendTo(selB + (code == kbUp ? -1 : code == kbDown ? 1 : up ? -page : page));
+            return true;
+        }
+        if (code == kbEsc && selA >= 0)
+        {
+            selA = selB = -1;
+            drawView();
+            return true;
+        }
+        int nx = delta.x, ny = delta.y;
+        switch (code)
+        {
+        case kbUp:
+            ny -= 1;
+            break;
+        case kbDown:
+            ny += 1;
+            break;
+        case kbLeft:
+            nx -= 1;
+            break;
+        case kbRight:
+            nx += 1;
+            break;
+        case kbPgUp:
+            ny -= page;
+            break;
+        case kbPgDn:
+            ny += page;
+            break;
+        case kbHome:
+            nx = 0;
+            break;
+        case kbEnd:
+            ny = limit.y;
+            break; // scrollTo() clamps
+        case kbCtrlPgUp:
+            ny = 0;
+            break;
+        case kbCtrlPgDn:
+            ny = limit.y;
+            break;
+        case kbEnter:
+            ny += 1;
+            break; // like a pager
+        default:
+            if (k.charScan.charCode == ' ')
+                ny += page;
+            else
+                return false;
+        }
+        scrollTo(nx, ny);
+        return true;
+    }
+
+protected:
+    virtual void wrapChanged(bool) {}
 
 public:
-    TContentPane(const TRect &b, TScrollBar *h, TScrollBar *v) : TScroller(b, h, v)
+    TMailText(const TRect &b, TScrollBar *h, TScrollBar *v,
+              std::vector<std::string> ls, bool wrapLines)
+        : TScroller(b, h, v), wrap(wrapLines)
     {
-        lines.push_back(std::string());
-        setLimit(1, 1);
+        options |= ofFirstClick; // the first click can start a selection
+        setLines(std::move(ls));
     }
+
     void setLines(std::vector<std::string> ls)
     {
-        lines = std::move(ls);
-        if (lines.empty())
-            lines.push_back(std::string());
-        size_t w = 1;
-        for (auto &l : lines)
-            w = std::max(w, l.size());
-        setLimit((int)w + 1, (int)lines.size());
+        src.clear();
+        srcWidth.clear();
+        for (auto &l : ls)
+        {
+            src.push_back(expandTabs(l));
+            srcWidth.push_back((int)TText::width(src.back()));
+        }
+        if (src.empty())
+        {
+            src.push_back(std::string());
+            srcWidth.push_back(0);
+        }
+        hlLine = -1;
+        layout(-1);
         scrollTo(0, 0);
         drawView();
     }
+
+    void setWrap(bool w)
+    {
+        if (w == wrap)
+            return;
+        int top = topLine();
+        wrap = w;
+        scrollTo(0, delta.y);
+        layout(top);
+        drawView();
+    }
+
+    void changeBounds(const TRect &bounds) override
+    {
+        int top = topLine();
+        TScroller::changeBounds(bounds);
+        if (wrap)
+        {
+            layout(top);
+            drawView();
+        }
+    }
+
     void draw() override
     {
-        TColorAttr c = cNorm();
+        TColorAttr norm = getColor(1);
+        TColorAttr selc = cSel();
+        TColorAttr match(TColorBIOS(0x0F), TColorBIOS(0x01)); // white on blue
+        int x0 = dx();
+        int s0 = std::min(selA, selB), s1 = std::max(selA, selB);
         for (short y = 0; y < size.y; ++y)
         {
+            int row = delta.y + y;
+            bool inSel = selA >= 0 && row >= s0 && row <= s1;
+            TColorAttr c = inSel ? selc : norm;
             TDrawBuffer b;
             b.moveChar(0, ' ', c, size.x);
-            int li = delta.y + y;
-            if (li >= 0 && li < (int)lines.size())
+            if (row >= 0 && row < (int)segs.size())
             {
-                const std::string &s = lines[li];
-                if (delta.x < (int)s.size())
-                    b.moveStr(0, s.c_str() + delta.x, c);
+                const Seg &g = segs[row];
+                const std::string &s = src[g.line];
+                b.moveStr(0, TStringView(s.data() + g.off, g.len), c, size.x, x0);
+                if (g.line == hlLine)
+                {
+                    size_t a = std::max(hlOff, g.off), e = std::min(hlOff + hlLen, g.off + g.len);
+                    if (a < e)
+                    {
+                        int c0 = (int)TText::width(TStringView(s.data() + g.off, a - g.off)) - x0;
+                        int cw = (int)TText::width(TStringView(s.data() + a, e - a));
+                        for (int x = std::max(0, c0); x < c0 + cw && x < size.x; ++x)
+                            b.putAttribute(x, match);
+                    }
+                }
+                if (!wrap && size.x > 2)
+                {
+                    TColorAttr m(TColorBIOS(0x0F), inSel ? TColorBIOS(0x0B) : TColorBIOS(0x03));
+                    if (srcWidth[g.line] > x0 + size.x)
+                        b.moveStr(size.x - 1, "\xC2\xBB", m); // >> more to the right
+                    if (x0 > 0 && srcWidth[g.line] > 0)
+                        b.moveStr(0, "\xC2\xAB", m); // << more to the left
+                }
             }
             writeLine(0, y, size.x, 1, b);
         }
     }
-    // A plain TScroller ignores the keyboard (scrolling normally comes from a
-    // focused scrollbar, which we don't have).  Drive it here so arrows /
-    // PgUp / PgDn / Home / End / Space / Enter scroll the body when this pane
-    // has focus.
+
     void handleEvent(TEvent &e) override
     {
-        if (e.what == evKeyDown && (state & sfFocused))
+        if (e.what == evMouseDown && (e.mouse.buttons & mbLeftButton))
         {
-            int page = size.y > 1 ? size.y - 1 : 1;
-            int nx = delta.x, ny = delta.y;
-            bool mine = true;
-            switch (e.keyDown.keyCode)
+            trackMouse(e);
+            clearEvent(e);
+            return;
+        }
+        if (e.what == evKeyDown && (state & sfFocused) && keyDown(e.keyDown))
+        {
+            clearEvent(e);
+            return;
+        }
+        if (e.what == evCommand && (state & sfFocused))
+        {
+            switch (e.message.command)
             {
-            case kbUp:
-                ny -= 1;
-                break;
-            case kbDown:
-                ny += 1;
-                break;
-            case kbLeft:
-                nx -= 1;
-                break;
-            case kbRight:
-                nx += 1;
-                break;
-            case kbPgUp:
-                ny -= page;
-                break;
-            case kbPgDn:
-                ny += page;
-                break;
-            case kbHome:
-                nx = 0;
-                break;
-            case kbEnd:
-                ny = limit.y;
-                break; // scrollTo() clamps
-            case kbCtrlPgUp:
-                ny = 0;
-                break;
-            case kbCtrlPgDn:
-                ny = limit.y;
-                break;
-            case kbEnter:
-                ny += 1;
-                break; // like a pager
-            default:
-                if (e.keyDown.charScan.charCode == ' ')
-                    ny += page;
-                else
-                    mine = false;
-            }
-            if (mine)
-            {
-                scrollTo(nx, ny);
+            case cmCopy:
+                copy();
+                clearEvent(e);
+                return;
+            case cmFind:
+                find(true);
+                clearEvent(e);
+                return;
+            case cmSearchAgain:
+                find(false);
+                clearEvent(e);
+                return;
+            case cmToggleWrap:
+                setWrap(!wrap);
+                wrapChanged(wrap);
                 clearEvent(e);
                 return;
             }
         }
         TScroller::handleEvent(e);
     }
+
+    // Copy / Find / Find again are live while this is the current view of
+    // the active window.  Keyed on sfActive + sfSelected like TEditor, not
+    // sfFocused: opening a menu takes the focus, and the items would grey
+    // out just as the menu draws them.
     void setState(ushort aState, Boolean enable) override
     {
         TScroller::setState(aState, enable);
+        if (aState & (sfActive | sfSelected))
+        {
+            TCommandSet cs;
+            cs.enableCmd(cmCopy);
+            cs.enableCmd(cmFind);
+            cs.enableCmd(cmSearchAgain);
+            if ((state & sfActive) && (state & sfSelected))
+                enableCommands(cs);
+            else
+                disableCommands(cs);
+        }
+    }
+};
+
+class TContentPane : public TMailText
+{
+protected:
+    void wrapChanged(bool w) override { gWrap = w; }
+
+public:
+    TContentPane(const TRect &b, TScrollBar *h, TScrollBar *v)
+        : TMailText(b, h, v, {std::string()}, gWrap) {}
+    void setState(ushort aState, Boolean enable) override
+    {
+        TMailText::setState(aState, enable);
         if (enable && (aState & sfFocused) && owner)
             message(owner, evBroadcast, cmPaneFocused, this);
     }
@@ -1711,19 +2238,15 @@ public:
 };
 
 // --------------------------------------------------------- message viewer ---
-class TTextView : public TScroller
+// Source / Help / Purge preview: a TMailText that grows with its window.
+class TTextView : public TMailText
 {
-    std::vector<std::string> lines;
-
 public:
-    TTextView(const TRect &b, TScrollBar *h, TScrollBar *v, std::vector<std::string> ls)
-        : TScroller(b, h, v), lines(std::move(ls))
+    TTextView(const TRect &b, TScrollBar *h, TScrollBar *v,
+              std::vector<std::string> ls, bool wrapLines = false)
+        : TMailText(b, h, v, std::move(ls), wrapLines)
     {
         growMode = gfGrowHiX | gfGrowHiY;
-        size_t w = 1;
-        for (auto &l : lines)
-            w = std::max(w, l.size());
-        setLimit((int)w + 1, (int)lines.size());
     }
 
     TColorAttr mapColor(uchar index) override
@@ -1737,30 +2260,13 @@ public:
         }
         return TView::mapColor(index);
     }
-
-    void draw() override
-    {
-        TColorAttr c = getColor(1);
-        for (short y = 0; y < size.y; ++y)
-        {
-            TDrawBuffer b;
-            b.moveChar(0, ' ', c, size.x);
-            int li = delta.y + y;
-            if (li >= 0 && li < (int)lines.size())
-            {
-                const std::string &s = lines[li];
-                if (delta.x < (int)s.size())
-                    b.moveStr(0, s.c_str() + delta.x, c);
-            }
-            writeLine(0, y, size.x, 1, b);
-        }
-    }
 };
 
 class TMailViewWindow : public TWindow
 {
 public:
-    TMailViewWindow(const TRect &b, const char *title, std::vector<std::string> lines)
+    TMailViewWindow(const TRect &b, const char *title, std::vector<std::string> lines,
+                    bool wrapLines = false)
         : TWindowInit(&TMailViewWindow::initFrame),
           TWindow(b, title, wnNoNumber)
     {
@@ -1770,7 +2276,7 @@ public:
         TScrollBar *h = standardScrollBar(sbHorizontal | sbHandleKeyboard);
         TRect r = getExtent();
         r.grow(-1, -1);
-        insert(new TTextView(r, h, v, std::move(lines)));
+        insert(new TTextView(r, h, v, std::move(lines), wrapLines));
     }
 
     TColorAttr mapColor(uchar index) override
@@ -2255,11 +2761,7 @@ public:
             dest[0] = 0;
             return;
         }
-        char line[600];
-        std::snprintf(line, sizeof line, "%-14.14s  %s",
-                      rows[item].first.c_str(), rows[item].second.c_str());
-        std::strncpy(dest, line, maxLen);
-        dest[maxLen] = 0;
+        putText(dest, fitCols(rows[item].first, 14) + "  " + rows[item].second, maxLen);
     }
     void selectItem(short i) override
     {
@@ -2379,12 +2881,11 @@ public:
             dest[0] = 0;
             return;
         }
-        char line[600];
-        std::snprintf(line, sizeof line, "%-4s %-28.28s %8s bytes  %s",
+        char line[64]; // number, type and size are ASCII; the name may not be
+        std::snprintf(line, sizeof line, "%-4s %-28.28s %8s bytes  ",
                       rows[item].no.c_str(), rows[item].type.c_str(),
-                      rows[item].bytes.c_str(), rows[item].name.c_str());
-        std::strncpy(dest, line, maxLen);
-        dest[maxLen] = 0;
+                      rows[item].bytes.c_str());
+        putText(dest, line + rows[item].name, maxLen);
     }
     void selectItem(short i) override
     {
@@ -2607,6 +3108,14 @@ static const char *kHelpText =
     "  F3       local: pull new mail (mail-pull)  .  remote: file tagged spam\n"
     "  Message > View source shows the raw RFC822 message.\n"
     "  File > Save message as... writes it to a .eml file.\n"
+    "  Long lines wrap at the pane edge; View > Wrap long lines turns that off\n"
+    "  (then a line cut off at the edge ends in >>, and Left / Right scroll).\n"
+    "\n"
+    "FIND AND COPY   (message body, View source, Help)\n"
+    "  Edit > Find... / Find again search the text you are reading.\n"
+    "  Shift+Up / Down / PgUp / PgDn, or a mouse drag, select whole lines;\n"
+    "  Edit > Copy (Ctrl-Ins) copies them - the whole text if none are selected.\n"
+    "  Shift-Ins pastes them into a compose window.  Esc drops the selection.\n"
     "\n"
     "READ AND UNREAD\n"
     "  Arrowing through the list only previews a message: it stays unread (N).\n"
@@ -2827,6 +3336,7 @@ TMenuBar *TVMailApp::initMenuBar(TRect r)
                             *new TMenuItem("~U~nread first", cmSortUnread, kbNoKey, hcNoContext) +
                             *new TMenuItem("~R~everse order", cmSortReverse, kbNoKey, hcNoContext) +
                             newLine() +
+                            *new TMenuItem("~W~rap long lines", cmToggleWrap, kbNoKey, hcNoContext) +
                             *new TMenuItem("~C~lear filter", cmClearFilter, kbNoKey, hcNoContext, "Esc") +
                             *new TSubMenu("~W~indow", kbAltW) +
                             *new TMenuItem("~N~ext", cmNext, kbF6, hcNoContext, "F6") +
@@ -3041,8 +3551,7 @@ public:
             dest[0] = 0;
             return;
         }
-        std::strncpy(dest, (*items)[item].title.c_str(), maxLen);
-        dest[maxLen] = 0;
+        putText(dest, (*items)[item].title, maxLen);
     }
     void selectItem(short) override { message(owner, evCommand, cmOK, this); }
     void handleEvent(TEvent &e) override
@@ -3439,7 +3948,7 @@ void TVMailApp::purgeDialog()
     std::string preview = shCapture(cmd + " -n 2>&1");
     TRect pr = deskTop->getExtent();
     pr.grow(-6, -3);
-    deskTop->insert(new TMailViewWindow(pr, "Purge preview", splitLines(preview)));
+    deskTop->insert(new TMailViewWindow(pr, "Purge preview", splitLines(preview), /*wrap=*/true));
 
     int n = -1;
     {
@@ -3582,6 +4091,15 @@ void TVMailApp::reload()
 void TVMailApp::handleEvent(TEvent &e)
 {
     TApplication::handleEvent(e);
+    if (e.what == evBroadcast && e.message.command == cmTimerExpired &&
+        gFlashTimer && e.message.infoPtr == gFlashTimer)
+    {
+        gFlashTimer = nullptr; // flashStatus() note is up: back to the F-key hints
+        if (statusLine)
+            statusLine->drawView();
+        clearEvent(e);
+        return;
+    }
     if (e.what != evCommand)
         return;
     bool handled = true;
@@ -3645,6 +4163,11 @@ void TVMailApp::handleEvent(TEvent &e)
         gSortRev = !gSortRev;
         if (mainWin)
             mainWin->viewChanged(false);
+        break;
+    case cmToggleWrap: // no text window has focus: it is the body pane's setting
+        gWrap = !gWrap;
+        if (mainWin && mainWin->contentPane)
+            mainWin->contentPane->setWrap(gWrap);
         break;
     case cmClearFilter:
         gFilter.clear();

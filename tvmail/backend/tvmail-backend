@@ -280,8 +280,25 @@ def _rcpts(msg, headers):
     return out
 
 
+def _hraw(msg, name):
+    """Header `name` as text ("" if absent), RFC 2047 words still encoded.
+    Raw 8-bit (UTF-8) headers - common despite RFC 5322 - come back from the
+    compat32 parser surrogate-escaped, and msg.get() hands back a Header that
+    turns them into U+FFFD (and trips str-only code such as _clean), so read
+    the raw value and recover the bytes as UTF-8."""
+    for k, v in msg.raw_items():
+        if k.lower() == name.lower():
+            if not isinstance(v, str):
+                return str(v)
+            try:
+                return v.encode("ascii", "surrogateescape").decode("utf-8", "replace")
+            except UnicodeError:
+                return v
+    return ""
+
+
 def _hdr(msg, name, default=""):
-    v = msg.get(name)
+    v = _hraw(msg, name)
     if not v:
         return default
     try:
@@ -299,7 +316,14 @@ def _clean(s, maxlen=0):
 
 
 def _short_from(raw):
+    """The display name (RFC 2047-decoded) or bare address of a From value."""
+    raw = str(raw or "")
     name, addr = email.utils.parseaddr(raw)
+    if name:
+        try:
+            name = str(make_header(decode_header(name)))
+        except Exception:
+            pass
     return _clean(name or addr or raw)
 
 
@@ -699,7 +723,7 @@ def _imap_list(folder):
             str(i),
             "." if "\\Seen" in fl else "N",
             _short_date(msg.get("Date", "")),
-            _clean(_short_from(msg.get("From", "")), 28),
+            _clean(_short_from(_hraw(msg, "From")), 28),
             _clean(_hdr(msg, "Subject", "(no subject)"), 200),
         )))
 
@@ -845,7 +869,7 @@ def cmd_list(a):
         dt = _short_date(m.get("Date", "")) or time.strftime(
             "%Y-%m-%d %H:%M", time.localtime(os.path.getmtime(_dead_path())))
         print("\t".join(("0", "N", dt,
-                         _clean(_short_from(m.get("From", "")), 28),
+                         _clean(_short_from(_hraw(m, "From")), 28),
                          _clean(_hdr(m, "Subject", "(dead.letter)"), 200))))
         return 0
     if _is_remote():
@@ -862,7 +886,7 @@ def cmd_list(a):
             str(i),
             flags,
             _short_date(msg.get("Date", "")),
-            _clean(_short_from(msg.get("From", "")), 28),
+            _clean(_short_from(_hraw(msg, "From")), 28),
             _clean(_hdr(msg, "Subject", "(no subject)"), 200),
         )))
     return 0
@@ -1131,7 +1155,7 @@ def _purge_filter(a):
 
 def _purge_preview(msg):
     print("\t".join((_short_date(msg.get("Date", "")),
-                     _clean(_short_from(msg.get("From", "")), 28),
+                     _clean(_short_from(_hraw(msg, "From")), 28),
                      _clean(_hdr(msg, "Subject", "(no subject)"), 120))))
 
 
@@ -1321,7 +1345,7 @@ def cmd_compose_template(a):
         if not subj:
             s = _hdr(src, "Subject", "")
             subj = s if s.lower().startswith("re:") else "Re: " + s
-        who = _short_from(src.get("From", "someone"))
+        who = _short_from(_hraw(src, "From") or "someone")
         quoted = "\n".join("> " + ln for ln in _best_body(src).splitlines())
         body = "\nOn %s, %s wrote:\n%s\n" % (_short_date(src.get("Date", "")), who, quoted)
         if getattr(a, "reply_all", False):
