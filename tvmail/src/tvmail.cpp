@@ -532,6 +532,9 @@ public:
             if (!restart() || !writeLine(req) || !readFrame(body, status))
                 return false;
         }
+        // a good round trip: the restart budget is for a backend that keeps
+        // dying, not for three hiccups spread over a long session
+        restarts = 0;
         return true;
     }
 
@@ -799,9 +802,11 @@ static void showBusy()
 {
     if (!TProgram::statusLine)
         return;
-    TColorAttr c = vga(0x1F); // white on blue - the
-    TDrawBuffer b;                                    // desktop's own accent
-    ushort w = b.moveStr(0, " Working... ", c);
+    TColorAttr c = vga(0x1F); // white on blue - the desktop's own accent
+    TDrawBuffer b;
+    short w = TProgram::statusLine->size.x; // the whole line, so no half-
+    b.moveChar(0, ' ', c, w);               // covered F-key hints show past it
+    b.moveStr(0, " Working... ", c);
     TProgram::statusLine->writeLine(0, 0, w, 1, b);
     TScreen::flushScreen();
 }
@@ -1012,7 +1017,9 @@ static void flashStatus(const std::string &msg)
         return;
     TColorAttr c = vga(0x1F);
     TDrawBuffer b;
-    ushort w = b.moveStr(0, " " + msg + " ", c);
+    short w = TProgram::statusLine->size.x; // whole line, as in showBusy()
+    b.moveChar(0, ' ', c, w);
+    b.moveStr(0, " " + msg + " ", c);
     TProgram::statusLine->writeLine(0, 0, w, 1, b);
     TScreen::flushScreen();
     if (gFlashTimer)
@@ -1292,11 +1299,16 @@ public:
             label += " (" + std::to_string(n) + ")";
         putText(dest, label, maxLen);
     }
+    // TListViewer calls this for every click and arrow key, even when the
+    // highlight lands where it already was (clicking the pane to focus it,
+    // Up on the first row) - only a real move reloads the folder (and
+    // drops the filter).  F5 is the way to re-read the same folder.
     void focusItem(short item) override
     {
+        bool moved = item != focused;
         TListViewer::focusItem(item);
         gFolderIdx = item;
-        if (owner)
+        if (moved && owner)
             message(owner, evBroadcast, cmFolderPicked, this);
     }
     void selectItem(short item) override { focusItem(item); }
@@ -1345,8 +1357,9 @@ public:
     }
     void focusItem(short item) override
     {
-        TListViewer::focusItem(item);
-        if (owner)
+        bool moved = item != focused; // as in TFolderPane: a click on the
+        TListViewer::focusItem(item); // current row doesn't re-fetch it
+        if (moved && owner)
             message(owner, evBroadcast, cmMsgPicked, this);
     }
     void selectItem(short) override
@@ -1763,18 +1776,20 @@ public:
 
     void setLines(std::vector<std::string> ls)
     {
-        src.clear();
-        srcWidth.clear();
+        std::vector<std::string> fresh;
         for (auto &l : ls)
-        {
-            src.push_back(expandTabs(l));
-            srcWidth.push_back((int)TText::width(src.back()));
-        }
-        if (src.empty())
-        {
-            src.push_back(std::string());
-            srcWidth.push_back(0);
-        }
+            fresh.push_back(expandTabs(l));
+        if (fresh.empty())
+            fresh.push_back(std::string());
+        // The same text again (a reload after a pull, a draft save, a mark):
+        // leave it be - scroll position, selection and Find match included -
+        // instead of jumping back to line 1 of what you were reading.
+        if (fresh == src)
+            return;
+        src = std::move(fresh);
+        srcWidth.clear();
+        for (auto &l : src)
+            srcWidth.push_back((int)TText::width(l));
         hlLine = -1;
         layout(-1);
         scrollTo(0, 0);
@@ -2053,6 +2068,21 @@ public:
             contentTitle->setActive(Boolean(p == 2));
     }
 
+    // Where to put the highlight when there is no message to stay on: in
+    // date (mailbox) order the newest message - the last row, or the first
+    // when reversed - so a folder opens on what just arrived, not on the
+    // oldest mail at the top; in the other orders, the first row.
+    static int startRow()
+    {
+        if (gSortKey != sortDate || gRows.empty())
+            return 0;
+        int best = 0;
+        for (int i = 1; i < (int)gRows.size(); ++i)
+            if (gRows[i].idx > gRows[best].idx)
+                best = i;
+        return best;
+    }
+
     // keep: stay on the same message across the reload (F5, mark, delete,
     // pull...) instead of jumping back to the top of the list.
     void loadFolder(bool keep = false)
@@ -2075,7 +2105,9 @@ public:
         }
         if (msgPane)
         {
-            int sel = keepPos; // message gone (deleted/moved): nearest row
+            // message gone (deleted/moved): the nearest row; nothing to
+            // stay on (a folder just opened): the newest message
+            int sel = keepIdx >= 0 ? keepPos : startRow();
             if (keepIdx >= 0)
                 for (size_t i = 0; i < gRows.size(); ++i)
                     if (gRows[i].idx == keepIdx)
@@ -2130,7 +2162,7 @@ public:
         if (!resetSel && msgPane && msgPane->focused >= 0 && msgPane->focused < (int)gRows.size())
             keepIdx = gRows[msgPane->focused].idx;
         applyView();
-        int sel = 0;
+        int sel = startRow();
         for (size_t i = 0; keepIdx >= 0 && i < gRows.size(); ++i)
             if (gRows[i].idx == keepIdx)
                 sel = (int)i;
@@ -2287,13 +2319,32 @@ public:
     }
 };
 
-class TMailViewWindow : public TWindow
+// A read-only window (Source, Help, Parts, Address book, Purge preview):
+// Esc closes it, once nothing inside wanted the key (a text selection takes
+// the first Esc).  Help has always said "Esc / Alt-F3 closes".
+class TViewerWindow : public TWindow
+{
+public:
+    TViewerWindow(const TRect &b, const char *title)
+        : TWindowInit(&TViewerWindow::initFrame), TWindow(b, title, wnNoNumber) {}
+    void handleEvent(TEvent &e) override
+    {
+        TWindow::handleEvent(e);
+        if (e.what == evKeyDown && e.keyDown.keyCode == kbEsc)
+        {
+            clearEvent(e);
+            close();
+        }
+    }
+};
+
+class TMailViewWindow : public TViewerWindow
 {
 public:
     TMailViewWindow(const TRect &b, const char *title, std::vector<std::string> lines,
                     bool wrapLines = false)
         : TWindowInit(&TMailViewWindow::initFrame),
-          TWindow(b, title, wnNoNumber)
+          TViewerWindow(b, title)
     {
         palette = wpCyanWindow; // <-- use cyan window palette
         options |= ofTileable;
@@ -2535,8 +2586,9 @@ public:
 
         auto addField = [&](int y, const char *label, const std::string &val)
         {
-            insert(new TLabel(TRect(2, y, 11, y + 1), label, nullptr));
             auto *il = new TFieldLine(TRect(11, y, W - 2, y + 1), 900);
+            // linked, so the label's Alt-letter (and a click on it) jumps here
+            insert(new TLabel(TRect(2, y, 11, y + 1), label, il));
             il->growMode = gfGrowHiX;
             if (!val.empty())
             {
@@ -2827,12 +2879,12 @@ public:
     }
 };
 
-class TAddrBookWindow : public TWindow
+class TAddrBookWindow : public TViewerWindow
 {
 public:
     TAddrBookWindow(const TRect &b)
         : TWindowInit(&TAddrBookWindow::initFrame),
-          TWindow(b, "Address book (~/.mailrc)", wnNoNumber)
+          TViewerWindow(b, "Address book (~/.mailrc)")
     {
         palette = wpCyanWindow;
         options |= ofTileable;
@@ -2957,12 +3009,12 @@ public:
     }
 };
 
-class TPartsWindow : public TWindow
+class TPartsWindow : public TViewerWindow
 {
 public:
     TPartsWindow(const TRect &b, int idx, const std::string &mbox, const char *title)
         : TWindowInit(&TPartsWindow::initFrame),
-          TWindow(b, title, wnNoNumber)
+          TViewerWindow(b, title)
     {
         palette = wpCyanWindow;
         options |= ofTileable;
@@ -3015,7 +3067,7 @@ class TSigWindow : public TWindow
             if (ok)
             {
                 editor->modified = False;
-                messageBox("Signature saved.", mfInformation | mfOKButton);
+                flashStatus("Signature saved"); // a note, not one more box to dismiss
                 return true;
             }
         }
@@ -3116,7 +3168,7 @@ static const char *kHelpText =
     "  same panes and keys, folders are IMAP folders, F3 files tagged spam.\n"
     "  Set it up in ~/.config/tvmail/tvmail.conf  (see man tvmail-backend).\n"
     "\n"
-    "FOLDERS   (the L / R column = Local mbox or Remote IMAP storage)\n"
+    "FOLDERS\n"
     "  inbox        where mail is delivered      (local: /var/mail ; remote: INBOX)\n"
     "  drafts       messages kept unsent\n"
     "  sent         a copy of everything you send\n"
@@ -3197,12 +3249,12 @@ static const char *kHelpText =
     "  Ctrl-R reply   Ctrl-N new   F2 send   Ctrl-D delete   F4 address book\n"
     "  Tab pane   Alt-X quit\n";
 
-class THelpWindow : public TWindow
+class THelpWindow : public TViewerWindow
 {
 public:
     THelpWindow(const TRect &b)
         : TWindowInit(&THelpWindow::initFrame),
-          TWindow(b, "Help", wnNoNumber)
+          TViewerWindow(b, "Help")
     {
         palette = wpCyanWindow;
         options |= ofTileable;
@@ -3379,7 +3431,7 @@ TMenuBar *TVMailApp::initMenuBar(TRect r)
                             *new TMenuItem("~F~orward", cmForwardMsg, kbNoKey, hcNoContext) +
                             *new TMenuItem("~N~ew message", cmCompose, kbCtrlN, hcNoContext, "Ctrl-N") +
                             *new TMenuItem("~E~dit draft", cmEditDraft, kbNoKey, hcNoContext, "Enter") +
-                            *new TMenuItem("~S~end draft", cmSendMsg, kbF2, hcNoContext, "F2") +
+                            *new TMenuItem("~S~end", cmSendMsg, kbF2, hcNoContext, "F2") +
                             newLine() +
                             *new TMenuItem("Insert si~g~nature", cmInsSig, kbNoKey, hcNoContext) +
                             *new TMenuItem("Insert dead.~l~etter", cmInsDead, kbNoKey, hcNoContext) +
@@ -3544,7 +3596,17 @@ void TVMailApp::deleteMsg(int row)
     if (row < 0)
         return;
     int b = gRows[row].idx;
-    if (messageBox(mfConfirmation | mfYesNoCancel, "Delete message %d?", b) != cmYes)
+    // name the message by its subject (the backend index means nothing to
+    // anyone), and say so when this delete is for good
+    std::string subj = gRows[row].subj.empty() ? "(no subject)" : gRows[row].subj;
+    subj = fitCols(subj, 34);
+    while (!subj.empty() && subj.back() == ' ')
+        subj.pop_back();
+    bool forGood = gMbox == "trash";
+    if (messageBox(mfConfirmation | mfYesButton | mfNoButton,
+                   forGood ? "Permanently delete \"%s\"?\n\nThis cannot be undone."
+                           : "Move \"%s\" to the trash?",
+                   subj.c_str()) != cmYes)
         return;
     std::string cmd = backendCommand("delete " + std::to_string(b) + mboxOpt());
     if (gMbox != "trash")
