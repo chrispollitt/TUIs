@@ -1892,6 +1892,8 @@ class TComposeWindow : public TWindow
     Boolean sent = False;
     std::string draftMbox; // set when editing an existing draft
     int draftIdx = -1;
+    std::string draftRaw; // the draft as opened: finds it again if indices shift
+    std::string initTo, initCc, initBcc, initSubj; // header fields as opened
 
     static std::string strip(std::string s)
     {
@@ -1901,10 +1903,21 @@ class TComposeWindow : public TWindow
     }
 
 public:
-    void linkDraft(const std::string &m, int i)
+    void linkDraft(const std::string &m, int i, const std::string &raw)
     {
         draftMbox = m;
         draftIdx = i;
+        draftRaw = raw;
+    }
+
+    // Unsent changes anywhere: the body, or any header field.
+    bool dirty()
+    {
+        auto val = [](TFieldLine *l)
+        { return std::string(l->data ? l->data : ""); };
+        return (editor && editor->modified) || val(toLine) != initTo ||
+               val(ccLine) != initCc || val(bccLine) != initBcc ||
+               val(subjLine) != initSubj;
     }
 
     void addRecipient(const std::string &a)
@@ -1937,13 +1950,37 @@ public:
         return msg;
     }
 
+    // Delete the draft this window was opened from.  Its index may have moved
+    // since (another draft deleted or filed meanwhile), so only delete a
+    // message whose raw text is still the one we opened; if none matches,
+    // leave Drafts alone - a stale extra draft beats deleting the wrong one.
     void dropSourceDraft()
     {
         if (draftMbox.empty() || draftIdx < 0)
             return;
-        shCapture(backendCommand("delete " + std::to_string(draftIdx) + " --mbox '" + draftMbox + "'") + " 2>&1");
-        message(TProgram::application, evCommand, cmReload, nullptr);
+        auto rawAt = [&](int i)
+        { return backendRun("raw " + std::to_string(i) + " " + draftMbox); };
+        int victim = -1;
+        if (!draftRaw.empty() && rawAt(draftIdx) == draftRaw)
+            victim = draftIdx;
+        else if (!draftRaw.empty())
+        {
+            std::istringstream is(backendRun("list " + draftMbox));
+            std::string line;
+            while (victim < 0 && std::getline(is, line))
+            {
+                if (line.find('\t') == std::string::npos)
+                    continue;
+                int i = std::atoi(line.c_str());
+                if (rawAt(i) == draftRaw)
+                    victim = i;
+            }
+        }
         draftIdx = -1;
+        if (victim < 0)
+            return;
+        shCapture(backendCommand("delete " + std::to_string(victim) + " --mbox '" + draftMbox + "'") + " 2>&1");
+        message(TProgram::application, evCommand, cmReload, nullptr);
     }
 
     void shutDown() override
@@ -1982,6 +2019,10 @@ public:
         ccLine = addField(2, "~C~c", cc);
         bccLine = addField(3, "~B~cc", bcc);
         subjLine = addField(4, "~S~ubject", subj);
+        initTo = toLine->data;
+        initCc = ccLine->data;
+        initBcc = bccLine->data;
+        initSubj = subjLine->data;
 
         TScrollBar *vsb = new TScrollBar(TRect(W - 2, 6, W - 1, size.y - 1));
         insert(vsb);
@@ -2099,17 +2140,36 @@ public:
     {
         if (!TWindow::valid(command))
             return False;
-        if (command == cmClose && editor && editor->modified && !sent)
+        // cmQuit too: Alt-X asks every window, and must not drop unsent mail
+        if ((command == cmClose || command == cmQuit) && !sent && dirty())
         {
+            if (command == cmQuit)
+                select(); // show which message the question is about
             ushort r = askSaveDraft();
             if (r == cmCancel)
                 return False;
             if (r == cmYes)
             {
                 std::string path = writeTemp(buildMessage(), ".eml");
-                shCapture(backendCommand("save-draft") + " < '" + path + "' 2>&1; rm -f '" + path + "'");
+                std::string out = shCapture(backendCommand("save-draft") + " < '" + path + "' 2>&1; rm -f '" + path + "'");
+                while (!out.empty() && (out.back() == '\n' || out.back() == ' '))
+                    out.pop_back();
+                if (out.size() < 11 || out.compare(out.size() - 11, 11, "draft saved") != 0)
+                {
+                    // keep the window (and the text) - the draft is not saved
+                    messageBox(("Draft not saved:\n" + (out.empty() ? std::string("no reply from tvmail-backend") : out)).c_str(),
+                               mfError | mfOKButton);
+                    return False;
+                }
                 dropSourceDraft();
                 message(TProgram::application, evCommand, cmReload, nullptr);
+                // saved: if a quit is called off by another window, this
+                // one stays open and must not save the same draft again
+                editor->modified = False;
+                initTo = toLine->data;
+                initCc = ccLine->data;
+                initBcc = bccLine->data;
+                initSubj = subjLine->data;
             }
         }
         return True;
@@ -2419,20 +2479,22 @@ class TSigWindow : public TWindow
             editor->getText(0, TSpan<char>(&s[0], (size_t)n));
         return s;
     }
-    void save()
+    bool save()
     {
         std::string s = text();
         if (FILE *f = fopen(path.c_str(), "wb"))
         {
-            fwrite(s.data(), 1, s.size(), f);
-            fclose(f);
-            editor->modified = False;
-            messageBox("Signature saved.", mfInformation | mfOKButton);
+            bool ok = fwrite(s.data(), 1, s.size(), f) == s.size();
+            ok = (fclose(f) == 0) && ok;
+            if (ok)
+            {
+                editor->modified = False;
+                messageBox("Signature saved.", mfInformation | mfOKButton);
+                return true;
+            }
         }
-        else
-        {
-            messageBox("Cannot write the signature file.", mfError | mfOKButton);
-        }
+        messageBox("Cannot write the signature file.", mfError | mfOKButton);
+        return false;
     }
 
 public:
@@ -2478,14 +2540,16 @@ public:
     {
         if (!TWindow::valid(cmd))
             return False;
-        if (cmd == cmClose && editor->modified)
+        if ((cmd == cmClose || cmd == cmQuit) && editor->modified)
         {
+            if (cmd == cmQuit)
+                select();
             ushort r = messageBox("Save changes to ~/.signature?",
                                   mfInformation | mfYesNoCancel);
             if (r == cmCancel)
                 return False;
-            if (r == cmYes)
-                save();
+            if (r == cmYes && !save())
+                return False; // keep the window and the text
         }
         return True;
     }
@@ -2845,7 +2909,7 @@ void TVMailApp::openComposeWith(const std::string &raw, const std::string &linkM
     r.grow(-5, -2);
     auto *w = new TComposeWindow(r, to, cc, subj, body, bcc);
     if (!linkMbox.empty())
-        w->linkDraft(linkMbox, linkIdx);
+        w->linkDraft(linkMbox, linkIdx, raw);
     deskTop->insert(w);
 }
 
@@ -3081,154 +3145,167 @@ void TVMailApp::outOfOffice()
     }
 
     // --- the dialog ------------------------------------------------------
-    const ushort kMemoMax = 4096;
-    TDialog *d = new TDialog(TRect(0, 0, 70, 24), "Out of office");
-    d->options |= ofCentered;
-
-    TCheckBoxes *onCb = new TCheckBoxes(TRect(3, 2, 60, 3), new TSItem("Automatic reply is ~O~N", 0));
-    d->insert(onCb);
-
-    TInputLine *subjIl = new TInputLine(TRect(14, 4, 67, 5), 120);
-    d->insert(subjIl);
-    d->insert(new TLabel(TRect(2, 4, 14, 5), "Su~b~ject", subjIl));
-
-    TInputLine *fromIl = new TInputLine(TRect(14, 6, 26, 7), 11);
-    d->insert(fromIl);
-    d->insert(new TLabel(TRect(2, 6, 14, 7), "~F~rom date", fromIl));
-    d->insert(new TStaticText(TRect(28, 6, 68, 7), "YYYY-MM-DD; blank = from now on"));
-
-    TInputLine *toIl = new TInputLine(TRect(14, 7, 26, 8), 11);
-    d->insert(toIl);
-    d->insert(new TLabel(TRect(2, 7, 14, 8), "~T~o date", toIl));
-    d->insert(new TStaticText(TRect(28, 7, 68, 8), "last day; blank = until switched off"));
-
-    // The server only answers mail addressed to one of these.  Mail pulled in
-    // from a POP account is addressed to *that* account, not to this one.
-    TInputLine *addrIl = new TInputLine(TRect(14, 9, 67, 10), 160);
-    d->insert(addrIl);
-    d->insert(new TLabel(TRect(2, 9, 14, 10), "~A~ddresses", addrIl));
-    d->insert(new TStaticText(TRect(14, 10, 68, 11), "public + local (comma separated); the server answers mail sent to any"));
-
-    TInputLine *daysIl = new TInputLine(TRect(43, 12, 49, 13), 4);
-    d->insert(daysIl);
-    d->insert(new TLabel(TRect(2, 12, 43, 13), "~R~eply to each sender at most every", daysIl));
-    d->insert(new TStaticText(TRect(50, 12, 56, 13), "days"));
-
-    TScrollBar *vsb = new TScrollBar(TRect(65, 15, 66, 20));
-    d->insert(vsb);
-    TMemo *memo = new TMemo(TRect(3, 15, 65, 20), nullptr, vsb, nullptr, kMemoMax);
-    d->insert(memo);
-    d->insert(new TLabel(TRect(2, 14, 20, 15), "~M~essage", memo));
-
-    d->insert(new TButton(TRect(20, 21, 32, 23), "~S~ave", cmOK, bfDefault));
-    d->insert(new TButton(TRect(36, 21, 48, 23), "Cancel", cmCancel, bfNormal));
-
-    ushort on = (state == "on") ? 1 : 0;
-    onCb->setData(&on);
-    // TInputLine::setData copies its full buffer size, so hand it one
-    auto fill = [](TInputLine *il, const std::string &s, size_t maxLen)
-    {
-        std::vector<char> b(maxLen + 1, 0);
-        std::memcpy(b.data(), s.data(), std::min(s.size(), maxLen));
-        il->setData(b.data());
-    };
-    fill(subjIl, subject, 120);
-    fill(fromIl, start, 11);
-    fill(toIl, end, 11);
-    fill(addrIl, addresses, 160);
-    fill(daysIl, days, 4);
-    {
-        std::vector<char> md(sizeof(ushort) + kMemoMax);
-        ushort len = (ushort)std::min<size_t>(message.size(), kMemoMax - 1);
-        std::memcpy(md.data(), &len, sizeof len);
-        std::memcpy(md.data() + sizeof len, message.data(), len);
-        memo->setData(md.data());
-    }
-    d->selectNext(False);
-
-    ushort r = TProgram::deskTop->execView(d);
-    if (r == cmCancel)
-    {
-        TObject::destroy(d);
-        return;
-    }
-    ushort wantOn = 0;
-    onCb->getData(&wantOn);
-    char sbuf[121], fbuf[12], tbuf[12], dbuf[5], abuf[161];
-    addrIl->getData(abuf);
-    subjIl->getData(sbuf);
-    fromIl->getData(fbuf);
-    toIl->getData(tbuf);
-    daysIl->getData(dbuf);
-    std::vector<char> md(sizeof(ushort) + kMemoMax);
-    memo->getData(md.data());
-    ushort mlen = 0;
-    std::memcpy(&mlen, md.data(), sizeof mlen);
-    std::string text(md.data() + sizeof mlen, std::min<size_t>(mlen, kMemoMax));
-    TObject::destroy(d);
-
+    // Loops until saved or cancelled: a rejected change (or a No to switching
+    // off another Sieve script) brings the dialog back with what was typed.
     auto trim = [](std::string s)
     {
         size_t a = s.find_first_not_of(" \t");
         size_t b = s.find_last_not_of(" \t");
         return a == std::string::npos ? std::string() : s.substr(a, b - a + 1);
     };
-    // the editor may use CR or CRLF line ends; the backend wants plain LF
-    std::string msg;
-    for (size_t i = 0; i < text.size(); ++i)
+    ushort on = (state == "on") ? 1 : 0;
+    bool force = false; // the user already agreed to replace otherActive
+    for (;;)
     {
-        if (text[i] == '\r')
+        const ushort kMemoMax = 4096;
+        TDialog *d = new TDialog(TRect(0, 0, 70, 24), "Out of office");
+        d->options |= ofCentered;
+
+        TCheckBoxes *onCb = new TCheckBoxes(TRect(3, 2, 60, 3), new TSItem("Automatic reply is ~O~N", 0));
+        d->insert(onCb);
+
+        TInputLine *subjIl = new TInputLine(TRect(14, 4, 67, 5), 120);
+        d->insert(subjIl);
+        d->insert(new TLabel(TRect(2, 4, 14, 5), "Su~b~ject", subjIl));
+
+        TInputLine *fromIl = new TInputLine(TRect(14, 6, 26, 7), 11);
+        d->insert(fromIl);
+        d->insert(new TLabel(TRect(2, 6, 14, 7), "~F~rom date", fromIl));
+        d->insert(new TStaticText(TRect(28, 6, 68, 7), "YYYY-MM-DD; blank = from now on"));
+
+        TInputLine *toIl = new TInputLine(TRect(14, 7, 26, 8), 11);
+        d->insert(toIl);
+        d->insert(new TLabel(TRect(2, 7, 14, 8), "~T~o date", toIl));
+        d->insert(new TStaticText(TRect(28, 7, 68, 8), "last day; blank = until switched off"));
+
+        // The server only answers mail addressed to one of these.  Mail pulled in
+        // from a POP account is addressed to *that* account, not to this one.
+        TInputLine *addrIl = new TInputLine(TRect(14, 9, 67, 10), 160);
+        d->insert(addrIl);
+        d->insert(new TLabel(TRect(2, 9, 14, 10), "~A~ddresses", addrIl));
+        d->insert(new TStaticText(TRect(14, 10, 68, 11), "public + local (comma separated); the server answers mail sent to any"));
+
+        TInputLine *daysIl = new TInputLine(TRect(43, 12, 49, 13), 4);
+        d->insert(daysIl);
+        d->insert(new TLabel(TRect(2, 12, 43, 13), "~R~eply to each sender at most every", daysIl));
+        d->insert(new TStaticText(TRect(50, 12, 56, 13), "days"));
+
+        TScrollBar *vsb = new TScrollBar(TRect(65, 15, 66, 20));
+        d->insert(vsb);
+        TMemo *memo = new TMemo(TRect(3, 15, 65, 20), nullptr, vsb, nullptr, kMemoMax);
+        d->insert(memo);
+        d->insert(new TLabel(TRect(2, 14, 20, 15), "~M~essage", memo));
+
+        d->insert(new TButton(TRect(20, 21, 32, 23), "~S~ave", cmOK, bfDefault));
+        d->insert(new TButton(TRect(36, 21, 48, 23), "Cancel", cmCancel, bfNormal));
+
+        onCb->setData(&on);
+        // TInputLine::setData copies its full buffer size, so hand it one
+        auto fill = [](TInputLine *il, const std::string &s, size_t maxLen)
         {
-            msg += '\n';
-            if (i + 1 < text.size() && text[i + 1] == '\n')
-                ++i;
+            std::vector<char> b(maxLen + 1, 0);
+            std::memcpy(b.data(), s.data(), std::min(s.size(), maxLen));
+            il->setData(b.data());
+        };
+        fill(subjIl, subject, 120);
+        fill(fromIl, start, 11);
+        fill(toIl, end, 11);
+        fill(addrIl, addresses, 160);
+        fill(daysIl, days, 4);
+        {
+            std::vector<char> md(sizeof(ushort) + kMemoMax);
+            ushort len = (ushort)std::min<size_t>(message.size(), kMemoMax - 1);
+            std::memcpy(md.data(), &len, sizeof len);
+            std::memcpy(md.data() + sizeof len, message.data(), len);
+            memo->setData(md.data());
+        }
+        d->selectNext(False);
+
+        ushort r = TProgram::deskTop->execView(d);
+        if (r == cmCancel)
+        {
+            TObject::destroy(d);
+            return;
+        }
+        onCb->getData(&on);
+        char sbuf[121], fbuf[12], tbuf[12], dbuf[5], abuf[161];
+        addrIl->getData(abuf);
+        subjIl->getData(sbuf);
+        fromIl->getData(fbuf);
+        toIl->getData(tbuf);
+        daysIl->getData(dbuf);
+        std::vector<char> md(sizeof(ushort) + kMemoMax);
+        memo->getData(md.data());
+        ushort mlen = 0;
+        std::memcpy(&mlen, md.data(), sizeof mlen);
+        std::string text(md.data() + sizeof mlen, std::min<size_t>(mlen, kMemoMax));
+        TObject::destroy(d);
+
+        // keep what was typed, for a second round if this one fails
+        subject = trim(sbuf);
+        start = trim(fbuf);
+        end = trim(tbuf);
+        addresses = trim(abuf);
+        days = trim(dbuf);
+        // the editor may use CR or CRLF line ends; the backend wants plain LF
+        message.clear();
+        for (size_t i = 0; i < text.size(); ++i)
+        {
+            if (text[i] == '\r')
+            {
+                message += '\n';
+                if (i + 1 < text.size() && text[i + 1] == '\n')
+                    ++i;
+            }
+            else
+                message += text[i];
+        }
+
+        std::string out;
+        bool ok;
+        if (!(on & 1))
+        {
+            out = backendRun("vacation off");
+            ok = out.rfind("off", 0) == 0;
         }
         else
-            msg += text[i];
-    }
-
-    std::string out;
-    bool ok;
-    if (!(wantOn & 1))
-    {
-        out = backendRun("vacation off");
-        ok = out.rfind("off", 0) == 0;
-    }
-    else
-    {
-        bool force = false;
-        if (!otherActive.empty())
         {
-            std::string q = "The Sieve script '" + otherActive + "' is active on the server.\n"
-                            "Only one script can be, so switching on the out-of-office\n"
-                            "reply will switch that one off.\n\nContinue?";
-            if (messageBox(mfConfirmation | mfYesNoCancel, "%s", q.c_str()) != cmYes)
-                return;
-            force = true;
+            if (!otherActive.empty() && !force)
+            {
+                std::string q = "The Sieve script '" + otherActive + "' is active on the server.\n"
+                                "Only one script can be, so switching on the out-of-office\n"
+                                "reply will switch that one off.\n\nContinue?";
+                if (messageBox(mfConfirmation | mfYesNoCancel, "%s", q.c_str()) != cmYes)
+                    continue; // back to the dialog, entries intact
+                force = true;
+            }
+            std::string f = writeTemp(message, ".txt");
+            std::string args = "vacation on --message-file " + shq(f) + " --subject " + shq(subject) +
+                               " --days " + shq(days.empty() ? "7" : days) +
+                               " --addresses " + shq(addresses);
+            if (!start.empty())
+                args += " --start " + shq(start);
+            if (!end.empty())
+                args += " --end " + shq(end);
+            if (force)
+                args += " --force";
+            out = backendRun(args);
+            ::remove(f.c_str());
+            ok = out.rfind("on", 0) == 0;
         }
-        std::string f = writeTemp(msg, ".txt");
-        std::string args = "vacation on --message-file " + shq(f) + " --subject " + shq(trim(sbuf)) +
-                           " --days " + shq(trim(dbuf).empty() ? "7" : trim(dbuf)) +
-                           " --addresses " + shq(trim(abuf));
-        if (!trim(fbuf).empty())
-            args += " --start " + shq(trim(fbuf));
-        if (!trim(tbuf).empty())
-            args += " --end " + shq(trim(tbuf));
-        if (force)
-            args += " --force";
-        out = backendRun(args);
-        ::remove(f.c_str());
-        ok = out.rfind("on", 0) == 0;
-    }
-    while (!out.empty() && (out.back() == '\n' || out.back() == ' '))
-        out.pop_back();
-    if (ok)
-        messageBox((wantOn & 1) ? "Out-of-office reply is ON.\n\nThe server answers for you from now on, even with tvmail closed."
+        while (!out.empty() && (out.back() == '\n' || out.back() == ' '))
+            out.pop_back();
+        if (ok)
+        {
+            messageBox((on & 1) ? "Out-of-office reply is ON.\n\nThe server answers for you from now on, even with tvmail closed."
                                 : "Out-of-office reply is OFF.",
-                   mfInformation | mfOKButton);
-    else
+                       mfInformation | mfOKButton);
+            return;
+        }
         messageBox(out.empty() ? "The server did not accept the change." : out.c_str(),
                    mfError | mfOKButton);
+        // and round again, with the entries as typed
+    }
 }
 
 void TVMailApp::moveMsg(int row)
