@@ -4,7 +4,8 @@ Defects only - features and wishes live in [TO-DO.txt](TO-DO.txt).
 Numbers (`#n`) are from the October 2026 code review, so a commit message or
 note that says "#14" means the same thing everywhere; bugs found later get
 the next free number.  The **Test** column says what guards a fix against
-coming back: `unit` (tests/test_backend.py), `e2e` (tests/e2e_tui.py), or
+coming back: `unit` (tests/test_backend.py), `e2e` (tests/e2e_regress.py,
+one case per bug; tests/e2e_tui.py is the older smoke test), or
 `manual` (checked on screen, no automated test yet - the gaps a TUI
 regression suite should close).
 
@@ -27,32 +28,35 @@ regression suite should close).
 | 32 | Commands that cannot apply (Edit draft outside Drafts; Reply / Parts / Move on an empty list) are never greyed and silently do nothing | |
 | 33 | A backend reply slower than 8 s freezes the UI for the rest of it (stop() waits for the old backend), then the request is retried | |
 | 39 | The dialog drop shadow is still drawn in a terminal-theme colour (tvision applies shadowAttr directly, not through mapColor) | Cosmetic |
+| 42 | Compose window header labels are under 3:1 contrast under Windows Terminal Dark+: the To / Cc / Bcc / Subject hotkey letters are themed white on light red (2.8:1), the label text white on cyan #00AFAF (2.7:1) | Found by e2e_regress #36; not scored there until fixed |
 
 ## Squashed
 
 | # | Bug | Fixed in | Test |
 |---|-----|----------|------|
-| 1 | Alt-X quit dropped unsent compose windows and an unsaved signature without asking | 7eba038 | manual |
-| 2 | Edits to To / Cc / Bcc / Subject alone did not count as changes - closing lost them | 7eba038 | manual |
-| 3 | A failed "Save draft" still closed the window | 7eba038 | manual |
-| 4 | The source draft was deleted by index - a shifted index could delete the wrong draft | 7eba038 | manual |
-| 5 | Out of office: a rejected change (or No to replacing another Sieve script) threw away what was typed | 7eba038 | manual |
-| 27 | List columns cut by bytes: accented / wide names misaligned columns and could split a UTF-8 character | 44e98b6 | manual |
-| 28 | Body: no word wrap, no sign a line was cut off, tabs not expanded | 44e98b6 | manual |
-| 29 | No Find and no copy in the body, View source or Help | 44e98b6 | manual |
-| 35 | A raw (8-bit) UTF-8 From header crashed `list` - the folder looked empty; RFC 2047 sender names were shown encoded | 44e98b6 | manual |
-| 36 | Unreadable colours under themed terminals (Windows Terminal Dark+): dialog titles white on grey, default button light cyan on green, the list highlight white on light cyan (1.2:1) | ccb1006 | manual |
+| 1 | Alt-X quit dropped unsent compose windows and an unsaved signature without asking | 7eba038 | e2e |
+| 2 | Edits to To / Cc / Bcc / Subject alone did not count as changes - closing lost them | 7eba038 | e2e |
+| 3 | A failed "Save draft" still closed the window | 7eba038 | e2e |
+| 4 | The source draft was deleted by index - a shifted index could delete the wrong draft | 7eba038 | e2e |
+| 5 | Out of office: a rejected change (or No to replacing another Sieve script) threw away what was typed | 7eba038 | e2e |
+| 27 | List columns cut by bytes: accented / wide names misaligned columns and could split a UTF-8 character | 44e98b6 | e2e |
+| 28 | Body: no word wrap, no sign a line was cut off, tabs not expanded | 44e98b6 | e2e |
+| 29 | No Find and no copy in the body, View source or Help | 44e98b6 | e2e |
+| 35 | A raw (8-bit) UTF-8 From header crashed `list` - the folder looked empty; RFC 2047 sender names were shown encoded | 44e98b6 | unit, e2e |
+| 36 | Unreadable colours under themed terminals (Windows Terminal Dark+): dialog titles white on grey, default button light cyan on green, the list highlight white on light cyan (1.2:1) | ccb1006 | e2e |
 | 38 | IMAP: after a delete, a blank "N (no subject)" ghost row took the message's place (the serve connection had not seen the EXPUNGE) | d8d605f | unit |
-| 37 | CJK text drawn with a space after each character ("日 本 語") - tvision's validateCell wiped wide-char trail cells | 7c7017a | manual |
-| 7 | Esc did not close Help / Source / Parts / Address book, though Help said it did | quick-fix batch | manual |
-| 8 | Clicking the current folder, or Up on the first one, reloaded it and dropped the filter | quick-fix batch | manual |
-| 9 | Clicking the current message, or Up on the first, re-fetched it and scrolled the body to the top | quick-fix batch | manual |
-| 11 | Compose labels showed Alt-T / C / B / S but were not linked to their fields | quick-fix batch | manual |
-| 12 | A folder opened on its oldest message, newest mail off-screen at the bottom | quick-fix batch | manual |
-| 14 | Any reload (pull, draft save, send, mark) scrolled the body you were reading back to line 1 | quick-fix batch | manual |
-| 19 | "Working..." covered only part of the status line, leaving F-key hints showing past it | quick-fix batch | manual |
-| 22 | The delete prompt named the message by backend index, offered Cancel on a yes/no question, and did not say that deleting from Trash is permanent | quick-fix batch | manual |
-| 26 | Saving the signature on close showed an extra "Signature saved." box | quick-fix batch | manual |
-| 30 | Help described an "L / R column" the folder pane does not have | quick-fix batch | manual |
-| 31 | The F2 menu item was labelled "Send draft" though it sends the compose window | quick-fix batch | manual |
-| 34 | The backend restart budget (3) never reset - three hiccups over a long session left every call on the slow shell path | quick-fix batch | manual |
+| 37 | CJK text drawn with a space after each character ("日 本 語") - tvision's validateCell wiped wide-char trail cells | 7c7017a | e2e |
+| 7 | Esc did not close Help / Source / Parts / Address book, though Help said it did | 00c1ae9 | e2e |
+| 8 | Clicking the current folder, or Up on the first one, reloaded it and dropped the filter | 00c1ae9 | e2e |
+| 9 | Clicking the current message, or Up on the first, re-fetched it and scrolled the body to the top | 00c1ae9 | e2e |
+| 11 | Compose labels showed Alt-T / C / B / S but were not linked to their fields | 00c1ae9 | e2e |
+| 12 | A folder opened on its oldest message, newest mail off-screen at the bottom | 00c1ae9 | e2e |
+| 14 | Any reload (pull, draft save, send, mark) scrolled the body you were reading back to line 1 | 00c1ae9 | e2e |
+| 19 | "Working..." covered only part of the status line, leaving F-key hints showing past it | 00c1ae9 | manual |
+| 22 | The delete prompt named the message by backend index, offered Cancel on a yes/no question, and did not say that deleting from Trash is permanent | 00c1ae9 | e2e |
+| 26 | Saving the signature on close showed an extra "Signature saved." box | 00c1ae9 | e2e |
+| 30 | Help described an "L / R column" the folder pane does not have | 00c1ae9 | e2e |
+| 31 | The F2 menu item was labelled "Send draft" though it sends the compose window | 00c1ae9 | e2e |
+| 34 | The backend restart budget (3) never reset - three hiccups over a long session left every call on the slow shell path | 00c1ae9 | manual |
+| 40 | Sent folder: blank date and sender columns - send left Date / Message-ID to the server, which adds them only to the delivered copy, so the Sent copy had none (and no From); the list also showed your own name, not the recipient | 394d25f | unit |
+| 41 | Help > About cut its credits off (messageBox holds about five lines) and called tvmail a client "for a local mailbox"; no link to the repo | e915646 | e2e |

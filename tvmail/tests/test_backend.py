@@ -319,6 +319,28 @@ class TestCli(Base):
         self.assertEqual(r[1].split("\t")[1], "N")     # no Status  -> new
         self.assertIn("\xa1Hola!", r[1])
 
+    def test_list_raw_utf8_and_rfc2047_from(self):
+        # BUGS.md #35: a raw 8-bit UTF-8 From crashed `list` (the folder
+        # looked empty), and RFC 2047 sender names were shown encoded
+        self.spool.write_bytes(
+            "From z@example.org Mon Sep  1 10:00:00 2026\n"
+            "From: Zoë Ünïcödé <z@example.org>\n"
+            "Date: Mon, 01 Sep 2026 10:00:00 -0700\n"
+            "Subject: raw\n\nbody\n\n"
+            "From y@example.jp Mon Sep  1 11:00:00 2026\n"
+            "From: =?utf-8?b?5bGx55Sw5aSq6YOO?= <y@example.jp>\n"
+            "Date: Mon, 01 Sep 2026 11:00:00 -0700\n"
+            "Subject: encoded\n\nbody\n\n".encode("utf-8"))
+        p = self.be("list", str(self.spool))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        rows = [r.split("\t") for r in p.stdout.decode("utf-8").splitlines()]
+        self.assertEqual([r[3] for r in rows], ["Zoë Ünïcödé", "山田太郎"])
+        self.assertEqual([r[4] for r in rows], ["raw", "encoded"])
+        # a reply's quote line names the raw-UTF-8 sender the same way
+        p = self.be("compose-template", "--in-reply-to", "0", str(self.spool))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("Zoë Ünïcödé wrote:", p.stdout.decode("utf-8"))
+
     def test_counts_total_and_unseen(self):
         # the folder pane's "inbox (3)" numbers: name, total, unseen
         p = self.be("counts", str(self.spool), "drafts")

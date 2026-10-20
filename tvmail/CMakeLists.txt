@@ -67,6 +67,8 @@ endif()
 #                co-process, handshakes, round-trips a request, spawnLogged
 # e2e_tui      : drives the built tvmail in a pty (launch, panes, Tab, body
 #                scroll, background F3); exits 77 = skipped where no pty
+# e2e_regress  : one pty case per squashed BUGS.md entry, read through a
+#                pyte screen model (columns, colours); 77 = no pty or no pyte
 find_program(TVMAIL_PYTHON
     NAMES python3 python3.13 python3.12 python3.11 python3.10 python3.9 python)
 
@@ -91,6 +93,12 @@ if(NOT WIN32)
                          --bin $<TARGET_FILE:tvmail>
                          --backend-dir "${CMAKE_CURRENT_SOURCE_DIR}/backend")
         set_tests_properties(e2e_tui PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
+        add_test(NAME e2e_regress
+                 COMMAND ${TVMAIL_PYTHON}
+                         "${CMAKE_CURRENT_SOURCE_DIR}/tests/e2e_regress.py"
+                         --bin $<TARGET_FILE:tvmail>
+                         --backend-dir "${CMAKE_CURRENT_SOURCE_DIR}/backend")
+        set_tests_properties(e2e_regress PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 400)
     endif()
     # install_roundtrip : cmake --install into a temp prefix, ./uninstall.sh it
     add_test(NAME install_roundtrip
