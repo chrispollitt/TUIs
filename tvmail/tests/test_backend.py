@@ -888,6 +888,40 @@ class TestRemoteIMAP(Base):
         self.assertEqual(rows[1].split("\t")[1], "N")
         self.assertIn("Second", rows[1])
 
+    def test_list_after_another_connection_expunged(self):
+        # Regression: Ctrl-D runs `delete` as a one-shot backend - its own
+        # IMAP connection - while the serve backend still has INBOX selected.
+        # A server need not tell that connection about the EXPUNGE until a
+        # command lets it (NOOP; UID SEARCH / FETCH needn't), so SEARCH kept
+        # listing the gone UID, FETCH returned nothing for it, and the list
+        # grew a blank "N  (no subject)" ghost where the message had been.
+        imap = self.imap
+        view = {}
+        orig_select, orig_uid = imap.select, imap.uid
+
+        def select(mailbox, readonly=False):
+            r = orig_select(mailbox, readonly)
+            view["uids"] = [row[0] for row in imap._rows()]
+            return r
+
+        def noop():
+            view["uids"] = [row[0] for row in imap._rows()]
+            return ("OK", [b"NOOP"])
+
+        def uid(command, *args):
+            if command.upper() == "SEARCH":   # this session's view, not live
+                return ("OK", [" ".join(map(str, view["uids"])).encode()])
+            return orig_uid(command, *args)
+
+        imap.select, imap.noop, imap.uid = select, noop, uid
+        self._run(be.cmd_list, self.ns())        # the serve connection opens INBOX
+        imap.folders["INBOX"].pop(1)             # another connection deletes "Second"
+        rows = [r for r in self._run(be.cmd_list, self.ns()).decode().splitlines() if r]
+        self.assertEqual(len(rows), 2, rows)
+        self.assertNotIn("(no subject)", "\n".join(rows))
+        self.assertIn("Hello", rows[0])
+        self.assertIn("Third", rows[1])
+
     def test_counts_over_imap_uses_status_not_select(self):
         selected = []
         orig = self.imap.select

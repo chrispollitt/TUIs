@@ -702,6 +702,21 @@ def _imap_msg(folder, idx, readonly=True):
 def _imap_list(folder):
     import re
     M = _imap()
+    # Mail can leave this folder through another connection: the TUI runs
+    # delete / move / purge as one-shot backends, and other clients exist.
+    # When this (serve) connection already has the folder selected,
+    # _imap_select() skips the SELECT, and a server need not report the
+    # EXPUNGE until a command lets it - UID SEARCH / FETCH needn't - so
+    # SEARCH would still list the gone UID, FETCH return nothing for it, and
+    # the list show a blank "(no subject)" ghost in its place.  NOOP lets
+    # the server catch this connection up.  One round trip per list (folder
+    # load / reload), not per keystroke: show / mark keep the skip.
+    sel = getattr(M, "_tvmail_selected", None)
+    if sel and sel[0] == folder:
+        try:
+            M.noop()
+        except Exception:
+            pass   # a dead connection fails the SEARCH next; _dispatch retries
     uids = _imap_uids(folder)
     if not uids:
         return
