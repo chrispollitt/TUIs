@@ -756,6 +756,39 @@ public:
 };
 #endif
 
+// -------------------------------------------------------- classic colors ----
+// The Turbo Vision DOS look, in exact RGB.  BIOS colour numbers are not
+// enough: the terminal's theme decides what "grey" or "green" look like, and
+// under e.g. Windows Terminal's Dark+ (white == bright white == #E5E5E5) the
+// classic white-on-grey dialog titles and light-cyan-on-green buttons
+// vanish.  RGB goes out as 24-bit colour, or as xterm's fixed 6x6x6 cube on
+// a 256-colour terminal - neither is touched by the theme.  (A 16-colour
+// terminal gets the nearest theme colour, as before.)
+static TColorAttr vga(uchar bios, ushort style = 0)
+{
+    static const uint32_t rgb[16] = {
+        0x000000, 0x0000AA, 0x00AA00, 0x00AAAA, 0xAA0000, 0xAA00AA, 0xAA5500, 0xAAAAAA,
+        0x555555, 0x5555FF, 0x55FF55, 0x55FFFF, 0xFF5555, 0xFF55FF, 0xFFFF55, 0xFFFFFF};
+    return TColorAttr(TColorRGB(rgb[bios & 15]), TColorRGB(rgb[(bios >> 4) & 15]), style);
+}
+// The "focus" green: darker than VGA green so black, white, yellow and light
+// cyan text all read on it (contrast >= 4); an exact xterm-cube colour, so
+// 256-colour terminals show the same.
+static const uint32_t kFocusGreen = 0x008700;
+static TColorAttr onGreen(uint32_t fg, ushort style = 0)
+{
+    return TColorAttr(TColorRGB(fg), TColorRGB(kFocusGreen), style);
+}
+
+static inline TColorAttr cNorm() { return vga(0x30); }          // black on cyan: text
+static inline TColorAttr cHi() { return vga(0x3F); }            // white on cyan: scroll arrows
+static inline TColorAttr cFocus() { return onGreen(0xFFFFFF); } // white on green: focused row, selection
+static inline TColorAttr cCur() { return vga(0xB0); }           // black on light cyan: current row, unfocused
+static inline TColorAttr cDiv() { return vga(0x33); }           // cyan on cyan
+static inline TColorAttr cFrame() { return vga(0x30); }         // black on cyan: frames + titles
+                                                                // (white on cyan is < 3:1 anywhere)
+static inline TColorAttr cDim() { return vga(0x38); }           // grey on cyan: pane rules
+
 // Every backendRun() call blocks the single TV event loop for the round
 // trip - fast on a local mailstore, but a real, felt pause over IMAP on a
 // slow link (see trace.sh). Flash a status-line message for the duration so
@@ -766,7 +799,7 @@ static void showBusy()
 {
     if (!TProgram::statusLine)
         return;
-    TColorAttr c(TColorBIOS(0x0F), TColorBIOS(0x01)); // white on blue - the
+    TColorAttr c = vga(0x1F); // white on blue - the
     TDrawBuffer b;                                    // desktop's own accent
     ushort w = b.moveStr(0, " Working... ", c);
     TProgram::statusLine->writeLine(0, 0, w, 1, b);
@@ -798,14 +831,6 @@ static std::string backendRun(const std::string &args)
     return shCapture("tvmail-backend" + backendFlags() + " " + args + " 2>&1");
 }
 
-// -------------------------------------------------------- classic colors ----
-// Turbo Vision DOS palette — hard-coded so we never depend on terminal quirks.
-static inline TColorAttr cNorm() { return TColorAttr(TColorBIOS(0x00), TColorBIOS(0x03)); }  // black on cyan
-static inline TColorAttr cHi() { return TColorAttr(TColorBIOS(0x0F), TColorBIOS(0x03)); }    // white on cyan
-static inline TColorAttr cSel() { return TColorAttr(TColorBIOS(0x0F), TColorBIOS(0x0B)); }   // white on light-cyan
-static inline TColorAttr cDiv() { return TColorAttr(TColorBIOS(0x03), TColorBIOS(0x03)); }   // cyan on cyan
-static inline TColorAttr cFrame() { return TColorAttr(TColorBIOS(0x0F), TColorBIOS(0x03)); } // white on cyan
-static inline TColorAttr cDim() { return TColorAttr(TColorBIOS(0x08), TColorBIOS(0x03)); }   // grey on cyan
 
 // ---------------------------------------------------------------- data -------
 struct MsgRow
@@ -985,7 +1010,7 @@ static void flashStatus(const std::string &msg)
 {
     if (!TProgram::statusLine || !TProgram::application)
         return;
-    TColorAttr c(TColorBIOS(0x0F), TColorBIOS(0x01));
+    TColorAttr c = vga(0x1F);
     TDrawBuffer b;
     ushort w = b.moveStr(0, " " + msg + " ", c);
     TProgram::statusLine->writeLine(0, 0, w, 1, b);
@@ -1194,7 +1219,7 @@ public:
     TBlueBg(const TRect &r) : TBackground(r, char(0xB0)) {} // 0xB0 = light shade
     void draw() override
     {
-        TColorAttr c(TColorBIOS(0x07), TColorBIOS(0x01)); // grey on blue
+        TColorAttr c = vga(0x17); // grey on blue
         TDrawBuffer b;
         b.moveChar(0, pattern, c, size.x);
         for (short y = 0; y < size.y; ++y)
@@ -1289,9 +1314,9 @@ public:
         case 2:
             return cNorm();
         case 3:
-            return cHi();
+            return cFocus();
         case 4:
-            return cSel();
+            return cCur();
         case 5:
             return cDiv();
         }
@@ -1399,9 +1424,9 @@ public:
         case 2:
             return cNorm();
         case 3:
-            return cHi();
+            return cFocus();
         case 4:
-            return cSel();
+            return cCur();
         case 5:
             return cDiv();
         }
@@ -1781,8 +1806,8 @@ public:
     void draw() override
     {
         TColorAttr norm = getColor(1);
-        TColorAttr selc = cSel();
-        TColorAttr match(TColorBIOS(0x0F), TColorBIOS(0x01)); // white on blue
+        TColorAttr selc = cFocus();
+        TColorAttr match = vga(0xE0); // black on yellow
         int x0 = dx();
         int s0 = std::min(selA, selB), s1 = std::max(selA, selB);
         for (short y = 0; y < size.y; ++y)
@@ -1810,7 +1835,7 @@ public:
                 }
                 if (!wrap && size.x > 2)
                 {
-                    TColorAttr m(TColorBIOS(0x0F), inSel ? TColorBIOS(0x0B) : TColorBIOS(0x03));
+                    TColorAttr m = inSel ? cFocus() : cHi();
                     if (srcWidth[g.line] > x0 + size.x)
                         b.moveStr(size.x - 1, "\xC2\xBB", m); // >> more to the right
                     if (x0 > 0 && srcWidth[g.line] > 0)
@@ -1930,14 +1955,14 @@ public:
     void draw() override
     {
         TColorAttr rule = cDim();
-        TColorAttr lab = active ? cSel() : cDim();
+        TColorAttr lab = active ? cFocus() : cNorm();
         TDrawBuffer b;
         b.moveChar(0, char(0xC4), rule, size.x); // horizontal rule
         std::string s = active ? "[ " + label + " ]" : "  " + label + "  ";
         b.moveStr(2, s.c_str(), lab);
         writeLine(0, 0, size.x, 1, b);
     }
-    TColorAttr mapColor(uchar) override { return active ? cSel() : cDim(); }
+    TColorAttr mapColor(uchar) override { return active ? cFocus() : cNorm(); }
 };
 
 class TMailWindow : public TWindow
@@ -2221,7 +2246,7 @@ public:
         switch (i)
         {
         case 1:
-            return cDim();
+            return cNorm();
         case 2:
         case 3:
             return cFrame();
@@ -2284,7 +2309,7 @@ public:
         switch (index)
         {
         case 1:
-            return cDim();
+            return cNorm();
         case 2:
             return cFrame();
         case 3:
@@ -2321,7 +2346,7 @@ public:
         case 1:
             return cNorm(); // normal text
         case 2:
-            return cSel(); // selected text
+            return cFocus(); // selected text
         }
         return TView::mapColor(index);
     }
@@ -2338,9 +2363,9 @@ public:
         case 1:
             return cNorm(); // passive
         case 2:
-            return cSel(); // active
+            return cCur(); // active
         case 3:
-            return cSel(); // selected block
+            return cFocus(); // selected block
         case 4:
             return cHi(); // scroll arrows
         }
@@ -2557,7 +2582,7 @@ public:
         switch (index)
         {
         case 1:
-            return cDim();
+            return cNorm();
         case 2:
             return cFrame();
         case 3:
@@ -2792,9 +2817,9 @@ public:
         case 2:
             return cNorm();
         case 3:
-            return cHi();
+            return cFocus();
         case 4:
-            return cSel();
+            return cCur();
         case 5:
             return cDiv();
         }
@@ -2820,7 +2845,7 @@ public:
         switch (i)
         {
         case 1:
-            return cDim();
+            return cNorm();
         case 2:
         case 3:
             return cFrame();
@@ -2922,9 +2947,9 @@ public:
         case 2:
             return cNorm();
         case 3:
-            return cHi();
+            return cFocus();
         case 4:
-            return cSel();
+            return cCur();
         case 5:
             return cDiv();
         }
@@ -2950,7 +2975,7 @@ public:
         switch (i)
         {
         case 1:
-            return cDim();
+            return cNorm();
         case 2:
         case 3:
             return cFrame();
@@ -3059,7 +3084,7 @@ public:
         switch (i)
         {
         case 1:
-            return cDim();
+            return cNorm();
         case 2:
         case 3:
             return cFrame();
@@ -3192,7 +3217,7 @@ public:
         switch (i)
         {
         case 1:
-            return cDim();
+            return cNorm();
         case 2:
         case 3:
             return cFrame();
@@ -3249,6 +3274,7 @@ public:
         return new TBlueDeskTop(r);
     }
     void handleEvent(TEvent &e) override;
+    TColorAttr mapColor(uchar index) override;
 #ifndef _WIN32
     void idle() override; // poll the background pull
 #endif
@@ -3282,6 +3308,53 @@ private:
                          const std::string &linkMbox = "", int linkIdx = -1,
                          bool addSig = false);
 };
+
+// tvision's own views - dialogs, message boxes, menus, the status line - end
+// their palette lookup here, at the application palette (cpAppColor).
+// Retune the classic entries that are hard to read even in true VGA colours
+// (each scored by WCAG contrast across Dark+, Campbell, VGA and mintty), and
+// hand everything back as exact RGB like tvmail's own views.
+TColorAttr TVMailApp::mapColor(uchar index)
+{
+    switch (index)
+    {
+    case 7: // menu: hotkey of the selected item (was red on green)
+        return vga(0x21);
+    case 25: // grey window / dialog: frame + title, and the frame icons
+    case 26: // (were white / light green on grey: invisible under Dark+)
+    case 33:
+    case 34:
+        return vga(0x70);
+    case 39: // label of the focused control (was white on grey)
+        return vga(0x71);
+    case 40: // label hotkey (was yellow on grey)
+        return vga(0x74);
+    case 41: // buttons: one green for every state, so the hotkey letter's
+        return onGreen(0x000000); // cell always matches; the text says it
+    case 42: // default (was light cyan on green)
+        return onGreen(0x55FFFF);
+    case 43: // focused (was white on green)
+        return onGreen(0xFFFFFF);
+    case 45: // hotkey (was yellow on green)
+        return onGreen(0xFFFF55);
+    case 48: // focused check box / radio button item (was white on cyan)
+        return vga(0x31);
+    case 49: // check box / radio button hotkey (was yellow on cyan)
+        return vga(0x30, slUnderline);
+    case 51: // input line selection, focused list row (were white on green)
+    case 58:
+        return cFocus();
+    case 54: // history button sides (was green on grey)
+        return vga(0x70);
+    case 59: // list row in a list without focus (was yellow on cyan)
+        return cCur();
+    }
+    TColorAttr c = TApplication::mapColor(index);
+    TColor fg = c.getForeground(), bg = c.getBackground();
+    if (fg.isBIOS() && bg.isBIOS())
+        return vga(uchar(uchar(fg.asBIOS()) | (uchar(bg.asBIOS()) << 4)), c.getStyle());
+    return c;
+}
 
 TMenuBar *TVMailApp::initMenuBar(TRect r)
 {
