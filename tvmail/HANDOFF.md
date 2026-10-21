@@ -1,6 +1,6 @@
 # tvmail chat add-on — Claude Code handoff
 
-Started Oct 20, 2026 · @Chris Pollitt · updated Oct 21, 2026 after milestone 3
+Started Oct 20, 2026 · @Chris Pollitt · updated Oct 21, 2026 after milestone 3 · Oct 20: merged to `main`, web hosting notes (cp1)
 
 This is the living version of the original handoff: the plan, what has been
 built, and the decisions made since. Where the code and this file disagree,
@@ -19,7 +19,7 @@ the code wins - and this file should be fixed.
 | 6 | Delta Chat adapter | | |
 | 7 | Docs | | |
 
-All work is on branch `ccr-b4320bfb-x90pzx`. `./test.sh` passes every layer.
+Milestones 1-3 were built on branch `ccr-b4320bfb-x90pzx`, merged into `main` (fast-forward to 69d442c) and the branch deleted on Oct 20; start milestone 4 from `main`. `./test.sh` passes every layer, on Cygwin too (all 8, Oct 20). The last pre-chat state is tagged `tvmail-v1.2.0`.
 Stop for Chris's review after each milestone.
 
 ## Purpose and scope
@@ -209,4 +209,22 @@ Not part of this work, but it constrains the design: a later installable web app
 - **Option A — the real app in a browser:** xterm.js plus a pty over WebSocket (ttyd-style). Identical look, almost no new code, but a server-side session and account per visitor - a hosting and security project.
 - **Option B — a Turbo Vision look-alike:** a CSS character grid with the cyan desktop, menus and shadowed dialogs, talking to the gateway. More work, feels native, installable as a PWA.
 - **IRC-only shortcut:** a self-hosted Ergo server accepts WebSocket clients directly; Delta Chat still needs the gateway.
-- **Hosting:** static front end on GitHub Pages; the gateway on cpbee or a small VPS.
+- **Hosting:** static front end on GitHub Pages or cp1; the gateway (with `tvchat-backend` and `tvmail-backend` behind it) on cpbee or a small VPS - **not cp1**, see below.
+- **What the server needs:** the backends running permanently (one per logged-in user, holding that user's connections and credentials), a small WebSocket gateway (login, spawn, relay), a reverse proxy (nginx or Caddy: TLS via Let's Encrypt, WebSocket upgrade, rate limiting) and service units. On cpbee that also means an inbound 443 in the nftables input chain (policy drop today), and a tunnel (Cloudflare Tunnel, Tailscale Funnel) or a VPS relay if cpbee loses its public address. It is a public login page in front of mail and chat credentials - auth, TLS only, lockout. An always-on backend is also an IRC bouncer, which argues for persisting IRC logs (open question above). Server-side setup would be a new tool in `chrispollitt/POSIX` beside `mail-setup` (`web-setup`, or `chat-setup` if it also covers Ergo - both need the port, the certificate and the reachability work).
+
+### cp1 (u-l.ca, the cPanel webhost) - checked Oct 20, 2026
+
+cp1 can serve the static front end but cannot host the gateway or the backends:
+
+| Check | Result |
+| --- | --- |
+| Platform | CloudLinux, kernel 5.14 el9; shared cPanel account `whatwelo` |
+| Outbound IRC, irc.libera.chat 6697 / 6667 | **refused** over IPv4 (IPv6: network unreachable) - the host's outbound firewall |
+| Outbound to irc.libera.chat 443 | times out (Libera has no IRC on 443 anyway) |
+| Outbound HTTPS (www.google.com 443) | ok - only non-web ports are blocked |
+| Python | 3.7 default; 2.7, 3.3-3.13 via `cloudlinux-selector` |
+| App hosting | CloudLinux selector (Passenger), Node 6-22 - request-driven apps that are stopped when idle, not daemons; per-account LVE limits |
+
+So even with the IRC ports opened by the host, a permanently connected backend fights Passenger's idle shutdown and the LVE limits, and the credentials would sit on a shared server.
+
+Non-interactive `ssh whatwelove.org` sits behind a per-session MFA gate: until Chris approves a fresh token every command prints only `token: Error` (exit status 0) and runs nothing. Claude does not generate or enter the code.
