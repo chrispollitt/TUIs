@@ -1,6 +1,6 @@
 # tvmail chat add-on — Claude Code handoff
 
-Started Oct 20, 2026 · @Chris Pollitt · updated Oct 21, 2026 after milestone 3 · Oct 20: merged to `main`, web hosting notes (cp1)
+Started Oct 20, 2026 · @Chris Pollitt · updated Oct 21, 2026 after milestone 4 · Oct 20: milestones 1-3 merged to `main`, web hosting notes (cp1)
 
 This is the living version of the original handoff: the plan, what has been
 built, and the decisions made since. Where the code and this file disagree,
@@ -11,15 +11,16 @@ the code wins - and this file should be fixed.
 | # | Milestone | State | Commit |
 | --- | --- | --- | --- |
 | 1 | Backend skeleton | done | 050add8 |
-| 2 | IRC from the command line | done, except the live Libera check (needs Chris's nick/channel; the build sandbox has no DNS) | 78e5e45 |
+| 2 | IRC from the command line | done; live check passed on Chris's machine (`tvchat-backend irc-tail libera`) | 78e5e45 |
 | – | Split `src/tvmail.cpp` (approved by Chris) | done | 73060b6 |
 | 3 | C++ plumbing | done | 62347cf |
-| 4 | Chat windows | **next** | |
-| 5 | IRC hardening | | |
+| 4 | Chat windows | done, waiting for Chris's live check in `#tvmail-test` | 611efde |
+| – | mingw compiles again (bug #45) | done | 1e43880 |
+| 5 | IRC hardening | **next** | |
 | 6 | Delta Chat adapter | | |
 | 7 | Docs | | |
 
-Milestones 1-3 were built on branch `ccr-b4320bfb-x90pzx`, merged into `main` (fast-forward to 69d442c) and the branch deleted on Oct 20; start milestone 4 from `main`. `./test.sh` passes every layer, on Cygwin too (all 8, Oct 20). The last pre-chat state is tagged `tvmail-v1.2.0`.
+Milestones 1-3 were built on branch `ccr-b4320bfb-x90pzx`, merged into `main` (fast-forward to 69d442c) and the branch deleted on Oct 20. Milestone 4 was built on branch `claude/sweet-thompson-nzz0zz` from `main` at cee1cc5 (Oct 21); `./test.sh` passes all 9 layers on Linux (`mingw_compile` is new, see Testing) - not yet run on Cygwin. The last pre-chat state is tagged `tvmail-v1.2.0`.
 Stop for Chris's review after each milestone.
 
 ## Purpose and scope
@@ -53,12 +54,13 @@ tvmail (v1.2.0) is a thin C++17 Turbo Vision face over stdlib-only Python helper
   | `dialogs.cpp`, `util.cpp`, `shell.cpp` | Find/Replace and save prompts; quoting, UTF-8 columns, clipboard, status flash; `--debug`/`--trace` and the sh plumbing |
   | `coprocess.h/.cpp` | `CoProcess`: one helper in `serve` mode over two pipes; `mailBackend()`, `chatBackend()` |
   | `chat.h/.cpp` | `ChatClient`: tvmail's side of `tvchat-backend` |
+  | `chatwin.cpp` | the chat UI: the Chat menu, `TConversationsWindow`, `TChatWindow` (milestone 4) |
 
   Command ids start at `cmPull = 2000`; **chat owns 2100–2149**. The Window ▸ List dialog (Alt-0) lists every `TWindow` by title.
 - **Python helpers** (`backend/`), plain `#!/usr/bin/env python3` scripts (not sh/python polyglots, as the first handoff said), Python ≥ 3.6, stdlib only. `tvmail-backend` (mail, ~2,250 lines) and `tvchat-backend` (chat). All protocol and format work lives there, never in C++.
 - **`CoProcess`** forks `<program> serve` through the shell preamble, waits for a `0 5\nready` banner, sends one shell-quoted request line per call, reads `<status> <nbytes>\n` + body, polls 8 s for the first byte, restarts a dead child up to three times in a row, and bumps `generation()` on every successful start. Every pipe step retries on `EINTR` (bug #43). `quit`/EOF ends the child with no reply.
-- **Idle work:** `TVMailApp::idle()` keeps a list of `IdleTick`s; it only posts a due tick's command (one per idle round - `putEvent` holds one event) and the work happens in `handleEvent`. The background F3 pull is reaped there too. **TO-DO item 14** (periodic pull, quiet "N new") should be another tick.
-- **Windows/mingw build has no `fork()`:** `CoProcess::call()` returns false and `ChatClient::configured()` is false, so chat is off; say so in the menu (milestone 4). The mingw build has not been compiled since the split - nobody had the cross compiler at hand.
+- **Idle work:** `TVMailApp::idle()` keeps a list of `IdleTick`s; it only posts a due tick's command (one per idle round - `putEvent` holds one event) and the work happens in `handleEvent`. The background F3 pull is reaped there too. **Nothing is posted while a menu or dialog is up** (`TopView() != this`): any command ends a tvision menu, so the 250 ms chat poll shut menus at once (bug #44), and a dialog swallows commands it does not know. Chat events wait in the backend's queue meanwhile (Chris: no polling under a dialog is fine). **TO-DO item 14** (periodic pull, quiet "N new") should be another tick; chat's "N new" already sits at the right end of the status line.
+- **Windows/mingw build has no `fork()`:** `CoProcess::call()` returns false and `ChatClient::configured()` is false, so chat is off and the Chat menu says so, greyed. It did not compile after all (`setenv()`, bug #45, pre-chat); fixed, and the `mingw_compile` test layer now syntax-checks every source with the mingw-w64 cross g++ (skipped where there is none - Cygwin's `mingw64-x86_64-gcc-g++` provides it). A full cross build with `build.sh --mingw`'s cmake settings also links (on Linux, Oct 21); the `.exe` has not been run on Windows since the split.
 - **Credentials never live in the repo or a config file.**
 
 ## Architecture as built
@@ -132,20 +134,22 @@ Do not reimplement Delta Chat. Spawn the official `deltachat-rpc-server` as a ch
 - **Mapping:** chat id → `conv` (`ACCOUNT/<chat id>`); contact email → `sender-address`, display name → `sender-display`; encrypted → flag `e`; groups `kind=group`, one-to-one `kind=direct`.
 - **Out of scope for v1:** attachments (show `[attachment: NAME]`), verification QR codes, multi-device setup, invite links.
 
-## UI in Turbo Vision (milestone 4 - next)
+## UI in Turbo Vision (milestone 4 - built)
 
-One window per conversation in the existing cyan style, reached through a new **Chat** menu and Window ▸ List.
+One window per conversation in the existing cyan style, reached through a new **Chat** menu, Alt-C and Window ▸ List. All of it is `src/chatwin.cpp`; it talks to the backend only through `ChatClient` and learns of changes only from the `cmChatEvent` / `cmChatReset` broadcasts, so nothing in it knows the protocol.
 
-- **Wiring that already exists:** `ChatClient::instance()` (`accounts()`, `convs()`, `unreadTotal()`, `request()`), the `cmChatEvent` / `cmChatReset` broadcasts, and `chatFields()` to split a reply line. A window sends verbs with `ChatClient::instance().request("send " + shq(conv) + " " + shq(text), body, status)` - `shq` quoting is understood by the backend's `shlex`.
-- **Chat menu:** Connect… (pick an account), Disconnect, Conversations… (Alt-C), Join… (channel or nick/address), Leave, plus the account list with each state. Greyed out entirely when `ChatClient::configured()` is false (always on mingw).
-- **`TConversationsWindow`:** a `TListViewer` of all conversations across accounts - protocol tag, title, unread count - modelled on `TFolderPane` (now in `mailwin.cpp`). Enter opens or focuses that conversation's window.
-- **`TChatWindow`** (a `TWindow`): a scrolling log on top, a one-line `TFieldLine` input at the bottom. Derive the log from `TMailText` (`views.h`) - UTF-8 columns, wrapping and the `»` marker that `e2e_regress` checks. Enter sends; PgUp past the top requests `history --before`. On open: `history CONV`; then apply `msg` events for its conv; on `cmChatReset`, re-read history.
-- **Log line format:** `HH:MM <nick> text`, `* nick action` for `/me`, system lines (flag `n`) dimmed, own lines (flag `s`) in a distinct colour, `[e]` for encrypted Delta Chat messages. Every colour must keep the ≥ 3:1 contrast `e2e_regress` enforces.
-- **Title and unread:** `#channel — Libera` or the contact's display name; unread in the Conversations list and in the title when unfocused. Focusing a window sends `mark-read`.
-- **Status line:** a quiet `N new` (from `unreadTotal()`) in the spot TO-DO 14 plans for mail; never a modal box.
-- **Window List:** check `collectWindow` / `WinEntry` in `app.cpp` show chat windows with their titles.
-- **Unsaved input:** text in the input line makes close / Alt-X ask, as the compose window does (`valid(cmClose|cmQuit)`).
-- **Done when** Chris can hold a conversation in his channel from tvmail, and `e2e_regress` cases cover opening a chat window, Esc closing it, and UTF-8 log columns - pointed at a fake IRC server via `$TVCHAT_CONF` (`tests/e2e_chat.py`'s `FakeIrc` is a starting point).
+- **Chat menu** (`Ch~a~t`, Alt-A - Alt-C is Conversations): Connect… (radio list of the accounts not connected; no dialog when there is one), Disconnect… (the same for live ones), Conversations… (Alt-C), Join…, Leave, then one item per account with its state on the right (`Libera   connected`); picking an account opens its server window, connecting it first if needed. The account items are rebuilt after every poll that brought a `state` event or a reset (never while a menu is open - see bug #44).
+- **Greyed by hand:** tvision only tracks commands 0-255 (`commandEnabled()` is always true above), and every command-set change resets every menu item's `disabled` flag. `TVMailMenuBar` sets the chat items' flags before and after each event it sees; `chatCommand()` checks again, because Enter can still pick a greyed item. No `tvchat.conf` (or mingw, or a backend that stopped answering): everything greyed and a note saying why, e.g. `(no chat: no tvchat.conf)`. Leave is greyed unless a chat window is the current one.
+- **Alt-C** is not a menu-bar key - the bar pre-processes keys and would take Alt-C from the compose window's Cc label (bug #11's case). `TVMailApp::handleEvent` takes it after the focused window had its turn.
+- **`TConversationsWindow`** (one at a time; Alt-C again brings it forward): a `TListViewer` like `TFolderPane` - `[irc]  #tvmail-test — Libera  (3)`, server window first per account, then channels, groups, queries, by name. Enter or a double click opens or focuses the window. Esc closes. Re-read on every chat broadcast.
+- **`TChatWindow`**: a `TChatLog` (a `TTextView`, so `TMailText`: UTF-8 columns, wrap (on by default; View ▸ Wrap long lines works from the input line too), Shift-select + Ctrl-Ins copy, Find) over `> ` and a `TFieldLine` (2,000 bytes). The input has the focus; typing in the log moves it there. Enter sends `send CONV TEXT`; a refused send (not connected, the server window) becomes a dim note in the log and the text stays. After a send the app polls at once, so your line shows without waiting for the tick. PgUp / PgDn / Up / Down / Ctrl-PgUp / Ctrl-PgDn scroll the log from the input; PgUp or Up at the top asks `history CONV --before OLDEST` (50 at a time) and keeps your place; "No older messages" on the status line when the ring is exhausted.
+- **Opening:** `history CONV` (the last 50), then the channel topic as a dim line (`ChatConv::topic`, kept by `ChatClient` from `topic` events - `convs` does not carry it), then `msg` events for the conversation. History and the event queue overlap, so lines are kept once per msgid. `cmChatReset` reads the history afresh (a restarted backend's ring is all there is). `state` events of the account and `conv-gone` add a dim note (`-- disconnected: ...`).
+- **Log lines:** `HH:MM <nick> text`, `HH:MM * nick action`, `HH:MM -nick- notice` (flag `n`, dim), `HH:MM -- note` for tvmail's own; `[e]` after the time for an encrypted message; continuation lines of a multi-line message indented under the text. Local time from the UTC stamp by hand (no `timegm` on every libc). Colours, all scored by `e2e_regress`: others black on cyan, own lines (flag `s`) blue on cyan (4.6:1), system lines `#444444` on cyan (3.4:1).
+- **Title and unread:** `#channel — Libera`, the nick for a query, `Libera (server)`; `(N)` appended while it is not the window you are in - Window ▸ List shows the same title. Becoming the front window, or a message arriving while it is, sends `mark-read`; the count drops with the backend's `unread CONV 0` on the next poll.
+- **Status line:** `N new` (`unreadTotal()`, server windows and your own lines never count) right-aligned on the status line, redrawn when the total changes; never a box. On a terminal narrower than the hints it covers the end of them.
+- **Leave** parts the focused window's conversation (`part`), then closes the window. A server window refuses (the backend says why).
+- **Unsent input:** Esc / Alt-F3 / Alt-X with text in the input asks "Discard the message you have not sent to …?" (Yes / No); No keeps the window and the text, and for Alt-X calls the quit off.
+- **Not in milestone 4:** typed `/commands` are sent as text (milestone 5 adds `/me`, `/join`, `/msg`, …); no member list view (the `members` verb exists); a pasted line ending in a newline is pasted, not sent (tvision delivers a fast burst of keys as a paste); new queries do not open a window by themselves - they show in Conversations and in "N new".
 
 ## Configuration and credentials
 
@@ -179,26 +183,31 @@ Values are placeholders - the nick, channel and Delta Chat address are Chris's t
 
 ## Testing
 
-Eight layers under `./test.sh` (see `tests/README.md`); no test needs network access or a real account.
+Nine layers under `./test.sh` (see `tests/README.md`); no test needs network access or a real account.
 
 - **`chat_unit`** (`tests/test_chat_backend.py`, 53 cases): config, escaping, event queue, the loop and its timers on a fake clock, `serve` framing; the IRC parser, colour stripping, UTF-8 splitting; a scripted **fake IRC server** on 127.0.0.1 (CAP LS 302, SASL PLAIN and its failure, nick-in-use, NAMES/TOPIC, server-time, echo-message, PING, queries, part, ERROR + hang-up); TLS with a `cafile` and a refused untrusted cert (`openssl` makes a throwaway cert; skipped without it); autoconnect through a real `serve` process.
 - **`backend_pipe`** (`tvmail --selftest`): the mail pipe and `spawnLogged`, then `tvchat-backend` (start, `accounts` from `tests/tvchat-selftest.conf`, a poll, `ping`). Both lines are required.
-- **`e2e_chat`** (`tests/e2e_chat.py`): tvmail in a pty against a fake IRC server - the backend is polled while idle (a message sent 1.5 s after the join arrives, seen in `--debug`), a killed `tvchat-backend` is restarted and re-read, Alt-X makes it QUIT.
-- **`e2e_regress`** case 43 (bug #43) guards the `EINTR` fix.
+- **`e2e_chat`** (`tests/e2e_chat.py`): tvmail in a pty against a fake IRC server - the backend is polled while idle (a message sent 1.5 s after the join arrives, seen in `--debug`); Alt-C, Enter opens the channel's window on that message; a line typed there reaches the server and the server's answer shows in the window; a killed `tvchat-backend` is restarted and re-read, the open window with it; Alt-X makes it QUIT.
+- **`e2e_regress`** case 43 (bug #43) guards the `EINTR` fix; case 44 (bug #44) keeps menus open while chat polls. The chat UI cases (tagged `--`) use **`tests/fake_irc.py`**, a scripted IRC server (registers, confirms JOIN with a topic and NAMES, records what it is sent, says what the test hands it): `chat_window_opens_and_esc_closes` (history, topic, live message, `/me`, unread in the title / Window ▸ List / "N new", mark-read on focus, Esc closes, Alt-C brings the list back), `chat_log_utf8_columns` (CJK and two-byte nicks and text, aligned stamps, word wrap, no split characters), `chat_history_pgup`, `chat_join_and_leave`, `chat_unsent_input_asks`, `chat_colours_readable` (own / system / other in three colours, every cell >= 3:1) and `chat_menu_greyed_without_config`.
+- **`mingw_compile`** (`tests/mingw_compile.sh`, new): every `src/*.cpp` syntax-checked by the mingw-w64 cross g++, `-Wall -Wextra -Werror`, against the tvision headers; exits 77 (skipped) without the cross compiler. Guards bug #45.
 - Still to add: a fake Delta Chat RPC server (a stub speaking JSON-RPC lines), plus a real-binary test that exits 77 when `deltachat-rpc-server` is not installed.
 - **Conventions:** stdlib only in Python; Python ≥ 3.6 syntax (no walrus, no `match`, no f-strings so far); C++17 across `src/`; comments in the existing explanatory style; no credentials in code, tests or examples; every squashed bug gets a `BUGS.md` entry (next free number: check the whole file - both tables) and a regression case.
-- **Builds:** Linux, the Pi, macOS and Cygwin; mingw compiles with chat disabled (unverified since the split).
+- **Builds:** Linux, the Pi, macOS and Cygwin; mingw compiles with chat disabled (`mingw_compile`, and a full cross build linked on Oct 21). `-Wall -Wextra` is clean on Linux and mingw (pass `-DCMAKE_CXX_FLAGS="-Wall -Wextra"`; the CMakeLists does not set it).
+- **`mail_setup`** runs the suites of whatever `chrispollitt/POSIX` checkout `third_party.sh` fetched. On Oct 21 a fresh clone failed one of its shell checks ("sasl_passwd is mode 600": `configure-sendmail-relay.sh` now leaves it 0640 for the pullers) - a mail-setup inconsistency, nothing in tvmail; the other 8 layers pass.
 
 ## Bugs found along the way
 
+- **#44 (fixed, 611efde):** with an account connected, every menu closed by itself within 250 ms - `idle()` posted the chat poll as a command, and any command ends a tvision menu. `idle()` now posts nothing while `TopView()` is not the app (a menu or a dialog is up); the backend queue holds the events. Found building the Chat menu.
+- **#45 (fixed, 1e43880):** the mingw build did not compile - `main()`'s `setenv("ESCDELAY", ...)` (668ea6b, pre-chat). Now POSIX only (ESCDELAY is an ncurses setting; the Windows build reads the Win32 console). Found by the first mingw compile since the split.
 - **#43 (fixed, 62347cf):** a signal during a backend round trip - `SIGWINCH` from any terminal resize - made `poll()`/`fgetc()` fail with `EINTR`, which was taken for a dead backend: the call fell back to the slow shell path, and during a start the co-process was given up for the session. Pre-dates chat; found by `e2e_chat` flaking.
 
 ## Open questions for Chris
 
-- [ ] IRC nick, whether it is registered with Libera's NickServ (for SASL), and which test channel - needed for milestone 2's live check and milestone 4's "done when".
+- [x] ~~IRC nick, NickServ registration, test channel?~~ Libera.Chat, nick `chris-pollitt`, registered (SASL user `chris-pollitt`), channel `#tvmail-test`, autoconnect on (Oct 21). His `tvchat.conf` and SASL password live on his machine only; `irc-tail libera` works there. Milestone 4's live check (a conversation in `#tvmail-test` from tvmail) is his.
 - [x] ~~Split `src/tvmail.cpp`?~~ Yes (Oct 20) - done.
 - [ ] Dedicated Delta Chat address on cpbee: which one, and is the mailbox created by mail-setup (a change in the `chrispollitt/POSIX` repo, not yet attached to the session) or by hand? (milestone 6)
-- [ ] Should IRC logs persist to disk between sessions, or stay in memory as v1 specifies?
+- [x] ~~Should IRC logs persist to disk between sessions?~~ No - in memory for v1 (Oct 21). The window's log is the backend's ring (2,000 per conversation); gone when tvmail exits. Worth asking again if an always-on backend (the web app) ever happens.
+- [x] ~~Must chat keep polling while a modal dialog is open?~~ No (Oct 21): `cmChatEvents` is simply not posted under a menu or dialog (bug #44); nothing is lost - the backend queue holds every event until the next `events --after`.
 - [ ] Later, separate project: self-host an Ergo IRC server on cpbee, and how to keep it reachable if cpbee moves to a phone-tethered connection.
 
 ## Future wish list

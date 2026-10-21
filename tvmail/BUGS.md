@@ -5,9 +5,10 @@ Numbers (`#n`) are from the October 2026 code review, so a commit message or
 note that says "#14" means the same thing everywhere; bugs found later get
 the next free number.  The **Test** column says what guards a fix against
 coming back: `unit` (tests/test_backend.py), `e2e` (tests/e2e_regress.py,
-one case per bug; tests/e2e_tui.py is the older smoke test), or
-`manual` (checked on screen, no automated test yet - the gaps a TUI
-regression suite should close).
+one case per bug; tests/e2e_tui.py is the older smoke test), `build`
+(tests/mingw_compile.sh, the mingw cross-compile), or `manual` (checked on
+screen, no automated test yet - the gaps a TUI regression suite should
+close).
 
 ## To be squashed
 
@@ -61,3 +62,5 @@ regression suite should close).
 | 40 | Sent folder: blank date and sender columns - send left Date / Message-ID to the server, which adds them only to the delivered copy, so the Sent copy had none (and no From); the list also showed your own name, not the recipient | 394d25f | unit |
 | 41 | Help > About cut its credits off (messageBox holds about five lines) and called tvmail a client "for a local mailbox"; no link to the repo | e915646 | e2e |
 | 43 | A terminal resize (SIGWINCH) during a backend round trip was taken for a dead co-process: the call fell back to the slow shell path, and during start-up tvmail gave up the warm backend for the whole session | 62347cf | e2e |
+| 44 | With a chat account connected, any open menu closed by itself within a quarter second: idle() posted the 250 ms chat poll as a command, and any command ends a tvision menu.  The background pull's cmPullDone could do the same, and under a dialog it was swallowed, so that pull's summary and reload never came (found by reading) | 611efde | e2e |
+| 45 | The mingw (native Windows) build did not compile: `main()` calls `setenv()` for ESCDELAY (since 668ea6b), which mingw does not have - unnoticed because nobody had the cross compiler at hand | 1e43880 | build |
