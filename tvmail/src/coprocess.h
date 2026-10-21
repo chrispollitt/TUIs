@@ -20,9 +20,9 @@ class CoProcess
 public:
     // program: run as `<program>[ diagnostics flags] serve` through the
     // shell preamble's PATH.  logEnv: an environment variable that, if set,
-    // names a file for the child's stderr (else /dev/null).  diagFlags: pass
-    // tvmail's --debug / --trace on (only tvmail-backend takes them).
-    CoProcess(const char *program, const char *logEnv, bool diagFlags);
+    // names a file for the child's stderr (else /dev/null).  diagTag: pass
+    // tvmail's --debug / --trace on, as FILE.<diagTag>.ext (nullptr: don't).
+    CoProcess(const char *program, const char *logEnv, const char *diagTag);
     ~CoProcess() { stop(); }
     CoProcess(const CoProcess &) = delete;
     CoProcess &operator=(const CoProcess &) = delete;
@@ -46,7 +46,7 @@ public:
 private:
     std::string program;
     const char *logEnv;
-    bool diagFlags;
+    const char *diagTag;
     FILE *wr = nullptr, *rd = nullptr;
 #ifndef _WIN32
     pid_t pid = -1;

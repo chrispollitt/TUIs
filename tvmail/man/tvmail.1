@@ -35,6 +35,16 @@ Write diagnostic logging to
 .IR FILE .
 If omitted, use
 .IR debug.log .
+The helpers log beside it:
+.B tvmail-backend
+to
+.I debug.backend.log
+and
+.B tvchat-backend
+to
+.IR debug.chat.log ,
+which records every chat request, account state changes, every IRC line in
+and out (SASL secrets redacted) and why a connection ended.
 .TP
 .BI "--trace " [FILE]
 Write profiling data as Chrome Trace Event JSON to
@@ -42,6 +52,10 @@ Write profiling data as Chrome Trace Event JSON to
 The file can be opened by Chrome's trace viewer and compatible profiling
 tools. If omitted, use
 .IR trace.log .
+The helpers write cProfile data beside it, to
+.I trace.backend.log
+and
+.IR trace.chat.log .
 .TP
 .B --help
 Show command-line help and exit.

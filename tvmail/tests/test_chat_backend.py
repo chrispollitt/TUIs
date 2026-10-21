@@ -19,6 +19,9 @@ import textwrap
 import threading
 import time
 import unittest
+import base64
+import io
+import logging
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -865,6 +868,128 @@ class TestIrcTls(IrcBase):
         self.assertIn("TLS", self.acct.detail)
         self.assertIn("CERTIFICATE_VERIFY_FAILED", self.acct.detail)
 
+
+
+class TestDiagnostics(IrcBase):
+    """--debug: what reached the log, what must never reach it, and a
+    handler bug that is logged instead of ending the connection."""
+
+    def capture(self):
+        self.logbuf = io.StringIO()
+        h = logging.StreamHandler(self.logbuf)
+        h.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
+        cb._log.addHandler(h)
+        old = cb._log.level
+        cb._log.setLevel(logging.DEBUG)
+
+        def undo():
+            cb._log.removeHandler(h)
+            cb._log.setLevel(old)
+        self.addCleanup(undo)
+
+    def test_wire_state_and_end_are_logged_sasl_redacted(self):
+        os.environ["TVCHAT_PASS_LIBERA"] = "s3cret-pw"
+        self.capture()
+
+        def script(srv):
+            srv.expect("CAP LS 302")
+            srv.send(":srv CAP * LS :sasl")
+            srv.expect("CAP REQ :sasl")
+            srv.send(":srv CAP * ACK :sasl")
+            srv.expect("AUTHENTICATE PLAIN")
+            srv.send("AUTHENTICATE +")
+            srv.expect("AUTHENTICATE ")
+            srv.send(":srv 903 tester :SASL authentication successful")
+            srv.expect("CAP END")
+            srv.send(":srv 001 tester :Welcome")
+            srv.expect("JOIN #Test")
+            srv.send(":tester!u@h JOIN #Test")
+            srv.expect("PRIVMSG #Test :hello there")
+            srv.hang_up()
+
+        self.setup_irc(script, "sasl = chrisp")
+        self.verb("connect", "libera")
+        self.turn(lambda: self.acct.state == "connected")
+        self.turn(lambda: "libera/#test" in self.acct.convs)
+        self.assertEqual(self.verb("send", "libera/#test", "hello there")[0], 0)
+        self.turn(lambda: self.acct.state == "disconnected")
+        log = self.logbuf.getvalue()
+        self.assertIn("libera: state connecting", log)
+        self.assertIn("libera: connected ", log)
+        self.assertIn("libera >> CAP LS 302", log)
+        self.assertIn("libera << :srv 001 tester :Welcome", log)
+        self.assertIn("libera >> PRIVMSG #Test :hello there", log)
+        self.assertIn("libera >> AUTHENTICATE <redacted>", log)
+        self.assertIn("libera: lost in phase up: connection closed by the server", log)
+        self.assertRegex(log, r"\d+ bytes in, \d+ out")
+        blob = base64.b64encode(b"chrisp\0chrisp\0s3cret-pw").decode()
+        self.assertNotIn("s3cret-pw", log)
+        self.assertNotIn(blob[:20], log)
+
+    def test_a_handler_bug_is_logged_and_the_connection_lives(self):
+        self.capture()
+
+        def script(srv):
+            welcome(srv)
+            srv.expect("JOIN #Test")
+            srv.send(":tester!u@h JOIN #Test")
+            srv.send(":alice!a@h PRIVMSG #Test :boom")
+            srv.send("PING :still-there")
+            srv.expect("PONG :still-there")
+            srv.send(":alice!a@h TOPIC #Test :after")
+            srv.expect("QUIT")
+
+        self.setup_irc(script)
+        ad = self.chat.adapter(self.acct)
+        ad.on_PRIVMSG = lambda m: 1 / 0
+        self.verb("connect", "libera")
+        self.turn(lambda: self.events("topic"))
+        self.assertEqual(self.acct.state, "connected")
+        log = self.logbuf.getvalue()
+        self.assertIn("ERROR libera: handling ':alice!a@h PRIVMSG #Test :boom' failed", log)
+        self.assertIn("ZeroDivisionError", log)
+        self.chat.close()
+
+    def test_a_loop_callback_that_raises_is_logged(self):
+        self.capture()
+        loop = cb.Loop(clock=FakeClock(5.0))
+        ran = []
+        loop.call_later(0, lambda: 1 / 0)
+        loop.call_later(0, lambda: ran.append(1))
+        self.assertEqual(loop.run_due(), 2)
+        self.assertEqual(ran, [1])
+        self.assertIn("ZeroDivisionError", self.logbuf.getvalue())
+
+    def test_cli_flags(self):
+        self.assertEqual(cb._normalize_cli(["--debug", "serve"]), ["--debug=debug.log", "serve"])
+        self.assertEqual(cb._normalize_cli(["--debug", "x.log", "serve"]), ["--debug", "x.log", "serve"])
+        self.assertEqual(cb._normalize_cli(["--trace"]), ["--trace=trace.log"])
+        a = cb.build_parser().parse_args(["irc-tail", "--raw", "libera"])
+        self.assertTrue(a.raw)
+
+    def test_serve_debug_logs_requests_not_idle_polls(self):
+        self.conf("[account:libera]\nprotocol = irc\nhost = 127.0.0.1\n")
+        log = self.tmp / "debug.chat.log"
+        p = subprocess.Popen([sys.executable, str(BACKEND), "--debug", str(log), "serve"],
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                             stderr=subprocess.DEVNULL, env=dict(os.environ))
+        self.addCleanup(TestServe._reap, p)
+        self.assertEqual(TestServe._frame(p.stdout), (0, b"ready"))
+        def req(text):
+            p.stdin.write(text.encode() + b"\n")
+            p.stdin.flush()
+            return TestServe._frame(p.stdout)
+        self.assertEqual(req("ping"), (0, b"pong\n"))
+        req("events")
+        self.assertEqual(req("part nowhere/#x")[0], 1)
+        p.stdin.write(b"quit\n")
+        p.stdin.flush()
+        self.assertEqual(p.wait(timeout=5), 0)
+        text = log.read_text()
+        self.assertIn("tvchat-backend %s" % cb.__version__, text)
+        self.assertIn("request: ping -> 0, 5 bytes", text)
+        self.assertRegex(text, r"request: part nowhere/#x -> 1, \d+ bytes, [\d.]+ ms: no chat account")
+        self.assertNotIn("request: events", text)       # empty poll: no line
 
 
 class TestServeIrc(IrcBase):

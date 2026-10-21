@@ -16,8 +16,8 @@ FILE *gDebugLog = nullptr;
 FILE *gTraceLog = nullptr;
 static bool gTraceFirst = true;
 static std::chrono::steady_clock::time_point gTraceStart;
-static std::string gBackendDebugPath;
-static std::string gBackendTracePath;
+static std::string gDebugPath; // tvmail's own --debug / --trace files: each
+static std::string gTracePath; // helper's go beside them (backendFlags)
 
 void debugLog(const char *fmt, ...)
 {
@@ -55,17 +55,9 @@ void traceSpan(const char *name, long long start)
 
 void startDiagnostics(const CliOptions &options)
 {
-    auto backendPath = [](const std::string &path)
-    {
-        size_t slash = path.find_last_of("/\\");
-        size_t dot = path.find_last_of('.');
-        if (dot == std::string::npos || dot < slash + 1)
-            return path + ".backend";
-        return path.substr(0, dot) + ".backend" + path.substr(dot);
-    };
     if (!options.debugPath.empty())
     {
-        gBackendDebugPath = backendPath(options.debugPath);
+        gDebugPath = options.debugPath;
         gDebugLog = std::fopen(options.debugPath.c_str(), "ab");
         if (!gDebugLog)
             std::fprintf(stderr, "tvmail: cannot open debug log %s\n",
@@ -73,7 +65,7 @@ void startDiagnostics(const CliOptions &options)
     }
     if (!options.tracePath.empty())
     {
-        gBackendTracePath = backendPath(options.tracePath);
+        gTracePath = options.tracePath;
         gTraceLog = std::fopen(options.tracePath.c_str(), "wb");
         if (!gTraceLog)
         {
@@ -103,13 +95,26 @@ void stopDiagnostics()
     }
 }
 
-std::string backendFlags()
+// A helper's log beside tvmail's: insert .TAG before the extension
+// (debug.log -> debug.backend.log, debug.chat.log), or append it if there's
+// none.  trace.sh knows the same rule.
+static std::string helperPath(const std::string &path, const char *tag)
+{
+    size_t slash = path.find_last_of("/\\");
+    size_t dot = path.find_last_of('.');
+    std::string t = std::string(".") + tag;
+    if (dot == std::string::npos || (slash != std::string::npos && dot < slash + 1))
+        return path + t;
+    return path.substr(0, dot) + t + path.substr(dot);
+}
+
+std::string backendFlags(const char *tag)
 {
     std::string flags;
-    if (!gBackendDebugPath.empty())
-        flags += " --debug " + shq(gBackendDebugPath);
-    if (!gBackendTracePath.empty())
-        flags += " --trace " + shq(gBackendTracePath);
+    if (!gDebugPath.empty())
+        flags += " --debug " + shq(helperPath(gDebugPath, tag));
+    if (!gTracePath.empty())
+        flags += " --trace " + shq(helperPath(gTracePath, tag));
     return flags;
 }
 

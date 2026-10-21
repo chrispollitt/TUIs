@@ -55,16 +55,30 @@ carriage return or backslash inside a field is escaped as \\t \\n \\r \\\\):
                             One selectors loop multiplexes stdin and every
                             protocol socket - no threads.
 
+  irc-tail --raw ACCOUNT    the same, plus every IRC line in (<<) and out (>>)
+
+Diagnostics (before the sub-command, as tvmail passes them):
+  --debug [FILE]            log to FILE (default debug.log): every request and
+                            its reply status, account state changes, every IRC
+                            line in and out (SASL secrets redacted), socket and
+                            TLS details, and why a connection ended
+  --trace [FILE]            write cProfile data to FILE on exit (default trace.log)
+
 Exit / frame status: 0 ok, 1 user-facing error (the body says what to tell
 the user), 2 internal error (bad request, bug).
 """
 
 import sys, os, io, argparse, base64, configparser, heapq, re, selectors, shlex, socket
-import errno, ssl, threading, time
+import errno, logging, ssl, threading, time
 from collections import deque
 
 
 __version__ = "1.2.0"
+
+# Silent unless --debug configures it (logging's last-resort handler still
+# shows ERRORs - a failed callback's traceback - on stderr, which tvmail
+# sends to $TVCHAT_BACKEND_LOG or /dev/null).
+_log = logging.getLogger("tvchat-backend")
 
 PROTOCOLS = ("irc", "deltachat")
 STATES = ("disconnected", "connecting", "connected", "error")
@@ -305,7 +319,7 @@ class Loop:
         with self._lock:
             done, self._done = self._done, []
         for cb, res, err in done:
-            cb(res, err)
+            self._call(lambda: cb(res, err))
 
     def run_due(self):
         """Fire every timer whose time has come; returns how many ran."""
@@ -314,7 +328,7 @@ class Loop:
         while self.timers and self.timers[0][0] <= now:
             t = heapq.heappop(self.timers)
             if t[3]:
-                t[2]()
+                self._call(t[2])
                 ran += 1
         return ran
 
@@ -338,17 +352,27 @@ class Loop:
                 continue
             on_read, on_write = cur.data
             if mask & selectors.EVENT_WRITE and on_write:
-                on_write()
+                self._call(on_write)
             if mask & selectors.EVENT_READ and on_read:
                 try:                             # on_write may have unwatched it
                     on_read = self.sel.get_key(key.fileobj).data[0]
                 except (KeyError, ValueError):
                     on_read = None
                 if on_read:
-                    on_read()
+                    self._call(on_read)
             if not self.running:
                 break
         self.run_due()
+
+    @staticmethod
+    def _call(fn):
+        """One callback.  A bug in a protocol handler must not take the
+        co-process - and every other account's connection - down with it:
+        the traceback goes to the log and the loop carries on."""
+        try:
+            fn()
+        except Exception:
+            _log.exception("callback %r failed", fn)
 
     def run(self):
         self.running = True
@@ -610,6 +634,7 @@ class IrcAdapter:
                          if c.strip()]
         self.gen = 0                     # bumped on close: stale callbacks no-op
         self._ids = 0
+        self.raw_tap = None              # irc-tail --raw: fn(direction, line)
         self._reset()
 
     def _reset(self):
@@ -629,6 +654,10 @@ class IrcAdapter:
         self.casemapping = "rfc1459"
         self.chantypes = "#&"
         self.prefixes = dict(_PREFIX_ROLE)
+        # for the log: why a connection ended is easier to tell with these
+        self.t_up = None                 # when the TCP connection was made
+        self.t_in = None                 # when the server last sent anything
+        self.n_in = self.n_out = 0       # bytes read / written
 
     # -- lifecycle ----------------------------------------------------------
     def connect(self):
@@ -676,6 +705,8 @@ class IrcAdapter:
                 continue
             s.setblocking(False)
             rc = s.connect_ex(addr)
+            _log.debug("%s: connect %s port %d -> %s", self.account.id, addr[0],
+                       self.port, errno.errorcode.get(rc, rc) if rc else "ok")
             if rc in (0, errno.EINPROGRESS, errno.EWOULDBLOCK):
                 self.sock = s
                 self.phase = "connecting"
@@ -690,11 +721,18 @@ class IrcAdapter:
     def _connected(self):
         err = self.sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
         if err:
+            _log.debug("%s: connect failed: %s", self.account.id, os.strerror(err))
             self.loop.watch(self.sock)
             self.sock.close()
             self.sock = None
             self._try_next(os.strerror(err))
             return
+        self.t_up = self.t_in = time.monotonic()
+        try:
+            _log.debug("%s: connected %s -> %s", self.account.id,
+                       self.sock.getsockname(), self.sock.getpeername())
+        except OSError:
+            pass
         if not self.tls:
             self._register()
             return
@@ -727,6 +765,8 @@ class IrcAdapter:
         except (OSError, ssl.SSLError, ssl.CertificateError) as e:
             self._fail("TLS: %s" % (getattr(e, "reason", None) or e))
             return
+        _log.debug("%s: TLS %s %s (verify=%s)", self.account.id, self.sock.version(),
+                   (self.sock.cipher() or ("?",))[0], self.verify)
         self._register()
 
     def _register(self):
@@ -768,18 +808,33 @@ class IrcAdapter:
                 self.chat.events.push("members", conv.id)
         self._reset()
 
+    def _ended(self, how, why):
+        now = time.monotonic()
+        _log.debug("%s: %s in phase %s: %s (up %s s, %s s since the server last "
+                   "sent anything, %d bytes in, %d out, %d unsent)",
+                   self.account.id, how, self.phase, why,
+                   "%.1f" % (now - self.t_up) if self.t_up else "-",
+                   "%.1f" % (now - self.t_in) if self.t_in else "-",
+                   self.n_in, self.n_out, len(self.wbuf))
+
     def _fail(self, why):
+        self._ended("failed", why)
         self._close()
         self.chat.set_state(self.account, "error", why)
 
     def _lost(self, why):
         # (milestone 5 reconnects from here with backoff)
+        self._ended("lost", why)
         self._close()
         self.chat.set_state(self.account, "disconnected", why)
 
     # -- the socket ---------------------------------------------------------
-    def send_raw(self, text):
+    def send_raw(self, text, secret=False):
         data = text.encode("utf-8", "replace")[:510] + b"\r\n"
+        shown = text.split(" ", 1)[0] + " <redacted>" if secret else text
+        _log.debug("%s >> %s", self.account.id, shown)
+        if self.raw_tap:
+            self.raw_tap(">>", shown)
         self.wbuf += data
         self._rewatch()
 
@@ -792,9 +847,11 @@ class IrcAdapter:
         try:
             n = self.sock.send(self.wbuf)
             self.wbuf = self.wbuf[n:]
+            self.n_out += n
         except (BlockingIOError, ssl.SSLWantWriteError, ssl.SSLWantReadError):
             pass
         except (OSError, ssl.SSLError) as e:
+            _log.debug("%s: send failed: %r", self.account.id, e)
             self._lost(str(e))
             return
         self._rewatch()
@@ -808,19 +865,29 @@ class IrcAdapter:
             except (BlockingIOError, ssl.SSLWantReadError, ssl.SSLWantWriteError):
                 break
             except (OSError, ssl.SSLError) as e:
+                _log.debug("%s: recv failed: %r", self.account.id, e)
                 gone = str(e)
                 break
             if not data:
                 gone = "connection closed by the server"
                 break
             self.rbuf += data
+            self.n_in += len(data)
+            self.t_in = time.monotonic()
         # what arrived before a hang-up still counts - above all the server's
         # ERROR line, which says why it hung up
         while b"\n" in self.rbuf and gen == self.gen:
             raw, self.rbuf = self.rbuf.split(b"\n", 1)
-            m = parse_line(raw.decode("utf-8", "replace"))
+            text = raw.decode("utf-8", "replace").rstrip("\r")
+            _log.debug("%s << %s", self.account.id, text)
+            if self.raw_tap:
+                self.raw_tap("<<", text)
+            m = parse_line(text)
             if m is not None:
-                self.handle(m)
+                try:
+                    self.handle(m)
+                except Exception:        # one bad line, not the connection
+                    _log.exception("%s: handling %r failed", self.account.id, text)
         if gone is not None and gen == self.gen:
             self._lost(gone)
 
@@ -915,7 +982,7 @@ class IrcAdapter:
                                     self.password)).encode("utf-8")
             b64 = base64.b64encode(blob).decode("ascii")
             for i in range(0, len(b64), 400):
-                self.send_raw("AUTHENTICATE %s" % b64[i:i + 400])
+                self.send_raw("AUTHENTICATE %s" % b64[i:i + 400], secret=True)
             if len(b64) % 400 == 0:
                 self.send_raw("AUTHENTICATE +")
 
@@ -1216,6 +1283,7 @@ class Chat:
         return conv
 
     def set_state(self, account, state, detail=""):
+        _log.debug("%s: state %s %s", account.id, state, detail)
         account.state, account.detail = state, detail
         self.events.push("state", account.id, state, detail)
 
@@ -1398,6 +1466,8 @@ def cmd_irc_tail(a):
         raise UserError("%s is not an IRC account" % acct.id)
     loop = chat.loop
     out = sys.stdout
+    if a.raw:
+        chat.adapter(acct).raw_tap = lambda d, t: out.write("%s %s\n" % (d, t))
     cur = [None]
     seen = [None]
     fd = sys.stdin.fileno()
@@ -1533,11 +1603,20 @@ def cmd_serve(a):
         except ValueError:
             emit(2, b"tvchat-backend serve: unparseable request line\n")
             return
+        t0 = time.monotonic()
         try:
             st, body = dispatch(parser, argv)
         except Exception as e:
+            _log.exception("request %r failed", text)
             st, body = 2, ("tvchat-backend serve: %s\n" % e).encode("utf-8")
         emit(st, body)
+        # the UI polls `events` every 250 ms: only a poll that brought
+        # something is worth a line
+        if argv[:1] != ["events"] or body:
+            _log.debug("request: %s -> %d, %d bytes, %.1f ms%s", text, st, len(body),
+                       (time.monotonic() - t0) * 1000,
+                       (": " + body.decode("utf-8", "replace").strip()[:300])
+                       if st else "")
 
     def on_stdin():
         data = os.read(fd, 65536)
@@ -1566,6 +1645,10 @@ def build_parser():
     ap = _ArgParser(prog="tvchat-backend", add_help=True)
     ap.add_argument("--version", action="version",
                     version="tvchat-backend %s" % __version__)
+    ap.add_argument("--debug", nargs="?", const="debug.log", metavar="FILE",
+                    help="write diagnostic logging to FILE (default: debug.log)")
+    ap.add_argument("--trace", nargs="?", const="trace.log", metavar="FILE",
+                    help="write cProfile data to FILE (default: trace.log)")
     sub = ap.add_subparsers(dest="cmd", parser_class=_ArgParser)
     sub.required = True
 
@@ -1584,20 +1667,60 @@ def build_parser():
     p = sub.add_parser("events"); p.add_argument("--after", type=int); p.set_defaults(fn=cmd_events)
     p = sub.add_parser("ping"); p.set_defaults(fn=cmd_ping)
     p = sub.add_parser("serve"); p.set_defaults(fn=cmd_serve)
-    p = sub.add_parser("irc-tail"); p.add_argument("account"); p.set_defaults(fn=cmd_irc_tail)
+    p = sub.add_parser("irc-tail"); p.add_argument("account")
+    p.add_argument("--raw", action="store_true", help="also print every IRC line")
+    p.set_defaults(fn=cmd_irc_tail)
     return ap
 
 
+_COMMANDS = frozenset(("accounts", "connect", "disconnect", "convs", "join", "part",
+                       "send", "history", "members", "mark-read", "events", "ping",
+                       "serve", "irc-tail"))
+
+
+def _normalize_cli(argv):
+    """Keep a bare diagnostic flag from consuming the sub-command as a path
+    (the same rule as tvmail-backend)."""
+    out = []
+    for i, value in enumerate(argv):
+        if value in ("--debug", "--trace"):
+            nxt = argv[i + 1] if i + 1 < len(argv) else None
+            if nxt is None or nxt.startswith("-") or nxt in _COMMANDS:
+                out.append(value + ("=debug.log" if value == "--debug" else "=trace.log"))
+                continue
+        out.append(value)
+    return out
+
+
 def main():
-    a = build_parser().parse_args(sys.argv[1:])
-    try:
-        sys.exit(a.fn(a))
-    except UserError as e:
-        sys.exit("tvchat-backend: %s" % e)
-    except BrokenPipeError:
-        sys.exit(0)
-    except KeyboardInterrupt:
-        sys.exit(130)
+    a = build_parser().parse_args(_normalize_cli(sys.argv[1:]))
+    if a.debug:
+        logging.basicConfig(filename=a.debug, level=logging.DEBUG,
+                            format="%(asctime)s %(levelname)s %(message)s")
+        _log.debug("tvchat-backend %s, python %s: %s", __version__,
+                   sys.version.split()[0], " ".join(sys.argv[1:]))
+
+    def run():
+        try:
+            sys.exit(a.fn(a))
+        except UserError as e:
+            sys.exit("tvchat-backend: %s" % e)
+        except BrokenPipeError:
+            sys.exit(0)
+        except KeyboardInterrupt:
+            sys.exit(130)
+
+    if a.trace:
+        import cProfile
+        profiler = cProfile.Profile()
+        try:
+            profiler.enable()
+            run()
+        finally:
+            profiler.disable()
+            profiler.dump_stats(a.trace)
+    else:
+        run()
 
 
 if __name__ == "__main__":

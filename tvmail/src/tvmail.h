@@ -186,7 +186,7 @@ long long traceMicros();
 void traceSpan(const char *name, long long start);
 void startDiagnostics(const CliOptions &options);
 void stopDiagnostics();
-std::string backendFlags();
+std::string backendFlags(const char *tag = "backend"); // --debug/--trace for a helper
 std::string backendCommand(const std::string &args);
 std::string tempDir();
 long procId();

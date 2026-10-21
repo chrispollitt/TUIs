@@ -193,6 +193,16 @@ def main():
                 fail("the chat window did not send the typed line: %r\n---\n%s" % (srv.got[-1], s[-1500:]))
             if "<e2e>hifromtvmail" not in s or "<bob>got:hifromtvmail" not in s:
                 fail("our line or the answer is not in the chat window\n---\n%s" % s[-1500:])
+            # --debug reached the chat backend: its log beside tvmail's has
+            # the wire both ways and the request; tvmail's has the request
+            clog = tmp / "debug.chat.log"
+            ctext = clog.read_text() if clog.exists() else ""
+            for w in ("fake >> PRIVMSG #e2e :hi from tvmail \u00e9",
+                      "fake << :bob!",
+                      "request: send "):
+                if w not in ctext:
+                    fail("not in debug.chat.log: %s\n---\n%s" % (w, ctext[-2500:]))
+            wait_log(t, log, [r"chat: send '?fake/#e2e.* -> 0"])
 
             # kill the chat co-process: the next poll restarts it, re-reads
             # the model, and the new one's autoconnect brings session 2

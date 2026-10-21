@@ -40,11 +40,16 @@ bool ChatClient::configured()
 
 bool ChatClient::request(const std::string &req, std::string &body, int &status)
 {
-    long long started = gTraceLog ? traceMicros() : 0;
+    long long started = (gTraceLog || gDebugLog) ? traceMicros() : 0;
     bool ok = chatBackend().call(req, body, status);
     traceSpan("chat", started);
     if (!ok)
         debugLog("chat: no reply to: %s", req.c_str());
+    // the 250 ms `events` poll only when it brought something
+    else if (gDebugLog && (req.compare(0, 6, "events") != 0 || !body.empty()))
+        debugLog("chat: %s -> %d, %lu bytes, %.1f ms%s%s", req.substr(0, 200).c_str(),
+                 status, (unsigned long)body.size(), (traceMicros() - started) / 1000.0,
+                 status ? ": " : "", status ? body.substr(0, 200).c_str() : "");
     return ok;
 }
 

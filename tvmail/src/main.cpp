@@ -21,8 +21,10 @@ static void printUsage(FILE *out)
                  "Usage: tvmail [--debug [FILE]] [--trace [FILE]] [--help] [--version]\n"
                  "       tvmail --selftest\n\n"
                  "Options:\n"
-                 "  --debug [FILE]   write diagnostic logging (default: debug.log; backend: *.backend.log)\n"
-                 "  --trace [FILE]   write Chrome Trace Event profiling data (default: trace.log; backend: *.backend.log)\n"
+                 "  --debug [FILE]   write diagnostic logging (default: debug.log;\n"
+                 "                   mail backend: *.backend.log, chat backend: *.chat.log)\n"
+                 "  --trace [FILE]   write Chrome Trace Event profiling data (default: trace.log;\n"
+                 "                   the backends' cProfile data: *.backend.log, *.chat.log)\n"
                  "  --help           show this help\n"
                  "  --version        show the tvmail version\n");
 }

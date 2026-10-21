@@ -6,24 +6,24 @@
 
 CoProcess &mailBackend()
 {
-    static CoProcess b("tvmail-backend", "TVMAIL_BACKEND_LOG", true);
+    static CoProcess b("tvmail-backend", "TVMAIL_BACKEND_LOG", "backend");
     return b;
 }
 
 CoProcess &chatBackend()
 {
-    static CoProcess b("tvchat-backend", "TVCHAT_BACKEND_LOG", false);
+    static CoProcess b("tvchat-backend", "TVCHAT_BACKEND_LOG", "chat");
     return b;
 }
 
 std::string CoProcess::command(const std::string &args) const
 {
-    return program + (diagFlags ? backendFlags() : std::string()) + " " + args;
+    return program + (diagTag ? backendFlags(diagTag) : std::string()) + " " + args;
 }
 
 #ifndef _WIN32
-CoProcess::CoProcess(const char *prog, const char *env, bool diag)
-    : program(prog), logEnv(env), diagFlags(diag)
+CoProcess::CoProcess(const char *prog, const char *env, const char *diag)
+    : program(prog), logEnv(env), diagTag(diag)
 {
     std::signal(SIGPIPE, SIG_IGN);
 }
@@ -289,8 +289,8 @@ bool CoProcess::readFrame(std::string &body, int &status)
 }
 
 #else // _WIN32: no fork(); every call uses the one-shot shell path.
-CoProcess::CoProcess(const char *prog, const char *env, bool diag)
-    : program(prog), logEnv(env), diagFlags(diag) {}
+CoProcess::CoProcess(const char *prog, const char *env, const char *diag)
+    : program(prog), logEnv(env), diagTag(diag) {}
 bool CoProcess::call(const std::string &, std::string &, int &) { return false; }
 void CoProcess::stop() {}
 #endif
