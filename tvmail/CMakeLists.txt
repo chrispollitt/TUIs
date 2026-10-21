@@ -129,6 +129,15 @@ if(NOT WIN32)
              COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/mail_setup.sh")
     set_tests_properties(mail_setup PROPERTIES
         SKIP_RETURN_CODE 77 TIMEOUT 300 LABELS mail_setup)
+    # mingw_compile : every src/*.cpp syntax-checked by the mingw-w64 cross g++
+    #                 (warnings as errors) - the native Windows build, chat off;
+    #                 77 = no cross compiler, or tvision found as a package
+    if(DEFINED TVISION_DIR AND EXISTS "${TVISION_DIR}/include/tvision/tv.h")
+        add_test(NAME mingw_compile
+                 COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/mingw_compile.sh"
+                         "${TVISION_DIR}/include")
+        set_tests_properties(mingw_compile PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)
+    endif()
 endif()
 
 include(GNUInstallDirs)

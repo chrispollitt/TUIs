@@ -91,7 +91,11 @@ int main(int argc, char **argv)
     // key records arrive cut in two, the rest 16-33 ms later (termprobe
     // --tvision), so the ESC was taken as Escape and the rest typed as text
     // ("[68;32;100;1;0;1_").  An ESCDELAY set by the user still wins.
+    // (Not on the mingw build: no setenv(), and no ncurses - it reads the
+    // Win32 console.)
+#ifndef _WIN32
     setenv("ESCDELAY", "100", 0);
+#endif
 
     CliOptions options;
     if (!parseOptions(argc, argv, options))
