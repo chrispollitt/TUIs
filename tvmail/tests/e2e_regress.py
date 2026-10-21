@@ -141,7 +141,7 @@ def cell_colours(c):
 # ------------------------------------------------------------------- keys ---
 K = dict(
     F1="\x1bOP", F2="\x1bOQ", F3="\x1bOR", F4="\x1b[14~", F5="\x1b[15~",
-    F6="\x1b[17~", End="\x1b[F",
+    F6="\x1b[17~", End="\x1b[F", PgUp="\x1b[5~",
     AltF3="\x1b[1;3R", Up="\x1b[A", Down="\x1b[B", PgDn="\x1b[6~",
     Home="\x1b[H", ShiftTab="\x1b[Z", ShiftDown="\x1b[1;2B",
     CtrlIns="\x1b[2;5~", ShiftIns="\x1b[2;2~", Tab="\t", Enter="\r",
@@ -1010,6 +1010,286 @@ def resize_keeps_backend(opts):
     return tv
 
 
+# ------------------------------------------------------------------- chat ---
+# tvmail with a tvchat.conf aimed at a fake IRC server (tests/fake_irc.py):
+# account "fake" (display "Fake", nick "tester") autoconnects and joins #e2e.
+def chat_tv(opts):
+    from fake_irc import FakeIrcd
+    srv = FakeIrcd()
+    srv.start()
+
+    def setup(t):
+        shutil.copy2(os.path.join(opts.backend_dir, "tvchat-backend"),
+                     t.home / "bin" / "tvchat-backend")
+        conf = t.tmp / "tvchat.conf"
+        conf.write_text(srv.conf())
+        t.env["TVCHAT_CONF"] = str(conf)
+        t.cleanups.append(srv.stop)
+    try:
+        tv = Tv(opts, setup=setup)
+    except Exception:
+        srv.stop()
+        raise
+    return tv, srv
+
+
+def chat_title(tv, name="#e2e — Fake"):
+    """The row of the chat window frame titled name (unread count or not)."""
+    pat = re.compile(r"[═─] %s(?: \(\d+\))? [═─]" % re.escape(name))
+    return next((y for y, l in enumerate(tv.lines()) if pat.search(l)), None)
+
+
+def open_chat(tv, c, srv):
+    c.check(srv.wait_joined("#e2e"), "the chat backend never joined #e2e")
+    tv.send(alt("c"))
+    c.check(tv.wait("[irc]  #e2e — Fake", 5),
+            "Alt-C did not list #e2e in Conversations")
+    tv.send("Down", "Enter")                  # the server window comes first
+    c.check(tv.wait(lambda: chat_title(tv) is not None, 5),
+            "Enter in Conversations did not open the #e2e window")
+
+
+def log_line(tv, text):
+    """(row, column) of text in the chat log, and that row."""
+    p = tv.find(text)
+    return (p, tv.line(p[0])) if p else (None, "")
+
+
+@case()
+def chat_window_opens_and_esc_closes(opts):
+    tv, srv = chat_tv(opts)
+    c = Case(tv)
+    started(tv, c)
+    c.check(srv.wait_joined("#e2e"), "the chat backend never joined #e2e")
+    srv.say(":alice!a@h PRIVMSG #e2e :hello before the window")
+    c.check(tv.wait(lambda: tv.line(ROWS - 1).rstrip().endswith("1 new"), 5),
+            "an unread chat message did not show as \"1 new\" on the status line")
+    open_chat(tv, c, srv)
+    # what was said before it opened (history), and the channel topic
+    p, row = log_line(tv, "<alice> hello before the window")
+    c.check(p and re.search(r"\d\d:\d\d <alice> hello before the window", row),
+            "the window did not show the message from before it opened")
+    c.check(tv.has("the e2e channel"), "the topic is not in the log")
+    # focusing it reads it: the count goes
+    c.check(tv.wait(lambda: "new" not in tv.line(ROWS - 1), 4),
+            "the unread count stayed with the conversation in front")
+    srv.say(":alice!a@h PRIVMSG #e2e :and after it opened",
+            ":alice!a@h PRIVMSG #e2e :\x01ACTION waves\x01")
+    c.check(tv.wait("<alice> and after it opened", 4),
+            "a message arriving with the window open did not show")
+    c.check(tv.wait("* alice waves", 3), "/me is not shown as * nick action")
+    # in the background, a new message counts in its title and as "N new";
+    # Window > List shows that title, and takes you back
+    tv.send("F6", settle=0.6)
+    srv.say(":alice!a@h PRIVMSG #e2e :while you look elsewhere")
+    c.check(tv.wait(lambda: tv.line(ROWS - 1).rstrip().endswith("1 new"), 4),
+            "a message in an unfocused chat window is not \"1 new\"")
+    tv.send(alt("0"))
+    c.check(tv.wait("Window list", 3) and tv.has("#e2e — Fake (1)"),
+            "Window > List does not show the chat window with its unread count")
+    top = tv.find("Window list")[0]               # its rows, the first one current
+    names = [l for l in tv.lines()[top + 1:]
+             if re.search(r"tvmail - |Conversations|#e2e", l)]
+    down = next(i for i, l in enumerate(names) if "#e2e — Fake (1)" in l)
+    tv.send(*(["Down"] * down + ["Enter"]), settle=0.6)
+    c.check(chat_title(tv) is not None and
+            tv.wait(lambda: not tv.has("Fake (1)") and "new" not in tv.line(ROWS - 1), 4),
+            "back in the chat window, the unread count stayed")
+    # Window > List names it
+    tv.send(alt("0"))
+    c.check(tv.wait("Window list", 3) and tv.has("#e2e — Fake"),
+            "Window > List does not list the chat window")
+    tv.send("\x1b")
+    c.check(tv.wait(lambda: not tv.has("Window list"), 3), "the window list stayed")
+    tv.send("\x1b")
+    c.check(tv.wait(lambda: chat_title(tv) is None, 3), "Esc did not close the chat window")
+    tv.send(alt("c"))                             # the same list, to the front
+    c.check(tv.wait("[irc]  #e2e — Fake", 3) and tv.text().count("Conversations") == 1,
+            "Alt-C did not bring back the one Conversations window")
+    tv.send("\x1b")
+    c.check(tv.wait(lambda: not tv.has("[irc]"), 3), "Esc did not close Conversations")
+    c.check(tv.alive(), "tvmail exited")
+    return tv
+
+
+@case()
+def chat_history_pgup(opts):
+    tv, srv = chat_tv(opts)
+    c = Case(tv)
+    started(tv, c)
+    c.check(srv.wait_joined("#e2e"), "the chat backend never joined #e2e")
+    srv.say(*[":alice!a@h PRIVMSG #e2e :backlog %02d" % i for i in range(80)])
+    c.check(tv.wait(lambda: tv.line(ROWS - 1).rstrip().endswith("80 new"), 6),
+            "the backlog did not arrive")
+    open_chat(tv, c, srv)
+    c.check(tv.has("backlog 79") and not tv.has("backlog 05"),
+            "the window did not open on the newest messages")
+    for _ in range(12):                           # page up, past the top
+        if tv.has("backlog 00"):
+            break
+        tv.send("PgUp", settle=0.3)
+    c.check(tv.has("backlog 00"),
+            "PgUp past the top did not fetch the older messages")
+    # the first page fetched lands where it belongs: oldest at the top, in order
+    rows = [l for l in tv.lines() if "backlog" in l]
+    nums = [int(re.search(r"backlog (\d\d)", l).group(1)) for l in rows]
+    c.check(nums == sorted(nums) and nums[0] == 0,
+            "older messages are out of order: %s" % nums)
+    tv.send("PgUp", settle=0.6)
+    c.check(tv.has("No older messages"), "nothing says the history has run out")
+    return tv
+
+
+@case()
+def chat_join_and_leave(opts):
+    tv, srv = chat_tv(opts)
+    c = Case(tv)
+    started(tv, c)
+    c.check(srv.wait_joined("#e2e"), "the chat backend never joined #e2e")
+    tv.send(alt("a"), "j")
+    c.check(tv.wait("nick / address to talk to", 3), "Chat > Join... did not ask")
+    tv.send("#Other", "Enter", settle=0.8)
+    c.check(srv.wait_joined("#other") and srv.sent("JOIN #Other"),
+            "Join did not join the channel")
+    c.check(tv.wait(lambda: chat_title(tv, "#Other — Fake") is not None, 4),
+            "Join did not open the channel's window")
+    tv.send(alt("a"), "l", settle=0.8)
+    c.check(tv.wait(lambda: chat_title(tv, "#Other — Fake") is None, 4),
+            "Chat > Leave did not close the window")
+    c.check(srv.sent("PART #Other"), "Chat > Leave did not part the channel")
+    tv.send(alt("c"))
+    c.check(tv.wait("[irc]  #e2e — Fake", 4) and not tv.has("#Other"),
+            "Conversations still lists the channel left")
+    return tv
+
+
+@case()
+def chat_log_utf8_columns(opts):
+    tv, srv = chat_tv(opts)
+    c = Case(tv)
+    started(tv, c)
+    open_chat(tv, c, srv)
+    long = "WRAPSTART " + " ".join("wörd%02d" % i for i in range(30)) + " WRAPEND"
+    srv.say(":山田!y@h PRIVMSG #e2e :日本語のテキスト end",
+            ":Zoë!z@h PRIVMSG #e2e :Ünïcödé after a two-byte nick",
+            ":alice!a@h PRIVMSG #e2e :" + long)
+    c.check(tv.wait("WRAPEND", 5), "the messages did not arrive")
+    # wide characters take two cells each, no gaps, nothing after them shifted
+    y, x = tv.find("日本語のテキスト")
+    row = tv.screen.buffer[y]
+    for i, ch in enumerate("日本語のテキスト"):
+        c.check(row[x + 2 * i].data == ch and row[x + 2 * i + 1].data == "",
+                "a gap after %r in the chat log" % ch)
+    c.check(tv.line(y)[tv.line(y).index("テキスト") + 4:].startswith(" end"),
+            "the text after the CJK run is out of place")
+    ny, nx = tv.find("<山田>")
+    c.check(ny == y and nx + 2 + 4 + 1 == x,
+            "the CJK nick and its text do not line up: %r %r" % ((ny, nx), (y, x)))
+    # every message's time stamp starts in the same column
+    stamps = {tv.find(s)[1] - 6 for s in ("<山田>", "<Zoë>", "<alice> WRAPSTART")}
+    c.check(len(stamps) == 1, "the time stamps do not line up: %s" % stamps)
+    c.check(tv.has("<Zoë> Ünïcödé after"), "the two-byte nick line is wrong")
+    # a long line wraps inside the window on word boundaries
+    sy, _ = tv.find("WRAPSTART")
+    ey, _ = tv.find("WRAPEND")
+    c.check(ey > sy, "the long message did not wrap")
+    for yy in range(sy, ey + 1):
+        c.check(not re.search(r"wörd\d\d[^\s║▲▼▒■]", tv.line(yy)) and "»" not in tv.line(yy),
+                "a wrapped row is cut mid-word or marked: %r" % tv.line(yy))
+    c.check("\ufffd" not in tv.text(), "a UTF-8 character was split")
+    return tv
+
+
+@case()
+def chat_unsent_input_asks(opts):
+    tv, srv = chat_tv(opts)
+    c = Case(tv)
+    started(tv, c)
+    open_chat(tv, c, srv)
+    tv.send("half a thought", settle=0.5)
+    tv.send("\x1b")
+    c.check(tv.wait("Discard the message", 3),
+            "Esc did not ask about the unsent chat message")
+    tv.send("n", settle=0.8)                      # No: keep it
+    c.check(chat_title(tv) is not None and tv.has("> half a thought"),
+            "No to the discard question lost the window or its text")
+    tv.send(alt("x"))
+    c.check(tv.wait("Discard the message", 3),
+            "Alt-X did not ask about the unsent chat message")
+    tv.send("y")                                  # Yes: discard, and quit
+    c.check(tv.wait(lambda: not tv.alive(), 6), "Yes did not go on to quit")
+    c.check(not srv.sent("PRIVMSG"), "the unsent text was sent")
+    return tv
+
+
+@case()
+def chat_colours_readable(opts):
+    tv, srv = chat_tv(opts)
+    c = Case(tv)
+    started(tv, c)
+    open_chat(tv, c, srv)
+    srv.say(":alice!a@h PRIVMSG #e2e :someone else's line",
+            ":alice!a@h NOTICE #e2e :a notice is a system line")
+    tv.send("my own line", "Enter", settle=0.8)
+    c.check(tv.wait("<tester> my own line", 4), "our own line did not show")
+    c.check(srv.sent("PRIVMSG #e2e :my own line"), "Enter did not send the line")
+    c.check(tv.wait("-alice- a notice", 3), "the notice did not show")
+    cols = {}
+    for what, text in (("other", "someone else's line"), ("own", "my own line"),
+                       ("system", "a notice is a system")):
+        y, x = tv.find(text)
+        cols[what] = cell_colours(tv.screen.buffer[y][x])
+    c.check(len({fg for fg, _ in cols.values()}) == 3,
+            "own, system and other lines are not three colours: %s" % cols)
+    bad = low_contrast(tv)
+    c.check(not bad, "#36 chat text below 3:1 contrast:\n  %s" % "\n  ".join(bad))
+    return tv
+
+
+@case(44)
+def menus_stay_open_while_chat_polls(opts):
+    tv, srv = chat_tv(opts)
+    c = Case(tv)
+    started(tv, c)
+    c.check(srv.wait_joined("#e2e"), "the chat backend never joined #e2e")
+    # connected: tvmail polls the chat backend every 250 ms, which shut any
+    # open menu within a quarter second
+    for key, item in (("f", "Out of office"), ("a", "Conversations...")):
+        tv.send(alt(key))
+        c.check(tv.wait(item, 3), "Alt-%s did not open its menu" % key.upper())
+        tv.pump(1.5)
+        c.check(tv.has(item), "#44 the menu closed by itself while chat polled")
+        tv.send("\x1b", "\x1b", settle=0.5)
+    # the Chat menu lists the account with its state
+    tv.send(alt("a"))
+    c.check(tv.wait(lambda: re.search(r"Fake\s+connected", tv.text()), 3),
+            "the Chat menu does not list the account as connected")
+    tv.send("\x1b", "\x1b", settle=0.5)
+    c.check(tv.alive(), "tvmail exited")
+    return tv
+
+
+@case()
+def chat_menu_greyed_without_config(opts):
+    tv = Tv(opts)                                 # no tvchat.conf
+    c = Case(tv)
+    started(tv, c)
+    tv.send(alt("f"))
+    c.check(tv.wait("Out of office", 3), "the File menu did not open")
+    y, x = tv.find("Reload")
+    enabled = cell_colours(tv.screen.buffer[y][x + 1])[0]
+    tv.send("\x1b", "\x1b", alt("a"))
+    c.check(tv.wait("no tvchat.conf", 3), "the Chat menu does not say chat is off")
+    for item in ("Connect...", "Conversations...", "Join...", "Leave"):
+        y, x = tv.find(item)
+        c.check(cell_colours(tv.screen.buffer[y][x + 1])[0] != enabled,
+                "Chat > %s is not greyed without a tvchat.conf" % item)
+    tv.send("\x1b", "\x1b", alt("c"), settle=0.6)
+    c.check(not tv.has("Conversations"), "Alt-C opened Conversations with chat off")
+    c.check(tv.alive(), "tvmail exited")
+    return tv
+
+
 # ------------------------------------------------------------------- main ---
 def main():
     ap = argparse.ArgumentParser()
@@ -1035,7 +1315,7 @@ def main():
         raise SystemExit(1)
     failed = []
     for bugs, fn in todo:
-        tag = "%s %s" % ("/".join("#%d" % b for b in bugs), fn.__name__)
+        tag = "%s %s" % ("/".join("#%d" % b for b in bugs) or "--", fn.__name__)
         t0 = time.monotonic()
         Tv.last = None
         try:

@@ -15,6 +15,7 @@ struct ChatConv
 {
     std::string id, kind, title; // kind: server, channel, direct, group
     int unread = 0;
+    std::string topic; // from `topic` events only: `convs` does not carry it
 };
 
 // One event from `events`: its sequence number and its fields, unescaped.

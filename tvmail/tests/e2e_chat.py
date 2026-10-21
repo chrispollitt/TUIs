@@ -2,10 +2,11 @@
 """End-to-end: tvmail drives the chat co-process.  Runs the built tvmail in a
 pty with a tvchat.conf that autoconnects to a fake IRC server on 127.0.0.1,
 then checks, through tvmail's --debug log, that the idle loop keeps polling
-tvchat-backend (a message sent well after start-up still arrives), that a
-killed backend is restarted and its state re-read, and that Alt-X shuts chat
-down cleanly (the server sees QUIT).  Stdlib only, no
-network.
+tvchat-backend (a message sent well after start-up still arrives); then,
+through a chat window (Alt-C, Enter), that a line typed there reaches the
+server and the server's answer shows in the window; that a killed backend is
+restarted, its state re-read and the window's log with it; and that Alt-X
+shuts chat down cleanly (the server sees QUIT).  Stdlib only, no network.
 
     python3 tests/e2e_chat.py --bin build/tvmail
 
@@ -30,8 +31,9 @@ from e2e_tui import Term, FIXTURE, skip, fail   # noqa: E402  (skips without a p
 class FakeIrc(threading.Thread):
     """Serves `sessions` connections in turn.  Each: welcome, confirm the
     JOIN, then - after a pause, so it can only reach tvmail through the
-    idle-time poll - one channel message naming the session.  Records every
-    line the client sent, per session."""
+    idle-time poll - one channel message naming the session.  Answers each
+    channel message with bob saying "got: <it>".  Records every line the
+    client sent, per session."""
 
     def __init__(self, sessions):
         super().__init__(daemon=True)
@@ -75,6 +77,9 @@ class FakeIrc(threading.Thread):
                 conn.sendall(b":e2e!u@h JOIN #e2e\r\n")
                 time.sleep(1.5)
                 conn.sendall(b":alice!a@h PRIVMSG #e2e :late hello %d\r\n" % n)
+            elif ln.startswith("PRIVMSG #e2e :"):
+                conn.sendall(b":bob!b@h PRIVMSG #e2e :got: "
+                             + ln.split(" :", 1)[1].encode() + b"\r\n")
             elif ln.startswith("QUIT"):
                 conn.close()
                 return
@@ -109,6 +114,20 @@ def wait_log(t, log, want, timeout=15):
         if not re.search(w, text):
             fail("not in the debug log: %s\n---\n%s" % (w, text[-2500:]))
     return text
+
+
+def flat(s):
+    """The pty stream with every space gone: a redraw that skips cells with
+    cursor moves leaves no spaces in deansi()'s text."""
+    return re.sub(r"\s+", "", s)
+
+
+def read_flat(t, want, timeout=8):
+    end = time.monotonic() + timeout
+    s = ""
+    while time.monotonic() < end and want not in flat(s):
+        s = t.read(timeout=0.3)
+    return flat(s)
 
 
 def main():
@@ -155,13 +174,39 @@ def main():
                     r"chat event \d+: msg .*fake/#e2e.*alice.*late hello 1"]
             text = wait_log(t, log, want)
 
+            # the chat window: Alt-C lists the conversations (the server
+            # window first), Enter opens #e2e on what it has said so far
+            t.clear()
+            t.send("\x1bc", settle=0.6)
+            t.send("\x1b[B", settle=0.3)
+            t.send("\r")
+            s = read_flat(t, "<alice>latehello1")
+            if "<alice>latehello1" not in s or "#e2e" not in s:
+                fail("Alt-C, Enter did not open #e2e on its history\n---\n%s" % s[-1500:])
+            # a line typed there goes to the server; its answer comes back
+            t.clear()
+            t.send("hi from tvmail \u00e9", settle=0.4)   # (one write with the
+            t.send("\r", settle=0.5)                     # \r is a paste)
+            s = read_flat(t, "<bob>got:hifromtvmail")
+            mine = [g for g in srv.got[-1] if g.startswith("PRIVMSG #e2e :")]
+            if mine != ["PRIVMSG #e2e :hi from tvmail \u00e9"]:
+                fail("the chat window did not send the typed line: %r\n---\n%s" % (srv.got[-1], s[-1500:]))
+            if "<e2e>hifromtvmail" not in s or "<bob>got:hifromtvmail" not in s:
+                fail("our line or the answer is not in the chat window\n---\n%s" % s[-1500:])
+
             # kill the chat co-process: the next poll restarts it, re-reads
             # the model, and the new one's autoconnect brings session 2
             pid = chat_backend_pid(t.pid) if os.path.isdir("/proc") else None
             if pid is not None:
+                t.clear()
                 os.kill(pid, 9)
                 wait_log(t, log, [r"chat: tvchat-backend restarted",
                                   r"chat event \d+: msg .*late hello 2"])
+                # the open window re-read its log from the new backend
+                s = read_flat(t, "<alice>latehello2")
+                if "<alice>latehello2" not in s:
+                    fail("the chat window did not follow the restarted backend"
+                         "\n---\n%s" % s[-1500:])
             else:
                 srv.sessions = 1                 # no /proc: skip the restart leg
 
@@ -183,8 +228,8 @@ def main():
         finally:
             if t.pid > 0:
                 t.close()
-        print("PASS: chat co-process started, polled while idle, restarted when "
-              "killed, shut down on exit")
+        print("PASS: chat co-process started, polled while idle; a chat window "
+              "sent and received; restarted when killed, shut down on exit")
         return 0
     finally:
         shutil.rmtree(str(tmp), ignore_errors=True)

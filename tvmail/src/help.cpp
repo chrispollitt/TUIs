@@ -88,6 +88,20 @@ static const char *kHelpText =
     "  Shift-Del cut   Ctrl-Ins copy   Shift-Ins paste\n"
     "  Edit > Find / Replace / Find again\n"
     "\n"
+    "CHAT   (the Chat menu; needs ~/.config/tvmail/tvchat.conf)\n"
+    "  IRC today.  Accounts in tvchat.conf connect by themselves ([chat]\n"
+    "  autoconnect) or by Chat > Connect...; the menu lists each one and its\n"
+    "  state - pick one for its server window (notices, errors).\n"
+    "  Alt-C    Conversations: every channel and query; Enter opens its window\n"
+    "  Chat > Join... a channel, or a nick to talk to; Chat > Leave parts the\n"
+    "  conversation of the chat window you are in.\n"
+    "  In a chat window just type: Enter sends.  PgUp / PgDn / Up / Down scroll\n"
+    "  the log; PgUp at the top fetches older messages.  Esc closes the window\n"
+    "  (asking first if you typed something you did not send).\n"
+    "  Unread messages count in the window's title while it is in the\n"
+    "  background, in Conversations, and as \"N new\" on the status line.\n"
+    "  The log lives in memory only: it is gone when tvmail exits.\n"
+    "\n"
     "mail(1) COMPATIBILITY\n"
     "  tvmail reads your ~/.mailrc:  set folder, set DEAD, and the alias / group\n"
     "  address book.  Drafts in ~/Mail/drafts open with  mail -f +drafts .\n"
@@ -96,7 +110,7 @@ static const char *kHelpText =
     "KEYS AT A GLANCE\n"
     "  F1 help    F3 pull    F5 reload    F6 next window    F10 menu\n"
     "  Ctrl-R reply   Ctrl-N new   F2 send   Ctrl-D delete   F4 address book\n"
-    "  Tab pane   Alt-X quit\n";
+    "  Tab pane   Alt-C conversations   Alt-X quit\n";
 
 class THelpWindow : public TViewerWindow
 {

@@ -85,10 +85,48 @@ TColorAttr TVMailApp::mapColor(uchar index)
     return c;
 }
 
+// The menu bar, with the Chat menu's items greyed by hand: tvision only
+// tracks commands 0-255 (cmChat* are 2100+) and resets every item's
+// disabled flag whenever the command set changes.  Greying before and after
+// each event the bar sees keeps the flags right whenever a menu opens.
+class TVMailMenuBar : public TMenuBar
+{
+public:
+    TVMailMenuBar(const TRect &r, TSubMenu &m) : TMenuBar(r, m) {}
+    void handleEvent(TEvent &e) override
+    {
+        chatMenuGrey();
+        TMenuBar::handleEvent(e);
+        chatMenuGrey();
+    }
+};
+
+// The status line, with a quiet "N new" at its right end while chat
+// conversations hold unread messages (never a box).
+class TVMailStatusLine : public TStatusLine
+{
+public:
+    TVMailStatusLine(const TRect &r, TStatusDef &d) : TStatusLine(r, d) {}
+    void draw() override
+    {
+        TStatusLine::draw();
+        int n = chatOn() ? ChatClient::instance().unreadTotal() : 0;
+        if (n <= 0)
+            return;
+        std::string s = " " + std::to_string(n) + " new ";
+        int w = (int)s.size();
+        if (w >= size.x)
+            return;
+        TDrawBuffer b;
+        b.moveStr(0, s, getColor(1));
+        writeLine(size.x - w, 0, w, 1, b);
+    }
+};
+
 TMenuBar *TVMailApp::initMenuBar(TRect r)
 {
     r.b.y = r.a.y + 1;
-    return new TMenuBar(r,
+    return new TVMailMenuBar(r,
                         *new TSubMenu("~F~ile", kbAltF) +
                             *new TMenuItem(gRemote ? "File ~s~pam" : "~P~ull mail",
                                            cmPull, kbF3, hcNoContext, "F3") +
@@ -140,6 +178,7 @@ TMenuBar *TVMailApp::initMenuBar(TRect r)
                             newLine() +
                             *new TMenuItem("~W~rap long lines", cmToggleWrap, kbNoKey, hcNoContext) +
                             *new TMenuItem("~C~lear filter", cmClearFilter, kbNoKey, hcNoContext, "Esc") +
+                            chatSubMenu() +
                             *new TSubMenu("~W~indow", kbAltW) +
                             *new TMenuItem("~N~ext", cmNext, kbF6, hcNoContext, "F6") +
                             *new TMenuItem("~P~revious", cmPrev, kbShiftF6, hcNoContext, "Shift-F6") +
@@ -158,7 +197,7 @@ TMenuBar *TVMailApp::initMenuBar(TRect r)
 TStatusLine *TVMailApp::initStatusLine(TRect r)
 {
     r.a.y = r.b.y - 1;
-    return new TStatusLine(r,
+    return new TVMailStatusLine(r,
                            *new TStatusDef(0, 0xFFFF) +
                                *new TStatusItem(gRemote ? "~F3~ Spam" : "~F3~ Pull", kbF3, cmPull) +
                                *new TStatusItem("~F5~ Reload", kbF5, cmReload) +
@@ -835,6 +874,13 @@ void TVMailApp::post(ushort command)
 void TVMailApp::idle()
 {
     TApplication::idle();
+    // Nothing is posted while a menu or a dialog is up (bug #44): any
+    // command ends a tvision menu, so the 250 ms chat poll shut every menu
+    // at once, and a dialog swallows what it does not know.  Chat events
+    // wait in the backend's queue until the next `events --after`; a
+    // finished pull is reaped once the dialog is gone.
+    if (TopView() != this)
+        return;
     auto now = std::chrono::steady_clock::now();
     for (IdleTick &t : ticks)
     {
@@ -894,12 +940,22 @@ void TVMailApp::pullFinished()
 // there.  A restarted backend is announced first, so windows re-read.
 void TVMailApp::chatEvents()
 {
+    ChatClient &cc = ChatClient::instance();
+    int unread = cc.unreadTotal();
     bool reset = false;
-    std::vector<ChatEvent> evs = ChatClient::instance().poll(reset);
+    std::vector<ChatEvent> evs = cc.poll(reset);
+    bool accounts = reset; // the Chat menu lists the accounts and their states
     if (reset)
         message(deskTop, evBroadcast, cmChatReset, nullptr);
     for (const ChatEvent &ev : evs)
+    {
+        accounts = accounts || ev.fields[0] == "state";
         message(deskTop, evBroadcast, cmChatEvent, (void *)&ev);
+    }
+    if (accounts)
+        chatMenuRebuild();
+    if (cc.unreadTotal() != unread && statusLine && !gFlashTimer)
+        statusLine->drawView(); // "N new"
 }
 
 void TVMailApp::reload()
@@ -919,8 +975,22 @@ void TVMailApp::handleEvent(TEvent &e)
         clearEvent(e);
         return;
     }
+    // Alt-C: Chat > Conversations.  Not a menu-bar key, which would come
+    // first and take Alt-C from the compose window's Cc label: here, after
+    // the focused window had its turn.
+    if (e.what == evKeyDown && e.keyDown.keyCode == kbAltC)
+    {
+        chatCommand(cmChatConvs);
+        clearEvent(e);
+        return;
+    }
     if (e.what != evCommand)
         return;
+    if (chatCommand(e.message.command))
+    {
+        clearEvent(e);
+        return;
+    }
     bool handled = true;
     switch (e.message.command)
     {

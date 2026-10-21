@@ -239,6 +239,8 @@ class TMailText : public TScroller
         TEditor::editorDialog(edSearchFailed);
     }
 
+protected:
+    // The scrolling keys (also what a chat window's input line hands on).
     bool keyDown(const KeyDownEvent &k)
     {
         int page = size.y > 1 ? size.y - 1 : 1;
@@ -305,8 +307,40 @@ class TMailText : public TScroller
         return true;
     }
 
-protected:
     virtual void wrapChanged(bool) {}
+    // The colour of source line `line` when it is not selected: the chat log
+    // tells system and own lines apart this way.
+    virtual TColorAttr lineColor(int, TColorAttr norm) { return norm; }
+    int firstShownLine() const { return topLine(); }
+    bool atBottom() const { return delta.y + size.y >= limit.y; }
+
+    // Swap in new text, unlike setLines() even when it is the same, with
+    // source line `top` at the top of the view (-1: the end of the text in
+    // view).  keepSel: the old lines are still the first ones (text was only
+    // added at the end), so a selection over them stays.
+    void replaceLines(std::vector<std::string> ls, int top, bool keepSel = false)
+    {
+        int a = selA, b = selB;
+        src.clear();
+        srcWidth.clear();
+        for (auto &l : ls)
+        {
+            src.push_back(expandTabs(l));
+            srcWidth.push_back((int)TText::width(src.back()));
+        }
+        if (src.empty())
+        {
+            src.push_back(std::string());
+            srcWidth.push_back(0);
+        }
+        hlLine = -1;
+        layout(top);
+        if (top < 0)
+            scrollTo(0, limit.y); // clamped to the last page
+        if (keepSel && a >= 0 && std::max(a, b) < (int)segs.size())
+            selA = a, selB = b;
+        drawView();
+    }
 
 public:
     TMailText(const TRect &b, TScrollBar *h, TScrollBar *v,
@@ -372,7 +406,9 @@ public:
         {
             int row = delta.y + y;
             bool inSel = selA >= 0 && row >= s0 && row <= s1;
-            TColorAttr c = inSel ? selc : norm;
+            TColorAttr c = inSel                                 ? selc
+                           : row >= 0 && row < (int)segs.size() ? lineColor(segs[row].line, norm)
+                                                                 : norm;
             TDrawBuffer b;
             b.moveChar(0, ' ', c, size.x);
             if (row >= 0 && row < (int)segs.size())

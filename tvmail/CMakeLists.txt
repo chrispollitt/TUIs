@@ -45,7 +45,8 @@ endif()
 add_executable(tvmail
     src/main.cpp src/app.cpp src/mailwin.cpp src/compose.cpp
     src/addrbook.cpp src/parts.cpp src/signature.cpp src/help.cpp
-    src/dialogs.cpp src/util.cpp src/shell.cpp src/coprocess.cpp src/chat.cpp)
+    src/dialogs.cpp src/util.cpp src/shell.cpp src/coprocess.cpp src/chat.cpp
+    src/chatwin.cpp)
 target_link_libraries(tvmail PRIVATE tvision)
 # Treat tvision's own headers as system headers so ITS warnings (e.g. the
 # __cdecl/__stdcall redefinition tv.h does on non-_WIN32 builds - Cygwin's

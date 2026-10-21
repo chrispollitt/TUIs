@@ -96,7 +96,7 @@ bool ChatClient::sync()
         {
             std::vector<std::string> f = chatFields(ln);
             if (f.size() >= 4)
-                convMap[f[0]] = {f[0], f[1], f[3], std::atoi(f[2].c_str())};
+                convMap[f[0]] = {f[0], f[1], f[3], std::atoi(f[2].c_str()), ""};
         }
     // the generation is read last: a restart during the calls above shows up
     // as a mismatch on the next poll and the model is read again
@@ -182,9 +182,15 @@ void ChatClient::apply(const ChatEvent &ev)
             }
     }
     else if (t == "conv-new" && f.size() >= 5)
-        convMap[f[1]] = {f[1], f[2], f[4], std::atoi(f[3].c_str())};
+        convMap[f[1]] = {f[1], f[2], f[4], std::atoi(f[3].c_str()), ""};
     else if (t == "conv-gone" && f.size() >= 2)
         convMap.erase(f[1]);
+    else if (t == "topic" && f.size() >= 3)
+    {
+        auto it = convMap.find(f[1]);
+        if (it != convMap.end())
+            it->second.topic = f[2];
+    }
     else if (t == "unread" && f.size() >= 3)
     {
         auto it = convMap.find(f[1]);

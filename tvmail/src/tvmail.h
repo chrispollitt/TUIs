@@ -12,6 +12,7 @@
 #define Uses_TDeskTop
 #define Uses_TMenuBar
 #define Uses_TMenuItem
+#define Uses_TMenu
 #define Uses_TSubMenu
 #define Uses_TStatusLine
 #define Uses_TStatusItem
@@ -123,6 +124,14 @@ const ushort cmToggleWrap = 2043;   // View > Wrap long lines (body pane / focus
 const ushort cmChatEvents = 2100; // self-posted from idle(): poll tvchat-backend
 const ushort cmChatEvent = 2101;  // broadcast, one per event: infoPtr = const ChatEvent *
 const ushort cmChatReset = 2102;  // broadcast: the chat backend restarted, re-read everything
+const ushort cmChatConnect = 2103;    // Chat > Connect... (pick an account)
+const ushort cmChatDisconnect = 2104; // Chat > Disconnect
+const ushort cmChatConvs = 2105;      // Chat > Conversations... (Alt-C)
+const ushort cmChatJoin = 2106;       // Chat > Join... (channel, nick or address)
+const ushort cmChatLeave = 2107;      // Chat > Leave: part the focused chat window's conversation
+const ushort cmChatOff = 2108;        // the "chat is off" note in the Chat menu: never does anything
+const ushort cmChatAccount = 2110;    // + i: Chat > <account i> opens its server window
+const int kChatMaxAccounts = 30;      // so 2110-2139
 
 // -------------------------------------------------------- classic colors ----
 // The Turbo Vision DOS look, in exact RGB.  BIOS colour numbers are not
@@ -262,3 +271,13 @@ TWindow *newPartsWindow(const TRect &bounds, int idx,       // parts.cpp
                         const std::string &mbox, const char *title);
 TWindow *newSigWindow(const TRect &bounds);                 // signature.cpp
 TWindow *newHelpWindow(const TRect &bounds);                // help.cpp
+
+// chatwin.cpp: the Chat menu, the Conversations list and one window per
+// conversation.  Commands > 255 cannot be disabled in tvision, so the menu
+// greys its own items (chatMenuGrey, from the menu bar) and every command
+// checks again before acting.
+bool chatOn();                         // tvchat-backend is up
+TSubMenu &chatSubMenu();               // for initMenuBar: the items, before chat starts
+void chatMenuRebuild();                // the account list and its states, afresh
+void chatMenuGrey();                   // set the items' disabled flags
+bool chatCommand(ushort command);      // a cmChat* command; false if not one

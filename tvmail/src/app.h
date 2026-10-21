@@ -43,6 +43,7 @@ public:
                              { return ChatClient::instance().pollIntervalMs(); },
                              std::chrono::steady_clock::now()});
 #endif
+        chatMenuRebuild(); // the accounts, or why there is no chat
     }
 
     static TMenuBar *initMenuBar(TRect r);
