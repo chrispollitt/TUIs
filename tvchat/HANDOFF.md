@@ -163,6 +163,21 @@ interface, in stdlib Python.
   Check against a real `talk`/`ytalk` and the BSD `talkd` sources before
   coding; byte order and the sockaddr layout in the control message are
   the classic traps.
+- **Decided (Chris, Oct 22): one talkd, on the master (cpbee)** - "unconventional
+  but we'll make it work".  Not the stock talkd (it announces to a tty in
+  utmp, which tvchat is not - and over ssh it would scribble on tvchat's
+  screen), but our own small daemon, set up like Ergo by a
+  `chat-setup/scripts/configure-talkd.sh`:
+  1. speaks standard ntalk on UDP 518, so a real `talk chris@cpbee` from any
+     shell still works;
+  2. tvchat registers its user with it, so an invitation arrives in tvchat
+     as an event; a user without tvchat still gets the classic tty
+     announcement;
+  3. relays the session: it gives its own address as the rendezvous and
+     splices the two TCP streams, so only cpbee takes inbound connections
+     (no Windows-firewall holes on the laptops).
+  Catches: UDP 518 needs a UDP port list in cmpi-router (lan0-tcp-ports is
+  TCP only); no auth in talk, so LAN only, like Ergo.
 - **Both directions:** `talk user[@host] [tty]` from tvchat (an invitation
   through the peer's talkd), and answering an invitation addressed to us
   ("Message from Talk_Daemon@host ... respond with: talk you@host") - which
