@@ -120,7 +120,7 @@ Hand-written, stdlib `socket` + `ssl`, on the shared loop.
 - **Registration:** `CAP LS 302` (multi-line LS handled), `NICK`, `USER`; `CAP REQ` for whichever of `sasl server-time message-tags echo-message batch chathistory draft/chathistory away-notify account-tag multi-prefix labeled-response` the server offers; SASL PLAIN only with `sasl =` set and a password found (and PLAIN offered); `CAP END`. Nick in use → `nick_`. ISUPPORT `CASEMAPPING`, `CHANTYPES`, `PREFIX` read. A failed SASL is reported in the server window and registration continues.
 - **Traffic:** PING answered; JOIN/PART/KICK/QUIT/NICK/MODE/TOPIC/332/353/366 keep members and topic; PRIVMSG/NOTICE with `server-time`, `msgid`, `/me`, CTCP VERSION answered, other CTCP ignored, STATUSMSG targets, mIRC colours stripped; numerics and MOTD go to the server conversation. A server `ERROR` that arrives with the hang-up is still read, so its reason reaches the `state` event.
 - **Sending:** split at 400 bytes on a UTF-8 boundary, one line per newline.
-- **Passwords:** `$TVCHAT_PASS_<ACCOUNT>` (e.g. `$TVCHAT_PASS_LIBERA`), then `~/.mu-tickets` (borrowed from the `tvmail-backend` installed beside it - chat may lean on mail, never the reverse), then `~/.netrc`. This is the mail backend's real order (environment first). No password with `sasl =` set → `connect` answers status 1 saying where to put it.
+- **Passwords:** `$TVCHAT_PASS_<ACCOUNT>` (e.g. `$TVCHAT_PASS_LIBERA`), then `~/.mu-tickets` (borrowed from the `tvmail-backend` installed beside it - chat may lean on mail, never the reverse), then `~/.netrc`. This is the mail backend's real order (environment first). In both files only an entry for the SASL login counts (bug #46: the mail lookup's any-user fallback sent the mail password); a failed login says where its password came from (`find_password_where()`, which `chat-setup`'s `configure-tvchat.sh` also calls). No password with `sasl =` set → `connect` answers status 1 saying where to put it.
 
 ### Still to do in milestone 5
 
@@ -176,7 +176,8 @@ verify   = true
 #cafile  = /etc/ssl/certs/my-ircd.pem
 nick     = yournick
 realname = Your Name
-sasl     = yournick          # omit to connect unauthenticated
+# omit sasl to connect unauthenticated (no inline comments: they become part of the value)
+sasl     = yournick
 channels = #tvmail-test
 
 [account:delta]
@@ -204,6 +205,7 @@ Nine layers under `./test.sh` (see `tests/README.md`); no test needs network acc
 
 ## Bugs found along the way
 
+- **#46 (fixed):** chat SASL sent the mail password - `~/.mu-tickets`' `*://chris:...@cpbee` matched before the right `~/.netrc` entry, because the borrowed mail lookup falls back to any user on the host. Found in the first live check on cpbee's Ergo (Oct 21), which otherwise passed: no reset after "hello" there.
 - **#44 (fixed, 611efde):** with an account connected, every menu closed by itself within 250 ms - `idle()` posted the chat poll as a command, and any command ends a tvision menu. `idle()` now posts nothing while `TopView()` is not the app (a menu or a dialog is up); the backend queue holds the events. Found building the Chat menu.
 - **#45 (fixed, 1e43880):** the mingw build did not compile - `main()`'s `setenv("ESCDELAY", ...)` (668ea6b, pre-chat). Now POSIX only (ESCDELAY is an ncurses setting; the Windows build reads the Win32 console). Found by the first mingw compile since the split.
 - **#43 (fixed, 62347cf):** a signal during a backend round trip - `SIGWINCH` from any terminal resize - made `poll()`/`fgetc()` fail with `EINTR`, which was taken for a dead backend: the call fell back to the slow shell path, and during a start the co-process was given up for the session. Pre-dates chat; found by `e2e_chat` flaking.

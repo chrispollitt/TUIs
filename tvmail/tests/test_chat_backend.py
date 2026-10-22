@@ -703,6 +703,27 @@ class TestIrcSession(IrcBase):
         self.assertEqual(cb.find_password("libera", "127.0.0.1", "chrisp", "irc"),
                          "fromenv")
 
+    def test_sasl_password_only_for_its_login(self):
+        # Bug #46: the mail ticket *://chris:...@cpbee was handed to SASL as
+        # chris-pollitt's - ~/.mu-tickets fell back to any user on the host
+        t = self.tmp / "tickets"
+        t.write_text("*://chris:mailpw@cpbee\n")
+        os.environ["TVMAIL_MU_TICKETS"] = str(t)
+        n = self.home / ".netrc"
+        n.write_text("machine cpbee login chris-pollitt password ircpw\n")
+        n.chmod(0o600)
+        self.assertEqual(cb.find_password_where("cpbee", "cpbee", "chris-pollitt", "irc"),
+                         ("ircpw", "~/.netrc"))
+        # a ticket for this login wins over ~/.netrc, as before
+        t.write_text("*://chris:mailpw@cpbee\nirc://chris-pollitt:ticketpw@CPBEE\n")
+        self.assertEqual(cb.find_password_where("cpbee", "cpbee", "chris-pollitt", "irc"),
+                         ("ticketpw", "~/.mu-tickets"))
+        # nor is ~/.netrc's entry for another login used
+        t.write_text("*://chris:mailpw@cpbee\n")
+        n.write_text("machine cpbee login chris password mailpw\n")
+        self.assertEqual(cb.find_password_where("cpbee", "cpbee", "chris-pollitt", "irc"),
+                         (None, None))
+
     def test_sasl_failure_is_reported_and_registration_continues(self):
         os.environ["TVCHAT_PASS_LIBERA"] = "wrong"
 
@@ -723,6 +744,8 @@ class TestIrcSession(IrcBase):
         self.verb("connect", "libera")
         self.turn(lambda: self.acct.state == "connected")
         self.assertTrue(any("SASL login failed" in m[6] for m in self.msgs()))
+        # ... and says which password it tried (bug #46)
+        self.assertTrue(any("from $TVCHAT_PASS_LIBERA" in m[6] for m in self.msgs()))
         self.chat.close()
 
     def test_server_hangup_is_disconnected(self):

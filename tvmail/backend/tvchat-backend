@@ -457,27 +457,56 @@ def _mail_backend():
         return None
 
 
-def find_password(account_id, host, login, scheme):
-    """The password, or None.  Never raises for a missing file."""
-    v = os.environ.get(_env_name(account_id))
+def _mu_ticket_for(mb, scheme, host, login):
+    """The ~/.mu-tickets password for exactly this login on host, or None.
+    Not mb._mu_ticket_pass(): for mail it falls back to the first entry for
+    the host whatever its user, and a mail ticket like *://chris:...@cpbee
+    then handed the mail password to SASL as another account's (bug #46)."""
+    try:
+        with open(mb._mu_tickets_path(), encoding="utf-8", errors="replace") as fh:
+            lines = fh.readlines()
+    except OSError:
+        return None
+    for ln in lines:
+        ln = ln.strip()
+        if not ln or ln.startswith("#"):
+            continue
+        t = mb._mu_url(ln)
+        if (t and t["pass"] and t["user"] == login and t["scheme"] in ("*", scheme)
+                and (t["host"] or "").lower() == host.lower()):
+            return t["pass"]
+    return None
+
+
+def find_password_where(account_id, host, login, scheme):
+    """(password, where it came from) or (None, None).  Only an entry for
+    this login counts - in ~/.mu-tickets and ~/.netrc alike.  Never raises
+    for a missing or broken file."""
+    name = _env_name(account_id)
+    v = os.environ.get(name)
     if v:
-        return v
+        return v, "$" + name
     mb = _mail_backend()
-    if mb is not None and hasattr(mb, "_mu_ticket_pass"):
+    if mb is not None and hasattr(mb, "_mu_url") and hasattr(mb, "_mu_tickets_path"):
         try:
-            pw = mb._mu_ticket_pass(scheme, host, login)
+            pw = _mu_ticket_for(mb, scheme, host, login)
         except Exception:
             pw = None
         if pw:
-            return pw
+            return pw, "~/.mu-tickets"
     try:
         import netrc
         auth = netrc.netrc(os.path.expanduser("~/.netrc")).authenticators(host)
-        if auth and auth[2]:
-            return auth[2]
+        if auth and auth[2] and auth[0] == login:
+            return auth[2], "~/.netrc"
     except (OSError, netrc.NetrcParseError):
         pass
-    return None
+    return None, None
+
+
+def find_password(account_id, host, login, scheme):
+    """The password, or None."""
+    return find_password_where(account_id, host, login, scheme)[0]
 
 
 def _bool(v, default):
@@ -649,7 +678,7 @@ class IrcAdapter:
         self.offered = {}
         self.ls_acc = []
         self.cap_done = False
-        self.password = None
+        self.password = self.password_from = None
         self.server = self.host
         self.casemapping = "rfc1459"
         self.chantypes = "#&"
@@ -665,10 +694,10 @@ class IrcAdapter:
             return
         if not self.host:
             raise UserError("[account:%s] has no host=" % self.account.id)
-        self.password = None
+        self.password = self.password_from = None
         if self.sasl_user:
-            self.password = find_password(self.account.id, self.host,
-                                          self.sasl_user, "irc")
+            self.password, self.password_from = find_password_where(
+                self.account.id, self.host, self.sasl_user, "irc")
             if not self.password:
                 raise UserError(
                     "no SASL password for %s on %s - add it to ~/.netrc "
@@ -992,7 +1021,8 @@ class IrcAdapter:
         if n in ("903", "907"):          # SASL ok / already authenticated
             self.cap_end()
         elif n in ("902", "904", "905", "906", "908"):
-            self.system(self.server_conv(), "SASL login failed: %s" % p[-1])
+            self.system(self.server_conv(), "SASL login failed: %s (password for %s from %s)"
+                        % (p[-1], self.sasl_user, self.password_from))
             self.cap_end()
         elif n in ("432", "433", "436", "437") and self.phase == "registering":
             self.nick = self.nick + "_"
