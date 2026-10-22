@@ -6,15 +6,17 @@
 # e2e_master.sh, which sends real mail through a live Postfix/Dovecot; run
 # that from mail-setup itself.
 #
-# Uses $MAIL_SETUP_DIR, else third_party/POSIX/mail-setup.  Exits 77 (ctest:
-# skipped) when neither exists - ./third_party.sh mail-setup fetches it.
+# Uses $MAIL_SETUP_DIR, else ../tvcommon/third_party/POSIX/mail-setup.  Exits 77
+# (ctest: skipped) when neither exists - ../tvcommon/third_party.sh posix
+# fetches it.
 # Leave it out of a run with:  ./test.sh -LE mail_setup
 set -uo pipefail
 here=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-M="${MAIL_SETUP_DIR:-$here/third_party/POSIX/mail-setup}"
+common="$here/tvcommon"; [ -d "$common" ] || common="$here/../tvcommon"
+M="${MAIL_SETUP_DIR:-$common/third_party/POSIX/mail-setup}"
 
 if [ ! -f "$M/tests/run-tests.sh" ]; then
-  echo "mail_setup: skipped - no mail-setup at $M (run ./third_party.sh mail-setup)"
+  echo "mail_setup: skipped - no mail-setup at $M (run ../tvcommon/third_party.sh posix)"
   exit 77
 fi
 cd "$M" || exit 1

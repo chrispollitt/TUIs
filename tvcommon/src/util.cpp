@@ -1,6 +1,6 @@
 // util.cpp - text and system helpers: shell quoting, files, UTF-8 column
 // arithmetic, the status-line flash and the desktop clipboard.
-#include "tvmail.h"
+#include "tvcommon.h"
 
 // Single-quote a value for /bin/sh.  Every other string interpolated into a
 // shCapture() command is program-controlled (folder shorthands, indices);
@@ -32,18 +32,6 @@ std::string homePath(const char *rel)
 {
     const char *h = getenv("HOME");
     return std::string(h ? h : ".") + "/" + rel;
-}
-std::string readSigFile()
-{
-    std::string s = slurp(homePath(".signature"));
-    while (!s.empty() && (s.back() == '\n' || s.back() == '\r'))
-        s.pop_back();
-    return s;
-}
-std::string readDeadLetter()
-{
-    const char *d = getenv("DEAD");
-    return slurp(d && *d ? std::string(d) : homePath("dead.letter"));
 }
 
 std::vector<std::string> splitLines(const std::string &s)
@@ -151,7 +139,7 @@ void flashStatus(const std::string &msg)
 //    terminals without it ignore it, as they did when tvision sent it;
 //  - a detached shell for the machine's own clipboard: Cygwin's
 //    /dev/clipboard, Wayland, X11, macOS, WSL.  Best effort and silent.
-// tvmail's own clipboard (Shift-Ins in a compose window) has it either way.
+// The app's own clipboard (Shift-Ins in an editor) has it either way.
 void systemClipboard(const std::string &text)
 {
 #ifdef _WIN32
@@ -218,7 +206,7 @@ void systemClipboard(const std::string &text)
                 if (n > 2)
                     ::close(n);
             }
-            ::execl(TVMAIL_SH, TVMAIL_SH, "-c", sc.c_str(), (char *)nullptr);
+            ::execl(TV_SH, TV_SH, "-c", sc.c_str(), (char *)nullptr);
         }
         ::_exit(0);
     }

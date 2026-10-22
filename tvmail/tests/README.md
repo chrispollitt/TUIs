@@ -13,7 +13,7 @@ Nine layers, no dependencies beyond a Python 3, bash and — for `e2e_tui` — a
 | **`e2e_chat`** (`e2e_chat.py`) | `pty` + a fake IRC server | tvmail with a `tvchat.conf` that autoconnects to 127.0.0.1: the chat co-process starts with the app, the idle loop keeps polling it (a message sent 1.5 s after the join arrives - checked in tvmail's `--debug` log), a chat window opened with Alt-C shows it, a line typed there reaches the server and the server's answer comes back into the window, a killed `tvchat-backend` is restarted and re-read (the open window too), and Alt-X makes it QUIT |
 | **`mingw_compile`** (`mingw_compile.sh`) | bash → mingw-w64 g++ | every `src/*.cpp` syntax-checked for the native Windows build (chat off there), `-Wall -Wextra -Werror`, against the tvision headers - nothing linked, seconds; exits 77 without `x86_64-w64-mingw32-g++` (Cygwin: `mingw64-x86_64-gcc-g++`) |
 | **`install_roundtrip`** (`install_roundtrip.sh`) | bash | `cmake --install` into a temp prefix, `./uninstall.sh -n` removes nothing, `./uninstall.sh -y` removes every installed file; a legacy `pop-pull` a `mail-pull` still runs is kept, an unused one removed; the real `build/install_manifest.txt` is restored |
-| **`mail_setup`** (`mail_setup.sh`) | bash → mail-setup's runner | `third_party/POSIX/mail-setup`'s unit, shell and pull-e2e suites (F3 runs its `mail-pull`); temp dirs only, never its live-master check; label `mail_setup` |
+| **`mail_setup`** (`mail_setup.sh`) | bash → mail-setup's runner | `../tvcommon/third_party/POSIX/mail-setup`'s unit, shell and pull-e2e suites (F3 runs its `mail-pull`); temp dirs only, never its live-master check; label `mail_setup` |
 
 ## Running
 
@@ -32,7 +32,7 @@ python3 tests/e2e_regress.py --bin build/tvmail -k chat_log_utf8_columns   # one
 
 `e2e_tui` exits **77** (ctest: *skipped*) when it cannot get a usable terminal
 — a bare CI shell, a stripped Python, or a non-POSIX host. `mail_setup` does
-the same when mail-setup hasn't been fetched (`./third_party.sh mail-setup`),
+the same when mail-setup hasn't been fetched (`../tvcommon/third_party.sh posix`),
 and `mingw_compile` when there is no mingw-w64 cross compiler.
 
 ## Notes

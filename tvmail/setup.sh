@@ -202,7 +202,7 @@ EOF
          && ! systemctl --user is-enabled mail-pull.timer >/dev/null 2>&1; then
         warn "nothing pulls your mail on a schedule yet (F3 won't here) - run"
         warn "  ./configure.sh --role master   (it asks how often), or"
-        warn "  third_party/POSIX/mail-setup/scripts/configure-mail-pull.sh --timer 5"
+        warn "  ../tvcommon/third_party/POSIX/mail-setup/scripts/configure-mail-pull.sh --timer 5"
       fi
       ;;
     l|L|local|Local)

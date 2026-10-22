@@ -12,7 +12,10 @@
 # Needs: cmake, a C++17 compiler, ncurses(w) headers, git, python3.
 set -eu
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-tv="$here/third_party/tvision"
+# the C++ shared with tvchat: ../tvcommon, or ./tvcommon in a source tarball;
+# Turbo Vision lives there too, one checkout for both apps
+common="$here/tvcommon"; [ -d "$common" ] || common="$here/../tvcommon"
+tv="$common/third_party/tvision"
 mode=native
 [ "${1:-}" = "--mingw" ] && mode=mingw
 
@@ -28,48 +31,13 @@ case "$os" in CYGWIN*|MINGW*|MSYS*) is_cygwin=1 ;; esac
 jobs=$( (nproc 2>/dev/null) || (sysctl -n hw.ncpu 2>/dev/null) \
         || (getconf _NPROCESSORS_ONLN 2>/dev/null) || echo 4 )
 
-# third_party/: tvision is needed to compile; mail-setup (configure.sh's mail
-# wizard) isn't, so a failed fetch of it only warns
-sh "$here/third_party.sh" tvision
-sh "$here/third_party.sh" mail-setup \
+# tvcommon/third_party/, shared with tvchat: Turbo Vision, fetched and
+# patched (read timeout over ssh, CJK trail cells, Cygwin's FIONREAD &c);
+# POSIX (mail-setup, configure.sh's mail wizard) isn't needed to compile, so
+# a failed fetch of it only warns
+sh "$common/third_party.sh" tvision
+sh "$common/third_party.sh" posix \
   || echo "build.sh: WARNING - couldn't fetch mail-setup (only ./configure.sh needs it)" >&2
-
-# tvision's ncurses input gives up on a byte after readTimeoutMs (10 ms).  Over ssh from
-# Windows Terminal, win32-input-mode key records arrive cut in two, the rest 16-33 ms
-# later, and the cut-off half shows on screen as "[68;32;100;1;0;1_".  Wait longer.
-# (Idempotent; needed on every platform, since the failing side is the remote one.)
-ncin="$tv/include/tvision/internal/ncursinp.h"
-if grep -q 'readTimeoutMs = 10 ' "$ncin" 2>/dev/null; then
-  echo ">> tvision: input read timeout 10 ms -> 50 ms (ssh from Windows Terminal)"
-  sed 's/readTimeoutMs = 10 /readTimeoutMs = 50 /' "$ncin" > "$ncin.new" && mv "$ncin.new" "$ncin"
-fi
-
-# Older tvision's DisplayBuffer::validateCell turns a cell whose text starts with '\0'
-# into a space - and a wide-char trail cell is exactly that, so the trail is lost before
-# the flush looks at it.  Every CJK character then gets a space written over its right
-# half ("日 本 語", one extra column per character).  Upstream fixed it later
-# (ensureCharacterIsPrintable returns early for trails); do the same here.  (Idempotent;
-# all platforms.)
-dbuf="$tv/source/platform/dispbuff.cpp"
-if grep -q 'DisplayBuffer::validateCell' "$dbuf" 2>/dev/null \
-   && ! grep -q 'isWideCharTrail()) {} else if' "$dbuf"; then
-  echo ">> tvision: keep wide-char trail cells in validateCell (CJK gaps)"
-  sed "s/^    if (c == '\\\\0')\$/    if (cell.character.isWideCharTrail()) {} else if (c == '\\\\0')/" \
-    "$dbuf" > "$dbuf.new" && mv "$dbuf.new" "$dbuf"
-fi
-
-if [ "$is_cygwin" = 1 ]; then
-  py="${PYTHON:-}"
-  if [ -z "$py" ]; then
-    for c in python3 python3.12 python3.11 python3.10 python3.9 python3.8 python3.7; do
-      command -v "$c" >/dev/null 2>&1 && "$c" -c 'import sys;exit(sys.version_info<(3,6))' \
-        2>/dev/null && { py="$c"; break; }
-    done
-  fi
-  [ -n "$py" ] || { echo "build.sh: no working python3 (>=3.6) found" >&2; exit 1; }
-  echo ">> applying Cygwin compatibility patch to tvision (with $py)"
-  "$py" "$here/patches/cygwin_patch.py" "$tv"
-fi
 
 set -- -S "$here" -B "$here/build" -DCMAKE_BUILD_TYPE=Release -DTVISION_DIR="$tv"
 
@@ -81,7 +49,7 @@ if [ "$is_cygwin" = 1 ] && [ "$mode" = mingw ]; then
     -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc \
     -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-g++ \
     -DCMAKE_RC_COMPILER=x86_64-w64-mingw32-windres \
-    -DTVMAIL_SH="$(cygpath -m /bin/bash.exe)"
+    -DTV_SH="$(cygpath -m /bin/bash.exe)"
 else
   echo ">> native build ($os)"
 fi

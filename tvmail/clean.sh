@@ -2,8 +2,9 @@
 # Remove what build.sh / test.sh / all.sh / dist.sh generate.
 #
 #   ./clean.sh          build/, dist/, the *.log files all.sh writes, __pycache__/
-#   ./clean.sh --all    ...plus third_party/ (tvision + mail-setup), so the next
-#                       ./build.sh re-fetches (and on Cygwin re-patches) them
+#   ./clean.sh --all    ...plus ../tvcommon/third_party/ (Turbo Vision and
+#                       POSIX's mail-setup, shared with tvchat), so the next
+#                       ./build.sh re-fetches (and re-patches) them
 #   ./clean.sh -n       just show what would go
 #
 # Never touches your files: BAK/, tmp/, DEVNOTES.txt, anything installed
@@ -36,14 +37,15 @@ find . -path ./third_party -prune -o -path '*/BAK' -prune -o \
      -type d -name __pycache__ -print | while read -r d; do rmv "$d"; done
 
 if [ "$all" = 1 ]; then
-  # tvision's only local changes are the Cygwin patch build.sh re-applies
-  rmv third_party/tvision
-  p=third_party/POSIX
+  # tvision's only local changes are the patches third_party.sh re-applies
+  common="$here/tvcommon"; [ -d "$common" ] || common="$here/../tvcommon"
+  rmv "$common/third_party/tvision"
+  p="$common/third_party/POSIX"
   if [ -d "$p/.git" ] && [ -n "$(git -C "$p" status --porcelain 2>/dev/null)" ]; then
     echo "kept $p - it has local changes:" >&2
     git -C "$p" status --short >&2
   else
     rmv "$p"
   fi
-  [ "$dry" = 1 ] || rmdir third_party 2>/dev/null || true
+  [ "$dry" = 1 ] || rmdir "$common/third_party" third_party 2>/dev/null || true
 fi

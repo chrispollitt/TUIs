@@ -1,7 +1,6 @@
 // coprocess.h - a helper program kept alive in "serve" mode, spoken to over
-// a pair of pipes.  One class, two instances: tvmail-backend (mail) and
-// tvchat-backend (chat) - separate processes, so a slow IMAP call never
-// stalls chat.
+// a pair of pipes: tvmail-backend for tvmail (its mailBackend()),
+// tvchat-backend for tvchat (its chatBackend()).
 //
 // Wire protocol - a request line, then a framed reply:
 //     ->  show 3 spool\n
@@ -13,7 +12,7 @@
 // always returns false there, mail uses the shell path for everything and
 // chat is off.
 #pragma once
-#include "tvmail.h"
+#include "tvcommon.h"
 
 class CoProcess
 {
@@ -21,7 +20,7 @@ public:
     // program: run as `<program>[ diagnostics flags] serve` through the
     // shell preamble's PATH.  logEnv: an environment variable that, if set,
     // names a file for the child's stderr (else /dev/null).  diagTag: pass
-    // tvmail's --debug / --trace on, as FILE.<diagTag>.ext (nullptr: don't).
+    // the app's --debug / --trace on, as FILE.<diagTag>.ext (nullptr: don't).
     CoProcess(const char *program, const char *logEnv, const char *diagTag);
     ~CoProcess() { stop(); }
     CoProcess(const CoProcess &) = delete;
@@ -64,5 +63,3 @@ private:
     bool readFrame(std::string &body, int &status);
 };
 
-CoProcess &mailBackend(); // tvmail-backend serve
-CoProcess &chatBackend(); // tvchat-backend serve

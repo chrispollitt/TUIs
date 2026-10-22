@@ -116,43 +116,7 @@ static const char *kHelpText =
     "  Ctrl-R reply   Ctrl-N new   F2 send   Ctrl-D delete   F4 address book\n"
     "  Tab pane   Alt-C chat / mail   Alt-X quit\n";
 
-class THelpWindow : public TViewerWindow
-{
-public:
-    THelpWindow(const TRect &b)
-        : TWindowInit(&THelpWindow::initFrame),
-          TViewerWindow(b, "Help")
-    {
-        palette = wpCyanWindow;
-        options |= ofTileable;
-        TScrollBar *v = standardScrollBar(sbVertical | sbHandleKeyboard);
-        TScrollBar *h = standardScrollBar(sbHorizontal | sbHandleKeyboard);
-        TRect r = getExtent();
-        r.grow(-1, -1);
-        insert(new TTextView(r, h, v, splitLines(kHelpText)));
-    }
-    TColorAttr mapColor(uchar i) override
-    {
-        switch (i)
-        {
-        case 1:
-            return cNorm();
-        case 2:
-        case 3:
-            return cFrame();
-        case 4:
-        case 6:
-        case 8:
-            return cNorm();
-        case 5:
-        case 7:
-            return cHi();
-        }
-        return TView::mapColor(i);
-    }
-};
-
 TWindow *newHelpWindow(const TRect &bounds)
 {
-    return new THelpWindow(bounds);
+    return newTextWindow(bounds, "Help", kHelpText);
 }

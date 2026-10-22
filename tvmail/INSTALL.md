@@ -4,7 +4,7 @@ tvmail is two things: the **app** (`tvmail` + `tvmail-backend`) and the
 **mail system** underneath it (Postfix, Dovecot, a puller, GNU Mailutils).
 The app is built here. The mail system is set up by
 [mail-setup](https://github.com/chrispollitt/POSIX/tree/main/mail-setup), a
-separate project that tvmail pulls into `third_party/`.
+separate project that tvmail pulls into `../tvcommon/third_party/` (shared with tvchat).
 
 Contents:
 
@@ -73,7 +73,7 @@ git clone https://github.com/chrispollitt/TUIs
 cd TUIs/tvmail
 
 ./configure.sh --role master   # 1. build tools + the mail system (mail-setup wizard)
-./build.sh                     # 2. fetch third_party/, build
+./build.sh                     # 2. fetch ../tvcommon/third_party/, build
 ./test.sh                      # 3. optional: all test layers (about 1-2 minutes)
 ./setup.sh                     # 4. install tvmail, write tvmail.conf
 ```
@@ -109,7 +109,7 @@ you can skip what you already have. It asks about:
   at this box.
 - **Test messages:** through `mail(1)` and through sendmail.
 
-**2. `./build.sh`.** Clones tvision and mail-setup into `third_party/`,
+**2. `./build.sh`.** Clones tvision and mail-setup into `../tvcommon/third_party/`,
 then builds `build/tvmail`.
 
 **3. `./test.sh`.** Runs the ctest layers; see `tests/README.md`.
@@ -152,7 +152,7 @@ don't lock the file the same way (`!WARNINGS.txt`, Warning 3). If you answer
 **Changing your mind later** (no need to re-run the whole wizard):
 
 ```bash
-M=third_party/POSIX/mail-setup/scripts
+M=../tvcommon/third_party/POSIX/mail-setup/scripts
 $M/configure-mail-pull.sh --timer 10         # pull every 10 min (pop-pull)
 $M/configure-getmail.sh   --timer 10         # ...or switch to getmail
 sudo $M/configure-sendmail-relay.sh --lan auto   # let LAN clients in
@@ -200,7 +200,7 @@ answering with tvmail closed.
 **On the master, once, as root** (this covers every user on it):
 
 ```bash
-cd tvmail && sudo third_party/POSIX/mail-setup/scripts/configure-sieve.sh   # --listen local for localhost only
+cd tvmail && sudo ../tvcommon/third_party/POSIX/mail-setup/scripts/configure-sieve.sh   # --listen local for localhost only
 ```
 
 That is mail-setup's `configure-sieve.sh` (its wizard offers it too, after
@@ -326,7 +326,7 @@ refused" instead means managesieve is not running (`ss -ltn | grep 4190`).
 | script | when | what |
 |---|---|---|
 | `configure.sh` | once per machine, before building | build tools, then mail-setup's wizard (`--role`, `--puller`, `-y`, `--assume-no`) |
-| `third_party.sh` | run for you by build/configure | clones `third_party/tvision` and `third_party/POSIX` (mail-setup only); `--update` pulls both |
+| `../tvcommon/third_party.sh` | run for you by build/configure | clones `../tvcommon/third_party/tvision` (and patches it) and `../tvcommon/third_party/POSIX` (mail-setup and chat-setup only), both shared with tvchat; `--update` pulls both |
 | `build.sh` | after every change / update | third_party, Cygwin patch, cmake build (`--mingw` on Cygwin) |
 | `test.sh` | optional | build + ctest: backend_unit, backend_pipe, e2e_tui, install_roundtrip, mail_setup |
 | `setup.sh` | once, then after rebuilds | install (asks the prefix, or `--prefix`), write tvmail.conf, smoke tests |
@@ -336,14 +336,14 @@ refused" instead means managesieve is not running (`ss -ltn | grep 4190`).
 | `all.sh` | development | build, test, install, run with `--trace`, report |
 | `Makefile` | habit | `make`, `make test`, `make install`, `make clean`, `make distclean` just call the scripts above (it's a CMake project; there's no real make build) |
 
-mail-setup's own scripts live in `third_party/POSIX/mail-setup/scripts/`.
+mail-setup's own scripts live in `../tvcommon/third_party/POSIX/mail-setup/scripts/`.
 Each one runs on its own and takes `--help`; see that project's README.
 
 Environment overrides:
 
 | variable | effect |
 |---|---|
-| `MAIL_SETUP_DIR` | use your own mail-setup checkout instead of `third_party/POSIX` |
+| `MAIL_SETUP_DIR` | use your own mail-setup checkout instead of `../tvcommon/third_party/POSIX` |
 | `MAIL_SETUP_REPO`, `TVISION_REPO` | clone from somewhere else |
 | `TVMAIL_CONF` | another tvmail.conf |
 | `TVMAIL_MODE` | `local` / `remote` for one run |
@@ -353,7 +353,7 @@ Environment overrides:
 
 ```bash
 git pull
-./third_party.sh --update      # newer tvision + mail-setup
+../tvcommon/third_party.sh --update      # newer tvision + mail-setup
 ./build.sh
 ./setup.sh --prefix ~/.local   # or ./install.sh for /usr/local
 ```
@@ -370,7 +370,7 @@ Dovecot drop-in, `/usr/sbin/sendmail`) are backed up as `*.bak.<date>` or
 ./uninstall.sh             # remove it (asks first; sudo if needed)
 ./uninstall.sh --purge     # ...and offer to remove ~/.config/tvmail/
 ./clean.sh                 # remove build/, dist/, logs, __pycache__/
-./clean.sh --all           # ...and third_party/ (fetched again on the next build)
+./clean.sh --all           # ...and ../tvcommon/third_party/ (fetched again on the next build)
 ```
 
 `uninstall.sh` removes only tvmail. The mail system (Postfix, Dovecot,
@@ -391,10 +391,10 @@ still runs it. To remove the mail system itself, use your package manager
 | F3 on the master only files spam | you're in remote mode (as recommended); pulling is the timer's job: `crontab -l` or `systemctl --user list-timers mail-pull.timer` |
 | the timer never runs (WSL) | cron isn't started there: `sudo service cron start` |
 | a client can't read mail: IMAP connects time out (SMTP on 25 works), Dovecot's log never shows the client | the master's firewall (nftables/ufw/iptables, default-drop) isn't letting the LAN reach 993/143; Dovecot itself is fine. Allow them from the LAN interface only, e.g. nftables: `iifname "lan0" tcp dport { 143, 993 } accept`. Test with `ssh -L 1143:localhost:143 master` to prove Dovecot works |
-| a client can't send | the master's Postfix is loopback-only: on the master, `sudo third_party/POSIX/mail-setup/scripts/configure-sendmail-relay.sh --lan auto` |
+| a client can't send | the master's Postfix is loopback-only: on the master, `sudo ../tvcommon/third_party/POSIX/mail-setup/scripts/configure-sendmail-relay.sh --lan auto` |
 | mail reaches the master's Postfix but not `/var/mail` | `sudo postqueue -p`; "alias database unavailable" → re-run `configure-sendmail-relay.sh` (it pins `alias_maps`) |
 | `build.sh`: couldn't fetch mail-setup | only a warning; the build continues. Check network/GitHub, or set `MAIL_SETUP_DIR` |
-| check a master end to end | `sudo MAIL_SETUP_E2E_USER=$USER bash third_party/POSIX/mail-setup/tests/e2e/e2e_master.sh` |
+| check a master end to end | `sudo MAIL_SETUP_E2E_USER=$USER bash ../tvcommon/third_party/POSIX/mail-setup/tests/e2e/e2e_master.sh` |
 | slow folder switching | tvmail is talking to a WAN IMAP host; see `!WARNINGS.txt`, Warning 4 (use a LAN master) |
 
 More: `README.md` (usage), `man tvmail`, `man tvmail-backend`,

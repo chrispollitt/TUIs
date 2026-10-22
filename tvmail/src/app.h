@@ -1,11 +1,12 @@
 // app.h - the application object.
 #pragma once
 #include "tvmail.h"
+#include "tvapp.h"
 #include "chat.h"
 #include <functional>
 
 // ---------------------------------------------------------------- app -------
-class TVMailApp : public TApplication
+class TVMailApp : public TTvApp
 {
 public:
     TWindow *mainWin = nullptr; // the 3-pane mail window (see mailwin.cpp)
@@ -13,25 +14,9 @@ public:
     TVMailApp()
         : TProgInit(&TVMailApp::initStatusLine,
                     &TVMailApp::initMenuBar,
-                    &TVMailApp::initDeskTop)
+                    &TTvApp::initDeskTop)
     {
-        // editor clipboard + Find/Replace dialogs (tvision ships neither)
-        TEditor::clipboard = new TEditor(TRect(0, 0, 0, 0), 0, 0, 0, 0x10000);
-        TEditor::clipboard->canUndo = False;
-        TEditor::editorDialog = tvmailEditDialog;
-
-        // grey the edit commands until an editor has focus
-        TCommandSet es;
-        es.enableCmd(cmCut);
-        es.enableCmd(cmCopy);
-        es.enableCmd(cmPaste);
-        es.enableCmd(cmClear);
-        es.enableCmd(cmUndo);
-        es.enableCmd(cmFind);
-        es.enableCmd(cmReplace);
-        es.enableCmd(cmSearchAgain);
-        disableCommands(es);
-
+        // (the clipboard, Find dialogs and greyed edit commands: TTvApp)
         mainWin = newMailWindow(deskTop->getExtent());
         deskTop->insert(mainWin);
 
@@ -48,9 +33,7 @@ public:
 
     static TMenuBar *initMenuBar(TRect r);
     static TStatusLine *initStatusLine(TRect r);
-    static TDeskTop *initDeskTop(TRect r);
     void handleEvent(TEvent &e) override;
-    TColorAttr mapColor(uchar index) override;
 #ifndef _WIN32
     void idle() override; // the background pull, and the periodic ticks below
 #endif
@@ -66,7 +49,6 @@ private:
     void markUnread(int row);
     void markRead(int row);
     void saveMsg(int row);
-    void windowList();
     void outOfOffice();
     void moveMsg(int row);
     void viewParts(int row);

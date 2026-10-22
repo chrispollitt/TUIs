@@ -1,13 +1,12 @@
 // shell.cpp - diagnostics (--debug / --trace) and the POSIX-sh plumbing that
-// runs tvmail-backend: one small script per call, and backendRun() which tries
-// the warm co-process first.
-#include "tvmail.h"
-#include "coprocess.h"
+// runs an app's helper (tvmail-backend, tvchat-backend): one small script per
+// call.
+#include "tvcommon.h"
 
 // -------------------------------------------------------- shell plumbing ----
-// Everything the backend needs runs inside one small POSIX-sh script (one
-// script per call keeps us clear of cmd.exe quoting on the mingw build).  The
-// preamble widens PATH so tvmail-backend is found wherever it was installed.
+// Everything a helper needs runs inside one small POSIX-sh script (one
+// script per call keeps us clear of cmd.exe quoting on tvmail's mingw build).
+// The preamble widens PATH so the helper is found wherever it was installed.
 const char *const kPreamble =
     "export PATH=\"$HOME/bin:$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin"
     ":/opt/local/bin:/usr/pkg/bin:/usr/bin:/bin:$PATH\"\n";
@@ -16,7 +15,7 @@ FILE *gDebugLog = nullptr;
 FILE *gTraceLog = nullptr;
 static bool gTraceFirst = true;
 static std::chrono::steady_clock::time_point gTraceStart;
-static std::string gDebugPath; // tvmail's own --debug / --trace files: each
+static std::string gDebugPath; // the app's own --debug / --trace files: each
 static std::string gTracePath; // helper's go beside them (backendFlags)
 
 void debugLog(const char *fmt, ...)
@@ -47,9 +46,9 @@ void traceSpan(const char *name, long long start)
         std::fputs(",\n", gTraceLog);
     gTraceFirst = false;
     std::fprintf(gTraceLog,
-                 "  {\"name\":\"%s\",\"cat\":\"tvmail\",\"ph\":\"X\","
+                 "  {\"name\":\"%s\",\"cat\":\"%s\",\"ph\":\"X\","
                  "\"ts\":%lld,\"dur\":%lld,\"pid\":1,\"tid\":1}",
-                 name, start, end - start);
+                 name, gAppName, start, end - start);
     std::fflush(gTraceLog);
 }
 
@@ -60,7 +59,7 @@ void startDiagnostics(const CliOptions &options)
         gDebugPath = options.debugPath;
         gDebugLog = std::fopen(options.debugPath.c_str(), "ab");
         if (!gDebugLog)
-            std::fprintf(stderr, "tvmail: cannot open debug log %s\n",
+            std::fprintf(stderr, "%s: cannot open debug log %s\n", gAppName,
                          options.debugPath.c_str());
     }
     if (!options.tracePath.empty())
@@ -69,7 +68,7 @@ void startDiagnostics(const CliOptions &options)
         gTraceLog = std::fopen(options.tracePath.c_str(), "wb");
         if (!gTraceLog)
         {
-            std::fprintf(stderr, "tvmail: cannot open trace log %s\n",
+            std::fprintf(stderr, "%s: cannot open trace log %s\n", gAppName,
                          options.tracePath.c_str());
         }
         else
@@ -95,7 +94,7 @@ void stopDiagnostics()
     }
 }
 
-// A helper's log beside tvmail's: insert .TAG before the extension
+// A helper's log beside the app's: insert .TAG before the extension
 // (debug.log -> debug.backend.log, debug.chat.log), or append it if there's
 // none.  trace.sh knows the same rule.
 static std::string helperPath(const std::string &path, const char *tag)
@@ -116,11 +115,6 @@ std::string backendFlags(const char *tag)
     if (!gTracePath.empty())
         flags += " --trace " + shq(helperPath(gTracePath, tag));
     return flags;
-}
-
-std::string backendCommand(const std::string &args)
-{
-    return "tvmail-backend" + backendFlags() + " " + args;
 }
 
 std::string tempDir()
@@ -147,7 +141,7 @@ long procId()
 static std::string writeScript(const std::string &body)
 {
     static int seq = 0;
-    std::string path = tempDir() + "tvmail_" + std::to_string(procId()) + "_" + std::to_string(++seq) + ".sh";
+    std::string path = tempDir() + gAppName + "_" + std::to_string(procId()) + "_" + std::to_string(++seq) + ".sh";
     if (FILE *f = fopen(path.c_str(), "wb"))
     {
         fputs(kPreamble, f);
@@ -162,7 +156,7 @@ static std::string writeScript(const std::string &body)
 std::string writeTemp(const std::string &content, const char *suffix)
 {
     static int seq = 0;
-    std::string path = tempDir() + "tvmail_msg_" + std::to_string(procId()) + "_" + std::to_string(++seq) + suffix;
+    std::string path = tempDir() + gAppName + "_msg_" + std::to_string(procId()) + "_" + std::to_string(++seq) + suffix;
     if (FILE *f = fopen(path.c_str(), "wb"))
     {
         fwrite(content.data(), 1, content.size(), f);
@@ -174,7 +168,7 @@ std::string writeTemp(const std::string &content, const char *suffix)
 static std::string q(const std::string &s) { return "\"" + s + "\""; }
 static std::string shInvoke(const std::string &script)
 {
-    return q(TVMAIL_SH) + " " + q(script);
+    return q(TV_SH) + " " + q(script);
 }
 
 std::string shCapture(const std::string &body)
@@ -201,7 +195,7 @@ int shInteractive(const std::string &body)
     TProgram::application->suspend();
     std::fputs("\n", stdout);
     int rc = std::system(shInvoke(sp).c_str());
-    std::fputs("\n[tvmail] done - press Enter to return ", stdout);
+    std::fprintf(stdout, "\n[%s] done - press Enter to return ", gAppName);
     std::fflush(stdout);
     for (int c; (c = std::getchar()) != '\n' && c != EOF;)
     {
@@ -210,48 +204,4 @@ int shInteractive(const std::string &body)
     TProgram::application->redraw();
     remove(sp.c_str());
     return rc;
-}
-
-// Every backendRun() call blocks the single TV event loop for the round
-// trip - fast on a local mailstore, but a real, felt pause over IMAP on a
-// slow link (see trace.sh). Flash a status-line message for the duration so
-// a slow request doesn't look like a hang. TProgram::statusLine is null
-// before the app object exists (the --selftest / early gRemote/gHost probes
-// in main() run before TVMailApp is constructed) - both ends just no-op then.
-static void showBusy()
-{
-    if (!TProgram::statusLine)
-        return;
-    TColorAttr c = vga(0x1F); // white on blue - the desktop's own accent
-    TDrawBuffer b;
-    short w = TProgram::statusLine->size.x; // the whole line, so no half-
-    b.moveChar(0, ' ', c, w);               // covered F-key hints show past it
-    b.moveStr(0, " Working... ", c);
-    TProgram::statusLine->writeLine(0, 0, w, 1, b);
-    TScreen::flushScreen();
-}
-
-static void hideBusy()
-{
-    if (!TProgram::statusLine)
-        return;
-    TProgram::statusLine->drawView();   // repaint the normal F-key hints
-    TScreen::flushScreen();
-}
-
-struct BusyGuard
-{
-    BusyGuard() { showBusy(); }
-    ~BusyGuard() { hideBusy(); }
-};
-
-// A read-only sub-command: try the warm co-process, else a one-shot shell call.
-std::string backendRun(const std::string &args)
-{
-    BusyGuard busy;
-    std::string body;
-    int st = 0;
-    if (mailBackend().call(args, body, st))
-        return body;
-    return shCapture("tvmail-backend" + backendFlags() + " " + args + " 2>&1");
 }

@@ -3,7 +3,7 @@
 // rules and headings, the viewer window, and the editor + input line the
 // composer and others use.
 #pragma once
-#include "tvmail.h"
+#include "tvcommon.h"
 
 // ------------------------------------------------------- mail text view ----
 // Read-only text for the body pane and the Source / Help / Purge-preview
@@ -165,7 +165,7 @@ class TMailText : public TScroller
             out.append(src[g.line], g.off, g.len);
         }
         out += '\n';
-        // tvmail's own clipboard: what Shift-Ins pastes into a compose window
+        // the app's own clipboard: what Shift-Ins pastes into an editor
         if (TEditor::clipboard && out.size() < TEditor::clipboard->bufSize)
             TEditor::clipboard->insertText(out.data(), (uint)out.size(), True);
         systemClipboard(out); // and the desktop's, for other programs
@@ -656,7 +656,8 @@ public:
 // -------------------------------------------------------- compose window ----
 // A real in-app composer (cf. third_party/tvision/examples/tvedit): To/Cc/
 // Subject input lines over a TEditor body with a scrollbar + L:C indicator.
-// F2 sends via `tvmail-backend send`; closing a modified draft asks first.
+// (tvmail's compose window: F2 sends via `tvmail-backend send`; closing a
+// modified draft asks first.)
 
 class TBodyEditor : public TEditor
 {

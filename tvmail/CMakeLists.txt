@@ -11,59 +11,24 @@ endif()
 # CTestTestfile.cmake and `ctest` doesn't warn about a missing include.
 enable_testing()
 
-# Cygwin's newlib hides XSI symbols (wcwidth, SA_NOCLDWAIT, ...) that tvision's
-# Unix backend expects; _GNU_SOURCE exposes them. Must precede add_subdirectory.
-if(CYGWIN)
-    add_compile_definitions(_GNU_SOURCE)
-    # Cygwin has no SA_NOCLDWAIT (no auto child-reaping); make it a no-op flag.
-    add_compile_definitions(SA_NOCLDWAIT=0)
-endif()
-
-# POSIX shell the app runs its little helper scripts through.  /bin/sh is right
-# everywhere native; the mingw cross-build (build.sh --mingw) overrides it with
-# a Cygwin shell, since a native Windows .exe cannot exec a Unix /bin/sh.
-set(TVMAIL_SH "/bin/sh" CACHE STRING "shell used to run tvmail-backend")
-
-# --- locate Turbo Vision (magiblot/tvision) -----------------------------
-find_package(tvision QUIET)
-if(NOT TARGET tvision)
-    if(NOT DEFINED TVISION_DIR)
-        set(TVISION_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/tvision")
-    endif()
-    if(EXISTS "${TVISION_DIR}/CMakeLists.txt")
-        message(STATUS "tvmail: building bundled Turbo Vision from ${TVISION_DIR}")
-        set(TV_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-        add_subdirectory("${TVISION_DIR}" tvision-build EXCLUDE_FROM_ALL)
+# The C++ tvmail shares with tvchat (../tvcommon; a source tarball carries
+# it as ./tvcommon).  It also finds Turbo Vision and sets TV_SH.
+if(NOT DEFINED TVCOMMON_DIR)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tvcommon/tvcommon.cmake")
+        set(TVCOMMON_DIR "${CMAKE_CURRENT_SOURCE_DIR}/tvcommon")
     else()
-        message(FATAL_ERROR
-            "Turbo Vision not found.\n"
-            "  git clone https://github.com/magiblot/tvision \"${TVISION_DIR}\"\n"
-            "or pass -DTVISION_DIR=/path/to/tvision , or install the tvision package.")
+        set(TVCOMMON_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../tvcommon")
     endif()
 endif()
+include("${TVCOMMON_DIR}/tvcommon.cmake")
 
 add_executable(tvmail
     src/main.cpp src/app.cpp src/mailwin.cpp src/compose.cpp
     src/addrbook.cpp src/parts.cpp src/signature.cpp src/help.cpp
-    src/dialogs.cpp src/util.cpp src/shell.cpp src/coprocess.cpp src/chat.cpp
-    src/chatwin.cpp)
-target_link_libraries(tvmail PRIVATE tvision)
-# Treat tvision's own headers as system headers so ITS warnings (e.g. the
-# __cdecl/__stdcall redefinition tv.h does on non-_WIN32 builds - Cygwin's
-# GCC already has built-in definitions for both) don't show up in tvmail's
-# build output. Warnings from tvmail's own sources are unaffected.
-get_target_property(TVISION_INCLUDE_DIRS tvision INTERFACE_INCLUDE_DIRECTORIES)
-if(TVISION_INCLUDE_DIRS)
-    target_include_directories(tvmail SYSTEM PRIVATE ${TVISION_INCLUDE_DIRS})
-endif()
-target_include_directories(tvmail PRIVATE src)
-target_compile_definitions(tvmail PRIVATE TVMAIL_SH="${TVMAIL_SH}"
-    TVMAIL_VERSION="${PROJECT_VERSION}")
-
-if(WIN32)
-    # self-contained .exe: no libstdc++-6/libgcc_s/libwinpthread next to it
-    target_link_options(tvmail PRIVATE -static -static-libgcc -static-libstdc++)
-endif()
+    src/dialogs.cpp src/backend.cpp src/chat.cpp src/chatwin.cpp
+    ${TVCOMMON_SOURCES})
+tvcommon_setup(tvmail)
+target_compile_definitions(tvmail PRIVATE TVMAIL_VERSION="${PROJECT_VERSION}")
 
 # --- tests (ctest) -------------------------------------------------------
 # backend_unit : stdlib unittest over tvmail-backend (mbox parsing, delete,
@@ -124,7 +89,7 @@ if(NOT WIN32)
     add_test(NAME install_roundtrip
              COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/install_roundtrip.sh"
                      "${CMAKE_CURRENT_BINARY_DIR}")
-    # mail_setup : third_party/POSIX/mail-setup's own sandboxed tests (F3 runs
+    # mail_setup : ../tvcommon/third_party/POSIX/mail-setup's own sandboxed tests (F3 runs
     #              its mail-pull); skipped if not fetched.  -LE mail_setup omits it
     add_test(NAME mail_setup
              COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/mail_setup.sh")
@@ -136,7 +101,7 @@ if(NOT WIN32)
     if(DEFINED TVISION_DIR AND EXISTS "${TVISION_DIR}/include/tvision/tv.h")
         add_test(NAME mingw_compile
                  COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/mingw_compile.sh"
-                         "${TVISION_DIR}/include")
+                         "${TVISION_DIR}/include" "${TVCOMMON_DIR}")
         set_tests_properties(mingw_compile PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)
     endif()
 endif()

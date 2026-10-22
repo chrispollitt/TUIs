@@ -1,83 +1,23 @@
-// tvmail.h - what every part of tvmail shares: the Turbo Vision classes it
-// uses, the command ids, the colours, and the free functions and globals that
-// cross a file boundary.  Classes shared between files live in views.h; each
-// window that only the app creates stays private to its own .cpp, reached
-// through the factory functions declared here.
+// tvmail.h - what every part of tvmail shares: its command ids and the free
+// functions and globals that cross a file boundary.  What tvmail shares with
+// tvchat (the Turbo Vision classes, the colours, diagnostics, the shell, text
+// by columns) is ../tvcommon/src/tvcommon.h; shared views are in views.h.
+// Each window that only the app creates stays private to its own .cpp,
+// reached through the factory functions declared here.
 #pragma once
+#include "tvcommon.h"
 
-#define Uses_TApplication
-#define Uses_TKeys
-#define Uses_TRect
-#define Uses_TBackground
-#define Uses_TDeskTop
-#define Uses_TMenuBar
-#define Uses_TMenuItem
-#define Uses_TMenu
-#define Uses_TSubMenu
-#define Uses_TStatusLine
-#define Uses_TStatusItem
-#define Uses_TStatusDef
-#define Uses_TScreen
-#define Uses_TFileDialog
-#define Uses_TDeskTop
-#define Uses_TWindow
-#define Uses_TFrame
-#define Uses_TScrollBar
-#define Uses_TScroller
-#define Uses_TListViewer
-#define Uses_TDrawBuffer
-#define Uses_TEvent
-#define Uses_MsgBox
-#define Uses_TInputLine
-#define Uses_TLabel
-#define Uses_TEditor
-#define Uses_TIndicator
-#define Uses_TDialog
-#define Uses_TButton
-#define Uses_TCheckBoxes
-#define Uses_TRadioButtons
-#define Uses_TSItem
-#define Uses_THistory
-#define Uses_TCommandSet
-#define Uses_TStaticText
-#define Uses_TMemo
-#define Uses_TText
-#define Uses_TClipboard
-#define Uses_TFindDialogRec
-#include <tvision/tv.h>
+class CoProcess;
+CoProcess &mailBackend(); // tvmail-backend serve (backend.cpp)
+CoProcess &chatBackend(); // tvchat-backend serve
 
-#include <string>
-#include <vector>
-#include <sstream>
-#include <algorithm>
-#include <cctype>
-#include <cstdarg>
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
-#include <chrono>
-
-#ifdef _WIN32
-#include <windows.h>
-#define popen _popen
-#define pclose _pclose
-#else
-#include <unistd.h>
-#include <fcntl.h>
-#include <poll.h>
-#include <csignal>
-#include <cerrno>
-#include <sys/wait.h>
-#endif
-
-#ifndef TVMAIL_SH
-#define TVMAIL_SH "/bin/sh"
-#endif
 #ifndef TVMAIL_VERSION
 #define TVMAIL_VERSION "1.2.0"
 #endif
 
 // ---------------------------------------------------------------- commands ---
+// (2007 About, 2014 focus content, 2022 help, 2024 pane focused, 2034 Window
+// list and 2043 wrap are tvcommon.h's: the shared views use them.)
 const ushort cmPull = 2000;
 const ushort cmReload = 2001;
 const ushort cmOpenMsg = 2002;
@@ -85,11 +25,9 @@ const ushort cmReplyMsg = 2003;
 const ushort cmCompose = 2004;
 const ushort cmDeleteMsg = 2005;
 const ushort cmViewSrc = 2006;
-const ushort cmAboutBox = 2007;
 const ushort cmSendMsg = 2011;      // send the focused compose window
 const ushort cmFolderPicked = 2012; // broadcast: folder pane focus changed
 const ushort cmMsgPicked = 2013;    // broadcast: message pane focus changed
-const ushort cmFocusContent = 2014; // Enter in message pane -> jump to body
 const ushort cmEditDraft = 2015;    // open the focused Drafts message to edit
 const ushort cmAddrBook = 2016;     // open the address-book window
 const ushort cmEditSig = 2017;      // open ~/.signature in an editor window
@@ -97,9 +35,7 @@ const ushort cmSaveSig = 2018;      // (signature window) write the file
 const ushort cmInsSig = 2019;       // (compose) insert the signature
 const ushort cmInsDead = 2020;      // (compose) insert ~/dead.letter
 const ushort cmResumeDead = 2021;   // open ~/dead.letter as a new compose
-const ushort cmShowHelp = 2022;     // in-app help window
 const ushort cmPullDone = 2023;     // background pop-pull finished (self-posted)
-const ushort cmPaneFocused = 2024;  // broadcast: a 3-pane pane took focus
 const ushort cmViewParts = 2025;    // open the MIME-parts window
 const ushort cmForwardMsg = 2026;   // forward the focused message
 const ushort cmReplyAllMsg = 2027;  // reply-all to the focused message
@@ -109,7 +45,6 @@ const ushort cmMoveMsg = 2030;      // move the focused message to another folde
 const ushort cmEmptyTrash = 2031;   // permanently delete everything in the trash folder
 const ushort cmMarkRead = 2032;     // mark the focused message read
 const ushort cmSaveMsg = 2033;      // save the focused message to a file (.eml)
-const ushort cmWindowList = 2034;   // Window > List... (Alt-0)
 const ushort cmSortDate = 2035;     // list order: mailbox order (oldest first)
 const ushort cmSortFrom = 2036;     //             by sender
 const ushort cmSortSubj = 2037;     //             by subject
@@ -118,7 +53,6 @@ const ushort cmSortReverse = 2039;  // flip the current order
 const ushort cmClearFilter = 2040;  // drop the type-to-filter text
 const ushort cmFilterChanged = 2041; // broadcast: list view rebuilt (title refresh)
 const ushort cmOutOfOffice = 2042;  // File > Out of office... (Sieve vacation reply)
-const ushort cmToggleWrap = 2043;   // View > Wrap long lines (body pane / focused text window)
 
 // chat: 2100-2149
 const ushort cmChatEvents = 2100; // self-posted from idle(): poll tvchat-backend
@@ -136,90 +70,18 @@ const ushort cmChatAcctPicked = 2140; // broadcast: the chat window's server pan
 const ushort cmChatConvPicked = 2141; // broadcast: its conversation pane moved
 const ushort hcChatWin = 2100;        // help context of the chat window: its own status line
 
-// -------------------------------------------------------- classic colors ----
-// The Turbo Vision DOS look, in exact RGB.  BIOS colour numbers are not
-// enough: the terminal's theme decides what "grey" or "green" look like, and
-// under e.g. Windows Terminal's Dark+ (white == bright white == #E5E5E5) the
-// classic white-on-grey dialog titles and light-cyan-on-green buttons
-// vanish.  RGB goes out as 24-bit colour, or as xterm's fixed 6x6x6 cube on
-// a 256-colour terminal - neither is touched by the theme.  (A 16-colour
-// terminal gets the nearest theme colour, as before.)
-inline TColorAttr vga(uchar bios, ushort style = 0)
-{
-    static const uint32_t rgb[16] = {
-        0x000000, 0x0000AA, 0x00AA00, 0x00AAAA, 0xAA0000, 0xAA00AA, 0xAA5500, 0xAAAAAA,
-        0x555555, 0x5555FF, 0x55FF55, 0x55FFFF, 0xFF5555, 0xFF55FF, 0xFFFF55, 0xFFFFFF};
-    return TColorAttr(TColorRGB(rgb[bios & 15]), TColorRGB(rgb[(bios >> 4) & 15]), style);
-}
-// The "focus" green: darker than VGA green so black, white, yellow and light
-// cyan text all read on it (contrast >= 4); an exact xterm-cube colour, so
-// 256-colour terminals show the same.
-constexpr uint32_t kFocusGreen = 0x008700;
-inline TColorAttr onGreen(uint32_t fg, ushort style = 0)
-{
-    return TColorAttr(TColorRGB(fg), TColorRGB(kFocusGreen), style);
-}
-
-inline TColorAttr cNorm() { return vga(0x30); }          // black on cyan: text
-inline TColorAttr cHi() { return vga(0x3F); }            // white on cyan: scroll arrows
-inline TColorAttr cFocus() { return onGreen(0xFFFFFF); } // white on green: focused row, selection
-inline TColorAttr cCur() { return vga(0xB0); }           // black on light cyan: current row, unfocused
-inline TColorAttr cDiv() { return vga(0x33); }           // cyan on cyan
-inline TColorAttr cFrame() { return vga(0x30); }         // black on cyan: frames + titles
-                                                                // (white on cyan is < 3:1 anywhere)
-inline TColorAttr cDim() { return vga(0x38); }           // grey on cyan: pane rules
-
-// ---------------------------------------------------------- command line ---
-struct CliOptions
-{
-    bool selftest = false;
-    bool parseError = false;
-    std::string debugPath;
-    std::string tracePath;
-};
-
-// --------------------------------------------------- shell + diagnostics ---
-// shell.cpp: the POSIX-sh plumbing every backend call goes through, and the
-// --debug / --trace logs.
-extern const char *const kPreamble; // PATH preamble for every helper script
-extern FILE *gDebugLog;
-extern FILE *gTraceLog;
-void debugLog(const char *fmt, ...);
-long long traceMicros();
-void traceSpan(const char *name, long long start);
-void startDiagnostics(const CliOptions &options);
-void stopDiagnostics();
-std::string backendFlags(const char *tag = "backend"); // --debug/--trace for a helper
-std::string backendCommand(const std::string &args);
-std::string tempDir();
-long procId();
-std::string writeTemp(const std::string &content, const char *suffix);
-std::string shCapture(const std::string &body);
-int shInteractive(const std::string &body);
-std::string backendRun(const std::string &args); // warm co-process, else the shell
+// ------------------------------------------------------ tvmail-backend ---
+// backend.cpp
+std::string backendCommand(const std::string &args); // for shCapture / shInteractive
+std::string backendRun(const std::string &args);     // warm co-process, else the shell
+std::string readSigFile();
+std::string readDeadLetter();
 
 // ------------------------------------------------------------- dialogs ---
 // dialogs.cpp
-ushort tvmailEditDialog(int dialog, ...);
 ushort askSaveDraft();
 std::string askSavePath(const std::string &suggested,
                         const char *title = "Save attachment as");
-
-// ---------------------------------------------------- text + system util ---
-// util.cpp
-std::string shq(const std::string &s);
-std::string slurp(const std::string &path);
-std::string homePath(const char *rel);
-std::string readSigFile();
-std::string readDeadLetter();
-std::vector<std::string> splitLines(const std::string &s);
-std::string lowered(std::string s);
-std::string fitCols(const std::string &s, int w);
-void putText(char *dest, const std::string &s, short maxLen);
-std::string expandTabs(const std::string &s);
-extern TTimerId gFlashTimer;
-void flashStatus(const std::string &msg);
-void systemClipboard(const std::string &text);
 
 // ------------------------------------------------------------ mail data ---
 // mailwin.cpp: the folder list and the current folder's messages

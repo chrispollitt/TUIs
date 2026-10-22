@@ -56,7 +56,7 @@ are remote clients.
   replies back. All of it is set up by
   [**mail-setup**](https://github.com/chrispollitt/POSIX/tree/main/mail-setup),
   a separate project that `./configure.sh` fetches into
-  `third_party/POSIX/mail-setup` (see *Requirements*). Its `mail-pull` wrapper
+  `../tvcommon/third_party/POSIX/mail-setup` (see *Requirements*). Its `mail-pull` wrapper
   runs whichever puller you picked, on the schedule the wizard asks for
   (systemd timer, or cron where there's none). On the master itself tvmail
   reads through Dovecot too: `./setup.sh` spots Dovecot and writes that
@@ -97,10 +97,10 @@ prompts than read the list below.
 
 mail-setup is imported the way tvision is: `configure.sh` sparse-clones
 `github.com/chrispollitt/POSIX` (just `mail-setup/`) into
-`third_party/POSIX` on first run. Update it with
-`git -C third_party/POSIX pull`. Set `MAIL_SETUP_DIR=/path/to/mail-setup` to
+`../tvcommon/third_party/POSIX` on first run. Update it with
+`git -C ../tvcommon/third_party/POSIX pull`. Set `MAIL_SETUP_DIR=/path/to/mail-setup` to
 use a checkout of your own instead. It has its own tests
-(`third_party/POSIX/mail-setup/tests/run-tests.sh`).
+(`../tvcommon/third_party/POSIX/mail-setup/tests/run-tests.sh`).
 
 - `cmake`, a C++17 compiler, `ncurses(w)` headers, `git`
   - Debian/Ubuntu/Pi: `apt install cmake g++ libncursesw5-dev git`
@@ -121,19 +121,21 @@ needs a small compatibility patch first (its Unix backend assumes Linux/BSD:
 `patches/cygwin_patch.py`, which `build.sh` applies automatically.
 
 ```bash
-./build.sh                # fetches third_party/ (tvision, mail-setup), patches, builds
+./build.sh                # fetches ../tvcommon/third_party/ (tvision, mail-setup), patches, builds
 ./clean.sh                # removes build/, dist/, logs, __pycache__/
-./clean.sh --all          # ...and third_party/, so the next build re-fetches it
+./clean.sh --all          # ...and ../tvcommon/third_party/, so the next build re-fetches it
 ```
 
 - `./build.sh --mingw` — cross-compile a static native `tvmail.exe` instead
   (only useful from a real Windows console, not mintty).
 - On Linux / macOS `build.sh` just builds natively.
-- `third_party/` is filled by `./third_party.sh` (which `build.sh` and
-  `configure.sh` both run): `tvision` from magiblot/tvision, and `POSIX` (a
-  sparse clone of chrispollitt/POSIX, just `mail-setup/`). Existing
-  checkouts are left alone; `./third_party.sh --update` pulls them. Only
-  tvision is needed to compile, so a failed mail-setup fetch just warns.
+- `../tvcommon/third_party/` (shared with tvchat) is filled by
+  `../tvcommon/third_party.sh`, which `build.sh` and `configure.sh` both
+  run: `tvision` from magiblot/tvision, and `POSIX` (a sparse clone of
+  chrispollitt/POSIX, just `mail-setup/` and `chat-setup/`). Existing
+  checkouts are left alone; `../tvcommon/third_party.sh --update` pulls
+  them. Only tvision is needed to compile, so a failed mail-setup fetch just
+  warns.
 
 Install and configure it with the wizard:
 
@@ -203,7 +205,7 @@ step above puts it on `PATH`. Otherwise:
   `./uninstall.sh` it; nothing may be left behind (and a legacy `pop-pull`
   that a `mail-pull` still runs must survive).
 - **`mail_setup`** — mail-setup's own unit, shell and pull-e2e suites from
-  `third_party/POSIX/mail-setup` (F3 runs its `mail-pull`). Temp dirs only;
+  `../tvcommon/third_party/POSIX/mail-setup` (F3 runs its `mail-pull`). Temp dirs only;
   never its live-master check. Skipped if mail-setup hasn't been fetched.
 
 Details in [tests/README.md](tests/README.md). No dependencies beyond a

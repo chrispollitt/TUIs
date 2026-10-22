@@ -5,7 +5,8 @@
 #   ./dist.sh src          just the source tarball
 #   ./dist.sh bin          just the binary tarball (needs a build/ already)
 #
-# The SOURCE tarball builds on Linux, macOS and Cygwin.
+# The SOURCE tarball (with ../tvcommon carried as tvmail-VER/tvcommon) builds
+# on Linux, macOS and Cygwin.
 # The BINARY tarball is per-platform - a Cygwin build only runs under Cygwin,
 # a Linux build only on Linux, etc.
 set -euo pipefail
@@ -16,12 +17,16 @@ what="${1:-all}"
 out="$here/dist"; mkdir -p "$out"
 
 make_src() {
-    local f="$out/tvmail-$ver.tar.gz"
+    local f="$out/tvmail-$ver.tar.gz" t
     if ( cd "$here" && git rev-parse --git-dir ) >/dev/null 2>&1; then
-        # "HEAD:" is the committed tree *at this directory* - works whether
-        # tvmail is the repo root or a subdirectory of one.
-        ( cd "$here" && git archive --format=tar --prefix="tvmail-$ver/" "HEAD:" ) \
-            | gzip -9 > "$f"
+        t=$(mktemp -d)
+        # "HEAD:" is the committed tree *at that directory*: tvmail itself,
+        # and tvcommon beside it (carried as tvmail-VER/tvcommon)
+        ( cd "$here" && git archive --format=tar --prefix="tvmail-$ver/" "HEAD:" ) > "$t/a.tar"
+        ( cd "$here/../tvcommon" && git archive --format=tar --prefix="tvmail-$ver/tvcommon/" "HEAD:" ) > "$t/b.tar"
+        ( cd "$t" && mkdir x && tar -xf a.tar -C x && tar -xf b.tar -C x &&
+          tar -cf - -C x "tvmail-$ver" ) | gzip -9 > "$f"
+        rm -rf "$t"
     else
         echo "not a git checkout - using cpack source packaging"
         ( cd "$here/build" && cpack --config CPackSourceConfig.cmake )

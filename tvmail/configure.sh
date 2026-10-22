@@ -8,7 +8,7 @@
 #   * dev tools to build tvmail (cmake, a C++ compiler, make, git, python3)
 #   * the mail system itself - delegated to mail-setup, a separate project
 #     (github.com/chrispollitt/POSIX, folder mail-setup) that this script
-#     fetches into third_party/POSIX/mail-setup (third_party.sh, same as
+#     fetches into ../tvcommon/third_party/POSIX/mail-setup (third_party.sh, same as
 #     build.sh uses for tvision), then runs its wizard:
 #       master  - Postfix (smarthost relay), Dovecot (IMAP), a puller
 #                 (pop-pull or getmail, run by F3 via mail-pull)
@@ -161,12 +161,13 @@ else
 fi
 
 # --------------------------------------------------------------------------
-# mail-setup (third_party/POSIX/mail-setup), like tvision in build.sh
+# mail-setup (../tvcommon/third_party/POSIX/mail-setup), like tvision in build.sh
 # --------------------------------------------------------------------------
 step "mail-setup (Postfix / Dovecot / pop-pull or getmail / Mailutils)"
-sh "$here/third_party.sh" mail-setup \
+common="$here/tvcommon"; [ -d "$common" ] || common="$here/../tvcommon"
+sh "$common/third_party.sh" posix \
   || die "couldn't get mail-setup - see above (or set MAIL_SETUP_DIR to a checkout)"
-MAIL_SETUP_DIR="${MAIL_SETUP_DIR:-$here/third_party/POSIX/mail-setup}"
+MAIL_SETUP_DIR="${MAIL_SETUP_DIR:-$common/third_party/POSIX/mail-setup}"
 log "mail-setup: $MAIL_SETUP_DIR"
 
 bash "$MAIL_SETUP_DIR/mail-setup.sh" --caller tvmail ${PASS[@]+"${PASS[@]}"}

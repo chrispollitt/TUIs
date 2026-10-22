@@ -4,18 +4,6 @@
 // mbox/MIME machinery is parsed once and each request is a pipe round-trip.
 #include "coprocess.h"
 
-CoProcess &mailBackend()
-{
-    static CoProcess b("tvmail-backend", "TVMAIL_BACKEND_LOG", "backend");
-    return b;
-}
-
-CoProcess &chatBackend()
-{
-    static CoProcess b("tvchat-backend", "TVCHAT_BACKEND_LOG", "chat");
-    return b;
-}
-
 std::string CoProcess::command(const std::string &args) const
 {
     return program + (diagTag ? backendFlags(diagTag) : std::string()) + " " + args;
@@ -29,7 +17,8 @@ CoProcess::CoProcess(const char *prog, const char *env, const char *diag)
 }
 
 // One request.  Returns false if the co-process is unavailable - the
-// caller then falls back to a one-shot `tvmail-backend ...` via the shell.
+// caller then falls back to something else (tvmail: a one-shot
+// `tvmail-backend ...` via the shell).
 bool CoProcess::call(const std::string &req, std::string &body, int &status)
 {
     if (permFail)
@@ -70,7 +59,7 @@ void CoProcess::stop()
     up = false;
 }
 
-// Fire-and-forget: run `tvmail-backend <args>` detached, stdin from
+// Fire-and-forget: run `<program> <args>` detached, stdin from
 // /dev/null and stdout+stderr to logpath.  Returns the pid (the caller
 // reaps it) or -1.  Used for the background mail pull, so F3 no longer
 // suspends the whole UI.
@@ -97,7 +86,7 @@ pid_t CoProcess::spawnLogged(const std::string &args, const std::string &logpath
                 ::close(f);
         }
         std::string sc = std::string(kPreamble) + "exec " + command(args) + "\n";
-        ::execl(TVMAIL_SH, TVMAIL_SH, "-c", sc.c_str(), (char *)nullptr);
+        ::execl(TV_SH, TV_SH, "-c", sc.c_str(), (char *)nullptr);
         ::_exit(127);
     }
     return p;
@@ -152,7 +141,7 @@ bool CoProcess::start()
         if (b[1] > 2)
             ::close(b[1]);
         std::string sc = std::string(kPreamble) + "exec " + command("serve") + "\n";
-        ::execl(TVMAIL_SH, TVMAIL_SH, "-c", sc.c_str(), (char *)nullptr);
+        ::execl(TV_SH, TV_SH, "-c", sc.c_str(), (char *)nullptr);
         ::_exit(127);
     }
     ::close(a[0]);
