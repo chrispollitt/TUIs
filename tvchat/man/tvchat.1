@@ -1,0 +1,92 @@
+.\" tvchat(1) man page.  man(7) macros, like tvmail's.
+.TH TVCHAT 1 "October 2026" "tvchat 0.1.0" "User Commands"
+.SH NAME
+tvchat \- a Turbo Vision chat client (IRC; Delta Chat to come)
+.SH SYNOPSIS
+.B tvchat
+.RB [ \-\-debug [ FILE ] ]
+.RB [ \-\-trace [ FILE ] ]
+.RB [ \-\-help | \-\-version ]
+.br
+.B tvchat \-\-selftest
+.SH DESCRIPTION
+.B tvchat
+is a chat client for the text terminal in the style of Borland's
+.BR "Turbo Vision" ,
+the sibling of
+.BR tvmail (1).
+Its one window has three panes:
+the chat accounts (left), the highlighted account's conversations (top right,
+starting with its server messages), and the conversation picked, its log over
+an input line (bottom right).
+.PP
+.B tvchat
+draws the windows only.
+The connections, the protocols and the history are kept by
+.BR tvchat\-backend (1),
+which it runs as a co-process and polls for events while it idles.
+.SH KEYS
+.TP
+.B Tab ", " Shift\-Tab
+servers \(-> conversations \(-> input, and round.
+.TP
+.B Enter
+on a server: connect it if need be and go to its conversations;
+on a conversation: go to the input line;
+in the input line: send.
+.TP
+.B PgUp ", " PgDn ", " Up ", " Down
+scroll the log from the input line; PgUp at the top fetches older messages.
+.TP
+.B Alt\-A
+the Chat menu: Connect..., Disconnect..., Join... (a channel or a nick),
+Leave, and one item per account.
+.TP
+.B F1
+help.
+.B F6
+next window.
+.B Alt\-0
+window list.
+.B Alt\-X
+quit (asking first about text typed and not sent).
+.SH OPTIONS
+.TP
+.BI "--debug " [FILE]
+Write diagnostic logging to
+.I FILE
+(default:
+.IR debug.log );
+.B tvchat\-backend
+logs beside it, to
+.I debug.chat.log
+\(em every request, every IRC line in and out (SASL redacted), and why a
+connection ended.
+.TP
+.BI "--trace " [FILE]
+Write Chrome Trace Event profiling data (default:
+.IR trace.log ;
+the backend's cProfile data to
+.IR trace.chat.log ).
+.TP
+.B --selftest
+Start the backend, read the accounts, poll once and ping, without the
+interface; exit 0 if all of that worked.
+.SH FILES
+.TP
+.I ~/.config/tvchat/tvchat.conf
+the accounts (see
+.BR tvchat\-backend (1));
+.B $TVCHAT_CONF
+names another file.
+.I ~/.config/tvmail/tvchat.conf
+is read when it is missing.
+.TP
+.IR ~/.netrc ", " ~/.mu-tickets
+where the SASL passwords are (or
+.BR $TVCHAT_PASS_ \fIACCOUNT\fR).
+.SH SEE ALSO
+.BR tvchat\-backend (1),
+.BR tvmail (1)
+.SH AUTHOR
+Chris Pollitt.  MIT licence, no warranty.

@@ -1,16 +1,16 @@
-# tvchat-backend configuration - the chat side of tvmail.
+# tvchat configuration - read by tvchat-backend.
 #
-# Copy to  ~/.config/tvmail/tvchat.conf  and edit.  $TVCHAT_CONF points one
+# Copy to  ~/.config/tvchat/tvchat.conf  and edit.  $TVCHAT_CONF points one
 # run at another file.  No file at all simply means no chat accounts.
 #
-# NO PASSWORDS HERE.  They are looked up like tvmail's own, first match wins:
+# NO PASSWORDS HERE.  They are looked up for the SASL login, first match wins:
 #   $TVCHAT_PASS_<ACCOUNT>   e.g. $TVCHAT_PASS_LIBERA for [account:libera]
 #   ~/.mu-tickets            irc://yournick:PASS@irc.libera.chat
 #   ~/.netrc  (chmod 600)    machine irc.libera.chat login yournick password PASS
 # The values below are placeholders - pick your own nick, channel and address.
 
 [chat]
-# connect these accounts when tvmail starts (comma-separated section names)
+# connect these accounts when tvchat starts (comma-separated section names)
 autoconnect = libera
 
 # One section per account, [account:NAME].  NAME is the account's id in the

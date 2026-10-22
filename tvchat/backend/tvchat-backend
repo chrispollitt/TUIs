@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 
-"""tvchat-backend - chat helper for the tvmail Turbo Vision client.
+"""tvchat-backend - chat helper for the tvchat Turbo Vision client.
 
-The chat counterpart of tvmail-backend: every live connection (IRC today,
-Delta Chat later) and all protocol work lives here, so the C++ front end only
-ever sees one small, protocol-neutral chat model.  It runs as a SEPARATE
-co-process from tvmail-backend, so a slow IMAP round trip never stalls chat.
-Stdlib only, Python >= 3.6.
+Every live connection (IRC today, Delta Chat later) and all protocol work
+lives here, so the C++ front end only ever sees one small, protocol-neutral
+chat model.  tvchat runs it as a co-process (like tvmail and its
+tvmail-backend).  Stdlib only, Python >= 3.6.
 
-Configuration: ~/.config/tvmail/tvchat.conf ($TVCHAT_CONF overrides it for one
-run; see the shipped tvchat.conf.example).  One [account:NAME] section per
-account; NO PASSWORDS in that file - they come from ~/.netrc, ~/.mu-tickets or
-the environment, exactly as tvmail-backend looks them up.
+Configuration: ~/.config/tvchat/tvchat.conf ($TVCHAT_CONF overrides it for one
+run; see the shipped tvchat.conf.example; the ~/.config/tvmail/tvchat.conf of
+when chat was part of tvmail is read if the new one is missing).  One
+[account:NAME] section per account; NO PASSWORDS in that file - they come
+from the environment, ~/.mu-tickets or ~/.netrc, for the SASL login only.
 
 Sub-commands (all reply bodies are TAB-separated lines; a TAB, newline,
 carriage return or backslash inside a field is escaped as \\t \\n \\r \\\\):
@@ -57,7 +57,7 @@ carriage return or backslash inside a field is escaped as \\t \\n \\r \\\\):
 
   irc-tail --raw ACCOUNT    the same, plus every IRC line in (<<) and out (>>)
 
-Diagnostics (before the sub-command, as tvmail passes them):
+Diagnostics (before the sub-command, as tvchat passes them):
   --debug [FILE]            log to FILE (default debug.log): every request and
                             its reply status, account state changes, every IRC
                             line in and out (SASL secrets redacted), socket and
@@ -76,7 +76,7 @@ from collections import deque
 __version__ = "1.2.0"
 
 # Silent unless --debug configures it (logging's last-resort handler still
-# shows ERRORs - a failed callback's traceback - on stderr, which tvmail
+# shows ERRORs - a failed callback's traceback - on stderr, which tvchat
 # sends to $TVCHAT_BACKEND_LOG or /dev/null).
 _log = logging.getLogger("tvchat-backend")
 
@@ -384,7 +384,8 @@ class Loop:
 
 
 # --------------------------------------------------------------------------
-# Configuration:  ~/.config/tvmail/tvchat.conf  (or $TVCHAT_CONF)
+# Configuration:  ~/.config/tvchat/tvchat.conf  (or $TVCHAT_CONF; the old
+# ~/.config/tvmail/tvchat.conf when the new one is missing)
 #
 #   [chat]           autoconnect = libera, delta   (section names, comma-separated)
 #   [account:NAME]   protocol = irc | deltachat,  display = (default: NAME)
@@ -392,9 +393,19 @@ class Loop:
 #
 # Passwords are NEVER in this file - see the module docstring.
 # --------------------------------------------------------------------------
+CONF_PATHS = ("~/.config/tvchat/tvchat.conf",
+              "~/.config/tvmail/tvchat.conf")   # chat was part of tvmail until 0.1.0
+
+
 def _conf_path():
-    return os.environ.get("TVCHAT_CONF") or os.path.expanduser(
-        "~/.config/tvmail/tvchat.conf")
+    env = os.environ.get("TVCHAT_CONF")
+    if env:
+        return env
+    for p in CONF_PATHS:
+        p = os.path.expanduser(p)
+        if os.path.exists(p):
+            return p
+    return os.path.expanduser(CONF_PATHS[0])
 
 
 def load_config(path=None):
@@ -431,39 +442,45 @@ def load_config(path=None):
 
 
 # --------------------------------------------------------------------------
-# Passwords.  Same places tvmail-backend looks, in the same order: the
-# environment ($TVCHAT_PASS_<ACCOUNT>, e.g. $TVCHAT_PASS_LIBERA), then
-# ~/.mu-tickets (borrowed from a tvmail-backend installed beside this file -
-# chat may lean on the mail backend, never the other way round), then
-# ~/.netrc (machine <host> login <user> password <p>, chmod 600).
+# Passwords: the environment ($TVCHAT_PASS_<ACCOUNT>, e.g. $TVCHAT_PASS_LIBERA),
+# then ~/.mu-tickets ($TVMAIL_MU_TICKETS names another - the file tvmail and
+# mu share), then ~/.netrc (machine <host> login <user> password <p>, chmod
+# 600).  In each, only an entry for the SASL login counts (bug #46).
 # --------------------------------------------------------------------------
 def _env_name(account_id):
     return "TVCHAT_PASS_" + re.sub(r"[^A-Za-z0-9]", "_", account_id).upper()
 
 
-def _mail_backend():
-    here = os.path.dirname(os.path.realpath(__file__))
-    path = os.path.join(here, "tvmail-backend")
-    if not os.path.exists(path):
-        return None
-    try:
-        import importlib.machinery, importlib.util
-        loader = importlib.machinery.SourceFileLoader("tvmail_backend", path)
-        spec = importlib.util.spec_from_loader(loader.name, loader)
-        mod = importlib.util.module_from_spec(spec)
-        loader.exec_module(mod)
-        return mod
-    except Exception:
-        return None
+def _mu_tickets_path():
+    return os.environ.get("TVMAIL_MU_TICKETS") or os.path.expanduser("~/.mu-tickets")
 
 
-def _mu_ticket_for(mb, scheme, host, login):
+def _mu_url(u):
+    """scheme://[user[:pass]@]host[:port][/path], user and pass
+    percent-decoded; scheme may be '*'.  None if it does not parse.  (The
+    same reading of the file as tvmail-backend's.)"""
+    from urllib.parse import unquote
+    m = re.match(
+        r'^(?P<scheme>\*|[A-Za-z][\w+.-]*)://'
+        r'(?:(?P<user>[^:@/]*)(?::(?P<pass>[^@/]*))?@)?'
+        r'(?P<host>[^:/]+)(?::(?P<port>\d+))?(?P<path>/.*)?$',
+        u.strip())
+    if not m:
+        return None
+    d = m.groupdict()
+    return {"scheme": d["scheme"],
+            "user": unquote(d["user"]) if d["user"] else None,
+            "pass": unquote(d["pass"]) if d["pass"] else None,
+            "host": d["host"]}
+
+
+def _mu_ticket_for(scheme, host, login):
     """The ~/.mu-tickets password for exactly this login on host, or None.
-    Not mb._mu_ticket_pass(): for mail it falls back to the first entry for
-    the host whatever its user, and a mail ticket like *://chris:...@cpbee
-    then handed the mail password to SASL as another account's (bug #46)."""
+    No fallback to another user on the host: tvmail's mail lookup does
+    that, and its mail ticket *://chris:...@cpbee was once handed to SASL as
+    chris-pollitt's password (bug #46)."""
     try:
-        with open(mb._mu_tickets_path(), encoding="utf-8", errors="replace") as fh:
+        with open(_mu_tickets_path(), encoding="utf-8", errors="replace") as fh:
             lines = fh.readlines()
     except OSError:
         return None
@@ -471,7 +488,7 @@ def _mu_ticket_for(mb, scheme, host, login):
         ln = ln.strip()
         if not ln or ln.startswith("#"):
             continue
-        t = mb._mu_url(ln)
+        t = _mu_url(ln)
         if (t and t["pass"] and t["user"] == login and t["scheme"] in ("*", scheme)
                 and (t["host"] or "").lower() == host.lower()):
             return t["pass"]
@@ -486,14 +503,12 @@ def find_password_where(account_id, host, login, scheme):
     v = os.environ.get(name)
     if v:
         return v, "$" + name
-    mb = _mail_backend()
-    if mb is not None and hasattr(mb, "_mu_url") and hasattr(mb, "_mu_tickets_path"):
-        try:
-            pw = _mu_ticket_for(mb, scheme, host, login)
-        except Exception:
-            pw = None
-        if pw:
-            return pw, "~/.mu-tickets"
+    try:
+        pw = _mu_ticket_for(scheme, host, login)
+    except Exception:
+        pw = None
+    if pw:
+        return pw, "~/.mu-tickets"
     try:
         import netrc
         auth = netrc.netrc(os.path.expanduser("~/.netrc")).authenticators(host)
@@ -519,7 +534,7 @@ def _me():
     for k in ("USER", "LOGNAME"):
         if os.environ.get(k):
             return os.environ[k]
-    return "tvmail"
+    return "tvchat"
 
 
 # --------------------------------------------------------------------------
@@ -805,7 +820,7 @@ class IrcAdapter:
         self.send_raw("NICK %s" % self.nick)
         self.send_raw("USER %s 0 * :%s" % (self.username, self.realname))
 
-    def disconnect(self, message="tvmail"):
+    def disconnect(self, message="tvchat"):
         if self.phase in ("registering", "up") and self.sock is not None:
             self.send_raw("QUIT :%s" % message)
             try:                         # best effort: one push of what's queued
@@ -1183,7 +1198,7 @@ class IrcAdapter:
             verb, _, rest = inner.partition(" ")
             if verb.upper() != "ACTION":
                 if verb.upper() == "VERSION" and not notice and not self.is_me(m.nick):
-                    self.send_raw("NOTICE %s :\x01VERSION tvmail %s\x01"
+                    self.send_raw("NOTICE %s :\x01VERSION tvchat %s\x01"
                                   % (m.nick, __version__))
                 return
             text, flags = rest, flags + "a"
@@ -1276,7 +1291,7 @@ class Chat:
         self.loop = loop or Loop()
         self.events = EventQueue(clock)
         # A broken tvchat.conf must not kill the co-process before its banner
-        # (tvmail would just see a dead backend); keep the complaint and give
+        # (tvchat would just see a dead backend); keep the complaint and give
         # it, as a user-facing error, to every verb that needs the accounts.
         self.conf_error = None
         try:
@@ -1470,7 +1485,7 @@ def cmd_ping(a):
 
 
 # --------------------------------------------------------------------------
-# irc-tail: a debugging aid, no tvmail needed.  Connects one account and
+# irc-tail: a debugging aid, no tvchat needed.  Connects one account and
 # prints its events as plain text; a typed line is sent to the newest
 # channel or query ("/join #chan" and "/quit" also work).
 # --------------------------------------------------------------------------
@@ -1544,7 +1559,7 @@ def cmd_irc_tail(a):
 
 
 # --------------------------------------------------------------------------
-# serve: the persistent co-process tvmail talks to.  Same framing as
+# serve: the persistent co-process tvchat talks to.  Same framing as
 # tvmail-backend serve, but stdin is one of several sources in the selectors
 # loop, so incoming chat traffic is read (and queued) while the UI is idle.
 # Every request is answered at once - anything slow (connecting) replies

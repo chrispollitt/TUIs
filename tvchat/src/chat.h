@@ -1,9 +1,9 @@
-// chat.h - tvmail's side of tvchat-backend: the second co-process, polled
-// for events while tvmail idles.  This keeps a copy of the parts of the chat
+// chat.h - tvchat's side of tvchat-backend: the co-process, polled for
+// events while tvchat idles.  This keeps a copy of the parts of the chat
 // model that more than one window needs (accounts, conversations, unread
 // counts); everything protocol-specific stays in the backend.
 #pragma once
-#include "tvmail.h"
+#include "tvchat.h"
 #include <map>
 
 struct ChatAccount
@@ -32,9 +32,9 @@ class ChatClient
 public:
     static ChatClient &instance();
 
-    // A chat config exists ($TVCHAT_CONF or ~/.config/tvmail/tvchat.conf):
-    // only then is the chat co-process started at all.  Always false on the
-    // mingw build, which has no co-processes.
+    // A chat config exists ($TVCHAT_CONF, else ~/.config/tvchat/tvchat.conf,
+    // else the ~/.config/tvmail/tvchat.conf of when chat was part of tvmail
+    // - the backend's own order): only then is the co-process started.
     static bool configured();
 
     // Start tvchat-backend and read the accounts and conversations.

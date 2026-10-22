@@ -3,7 +3,7 @@
 // through ChatClient (chat.h) and hears about changes from the cmChatEvent /
 // cmChatReset broadcasts the app sends after each poll; nothing here knows
 // which protocol a conversation speaks.
-#include "tvmail.h"
+#include "tvchat.h"
 #include "views.h"
 #include "chat.h"
 #include <ctime>
@@ -95,7 +95,7 @@ bool ask(const std::string &req, std::string &body, std::string &err)
 }
 
 // "2026-10-21T17:05:09Z" -> "10:05", the local time.  Days-from-civil by
-// hand: timegm() is not on every libc tvmail builds with.
+// hand: timegm() is not on every libc tvchat builds with.
 std::string localHHMM(const std::string &iso)
 {
     int Y, M, D, h, m, s;
@@ -133,7 +133,7 @@ std::string nowHHMM()
 }
 
 // --------------------------------------------------------------- the log ---
-// One message as the window keeps it.  Lines tvmail adds itself (a state
+// One message as the window keeps it.  Lines tvchat adds itself (a state
 // change, a refused send) have no id and flag n.
 struct ChatLine
 {
@@ -160,7 +160,7 @@ enum LineKind : char
 {
     lkOther,
     lkOwn,    // flag s: what you sent
-    lkSystem, // flag n: notices, server text, tvmail's own notes
+    lkSystem, // flag n: notices, server text, tvchat's own notes
 };
 
 // Own lines and system lines get their own colours, both >= 3:1 on the
@@ -265,7 +265,7 @@ protected:
     }
 };
 
-// The cyan window colours every tvmail text window uses (TMailViewWindow).
+// The cyan window colours every text window uses (TMailViewWindow).
 TColorAttr cyanWindowColor(uchar index, TView *self)
 {
     switch (index)
@@ -286,11 +286,11 @@ TColorAttr cyanWindowColor(uchar index, TView *self)
 }
 
 // ----------------------------------------------------- the chat window ---
-// One full-size window laid out like the mail one (mailwin.cpp): the chat
-// accounts (left) | the picked account's conversations (top right) / the
-// picked conversation, its log over a one-line input (bottom right).
-// Alt-C brings it forward and, from here, goes back to mail; so does Esc.
-// Tab moves servers -> conversations -> input.  Each account's list starts
+// One full-size window laid out like tvmail's: the chat accounts (left) |
+// the picked account's conversations (top right) / the picked
+// conversation, its log over a one-line input (bottom right).  It is made
+// when tvchat starts and never closes.  Tab moves servers ->
+// conversations -> input.  Each account's list starts
 // with its server messages (MOTD, notices, SASL results).  Text typed and
 // not sent stays with its conversation when you pick another; Alt-X asks
 // before it is thrown away.
@@ -541,7 +541,7 @@ class TChatMainWindow : public TWindow
         return true;
     }
 
-    // tvmail's own note in the log: a state change, a refused send.
+    // tvchat's own note in the log: a state change, a refused send.
     void note(const std::string &text)
     {
         bool bottom = log->atBottom();
@@ -695,10 +695,10 @@ class TChatMainWindow : public TWindow
         logTitle->setLabel(isServer() ? name.substr(0, name.rfind(" (server)")) + " - server messages" : name);
         const ChatAccount *a = findAccount(acct);
         convTitle->setLabel(a ? "Conversations - " + menuSafe(a->display) : std::string("Conversations"));
-        // "tvmail chat (3)" while it is not the window you are in:
+        // "tvchat (3)" while it is not the window you are in (Help is):
         // Window > List shows the same
         int unread = chatOn() ? ChatClient::instance().unreadTotal() : 0;
-        std::string t = "tvmail chat";
+        std::string t = "tvchat";
         if (unread > 0 && !front())
             t += " (" + std::to_string(unread) + ")";
         if (!title || t != title)
@@ -811,12 +811,11 @@ class TChatMainWindow : public TWindow
 public:
     TChatMainWindow(const TRect &bounds)
         : TWindowInit(&TChatMainWindow::initFrame),
-          TWindow(bounds, "tvmail chat", wnNoNumber)
+          TWindow(bounds, "tvchat", wnNoNumber)
     {
         palette = wpCyanWindow;
         flags &= ~(wfClose | wfZoom | wfMove);
         growMode = gfGrowHiX | gfGrowHiY;
-        helpCtx = hcChatWin; // its own status line: no mail keys here
 
         Rects R = paneRects();
         srvTitle = new TPaneTitle(R.srvTitle, "Servers");
@@ -930,12 +929,6 @@ public:
             return;
         }
         TWindow::handleEvent(e);
-        if (e.what == evKeyDown && e.keyDown.keyCode == kbEsc)
-        {
-            clearEvent(e);
-            showMailWindow(); // the text typed here stays
-            return;
-        }
         if (!alive || e.what != evBroadcast)
             return;
         switch (e.message.command)
@@ -1054,7 +1047,7 @@ public:
 
 // The chat window to the front (made the first time), on this account /
 // conversation if given.
-void openChatWindow(const std::string &account = std::string(), const std::string &c = std::string())
+void showChatWindow(const std::string &account = std::string(), const std::string &c = std::string())
 {
     if (!gChatWin)
         TProgram::deskTop->insert(new TChatMainWindow(TProgram::deskTop->getExtent()));
@@ -1196,7 +1189,7 @@ void joinDialog()
     pollNow(); // conv-new: the list shows it with its name
     std::string conv = trimmed(body);
     if (!conv.empty())
-        openChatWindow(std::string(), conv);
+        showChatWindow(std::string(), conv);
 }
 
 // Leave: part the conversation the chat window shows; its conv-gone takes
@@ -1205,7 +1198,7 @@ void leaveShown()
 {
     if (!chatInFront())
     {
-        flashStatus("Leave: Alt-C to the chat window first");
+        flashStatus("Leave: close Help first - it is the chat window's");
         return;
     }
     std::string body, err;
@@ -1227,7 +1220,7 @@ void accountItem(int i)
     ChatAccount a = as[i]; // connectAccount() polls, which may reshape as
     if (!isLive(a))
         connectAccount(a);
-    openChatWindow(a.id);
+    showChatWindow(a.id);
 }
 
 // ---------------------------------------------------------- the menu ---
@@ -1254,7 +1247,6 @@ TMenu *buildChatMenu()
     };
     add(new TMenuItem("~C~onnect...", cmChatConnect, kbNoKey, hcNoContext));
     add(new TMenuItem("~D~isconnect...", cmChatDisconnect, kbNoKey, hcNoContext));
-    add(new TMenuItem("Chat ~w~indow", cmChatConvs, kbNoKey, hcNoContext, "Alt-C"));
     add(new TMenuItem("~J~oin...", cmChatJoin, kbNoKey, hcNoContext));
     add(new TMenuItem("~L~eave", cmChatLeave, kbNoKey, hcNoContext));
     add(&newLine());
@@ -1268,6 +1260,11 @@ TMenu *buildChatMenu()
     return new TMenu(*head);
 }
 } // namespace
+
+void openChatWindow()
+{
+    showChatWindow();
+}
 
 bool chatOn()
 {
@@ -1324,12 +1321,6 @@ bool chatCommand(ushort command)
         break;
     case cmChatDisconnect:
         disconnectDialog();
-        break;
-    case cmChatConvs: // Alt-C: to the chat window, and from it back to mail
-        if (chatInFront())
-            showMailWindow();
-        else
-            openChatWindow();
         break;
     case cmChatJoin:
         joinDialog();

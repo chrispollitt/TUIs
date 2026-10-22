@@ -2,7 +2,6 @@
 #pragma once
 #include "tvmail.h"
 #include "tvapp.h"
-#include "chat.h"
 #include <functional>
 
 // ---------------------------------------------------------------- app -------
@@ -19,16 +18,6 @@ public:
         // (the clipboard, Find dialogs and greyed edit commands: TTvApp)
         mainWin = newMailWindow(deskTop->getExtent());
         deskTop->insert(mainWin);
-
-#ifndef _WIN32
-        // chat runs only for someone who configured it: no tvchat.conf, no
-        // second co-process
-        if (ChatClient::configured() && ChatClient::instance().start())
-            ticks.push_back({cmChatEvents, []
-                             { return ChatClient::instance().pollIntervalMs(); },
-                             std::chrono::steady_clock::now()});
-#endif
-        chatMenuRebuild(); // the accounts, or why there is no chat
     }
 
     static TMenuBar *initMenuBar(TRect r);
@@ -57,11 +46,10 @@ private:
     void pullMail();
     void pullFinished(); // cmPullDone handler
     void reload();
-    void chatEvents(); // cmChatEvents handler
 #ifndef _WIN32
     // Periodic work.  idle() only decides that one is due and posts its
-    // command; handleEvent() does the work, outside idle().  Chat's event
-    // poll is one; TO-DO 14's periodic mail pull can be another.
+    // command; handleEvent() does the work, outside idle().  TO-DO 14's
+    // periodic mail pull can be one.
     struct IdleTick
     {
         ushort command;

@@ -118,7 +118,7 @@ else
   cmake --install "$BUILD" --prefix "$PREFIX"
 fi
 BIN_DIR="$PREFIX/bin"
-log "installed tvmail, tvmail-backend, tvchat-backend -> $BIN_DIR"
+log "installed tvmail, tvmail-backend -> $BIN_DIR"
 
 case ":$PATH:" in
   *":$BIN_DIR:"*) : ;;

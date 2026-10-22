@@ -1,0 +1,48 @@
+// help.cpp - the in-app help (F1).
+#include "tvchat.h"
+
+static const char *kHelpText =
+    "tvchat  -  a Turbo Vision chat client                (Esc / Alt-F3 closes)\n"
+    "\n"
+    "THE THREE PANES\n"
+    "  Servers (left)  .  Conversations (top right)  .  the chat (bottom right).\n"
+    "  Tab / Shift-Tab move between them: servers -> conversations -> input.\n"
+    "  Moving the highlight in Servers shows that server's conversations (and\n"
+    "  the one you last had open there); moving it in Conversations shows that\n"
+    "  conversation below.  Enter on a server connects it if need be and goes\n"
+    "  to its conversations; Enter on a conversation goes to the input line.\n"
+    "  Each server's list starts with its server messages (MOTD, notices,\n"
+    "  errors, SASL results).\n"
+    "\n"
+    "ACCOUNTS   (~/.config/tvchat/tvchat.conf - see man tvchat-backend)\n"
+    "  IRC today, Delta Chat to come.  Accounts connect by themselves ([chat]\n"
+    "  autoconnect) or by Chat > Connect...; the Chat menu lists each one and\n"
+    "  its state - pick one to show it.  Passwords never go in tvchat.conf:\n"
+    "  $TVCHAT_PASS_<ACCOUNT>, ~/.mu-tickets or ~/.netrc, for the SASL login.\n"
+    "  Chat > Join... a channel, or a nick to talk to; Chat > Leave parts the\n"
+    "  conversation shown.\n"
+    "\n"
+    "TALKING\n"
+    "  In the chat pane just type: Enter sends.  PgUp / PgDn / Up / Down scroll\n"
+    "  the log; PgUp at the top fetches older messages.  What you typed and did\n"
+    "  not send stays with its conversation when you pick another; Alt-X asks\n"
+    "  before it is thrown away.\n"
+    "  Unread messages count in both lists, in the window title while another\n"
+    "  window is in front, and as \"N new\" on the status line.  A conversation\n"
+    "  is read once the chat pane has the focus.\n"
+    "  The log lives in memory only: it is gone when tvchat exits.\n"
+    "\n"
+    "FIND AND COPY   (the chat log, Help)\n"
+    "  Edit > Find... / Find again search the text.\n"
+    "  Shift-arrows / Shift-PgUp / PgDn or a mouse drag select whole lines;\n"
+    "  Ctrl-Ins (Edit > Copy) copies them - everything, when nothing is\n"
+    "  selected.  Long lines wrap; View > Wrap long lines turns that off.\n"
+    "\n"
+    "KEYS AT A GLANCE\n"
+    "  F1 help    F6 next window    Alt-0 window list    F10 menu\n"
+    "  Tab pane   Enter send   PgUp older   Alt-X quit\n";
+
+TWindow *newHelpWindow(const TRect &bounds)
+{
+    return newTextWindow(bounds, "Help", kHelpText);
+}

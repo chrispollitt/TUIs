@@ -1,0 +1,131 @@
+.\" tvchat-backend(1) man page.
+.TH TVCHAT-BACKEND 1 "October 2026" "tvchat 0.1.0" "User Commands"
+.SH NAME
+tvchat\-backend \- the chat helper behind tvchat
+.SH SYNOPSIS
+.B tvchat\-backend
+.RB [ \-\-debug " [" \fIFILE\fR ]]
+.RB [ \-\-trace " [" \fIFILE\fR ]]
+.B serve
+.br
+.B tvchat\-backend
+.B irc\-tail
+.RB [ \-\-raw ]
+.I ACCOUNT
+.SH DESCRIPTION
+.B tvchat\-backend
+holds every live chat connection (IRC today; Delta Chat to come) for
+.BR tvchat (1).
+It is a single Python 3 program, standard library only, with one
+.B selectors
+loop over its standard input, every socket and a timer heap.
+.PP
+.B serve
+is how
+.B tvchat
+runs it: one request line in, one framed reply out
+.RB ( "<status> <nbytes>" ,
+a newline, then the body).
+Status 0 is success, 1 a message for the user, 2 an internal error.
+Verbs:
+.BR accounts ,
+.BR connect ,
+.BR disconnect ,
+.BR convs ,
+.BR join ,
+.BR part ,
+.BR send ,
+.BR history ,
+.BR members ,
+.BR mark\-read ,
+.B events
+.RI [ "\-\-after SEQ" ],
+.BR ping ,
+.BR quit .
+Replies are TAB-separated lines; inside a field TAB, newline, CR and
+backslash are written
+.BR \et ", " \en ", " \er ", " \e\e .
+Nothing terminal-specific ever appears in a reply.
+.PP
+.B irc\-tail
+.I ACCOUNT
+connects one account in the terminal and prints its events
+.RB ( \-\-raw :
+every IRC line too); typed lines go to the newest channel,
+.B /join #x
+and
+.B /quit
+work.
+For checking an account by hand.
+.SH CONFIGURATION
+.I ~/.config/tvchat/tvchat.conf
+.RB ( $TVCHAT_CONF
+names another; the old
+.I ~/.config/tvmail/tvchat.conf
+is read when it is missing), INI syntax, no interpolation.
+Write comments on lines of their own: a
+.B #
+after a value is part of the value.
+.PP
+.B [chat]
+.B autoconnect =
+.I name, ...
+connects those accounts when
+.B serve
+starts.
+.PP
+.BI [account: NAME ]
+\(em
+.B protocol = irc
+(or
+.BR deltachat ,
+not supported yet),
+.BR display ,
+.BR host ,
+.B port
+(6697, or 6667 with
+.BR "tls = false" ),
+.BR tls ,
+.B verify
+(default true),
+.B cafile
+(a full path: no
+.B ~
+expansion),
+.BR nick ,
+.BR realname ,
+.B sasl
+(the SASL login; leave it out to connect unauthenticated),
+.B channels
+(comma-separated).
+.SH PASSWORDS
+Never in the configuration file.
+For an account with
+.BR sasl ,
+in this order, and in each place only an entry for that login counts:
+.B $TVCHAT_PASS_\fIACCOUNT\fR
+(e.g.
+.BR $TVCHAT_PASS_LIBERA ),
+then
+.I ~/.mu-tickets
+.RB ( irc://\fIlogin\fB:\fIpassword\fB@\fIhost\fR ,
+or a
+.B *://
+entry; the file is
+.B $TVMAIL_MU_TICKETS
+if set), then
+.I ~/.netrc
+.RB ( "machine \fIhost\fB login \fIlogin\fB password \fIpassword\fR" ).
+.SH OPTIONS
+.TP
+.BI "\-\-debug " [FILE]
+log every serve request, every IRC line in and out (SASL payloads
+redacted), the TLS version and cipher, and why a connection ended
+(default:
+.IR debug.log ).
+.TP
+.BI "\-\-trace " [FILE]
+write cProfile data on exit.
+.SH SEE ALSO
+.BR tvchat (1),
+.BR tvmail\-backend (1)

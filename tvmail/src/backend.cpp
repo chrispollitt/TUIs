@@ -10,12 +10,6 @@ CoProcess &mailBackend()
     return b;
 }
 
-CoProcess &chatBackend()
-{
-    static CoProcess b("tvchat-backend", "TVCHAT_BACKEND_LOG", "chat");
-    return b;
-}
-
 std::string backendCommand(const std::string &args)
 {
     return "tvmail-backend" + backendFlags() + " " + args;

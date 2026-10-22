@@ -1,0 +1,66 @@
+# tvchat
+
+A chat client for the text terminal, wearing the face of Borland's Turbo
+Vision: drop-down menus, shadowed dialogs, the cyan desktop, F10 for the menu
+bar. IRC today (with the IRCv3 extensions a modern server offers); Delta Chat,
+chat carried over email, is next.
+
+It is tvmail's sibling: the same look and the same split. The C++ front end
+draws windows. Everything protocol-specific (sockets, TLS, SASL, parsing)
+lives in a stdlib-only Python helper, `tvchat-backend`, which tvchat keeps
+running as a co-process. The two apps share their common C++ in
+[`../tvcommon`](../tvcommon).
+
+```text
+┌─────────────────────────────── tvchat ───────────────────────────────┐
+│[ Servers ]─────────│  Conversations - cpbee  ───────────────────────│
+│ Libera   connected │ * server messages                               │
+│ cpbee (2) connected│ #test (2)                                       │
+│                    │ tester2                                         │
+│                    │──  #test — cpbee  ─────────────────────────────│
+│                    │18:17 <tester2> hi                               │
+│                    │18:17 <chris-pollitt> hello                      │
+│                    │> _                                              │
+└──────────────────────────────────────────────────────────────────────┘
+ Tab Pane  Enter Send  PgUp Older  F6 Next  Alt-X Exit  F1 Help   2 new
+```
+
+## The window
+
+- **Servers (left):** each account with its unread count and its state.
+- **Conversations (top right):** the highlighted account's, starting with
+  its server messages (MOTD, notices, SASL results), then channels and
+  people.
+- **The chat (bottom right):** the conversation picked, its log over the
+  input line. Enter sends; PgUp at the top of the log fetches older lines.
+
+Tab moves servers → conversations → input. As in tvmail, moving a highlight
+shows what it points at, and a conversation counts as read once the chat pane
+has the focus. Unsent text stays with its conversation; Alt-X asks before it
+is thrown away.
+
+## Quick start
+
+```sh
+./build.sh                      # fetches + patches Turbo Vision, builds
+./install.sh                    # /usr/local (sudo if needed)
+cp configure/tvchat.conf.example ~/.config/tvchat/tvchat.conf   # then edit
+tvchat
+```
+
+Passwords never go in `tvchat.conf`: `$TVCHAT_PASS_<ACCOUNT>`,
+`~/.mu-tickets` or `~/.netrc`, for the SASL login. For your own IRC server on
+the LAN, `chrispollitt/POSIX`'s `chat-setup` installs Ergo
+(`configure-ergo.sh`) and points tvchat at it (`configure-tvchat.sh`). See
+[INSTALL.md](INSTALL.md).
+
+## Files
+
+| path | what |
+| --- | --- |
+| `src/` | the C++ front end: `main.cpp`, `app.cpp`, `chat.cpp` (the client side of the backend), `chatwin.cpp` (the window and the Chat menu) |
+| `backend/tvchat-backend` | the Python helper (`man tvchat-backend`) |
+| `configure/tvchat.conf.example` | a commented configuration |
+| `tests/` | `./test.sh` runs them all (see [tests/README.md](tests/README.md)) |
+| `HANDOFF.md` | the plan, what has been built, and the decisions made since |
+| `BUGS.md` | the bug list |

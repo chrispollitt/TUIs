@@ -9,7 +9,6 @@
 
 class CoProcess;
 CoProcess &mailBackend(); // tvmail-backend serve (backend.cpp)
-CoProcess &chatBackend(); // tvchat-backend serve
 
 #ifndef TVMAIL_VERSION
 #define TVMAIL_VERSION "1.2.0"
@@ -53,22 +52,6 @@ const ushort cmSortReverse = 2039;  // flip the current order
 const ushort cmClearFilter = 2040;  // drop the type-to-filter text
 const ushort cmFilterChanged = 2041; // broadcast: list view rebuilt (title refresh)
 const ushort cmOutOfOffice = 2042;  // File > Out of office... (Sieve vacation reply)
-
-// chat: 2100-2149
-const ushort cmChatEvents = 2100; // self-posted from idle(): poll tvchat-backend
-const ushort cmChatEvent = 2101;  // broadcast, one per event: infoPtr = const ChatEvent *
-const ushort cmChatReset = 2102;  // broadcast: the chat backend restarted, re-read everything
-const ushort cmChatConnect = 2103;    // Chat > Connect... (pick an account)
-const ushort cmChatDisconnect = 2104; // Chat > Disconnect
-const ushort cmChatConvs = 2105;      // Chat > Chat window (Alt-C): to it, and back to mail
-const ushort cmChatJoin = 2106;       // Chat > Join... (channel, nick or address)
-const ushort cmChatLeave = 2107;      // Chat > Leave: part the conversation the chat window shows
-const ushort cmChatOff = 2108;        // the "chat is off" note in the Chat menu: never does anything
-const ushort cmChatAccount = 2110;    // + i: Chat > <account i> opens its server window
-const int kChatMaxAccounts = 30;      // so 2110-2139
-const ushort cmChatAcctPicked = 2140; // broadcast: the chat window's server pane moved
-const ushort cmChatConvPicked = 2141; // broadcast: its conversation pane moved
-const ushort hcChatWin = 2100;        // help context of the chat window: its own status line
 
 // ------------------------------------------------------ tvmail-backend ---
 // backend.cpp
@@ -137,13 +120,3 @@ TWindow *newPartsWindow(const TRect &bounds, int idx,       // parts.cpp
                         const std::string &mbox, const char *title);
 TWindow *newSigWindow(const TRect &bounds);                 // signature.cpp
 TWindow *newHelpWindow(const TRect &bounds);                // help.cpp
-
-// chatwin.cpp: the Chat menu, the Conversations list and one window per
-// conversation.  Commands > 255 cannot be disabled in tvision, so the menu
-// greys its own items (chatMenuGrey, from the menu bar) and every command
-// checks again before acting.
-bool chatOn();                         // tvchat-backend is up
-TSubMenu &chatSubMenu();               // for initMenuBar: the items, before chat starts
-void chatMenuRebuild();                // the account list and its states, afresh
-void chatMenuGrey();                   // set the items' disabled flags
-bool chatCommand(ushort command);      // a cmChat* command; false if not one

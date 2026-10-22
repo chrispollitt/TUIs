@@ -1,6 +1,8 @@
-# tvmail chat add-on — Claude Code handoff
+# tvchat — Claude Code handoff
 
-Started Oct 20, 2026 · @Chris Pollitt · updated Oct 21, 2026 (evening): milestone 4 + the 3-pane chat window merged to `main`, Ergo on cpbee, bug #46 · Oct 20: milestones 1-3 merged to `main`, web hosting notes (cp1)
+Started Oct 20, 2026 as tvmail's chat add-on · @Chris Pollitt · updated Oct 21, 2026 (night): chat split out of tvmail into its own app, tvchat (branch `split-tvchat`), with the shared code in `../tvcommon` · earlier Oct 21: milestone 4 + the 3-pane chat window merged to `main`, Ergo on cpbee, bug #46 · Oct 20: milestones 1-3 merged to `main`, web hosting notes (cp1)
+
+**The split (Oct 21, Chris):** "these need to be separate apps: tvmail and tvchat". tvchat lives in `TUIs/tvchat/`; what both apps use is `TUIs/tvcommon/` (`src/`: views.h, util, shell, coprocess, dialogs, cli, tvapp - the application base -, textwin; `tvcommon.cmake`; `tests/tvscreen.py`, the pty + pyte harness; `third_party.sh`, which fetches Turbo Vision (patched) and chrispollitt/POSIX's mail-setup + chat-setup once into `tvcommon/third_party/`). This reverses "extend tvmail, not a new app" below. Much of this file still describes the code as it was inside tvmail (`tvmail.h`, `app.cpp`, "tvmail polls ..."): read tvmail there as "the app" - now tvchat (`src/tvchat.h`, `src/app.cpp`, `TVChatApp`). Config: `~/.config/tvchat/tvchat.conf`, falling back to the old `~/.config/tvmail/tvchat.conf`. tvchat-backend no longer imports tvmail-backend (its own `~/.mu-tickets` reader). tvchat's bugs: `BUGS.md` (from #1; tvmail #44 and #46 listed there).
 
 This is the living version of the original handoff: the plan, what has been
 built, and the decisions made since. Where the code and this file disagree,
@@ -16,7 +18,8 @@ the code wins - and this file should be fixed.
 | 3 | C++ plumbing | done | 62347cf |
 | 4 | Chat windows | done; live check passed on cpbee's Ergo (Oct 21; Libera's reset after a send not seen again, not retested) | 611efde |
 | – | Bug #46: SASL got the mail password from `~/.mu-tickets` | fixed | b97d83c |
-| – | Chat as one 3-pane window like mail (asked by Chris, Oct 21) | done; Chris has not tried it yet | a945288 |
+| – | Chat as one 3-pane window like mail (asked by Chris, Oct 21) | done; Chris tried it and loves it | a945288 |
+| – | Split into its own app, tvchat, with `../tvcommon` (asked by Chris, Oct 21) | done on branch `split-tvchat`, not merged | 4dcfd2a (tvcommon), then the split |
 | – | mingw compiles again (bug #45) | done | 1e43880 |
 | 5 | IRC hardening | **next** | |
 | 6 | Delta Chat adapter | | |
@@ -30,7 +33,14 @@ Stop for Chris's review after each milestone.
 - **Installed on cmlaptop** (`/usr/local/bin`): the `main` build - tvmail with the 3-pane chat window, and `tvchat-backend` with bug #46's fix.
 - **cpbee runs Ergo 2.19.1** (`chrispollitt/POSIX` `chat-setup/scripts/configure-ergo.sh`): server `cpbee.cmnet`, TLS on 192.168.10.1:6697, NickServ accounts `chris-pollitt` and `tester2`. The laptop's `tvchat.conf` has `[account:cpbee]` (written by `chat-setup/scripts/configure-tvchat.sh`; not in `autoconnect`), its password in `~/.netrc`. `configure-ergo.sh` has not been re-run on cpbee since it started publishing `/opt/ergo/ca.pem` (POSIX bb1cc79) - the laptop got its CA another way.
 - **Live checks:** on cpbee, connect, SASL, join `#test` and a sent line all work - no reset. Libera connects and SASL works, but **the `Connection reset by peer` right after a send there has not been retested**: send one line in `#tvmail-test` with `tvmail --debug` and read `debug.chat.log` (the end-of-connection line says phase, error and bytes unsent).
-- **Next:** Chris tries the 3-pane window; the Libera retest; then milestone 5 (IRC hardening), on a new branch from `main`.
+- **Next (as of the 3-pane window):** Chris tried it (loves it); the Libera reset is gone (`#tvmail-test` works).
+
+### Where we stopped (Oct 21, night): the split
+
+- Branch **`split-tvchat`** (from `main` 38266d7): 4dcfd2a extracted `tvcommon/` (all 9 tvmail layers passed); the next commit moves chat into `tvchat/` and takes it out of tvmail. tvchat: 5 layers (chat_unit, backend_pipe, e2e_chat, e2e_regress - the chat cases plus #43 and #44 -, install_roundtrip) pass on Cygwin.
+- **Not done yet:** POSIX `chat-setup/scripts/configure-tvchat.sh` still writes `~/.config/tvmail/` (tvchat reads it via the fallback; switch it to `~/.config/tvchat/`); the "independence" checks (tvchat built from a copy of TUIs without `tvmail/`; `dist.sh src` for each app builds alone); installing both apps on cmlaptop (`tvmail/install.sh`, `tvchat/install.sh`, then fixperms) for Chris to try; then merge `split-tvchat` into `main` (Chris approves) and push.
+- `tvcommon/third_party/POSIX.stale-20261021`: Chris's old mail-setup checkout (13 commits that were all rebased into POSIX already; clean tree) - safe to delete.
+- **Then:** milestone 5 (IRC hardening), in `tvchat/`.
 
 ## Purpose and scope
 

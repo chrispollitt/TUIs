@@ -2,6 +2,12 @@
 #include "chat.h"
 #include "coprocess.h"
 
+CoProcess &chatBackend()
+{
+    static CoProcess b("tvchat-backend", "TVCHAT_BACKEND_LOG", "chat");
+    return b;
+}
+
 std::vector<std::string> chatFields(const std::string &line)
 {
     std::vector<std::string> out(1);
@@ -29,13 +35,11 @@ ChatClient &ChatClient::instance()
 
 bool ChatClient::configured()
 {
-#ifdef _WIN32
-    return false;
-#else
     const char *env = getenv("TVCHAT_CONF");
-    std::string path = (env && *env) ? std::string(env) : homePath(".config/tvmail/tvchat.conf");
-    return ::access(path.c_str(), R_OK) == 0;
-#endif
+    if (env && *env)
+        return ::access(env, R_OK) == 0;
+    return ::access(homePath(".config/tvchat/tvchat.conf").c_str(), R_OK) == 0 ||
+           ::access(homePath(".config/tvmail/tvchat.conf").c_str(), R_OK) == 0;
 }
 
 bool ChatClient::request(const std::string &req, std::string &body, int &status)

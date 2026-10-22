@@ -172,6 +172,7 @@ class Tv:
     def __init__(self, opts, env=None, setup=None, argv=None):
         Tv.last = self
         self.opts = opts
+        self.argv = argv           # (prepare() may set it; default: just the binary)
         self.pid = None
         self.cleanups = []
         self.tmp = Path(tempfile.mkdtemp(prefix=self.prefix))
@@ -196,7 +197,7 @@ class Tv:
         self.screen = ThemedScreen(COLS, ROWS)
         self.stream = pyte.ByteStream(self.screen)
         self.exited = None
-        argv = argv or [opts.bin]
+        argv = self.argv or [opts.bin]
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
             try:

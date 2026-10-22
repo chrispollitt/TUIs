@@ -122,7 +122,18 @@ class TestConfig(Base):
 
     def test_default_path(self):
         self.assertEqual(cb._conf_path(),
-                         str(self.home / ".config" / "tvmail" / "tvchat.conf"))
+                         str(self.home / ".config" / "tvchat" / "tvchat.conf"))
+
+    def test_old_tvmail_path_when_the_new_one_is_missing(self):
+        # chat was part of tvmail until tvchat 0.1.0: its config still works
+        old = self.home / ".config" / "tvmail" / "tvchat.conf"
+        old.parent.mkdir(parents=True)
+        old.write_text("[account:x]\nprotocol = irc\n")
+        self.assertEqual(cb._conf_path(), str(old))
+        new = self.home / ".config" / "tvchat" / "tvchat.conf"
+        new.parent.mkdir(parents=True)
+        new.write_text("[account:y]\nprotocol = irc\n")
+        self.assertEqual(cb._conf_path(), str(new))   # the new one wins
 
     def test_accounts_in_file_order(self):
         self.conf(CONF)
@@ -296,7 +307,7 @@ class TestVerbs(Base):
 
 # --------------------------------------------------------------------------
 class TestServe(Base):
-    """The frame protocol over a real pipe, as tvmail's ChatBackend sees it."""
+    """The frame protocol over a real pipe, as tvchat's ChatClient sees it."""
 
     def _serve(self):
         p = subprocess.Popen([sys.executable, str(BACKEND), "serve"],
@@ -602,7 +613,7 @@ class TestIrcSession(IrcBase):
             srv.send(":bob!b@h PRIVMSG #Test :\x01ACTION waves\x01")
             srv.send(":carol!c@h PRIVMSG tester_ :psst")
             srv.send(":carol!c@h PRIVMSG tester_ :\x01VERSION\x01")
-            srv.expect("NOTICE carol :\x01VERSION tvmail")
+            srv.expect("NOTICE carol :\x01VERSION tvchat")
             srv.send("PING :keepalive-1")
             srv.expect("PONG :keepalive-1")
             line = srv.expect("PRIVMSG #Test :")

@@ -25,7 +25,7 @@ include("${TVCOMMON_DIR}/tvcommon.cmake")
 add_executable(tvmail
     src/main.cpp src/app.cpp src/mailwin.cpp src/compose.cpp
     src/addrbook.cpp src/parts.cpp src/signature.cpp src/help.cpp
-    src/dialogs.cpp src/backend.cpp src/chat.cpp src/chatwin.cpp
+    src/dialogs.cpp src/backend.cpp
     ${TVCOMMON_SOURCES})
 tvcommon_setup(tvmail)
 target_compile_definitions(tvmail PRIVATE TVMAIL_VERSION="${PROJECT_VERSION}")
@@ -33,18 +33,12 @@ target_compile_definitions(tvmail PRIVATE TVMAIL_VERSION="${PROJECT_VERSION}")
 # --- tests (ctest) -------------------------------------------------------
 # backend_unit : stdlib unittest over tvmail-backend (mbox parsing, delete,
 #                aliases, lock-sweep, serve framing) - no build needed
-# chat_unit    : stdlib unittest over tvchat-backend (config, event queue,
-#                wire escaping, selectors loop, serve framing) - no network
 # backend_pipe : `tvmail --selftest` - the C++ side forks the serve
-#                co-process, handshakes, round-trips a request, spawnLogged;
-#                then the same for tvchat-backend (start, accounts, a poll)
+#                co-process, handshakes, round-trips a request, spawnLogged
 # e2e_tui      : drives the built tvmail in a pty (launch, panes, Tab, body
 #                scroll, background F3); exits 77 = skipped where no pty
 # e2e_regress  : one pty case per squashed BUGS.md entry, read through a
 #                pyte screen model (columns, colours); 77 = no pty or no pyte
-# e2e_chat     : tvmail in a pty with a tvchat.conf aimed at a fake IRC server:
-#                the chat co-process starts, is polled while idle, and QUITs
-#                on Alt-X; 77 = no pty
 find_program(TVMAIL_PYTHON
     NAMES python3 python3.13 python3.12 python3.11 python3.10 python3.9 python)
 
@@ -52,9 +46,6 @@ if(TVMAIL_PYTHON)
     add_test(NAME backend_unit
              COMMAND ${TVMAIL_PYTHON} -m unittest discover
                      -s "${CMAKE_CURRENT_SOURCE_DIR}/tests" -p "test_backend.py")
-    add_test(NAME chat_unit
-             COMMAND ${TVMAIL_PYTHON} -m unittest discover
-                     -s "${CMAKE_CURRENT_SOURCE_DIR}/tests" -p "test_chat_backend.py")
 endif()
 
 if(NOT WIN32)
@@ -63,8 +54,8 @@ if(NOT WIN32)
     # --selftest doesn't wander off to a live IMAP server.
     add_test(NAME backend_pipe COMMAND tvmail --selftest)
     set_tests_properties(backend_pipe PROPERTIES
-        ENVIRONMENT "PATH=${CMAKE_CURRENT_SOURCE_DIR}/backend:$ENV{PATH};TVMAIL_MODE=local;TVCHAT_CONF=${CMAKE_CURRENT_SOURCE_DIR}/tests/tvchat-selftest.conf"
-        PASS_REGULAR_EXPRESSION "selftest: served=1 status=0.*selftest: chat served=1 status=0 accounts=1")
+        ENVIRONMENT "PATH=${CMAKE_CURRENT_SOURCE_DIR}/backend:$ENV{PATH};TVMAIL_MODE=local"
+        PASS_REGULAR_EXPRESSION "selftest: served=1 status=0")
     if(TVMAIL_PYTHON)
         add_test(NAME e2e_tui
                  COMMAND ${TVMAIL_PYTHON}
@@ -78,12 +69,6 @@ if(NOT WIN32)
                          --bin $<TARGET_FILE:tvmail>
                          --backend-dir "${CMAKE_CURRENT_SOURCE_DIR}/backend")
         set_tests_properties(e2e_regress PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 400)
-        add_test(NAME e2e_chat
-                 COMMAND ${TVMAIL_PYTHON}
-                         "${CMAKE_CURRENT_SOURCE_DIR}/tests/e2e_chat.py"
-                         --bin $<TARGET_FILE:tvmail>
-                         --backend-dir "${CMAKE_CURRENT_SOURCE_DIR}/backend")
-        set_tests_properties(e2e_chat PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
     endif()
     # install_roundtrip : cmake --install into a temp prefix, ./uninstall.sh it
     add_test(NAME install_roundtrip
@@ -96,7 +81,7 @@ if(NOT WIN32)
     set_tests_properties(mail_setup PROPERTIES
         SKIP_RETURN_CODE 77 TIMEOUT 300 LABELS mail_setup)
     # mingw_compile : every src/*.cpp syntax-checked by the mingw-w64 cross g++
-    #                 (warnings as errors) - the native Windows build, chat off;
+    #                 and tvcommon's (warnings as errors) - the native Windows build;
     #                 77 = no cross compiler, or tvision found as a package
     if(DEFINED TVISION_DIR AND EXISTS "${TVISION_DIR}/include/tvision/tv.h")
         add_test(NAME mingw_compile
@@ -108,11 +93,11 @@ endif()
 
 include(GNUInstallDirs)
 install(TARGETS tvmail RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-install(PROGRAMS backend/tvmail-backend backend/tvchat-backend DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(PROGRAMS backend/tvmail-backend DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES man/tvmail.1 man/tvmail-backend.1
         DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
 install(FILES README.md INSTALL.md HISTORY.md LICENSE AUTHORS WARRANTY
-              configure/tvmail.conf.example configure/tvchat.conf.example
+              configure/tvmail.conf.example
         DESTINATION ${CMAKE_INSTALL_DOCDIR})
 
 # --- tarballs (CPack) -------------------------------------------------------
