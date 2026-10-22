@@ -1033,20 +1033,36 @@ def chat_tv(opts):
     return tv, srv
 
 
-def chat_title(tv, name="#e2e — Fake"):
-    """The row of the chat window frame titled name (unread count or not)."""
-    pat = re.compile(r"[═─] %s(?: \(\d+\))? [═─]" % re.escape(name))
+def chat_heading(tv, name="#e2e — Fake"):
+    """The row of the chat pane's heading showing name, focused ("[ name ]")
+    or not ("  name  "), or None."""
+    pat = re.compile(r"─(?:\[ |  )%s(?: \]|  )─" % re.escape(name))
     return next((y for y, l in enumerate(tv.lines()) if pat.search(l)), None)
 
 
+def heading_active(tv, label):
+    """The heading of that pane shows it has the focus."""
+    return tv.has("[ %s" % label)
+
+
+def in_chat_window(tv):
+    return tv.has("tvmail chat") and tv.has("Servers")
+
+
 def open_chat(tv, c, srv):
+    """Alt-C, then the #e2e conversation of account Fake, the input focused."""
     c.check(srv.wait_joined("#e2e"), "the chat backend never joined #e2e")
     tv.send(alt("c"))
-    c.check(tv.wait("[irc]  #e2e — Fake", 5),
-            "Alt-C did not list #e2e in Conversations")
-    tv.send("Down", "Enter")                  # the server window comes first
-    c.check(tv.wait(lambda: chat_title(tv) is not None, 5),
-            "Enter in Conversations did not open the #e2e window")
+    c.check(tv.wait(lambda: in_chat_window(tv) and re.search(r"Fake\b.*connected", tv.text()), 5),
+            "Alt-C did not bring up the chat window with Fake connected")
+    c.check(heading_active(tv, "Servers"), "the chat window did not open on the server pane")
+    tv.send("Enter")                              # Enter on a server: its conversations
+    c.check(tv.wait(lambda: heading_active(tv, "Conversations"), 3) and
+            tv.wait("* server messages", 3) and tv.has("#e2e"),
+            "Enter on the server did not go to its conversations (server messages first)")
+    tv.send("Down", "Enter")
+    c.check(tv.wait(lambda: chat_heading(tv) is not None and heading_active(tv, "#e2e"), 5),
+            "Down, Enter in the conversations did not open #e2e in the chat pane")
 
 
 def log_line(tv, text):
@@ -1056,7 +1072,7 @@ def log_line(tv, text):
 
 
 @case()
-def chat_window_opens_and_esc_closes(opts):
+def chat_window_three_panes(opts):
     tv, srv = chat_tv(opts)
     c = Case(tv)
     started(tv, c)
@@ -1064,50 +1080,63 @@ def chat_window_opens_and_esc_closes(opts):
     srv.say(":alice!a@h PRIVMSG #e2e :hello before the window")
     c.check(tv.wait(lambda: tv.line(ROWS - 1).rstrip().endswith("1 new"), 5),
             "an unread chat message did not show as \"1 new\" on the status line")
-    open_chat(tv, c, srv)
-    # what was said before it opened (history), and the channel topic
+    tv.send(alt("c"))
+    c.check(tv.wait(lambda: in_chat_window(tv) and tv.has("Fake (1)"), 5),
+            "the server pane does not count the unread message: Fake (1)")
+    c.check(tv.has("Alt-C Mail") and not tv.has("^D Del"),
+            "the chat window has the mail window's status-line keys")
+    tv.send("Enter")
+    c.check(tv.wait("#e2e (1)", 3), "the conversation pane does not show #e2e (1)")
+    # moving onto it shows it, but does not read it: as in mail, it is read
+    # once the chat pane has the focus
+    tv.send("Down", settle=0.8)
     p, row = log_line(tv, "<alice> hello before the window")
     c.check(p and re.search(r"\d\d:\d\d <alice> hello before the window", row),
-            "the window did not show the message from before it opened")
+            "the chat pane did not show the message from before")
     c.check(tv.has("the e2e channel"), "the topic is not in the log")
-    # focusing it reads it: the count goes
-    c.check(tv.wait(lambda: "new" not in tv.line(ROWS - 1), 4),
-            "the unread count stayed with the conversation in front")
+    tv.pump(0.8)
+    c.check(tv.has("#e2e (1)"), "just moving onto the conversation read it")
+    tv.send("Enter")
+    c.check(tv.wait(lambda: "new" not in tv.line(ROWS - 1) and not tv.has("#e2e (1)"), 4),
+            "with the chat pane focused, the unread count stayed")
     srv.say(":alice!a@h PRIVMSG #e2e :and after it opened",
             ":alice!a@h PRIVMSG #e2e :\x01ACTION waves\x01")
     c.check(tv.wait("<alice> and after it opened", 4),
-            "a message arriving with the window open did not show")
+            "a message arriving with the conversation shown did not show")
     c.check(tv.wait("* alice waves", 3), "/me is not shown as * nick action")
-    # in the background, a new message counts in its title and as "N new";
-    # Window > List shows that title, and takes you back
-    tv.send("F6", settle=0.6)
+    c.check(tv.wait(lambda: "new" not in tv.line(ROWS - 1), 3),
+            "a message arriving while you read counted as new")
+    # Tab: servers -> conversations -> input, and round
+    tv.send("Tab")
+    c.check(tv.wait(lambda: heading_active(tv, "Servers"), 2), "Tab from the input did not go to Servers")
+    tv.send("Tab")
+    c.check(tv.wait(lambda: heading_active(tv, "Conversations"), 2), "Tab did not go on to Conversations")
+    tv.send("Tab")
+    c.check(tv.wait(lambda: heading_active(tv, "#e2e"), 2), "Tab did not go on to the chat pane")
+    # Alt-C again: back to mail; there a new message counts, in the chat
+    # window's title too, which Window > List shows
+    tv.send(alt("c"), settle=0.6)
+    c.check(tv.wait(lambda: tv.has("Folders") and not tv.has("Servers"), 3),
+            "Alt-C in the chat window did not go back to mail")
     srv.say(":alice!a@h PRIVMSG #e2e :while you look elsewhere")
     c.check(tv.wait(lambda: tv.line(ROWS - 1).rstrip().endswith("1 new"), 4),
-            "a message in an unfocused chat window is not \"1 new\"")
+            "a message with the chat window behind is not \"1 new\"")
     tv.send(alt("0"))
-    c.check(tv.wait("Window list", 3) and tv.has("#e2e — Fake (1)"),
+    c.check(tv.wait("Window list", 3) and tv.has("tvmail chat (1)"),
             "Window > List does not show the chat window with its unread count")
     top = tv.find("Window list")[0]               # its rows, the first one current
-    names = [l for l in tv.lines()[top + 1:]
-             if re.search(r"tvmail - |Conversations|#e2e", l)]
-    down = next(i for i, l in enumerate(names) if "#e2e — Fake (1)" in l)
+    names = [l for l in tv.lines()[top + 1:] if re.search(r"tvmail - |tvmail chat", l)]
+    down = next(i for i, l in enumerate(names) if "tvmail chat (1)" in l)
     tv.send(*(["Down"] * down + ["Enter"]), settle=0.6)
-    c.check(chat_title(tv) is not None and
-            tv.wait(lambda: not tv.has("Fake (1)") and "new" not in tv.line(ROWS - 1), 4),
-            "back in the chat window, the unread count stayed")
-    # Window > List names it
-    tv.send(alt("0"))
-    c.check(tv.wait("Window list", 3) and tv.has("#e2e — Fake"),
-            "Window > List does not list the chat window")
-    tv.send("\x1b")
-    c.check(tv.wait(lambda: not tv.has("Window list"), 3), "the window list stayed")
-    tv.send("\x1b")
-    c.check(tv.wait(lambda: chat_title(tv) is None, 3), "Esc did not close the chat window")
-    tv.send(alt("c"))                             # the same list, to the front
-    c.check(tv.wait("[irc]  #e2e — Fake", 3) and tv.text().count("Conversations") == 1,
-            "Alt-C did not bring back the one Conversations window")
-    tv.send("\x1b")
-    c.check(tv.wait(lambda: not tv.has("[irc]"), 3), "Esc did not close Conversations")
+    c.check(tv.wait(lambda: chat_heading(tv) is not None and "new" not in tv.line(ROWS - 1), 4),
+            "back in the chat window, on #e2e with the chat pane focused, the count stayed")
+    # Esc goes back to mail too; Alt-C comes back to the same conversation
+    tv.send("\x1b", settle=0.6)
+    c.check(tv.wait(lambda: tv.has("Folders") and not tv.has("Servers"), 3),
+            "Esc in the chat window did not go back to mail")
+    tv.send(alt("c"))
+    c.check(tv.wait(lambda: chat_heading(tv) is not None, 3) and tv.text().count("Servers") == 1,
+            "Alt-C did not bring back the one chat window on #e2e")
     c.check(tv.alive(), "tvmail exited")
     return tv
 
@@ -1123,8 +1152,8 @@ def chat_history_pgup(opts):
             "the backlog did not arrive")
     open_chat(tv, c, srv)
     c.check(tv.has("backlog 79") and not tv.has("backlog 05"),
-            "the window did not open on the newest messages")
-    for _ in range(12):                           # page up, past the top
+            "the chat pane did not open on the newest messages")
+    for _ in range(16):                           # page up, past the top
         if tv.has("backlog 00"):
             break
         tv.send("PgUp", settle=0.3)
@@ -1151,15 +1180,16 @@ def chat_join_and_leave(opts):
     tv.send("#Other", "Enter", settle=0.8)
     c.check(srv.wait_joined("#other") and srv.sent("JOIN #Other"),
             "Join did not join the channel")
-    c.check(tv.wait(lambda: chat_title(tv, "#Other — Fake") is not None, 4),
-            "Join did not open the channel's window")
+    c.check(tv.wait(lambda: chat_heading(tv, "#Other — Fake") is not None, 4),
+            "Join did not show the channel in the chat window")
+    c.check(tv.wait(lambda: re.search(r"│ ?#Other\b", tv.text()), 3),
+            "the channel joined is not in the conversation list")
     tv.send(alt("a"), "l", settle=0.8)
-    c.check(tv.wait(lambda: chat_title(tv, "#Other — Fake") is None, 4),
-            "Chat > Leave did not close the window")
     c.check(srv.sent("PART #Other"), "Chat > Leave did not part the channel")
-    tv.send(alt("c"))
-    c.check(tv.wait("[irc]  #e2e — Fake", 4) and not tv.has("#Other"),
-            "Conversations still lists the channel left")
+    c.check(tv.wait(lambda: chat_heading(tv, "#Other — Fake") is None and
+                    not re.search(r"│ ?#Other\b", tv.text()), 4),
+            "the channel left is still shown or listed")
+    c.check(tv.alive(), "tvmail exited")
     return tv
 
 
@@ -1189,33 +1219,44 @@ def chat_log_utf8_columns(opts):
     stamps = {tv.find(s)[1] - 6 for s in ("<山田>", "<Zoë>", "<alice> WRAPSTART")}
     c.check(len(stamps) == 1, "the time stamps do not line up: %s" % stamps)
     c.check(tv.has("<Zoë> Ünïcödé after"), "the two-byte nick line is wrong")
-    # a long line wraps inside the window on word boundaries
+    # a long line wraps inside the pane on word boundaries
     sy, _ = tv.find("WRAPSTART")
     ey, _ = tv.find("WRAPEND")
     c.check(ey > sy, "the long message did not wrap")
     for yy in range(sy, ey + 1):
-        c.check(not re.search(r"wörd\d\d[^\s║▲▼▒■]", tv.line(yy)) and "»" not in tv.line(yy),
+        c.check(not re.search(r"wörd\d\d[^\s║│▲▼▒■]", tv.line(yy)) and "»" not in tv.line(yy),
                 "a wrapped row is cut mid-word or marked: %r" % tv.line(yy))
     c.check("\ufffd" not in tv.text(), "a UTF-8 character was split")
     return tv
 
 
 @case()
-def chat_unsent_input_asks(opts):
+def chat_unsent_input_kept(opts):
     tv, srv = chat_tv(opts)
     c = Case(tv)
     started(tv, c)
     open_chat(tv, c, srv)
     tv.send("half a thought", settle=0.5)
-    tv.send("\x1b")
-    c.check(tv.wait("Discard the message", 3),
-            "Esc did not ask about the unsent chat message")
-    tv.send("n", settle=0.8)                      # No: keep it
-    c.check(chat_title(tv) is not None and tv.has("> half a thought"),
-            "No to the discard question lost the window or its text")
+    # Esc goes to mail and keeps it; so does picking another conversation
+    tv.send("\x1b", settle=0.6)
+    c.check(tv.wait(lambda: tv.has("Folders") and not tv.has("Servers"), 3) and
+            not tv.has("Discard"), "Esc did not just go back to mail")
+    tv.send(alt("c"))
+    c.check(tv.wait("> half a thought", 3), "the unsent text was lost going to mail and back")
+    tv.send("ShiftTab", "Up", settle=0.8)         # the server messages
+    c.check(tv.wait(lambda: not tv.has("> half a thought") and
+                    chat_heading(tv, "Fake - server messages") is not None, 3),
+            "another conversation shows the text typed for #e2e")
+    tv.send("Down", settle=0.8)
+    c.check(tv.wait("> half a thought", 3), "back on #e2e, the unsent text is gone")
     tv.send(alt("x"))
-    c.check(tv.wait("Discard the message", 3),
+    c.check(tv.wait("Discard the chat message", 3),
             "Alt-X did not ask about the unsent chat message")
+    tv.send("n", settle=0.8)                      # No: keep it, and tvmail
+    c.check(tv.alive() and tv.wait("> half a thought", 3),
+            "No to the discard question lost tvmail or the text")
+    tv.send(alt("x"))
+    c.check(tv.wait("Discard the chat message", 3), "Alt-X did not ask again")
     tv.send("y")                                  # Yes: discard, and quit
     c.check(tv.wait(lambda: not tv.alive(), 6), "Yes did not go on to quit")
     c.check(not srv.sent("PRIVMSG"), "the unsent text was sent")
@@ -1254,7 +1295,7 @@ def menus_stay_open_while_chat_polls(opts):
     c.check(srv.wait_joined("#e2e"), "the chat backend never joined #e2e")
     # connected: tvmail polls the chat backend every 250 ms, which shut any
     # open menu within a quarter second
-    for key, item in (("f", "Out of office"), ("a", "Conversations...")):
+    for key, item in (("f", "Out of office"), ("a", "Chat window")):
         tv.send(alt(key))
         c.check(tv.wait(item, 3), "Alt-%s did not open its menu" % key.upper())
         tv.pump(1.5)
@@ -1280,12 +1321,12 @@ def chat_menu_greyed_without_config(opts):
     enabled = cell_colours(tv.screen.buffer[y][x + 1])[0]
     tv.send("\x1b", "\x1b", alt("a"))
     c.check(tv.wait("no tvchat.conf", 3), "the Chat menu does not say chat is off")
-    for item in ("Connect...", "Conversations...", "Join...", "Leave"):
+    for item in ("Connect...", "Chat window", "Join...", "Leave"):
         y, x = tv.find(item)
         c.check(cell_colours(tv.screen.buffer[y][x + 1])[0] != enabled,
                 "Chat > %s is not greyed without a tvchat.conf" % item)
     tv.send("\x1b", "\x1b", alt("c"), settle=0.6)
-    c.check(not tv.has("Conversations"), "Alt-C opened Conversations with chat off")
+    c.check(not tv.has("tvmail chat"), "Alt-C opened the chat window with chat off")
     c.check(tv.alive(), "tvmail exited")
     return tv
 

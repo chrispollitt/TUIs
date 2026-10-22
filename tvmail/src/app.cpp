@@ -197,7 +197,21 @@ TMenuBar *TVMailApp::initMenuBar(TRect r)
 TStatusLine *TVMailApp::initStatusLine(TRect r)
 {
     r.a.y = r.b.y - 1;
+    // the chat window (helpCtx hcChatWin) gets its own keys: mail's ^D / ^R
+    // / F2 would act on the mail window behind it
     return new TVMailStatusLine(r,
+                           *new TStatusDef(hcChatWin, hcChatWin) +
+                               *new TStatusItem("~Alt-C~ Mail", kbAltC, cmChatConvs) +
+                               // hints only: cmChatOff does nothing
+                               *new TStatusItem("~Tab~ Pane", kbNoKey, cmChatOff) +
+                               *new TStatusItem("~Enter~ Send", kbNoKey, cmChatOff) +
+                               *new TStatusItem("~PgUp~ Older", kbNoKey, cmChatOff) +
+                               *new TStatusItem("~^N~ New mail", kbCtrlN, cmCompose) +
+                               *new TStatusItem("~F6~ Next", kbF6, cmNext) +
+                               *new TStatusItem("~Alt-X~ Exit", kbAltX, cmQuit) +
+                               *new TStatusItem("~F1~ Help", kbF1, cmShowHelp) +
+                               *new TStatusItem(nullptr, kbF10, cmMenu) +
+                               *new TStatusItem(nullptr, kbShiftF6, cmPrev) +
                            *new TStatusDef(0, 0xFFFF) +
                                *new TStatusItem(gRemote ? "~F3~ Spam" : "~F3~ Pull", kbF3, cmPull) +
                                *new TStatusItem("~F5~ Reload", kbF5, cmReload) +

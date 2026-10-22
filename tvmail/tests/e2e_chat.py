@@ -3,9 +3,9 @@
 pty with a tvchat.conf that autoconnects to a fake IRC server on 127.0.0.1,
 then checks, through tvmail's --debug log, that the idle loop keeps polling
 tvchat-backend (a message sent well after start-up still arrives); then,
-through a chat window (Alt-C, Enter), that a line typed there reaches the
-server and the server's answer shows in the window; that a killed backend is
-restarted, its state re-read and the window's log with it; and that Alt-X
+through the chat window (Alt-C, Enter, Down, Enter), that a line typed there
+reaches the server and the server's answer shows in it; that a killed backend
+is restarted, its state re-read and the chat pane's log with it; and that Alt-X
 shuts chat down cleanly (the server sees QUIT).  Stdlib only, no network.
 
     python3 tests/e2e_chat.py --bin build/tvmail
@@ -174,15 +174,17 @@ def main():
                     r"chat event \d+: msg .*fake/#e2e.*alice.*late hello 1"]
             text = wait_log(t, log, want)
 
-            # the chat window: Alt-C lists the conversations (the server
-            # window first), Enter opens #e2e on what it has said so far
+            # the chat window: Alt-C opens it on the servers, Enter goes to
+            # fake's conversations (its server messages first), Down shows
+            # #e2e on what it has said so far, Enter goes to its input
             t.clear()
             t.send("\x1bc", settle=0.6)
-            t.send("\x1b[B", settle=0.3)
+            t.send("\r", settle=0.4)
+            t.send("\x1b[B", settle=0.4)
             t.send("\r")
             s = read_flat(t, "<alice>latehello1")
             if "<alice>latehello1" not in s or "#e2e" not in s:
-                fail("Alt-C, Enter did not open #e2e on its history\n---\n%s" % s[-1500:])
+                fail("Alt-C, Enter, Down, Enter did not show #e2e on its history\n---\n%s" % s[-1500:])
             # a line typed there goes to the server; its answer comes back
             t.clear()
             t.send("hi from tvmail \u00e9", settle=0.4)   # (one write with the
@@ -212,7 +214,7 @@ def main():
                 os.kill(pid, 9)
                 wait_log(t, log, [r"chat: tvchat-backend restarted",
                                   r"chat event \d+: msg .*late hello 2"])
-                # the open window re-read its log from the new backend
+                # the chat pane re-read its log from the new backend
                 s = read_flat(t, "<alice>latehello2")
                 if "<alice>latehello2" not in s:
                     fail("the chat window did not follow the restarted backend"

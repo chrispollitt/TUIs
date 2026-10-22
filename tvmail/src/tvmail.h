@@ -126,12 +126,15 @@ const ushort cmChatEvent = 2101;  // broadcast, one per event: infoPtr = const C
 const ushort cmChatReset = 2102;  // broadcast: the chat backend restarted, re-read everything
 const ushort cmChatConnect = 2103;    // Chat > Connect... (pick an account)
 const ushort cmChatDisconnect = 2104; // Chat > Disconnect
-const ushort cmChatConvs = 2105;      // Chat > Conversations... (Alt-C)
+const ushort cmChatConvs = 2105;      // Chat > Chat window (Alt-C): to it, and back to mail
 const ushort cmChatJoin = 2106;       // Chat > Join... (channel, nick or address)
-const ushort cmChatLeave = 2107;      // Chat > Leave: part the focused chat window's conversation
+const ushort cmChatLeave = 2107;      // Chat > Leave: part the conversation the chat window shows
 const ushort cmChatOff = 2108;        // the "chat is off" note in the Chat menu: never does anything
 const ushort cmChatAccount = 2110;    // + i: Chat > <account i> opens its server window
 const int kChatMaxAccounts = 30;      // so 2110-2139
+const ushort cmChatAcctPicked = 2140; // broadcast: the chat window's server pane moved
+const ushort cmChatConvPicked = 2141; // broadcast: its conversation pane moved
+const ushort hcChatWin = 2100;        // help context of the chat window: its own status line
 
 // -------------------------------------------------------- classic colors ----
 // The Turbo Vision DOS look, in exact RGB.  BIOS colour numbers are not
@@ -256,6 +259,7 @@ std::string mboxOpt();
 // The one 3-pane mail window.  The app drives it through these rather than
 // reaching into its panes.
 TWindow *newMailWindow(const TRect &bounds);
+void showMailWindow(); // bring the 3-pane mail window to the front
 int mailFocusedRow();             // the highlighted row of gRows, or -1
 void mailMarkFocused(bool read);
 void mailReload();                // F5: counts + the folder, same message

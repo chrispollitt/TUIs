@@ -91,15 +91,19 @@ static const char *kHelpText =
     "CHAT   (the Chat menu; needs ~/.config/tvmail/tvchat.conf)\n"
     "  IRC today.  Accounts in tvchat.conf connect by themselves ([chat]\n"
     "  autoconnect) or by Chat > Connect...; the menu lists each one and its\n"
-    "  state - pick one for its server window (notices, errors).\n"
-    "  Alt-C    Conversations: every channel and query; Enter opens its window\n"
-    "  Chat > Join... a channel, or a nick to talk to; Chat > Leave parts the\n"
-    "  conversation of the chat window you are in.\n"
-    "  In a chat window just type: Enter sends.  PgUp / PgDn / Up / Down scroll\n"
-    "  the log; PgUp at the top fetches older messages.  Esc closes the window\n"
-    "  (asking first if you typed something you did not send).\n"
-    "  Unread messages count in the window's title while it is in the\n"
-    "  background, in Conversations, and as \"N new\" on the status line.\n"
+    "  state - pick one to see it in the chat window.\n"
+    "  Alt-C    the chat window, laid out like mail: servers (left),\n"
+    "           conversations (top right), the chat (bottom right).  Alt-C\n"
+    "           or Esc there goes back to mail.  Tab moves between the panes.\n"
+    "  Each server's list starts with its server messages (MOTD, notices,\n"
+    "  errors).  Chat > Join... a channel, or a nick to talk to; Chat > Leave\n"
+    "  parts the conversation shown.\n"
+    "  In the chat pane just type: Enter sends.  PgUp / PgDn / Up / Down scroll\n"
+    "  the log; PgUp at the top fetches older messages.  What you typed and\n"
+    "  did not send stays with its conversation; Alt-X asks first.\n"
+    "  Unread messages count in the lists, in the window's title while it is\n"
+    "  in the background, and as \"N new\" on the status line; a conversation\n"
+    "  is read once the chat pane has the focus.\n"
     "  The log lives in memory only: it is gone when tvmail exits.\n"
     "\n"
     "mail(1) COMPATIBILITY\n"
@@ -110,7 +114,7 @@ static const char *kHelpText =
     "KEYS AT A GLANCE\n"
     "  F1 help    F3 pull    F5 reload    F6 next window    F10 menu\n"
     "  Ctrl-R reply   Ctrl-N new   F2 send   Ctrl-D delete   F4 address book\n"
-    "  Tab pane   Alt-C conversations   Alt-X quit\n";
+    "  Tab pane   Alt-C chat / mail   Alt-X quit\n";
 
 class THelpWindow : public TViewerWindow
 {

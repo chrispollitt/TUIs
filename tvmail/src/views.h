@@ -1,6 +1,7 @@
 // views.h - view classes shared between windows: the read-only text view
-// (body pane, Source / Help / Purge preview, and the chat log to come), the
-// viewer window, and the editor + input line the composer and others use.
+// (body pane, Source / Help / Purge preview, the chat log), the 3-pane
+// rules and headings, the viewer window, and the editor + input line the
+// composer and others use.
 #pragma once
 #include "tvmail.h"
 
@@ -498,6 +499,72 @@ public:
                 disableCommands(cs);
         }
     }
+};
+
+// ------------------------------------------------------ 3-pane pieces ---
+// The rule between panes and the heading over each one, for the mail and
+// chat windows alike.
+class TDivider : public TView
+{
+    bool vert;
+
+public:
+    TDivider(const TRect &b, bool v) : TView(b), vert(v) {}
+    void draw() override
+    {
+        TColorAttr c = cFrame();
+        TDrawBuffer b;
+        if (vert)
+        {
+            b.moveChar(0, char(0xB3), c, 1); // vertical bar
+            for (short y = 0; y < size.y; ++y)
+                writeLine(0, y, 1, 1, b);
+        }
+        else
+        {
+            b.moveChar(0, char(0xC4), c, size.x); // horizontal bar
+            writeLine(0, 0, size.x, 1, b);
+        }
+    }
+};
+
+// A one-row heading above a pane.  Reverse-video when its pane holds focus,
+// dim otherwise - the "which pane am I in?" cue.  The one over the body also
+// serves as the rule between the message list and the message text.
+class TPaneTitle : public TView
+{
+    std::string label;
+    Boolean active = False;
+
+public:
+    TPaneTitle(const TRect &b, const char *l) : TView(b), label(l) {}
+    void setActive(Boolean a)
+    {
+        if (a != active)
+        {
+            active = a;
+            drawView();
+        }
+    }
+    void setLabel(const std::string &l)
+    {
+        if (l != label)
+        {
+            label = l;
+            drawView();
+        }
+    }
+    void draw() override
+    {
+        TColorAttr rule = cDim();
+        TColorAttr lab = active ? cFocus() : cNorm();
+        TDrawBuffer b;
+        b.moveChar(0, char(0xC4), rule, size.x); // horizontal rule
+        std::string s = active ? "[ " + label + " ]" : "  " + label + "  ";
+        b.moveStr(2, s.c_str(), lab);
+        writeLine(0, 0, size.x, 1, b);
+    }
+    TColorAttr mapColor(uchar) override { return active ? cFocus() : cNorm(); }
 };
 
 // --------------------------------------------------------- message viewer ---

@@ -139,30 +139,6 @@ static void loadList()
 // message content (bottom-right).  Panes talk via evBroadcast: folder focus
 // reloads the list, message focus loads the content.
 
-class TDivider : public TView
-{
-    bool vert;
-
-public:
-    TDivider(const TRect &b, bool v) : TView(b), vert(v) {}
-    void draw() override
-    {
-        TColorAttr c = cFrame();
-        TDrawBuffer b;
-        if (vert)
-        {
-            b.moveChar(0, char(0xB3), c, 1); // vertical bar
-            for (short y = 0; y < size.y; ++y)
-                writeLine(0, y, 1, 1, b);
-        }
-        else
-        {
-            b.moveChar(0, char(0xC4), c, size.x); // horizontal bar
-            writeLine(0, 0, size.x, 1, b);
-        }
-    }
-};
-
 class TFolderPane : public TListViewer
 {
 public:
@@ -372,45 +348,6 @@ public:
     {
         return i == 1 ? cNorm() : (i == 2 ? cHi() : TView::mapColor(i));
     }
-};
-
-// A one-row heading above a pane.  Reverse-video when its pane holds focus,
-// dim otherwise - the "which pane am I in?" cue.  The one over the body also
-// serves as the rule between the message list and the message text.
-class TPaneTitle : public TView
-{
-    std::string label;
-    Boolean active = False;
-
-public:
-    TPaneTitle(const TRect &b, const char *l) : TView(b), label(l) {}
-    void setActive(Boolean a)
-    {
-        if (a != active)
-        {
-            active = a;
-            drawView();
-        }
-    }
-    void setLabel(const std::string &l)
-    {
-        if (l != label)
-        {
-            label = l;
-            drawView();
-        }
-    }
-    void draw() override
-    {
-        TColorAttr rule = cDim();
-        TColorAttr lab = active ? cFocus() : cNorm();
-        TDrawBuffer b;
-        b.moveChar(0, char(0xC4), rule, size.x); // horizontal rule
-        std::string s = active ? "[ " + label + " ]" : "  " + label + "  ";
-        b.moveStr(2, s.c_str(), lab);
-        writeLine(0, 0, size.x, 1, b);
-    }
-    TColorAttr mapColor(uchar) override { return active ? cFocus() : cNorm(); }
 };
 
 class TMailWindow;
@@ -741,6 +678,12 @@ public:
 TWindow *newMailWindow(const TRect &bounds)
 {
     return new TMailWindow(bounds);
+}
+
+void showMailWindow()
+{
+    if (gMailWin)
+        gMailWin->select();
 }
 
 int mailFocusedRow()

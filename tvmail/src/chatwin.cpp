@@ -1,5 +1,5 @@
-// chatwin.cpp - the chat UI: the Chat menu, the Conversations list and one
-// TChatWindow per conversation.  Everything here talks to tvchat-backend
+// chatwin.cpp - the chat UI: the Chat menu and the 3-pane chat window
+// (servers | conversations / the chat).  Everything here talks to tvchat-backend
 // through ChatClient (chat.h) and hears about changes from the cmChatEvent /
 // cmChatReset broadcasts the app sends after each poll; nothing here knows
 // which protocol a conversation speaks.
@@ -8,6 +8,7 @@
 #include "chat.h"
 #include <ctime>
 #include <functional>
+#include <map>
 #include <set>
 #include <tuple>
 
@@ -284,25 +285,253 @@ TColorAttr cyanWindowColor(uchar index, TView *self)
     return self->TView::mapColor(index);
 }
 
-// ------------------------------------------------------- chat window ----
-// One conversation: the log over a one-line input.  Enter sends; the
-// scrolling keys work from the input line too, so typing never needs a
-// Tab.  Esc / Alt-F3 close it - asking first when the input holds text,
-// and Alt-X asks the same.
-class TChatWindow;
-std::vector<TChatWindow *> gChatWins;
+// ----------------------------------------------------- the chat window ---
+// One full-size window laid out like the mail one (mailwin.cpp): the chat
+// accounts (left) | the picked account's conversations (top right) / the
+// picked conversation, its log over a one-line input (bottom right).
+// Alt-C brings it forward and, from here, goes back to mail; so does Esc.
+// Tab moves servers -> conversations -> input.  Each account's list starts
+// with its server messages (MOTD, notices, SASL results).  Text typed and
+// not sent stays with its conversation when you pick another; Alt-X asks
+// before it is thrown away.
 
-class TChatWindow : public TWindow
+void connectAccount(const ChatAccount &a); // below, with the dialogs
+
+// The chat pane's two views say when they take the focus, as the lists do,
+// so the window lights the right heading and knows you are reading.
+class TChatInput : public TFieldLine
 {
-    std::string conv, name; // name: the last title the model gave it
-    TChatLog *log = nullptr;
-    TFieldLine *input = nullptr;
-    std::vector<ChatLine> msgs; // oldest first
+public:
+    TChatInput(const TRect &b, int lim) : TFieldLine(b, lim) {}
+    void setState(ushort aState, Boolean enable) override
+    {
+        TFieldLine::setState(aState, enable);
+        if (enable && (aState & sfFocused) && owner)
+            message(owner, evBroadcast, cmPaneFocused, this);
+    }
+};
+
+class TChatPaneLog : public TChatLog
+{
+public:
+    TChatPaneLog(const TRect &b, TScrollBar *v) : TChatLog(b, v) {}
+    void setState(ushort aState, Boolean enable) override
+    {
+        TChatLog::setState(aState, enable);
+        if (enable && (aState & sfFocused) && owner)
+            message(owner, evBroadcast, cmPaneFocused, this);
+    }
+};
+
+// Conversations of one account in list order: its server messages, then
+// channels, groups and direct talk, by name.
+std::vector<std::string> convsOf(const std::string &acct)
+{
+    std::vector<const ChatConv *> cs;
+    for (const auto &kv : chat().convs())
+        if (accountIdOf(kv.first) == acct)
+            cs.push_back(&kv.second);
+    auto rank = [](const ChatConv &c)
+    {
+        int k = c.kind == "server" ? 0 : c.kind == "channel" ? 1 : c.kind == "group" ? 2 : 3;
+        return std::make_tuple(k, lowered(c.title));
+    };
+    std::sort(cs.begin(), cs.end(), [&](const ChatConv *x, const ChatConv *y)
+              { return rank(*x) < rank(*y); });
+    std::vector<std::string> out;
+    for (const ChatConv *c : cs)
+        out.push_back(c->id);
+    return out;
+}
+
+int unreadOf(const std::string &acct)
+{
+    int n = 0;
+    for (const auto &kv : chat().convs())
+        if (accountIdOf(kv.first) == acct && kv.second.kind != "server")
+            n += std::max(0, kv.second.unread);
+    return n;
+}
+
+// The list panes: the mail panes' colours, and "I moved" / "I have the
+// focus" told to the window as the mail panes do.
+class TChatList : public TListViewer
+{
+    ushort picked;
+
+public:
+    std::vector<std::string> ids;
+
+    TChatList(const TRect &b, TScrollBar *vsb, ushort cmd)
+        : TListViewer(b, 1, nullptr, vsb), picked(cmd) {}
+
+    std::string current() const
+    {
+        return focused >= 0 && focused < (short)ids.size() ? ids[focused] : std::string();
+    }
+    // New rows, the highlight on `keep` if it is still there (else the
+    // first row), without announcing a move.
+    void setIds(std::vector<std::string> v, const std::string &keep)
+    {
+        ids = std::move(v);
+        setRange((short)ids.size());
+        short at = 0;
+        for (size_t i = 0; i < ids.size(); ++i)
+            if (ids[i] == keep)
+                at = (short)i;
+        TListViewer::focusItem(at);
+        drawView();
+    }
+    void focusItem(short item) override
+    {
+        bool moved = item != focused; // a click on the current row is no move
+        TListViewer::focusItem(item);
+        if (moved && owner)
+            message(owner, evBroadcast, picked, this);
+    }
+    void selectItem(short) override
+    {
+        if (owner)
+            message(owner, evBroadcast, cmFocusContent, this);
+    }
+    void handleEvent(TEvent &e) override
+    {
+        if (e.what == evKeyDown && e.keyDown.keyCode == kbEnter)
+        {
+            selectItem(focused);
+            clearEvent(e);
+            return;
+        }
+        TListViewer::handleEvent(e);
+    }
+    void setState(ushort aState, Boolean enable) override
+    {
+        TListViewer::setState(aState, enable);
+        if (enable && (aState & sfFocused) && owner)
+            message(owner, evBroadcast, cmPaneFocused, this);
+    }
+    TColorAttr mapColor(uchar i) override
+    {
+        switch (i)
+        {
+        case 1:
+        case 2:
+            return cNorm();
+        case 3:
+            return cFocus();
+        case 4:
+            return cCur();
+        case 5:
+            return cDiv();
+        }
+        return TView::mapColor(i);
+    }
+};
+
+// "Libera (3)      connected": the account, its unread count, its state.
+class TServerPane : public TChatList
+{
+public:
+    TServerPane(const TRect &b) : TChatList(b, nullptr, cmChatAcctPicked) {}
+    void getText(char *dest, short item, short maxLen) override
+    {
+        const ChatAccount *a = item >= 0 && item < (short)ids.size() ? findAccount(ids[item]) : nullptr;
+        if (!a)
+        {
+            dest[0] = 0;
+            return;
+        }
+        std::string name = a->display;
+        int n = unreadOf(a->id);
+        if (n > 0)
+            name += " (" + std::to_string(n) + ")";
+        int w = size.x - 1 - (int)a->state.size() - 1;
+        putText(dest, w > 3 ? fitCols(name, w) + " " + a->state : name, maxLen);
+    }
+};
+
+// "* server messages", "#test (2)", "tester2".
+class TConvPane : public TChatList
+{
+public:
+    TConvPane(const TRect &b, TScrollBar *vsb) : TChatList(b, vsb, cmChatConvPicked) {}
+    void getText(char *dest, short item, short maxLen) override
+    {
+        auto it = item >= 0 && item < (short)ids.size() ? chat().convs().find(ids[item])
+                                                         : chat().convs().end();
+        if (it == chat().convs().end())
+        {
+            dest[0] = 0;
+            return;
+        }
+        const ChatConv &c = it->second;
+        std::string t = c.kind == "server" ? std::string("* server messages") : c.title;
+        if (c.kind != "server" && c.unread > 0)
+            t += " (" + std::to_string(c.unread) + ")";
+        putText(dest, t, maxLen);
+    }
+};
+
+class TChatMainWindow;
+TChatMainWindow *gChatWin = nullptr; // the one chat window, once made
+
+class TChatMainWindow : public TWindow
+{
+    TPaneTitle *srvTitle = nullptr, *convTitle = nullptr, *logTitle = nullptr;
+    TDivider *vdiv = nullptr;
+    TScrollBar *convVsb = nullptr, *logVsb = nullptr;
+    TStaticText *prompt = nullptr;
+    TServerPane *servers = nullptr;
+    TConvPane *convs = nullptr;
+    TChatPaneLog *log = nullptr;
+    TChatInput *input = nullptr;
+
+    std::string acct, conv, name;                  // shown: account, conversation, its name
+    std::map<std::string, std::string> lastConv;   // per account: the conversation last shown
+    std::map<std::string, std::string> drafts;     // per conversation: typed, not sent
+    std::vector<ChatLine> msgs; // the shown conversation's, oldest first
     std::set<std::string> ids;  // what msgs holds: history and events overlap
     bool noOlder = false;       // `history --before` came back empty
     bool alive = false;         // constructed, not yet shut down
 
+    struct Rects
+    {
+        TRect srvTitle, servers, vbar, convTitle, convs, convVsb,
+            logTitle, log, logVsb, prompt, input;
+    };
+    Rects paneRects() const
+    {
+        int W = size.x, H = size.y;
+        const int FW = 22;
+        int sy = 1 + (H - 2) * 2 / 5;
+        if (sy < 6)
+            sy = 6;
+        if (sy > H - 5)
+            sy = H - 5;
+        Rects r;
+        r.srvTitle = TRect(1, 1, 1 + FW, 2);
+        r.servers = TRect(1, 2, 1 + FW, H - 1);
+        r.vbar = TRect(1 + FW, 1, 2 + FW, H - 1);
+        r.convTitle = TRect(2 + FW, 1, W - 1, 2);
+        r.convs = TRect(2 + FW, 2, W - 2, sy);
+        r.convVsb = TRect(W - 2, 2, W - 1, sy);
+        r.logTitle = TRect(2 + FW, sy, W - 1, sy + 1);
+        r.log = TRect(2 + FW, sy + 1, W - 2, H - 2);
+        r.logVsb = TRect(W - 2, sy + 1, W - 1, H - 2);
+        // "> text": the input line keeps its own first column (the "<"
+        // shown when its text scrolls), so the prompt is one cell
+        r.prompt = TRect(2 + FW, H - 2, 3 + FW, H - 1);
+        r.input = TRect(3 + FW, H - 2, W - 1, H - 1);
+        return r;
+    }
+
     bool front() const { return (state & sfActive) && (state & sfSelected); }
+    bool inChatPane() const { return current == input || current == log; }
+    bool isServer() const
+    {
+        auto it = chat().convs().find(conv);
+        return it != chat().convs().end() && it->second.kind == "server";
+    }
 
     bool add(const ChatLine &m)
     {
@@ -335,6 +564,13 @@ class TChatWindow : public TWindow
         msgs.clear();
         ids.clear();
         noOlder = false;
+        if (conv.empty())
+        {
+            msgs.push_back({std::string(), nowHHMM(), std::string(), "n",
+                            chat().accounts().empty() ? "no chat accounts" : "no conversation"});
+            render(-1, false);
+            return;
+        }
         std::string body, err;
         if (ask("history " + shq(conv), body, err))
         {
@@ -400,8 +636,13 @@ class TChatWindow : public TWindow
         log->scrollKey(kbPgUp);
     }
 
-    void markRead()
+    // Read once you actually look, as in mail: the chat pane has the focus
+    // and the window is in front.  looking: the chat pane is just taking
+    // the focus (tvision sets `current` only after telling the view).
+    void markRead(bool looking = false)
     {
+        if (!front() || !(looking || inChatPane()))
+            return;
         auto it = chat().convs().find(conv);
         if (it == chat().convs().end() || it->second.unread <= 0)
             return;
@@ -409,24 +650,123 @@ class TChatWindow : public TWindow
         if (!ask("mark-read " + shq(conv), body, err))
             debugLog("chat: mark-read %s: %s", conv.c_str(), err.c_str());
         // the backend answers with `unread CONV 0`, which the next poll
-        // applies to the model (and the title, through the broadcast)
+        // applies to the model (and the lists, through the broadcast)
+    }
+
+    std::string inputText() const { return input && input->data ? input->data : ""; }
+    void setInput(const std::string &s)
+    {
+        size_t n = std::min(s.size(), (size_t)input->maxLen);
+        std::memcpy(input->data, s.data(), n);
+        input->data[n] = '\0';
+        input->selectAll(False);
+        input->curPos = (int)n;
+        input->drawView();
     }
 
     void sendInput()
     {
-        std::string text = input->data ? input->data : "";
+        std::string text = inputText();
         if (trimmed(text).empty())
             return;
+        if (isServer())
+        {
+            flashStatus("Pick a channel or a person to talk to - this is " + name);
+            return;
+        }
         std::string body, err;
         if (!ask("send " + shq(conv) + " " + shq(text), body, err))
         {
             note("not sent: " + err); // the text stays in the input line
             return;
         }
-        input->data[0] = '\0';
-        input->selectAll(False);
-        input->drawView();
+        setInput(std::string());
+        drafts.erase(conv);
         pollNow(); // our line (the backend's copy or the server's echo) now
+    }
+
+    void updateTitles()
+    {
+        std::string n = convName(conv);
+        if (!n.empty())
+            name = n;
+        else if (conv.empty())
+            name = "Chat";
+        logTitle->setLabel(isServer() ? name.substr(0, name.rfind(" (server)")) + " - server messages" : name);
+        const ChatAccount *a = findAccount(acct);
+        convTitle->setLabel(a ? "Conversations - " + menuSafe(a->display) : std::string("Conversations"));
+        // "tvmail chat (3)" while it is not the window you are in:
+        // Window > List shows the same
+        int unread = chatOn() ? ChatClient::instance().unreadTotal() : 0;
+        std::string t = "tvmail chat";
+        if (unread > 0 && !front())
+            t += " (" + std::to_string(unread) + ")";
+        if (!title || t != title)
+        {
+            delete[] (char *)title;
+            title = newStr(t);
+            if (frame)
+                frame->drawView();
+        }
+    }
+
+    // Both lists from the model, staying on the account and conversation
+    // shown.  follow: if that conversation is gone (left, a new backend),
+    // show the one the list now highlights - otherwise it stays, as a
+    // conversation just joined does until its conv-new arrives.
+    void refreshLists(bool follow = false)
+    {
+        std::vector<std::string> as;
+        for (const ChatAccount &a : chat().accounts())
+            as.push_back(a.id);
+        if (std::find(as.begin(), as.end(), acct) == as.end())
+            acct = as.empty() ? std::string() : as[0];
+        servers->setIds(as, acct);
+        std::vector<std::string> cs = convsOf(acct);
+        convs->setIds(cs, conv);
+        if (follow && std::find(cs.begin(), cs.end(), conv) == cs.end() &&
+            convs->current() != conv)
+            showConv(convs->current());
+        updateTitles();
+    }
+
+    void showConv(const std::string &c)
+    {
+        if (c == conv && !msgs.empty())
+            return;
+        if (!conv.empty())
+        {
+            std::string d = inputText();
+            if (trimmed(d).empty())
+                drafts.erase(conv);
+            else
+                drafts[conv] = d;
+        }
+        conv = c;
+        if (!acct.empty())
+            lastConv[acct] = conv;
+        auto d = drafts.find(conv);
+        setInput(d != drafts.end() ? d->second : std::string());
+        name = convName(conv);
+        loadHistory();
+        updateTitles();
+        markRead();
+    }
+
+    void showAccount(const std::string &a)
+    {
+        acct = a;
+        std::vector<std::string> cs = convsOf(acct);
+        auto last = lastConv.find(acct);
+        convs->setIds(cs, last != lastConv.end() ? last->second : std::string());
+        showConv(convs->current());
+    }
+
+    void setActivePane(TView *v)
+    {
+        srvTitle->setActive(Boolean(v == servers));
+        convTitle->setActive(Boolean(v == convs));
+        logTitle->setActive(Boolean(v == log || v == input));
     }
 
     void onEvent(const ChatEvent &ev)
@@ -440,85 +780,112 @@ class TChatWindow : public TWindow
             if (parseMsg(f, 1, m) && add(m))
                 render(bottom ? -1 : log->firstShownLine(), true);
         }
-        else if (t == "unread" && f.size() >= 3 && f[1] == conv)
+        else if (t == "unread" && f.size() >= 3)
         {
-            if (std::atoi(f[2].c_str()) > 0 && front())
+            if (f[1] == conv && std::atoi(f[2].c_str()) > 0)
                 markRead(); // read as it arrives: you are looking at it
-            updateTitle();
+            servers->drawView();
+            convs->drawView();
+            updateTitles();
         }
-        else if (t == "state" && f.size() >= 3 && f[1] == accountIdOf(conv))
+        else if (t == "state" && f.size() >= 3)
         {
-            std::string d = f.size() > 3 ? trimmed(f[3]) : std::string();
-            note(f[2] + (d.empty() ? std::string() : ": " + d));
+            servers->drawView();
+            if (f[1] == accountIdOf(conv))
+            {
+                std::string d = f.size() > 3 ? trimmed(f[3]) : std::string();
+                note(f[2] + (d.empty() ? std::string() : ": " + d));
+            }
         }
         else if (t == "topic" && f.size() >= 3 && f[1] == conv)
             note("topic: " + f[2]);
-        else if (t == "conv-gone" && f.size() >= 2 && f[1] == conv)
-            note("left " + name);
-        else if (t == "conv-new" && f.size() >= 2 && f[1] == conv)
-            updateTitle();
+        else if ((t == "conv-new" || t == "conv-gone") && f.size() >= 2)
+        {
+            bool gone = t == "conv-gone" && f[1] == conv;
+            if (gone)
+                note("left " + name);
+            refreshLists(gone);
+        }
     }
 
 public:
-    TChatWindow(const TRect &bounds, const std::string &c)
-        : TWindowInit(&TChatWindow::initFrame),
-          TWindow(bounds, "", wnNoNumber), conv(c)
+    TChatMainWindow(const TRect &bounds)
+        : TWindowInit(&TChatMainWindow::initFrame),
+          TWindow(bounds, "tvmail chat", wnNoNumber)
     {
         palette = wpCyanWindow;
-        options |= ofTileable;
-        TScrollBar *v = standardScrollBar(sbVertical);
-        TRect r = getExtent();
-        r.grow(-1, -1);
-        r.b.y -= 1;
-        log = new TChatLog(r, v);
+        flags &= ~(wfClose | wfZoom | wfMove);
+        growMode = gfGrowHiX | gfGrowHiY;
+        helpCtx = hcChatWin; // its own status line: no mail keys here
+
+        Rects R = paneRects();
+        srvTitle = new TPaneTitle(R.srvTitle, "Servers");
+        convTitle = new TPaneTitle(R.convTitle, "Conversations");
+        logTitle = new TPaneTitle(R.logTitle, "Chat");
+        vdiv = new TDivider(R.vbar, true);
+        servers = new TServerPane(R.servers);
+        convVsb = new TScrollBar(R.convVsb);
+        convs = new TConvPane(R.convs, convVsb);
+        logVsb = new TScrollBar(R.logVsb);
+        log = new TChatPaneLog(R.log, logVsb);
+        log->growMode = 0; // placed by changeBounds(), as the mail panes are
         log->wantOlder = [this]
         { loadOlder(); };
-        insert(log);
-        // "> text": the input line keeps its own first column (the "<"
-        // shown when its text scrolls), so the prompt is one cell
-        auto *prompt = new TStaticText(TRect(1, size.y - 2, 2, size.y - 1), ">");
-        prompt->growMode = gfGrowLoY | gfGrowHiY;
+        prompt = new TStaticText(R.prompt, ">");
+        input = new TChatInput(R.input, 2000);
+
+        insert(vdiv);
+        insert(srvTitle);
+        insert(convTitle);
+        insert(logTitle);
+        insert(convVsb);
+        insert(logVsb);
         insert(prompt);
-        input = new TFieldLine(TRect(2, size.y - 2, size.x - 1, size.y - 1), 2000);
-        input->growMode = gfGrowLoY | gfGrowHiX | gfGrowHiY;
+        insert(log);
+        insert(convs);
         insert(input);
-        name = convName(conv);
-        if (name.empty())
-            name = conv;
-        gChatWins.push_back(this);
-        loadHistory();
-        input->select();
+        insert(servers); // first to have the focus; Tab: see handleEvent
+
+        gChatWin = this;
+        refreshLists(true);
+        showAccount(acct);
         alive = true;
-        updateTitle();
+        servers->select();
+        setActivePane(servers);
+        updateTitles();
+    }
+
+    // Show this account (its server messages, or the conversation last
+    // shown there) or this conversation, and put the focus where it fits.
+    void goTo(const std::string &account, const std::string &c = std::string())
+    {
+        refreshLists();
+        std::string a = c.empty() ? account : accountIdOf(c);
+        if (!a.empty() && a != acct)
+        {
+            servers->setIds(servers->ids, a);
+            showAccount(a);
+        }
+        if (c.empty())
+        {
+            convs->select();
+            return;
+        }
+        convs->setIds(convs->ids, c); // a channel just joined is not listed yet
+        showConv(c);
+        input->select();
     }
 
     const std::string &convId() const { return conv; }
-    bool unsent() const { return input && input->data && !trimmed(input->data).empty(); }
-
-    // "#chan — Libera", and the unread count while it is not the window
-    // you are in.  Window > List shows the same.
-    void updateTitle()
+    bool showingServer() const { return isServer(); }
+    bool unsent() const
     {
-        std::string n = convName(conv);
-        if (!n.empty())
-            name = n;
-        auto it = chat().convs().find(conv);
-        int unread = it != chat().convs().end() ? it->second.unread : 0;
-        std::string t = name;
-        if (unread > 0 && !front())
-            t += " (" + std::to_string(unread) + ")";
-        if (title && t == title)
-            return;
-        delete[] (char *)title;
-        title = newStr(t);
-        if (frame)
-            frame->drawView();
-    }
-
-    void reload()
-    {
-        loadHistory();
-        updateTitle();
+        if (!trimmed(inputText()).empty())
+            return true;
+        for (const auto &kv : drafts)
+            if (kv.first != conv && !trimmed(kv.second).empty())
+                return true;
+        return false;
     }
 
     void handleEvent(TEvent &e) override
@@ -550,17 +917,79 @@ public:
                 return;
             }
         }
+        // Tab: servers -> conversations -> input, and round; the log is
+        // not a stop (the scrolling keys work from the input), but Tab from
+        // it goes on as from the input
+        if (e.what == evKeyDown && (e.keyDown.keyCode == kbTab || e.keyDown.keyCode == kbShiftTab))
+        {
+            TView *order[] = {servers, convs, input};
+            int at = current == servers ? 0 : current == convs ? 1 : 2;
+            at = (at + (e.keyDown.keyCode == kbTab ? 1 : 2)) % 3;
+            order[at]->select();
+            clearEvent(e);
+            return;
+        }
         TWindow::handleEvent(e);
         if (e.what == evKeyDown && e.keyDown.keyCode == kbEsc)
         {
             clearEvent(e);
-            close(); // may delete this
+            showMailWindow(); // the text typed here stays
             return;
         }
-        if (e.what == evBroadcast && e.message.command == cmChatEvent && e.message.infoPtr)
-            onEvent(*static_cast<const ChatEvent *>(e.message.infoPtr));
-        else if (e.what == evBroadcast && e.message.command == cmChatReset)
-            reload(); // a new backend: its history is all there is now
+        if (!alive || e.what != evBroadcast)
+            return;
+        switch (e.message.command)
+        {
+        case cmChatEvent:
+            if (e.message.infoPtr)
+                onEvent(*static_cast<const ChatEvent *>(e.message.infoPtr));
+            break;
+        case cmChatReset: // a new backend: its model and history are all there is now
+            // stay on the conversation shown: the new backend's autoconnect
+            // joins it again (and lists it) a moment later
+            refreshLists();
+            msgs.clear();
+            showConv(conv);
+            break;
+        case cmChatAcctPicked:
+            if (e.message.infoPtr == servers)
+            {
+                showAccount(servers->current());
+                clearEvent(e);
+            }
+            break;
+        case cmChatConvPicked:
+            if (e.message.infoPtr == convs)
+            {
+                showConv(convs->current());
+                clearEvent(e);
+            }
+            break;
+        case cmFocusContent: // Enter in a list
+            if (e.message.infoPtr == servers)
+            {
+                const ChatAccount *a = findAccount(acct);
+                if (a && !isLive(*a))
+                    connectAccount(*a);
+                convs->select();
+                clearEvent(e);
+            }
+            else if (e.message.infoPtr == convs)
+            {
+                input->select();
+                clearEvent(e);
+            }
+            break;
+        case cmPaneFocused:
+        {
+            TView *v = (TView *)e.message.infoPtr;
+            setActivePane(v);
+            if (v == input || v == log)
+                markRead(true); // you are reading it now
+            clearEvent(e);
+            break;
+        }
+        }
     }
 
     void setState(ushort aState, Boolean enable) override
@@ -568,9 +997,8 @@ public:
         TWindow::setState(aState, enable);
         if (alive && (aState & (sfActive | sfSelected)))
         {
-            if (front())
-                markRead();
-            updateTitle();
+            markRead();
+            updateTitles();
         }
     }
 
@@ -578,18 +1006,16 @@ public:
     {
         if (!TWindow::valid(command))
             return False;
-        // cmQuit too: Alt-X asks every window, as for an unsent compose
-        if ((command == cmClose || command == cmQuit) && unsent())
+        // Alt-X asks every window, as for an unsent compose
+        if (command == cmQuit && unsent())
         {
-            if (command == cmQuit)
-                select(); // show which window the question is about
+            select(); // show which window the question is about
             if (messageBox(mfConfirmation | mfYesButton | mfNoButton,
-                           "Discard the message you have not sent\nto %s?",
-                           name.c_str()) != cmYes)
+                           "Discard the chat message%s you have not sent?",
+                           drafts.size() > 1 ? "s" : "") != cmYes)
                 return False;
-            input->data[0] = '\0'; // a quit called off later must not ask twice
-            input->selectAll(False);
-            input->drawView();
+            drafts.clear(); // a quit called off later must not ask twice
+            setInput(std::string());
         }
         return True;
     }
@@ -597,191 +1023,50 @@ public:
     void shutDown() override
     {
         alive = false;
-        gChatWins.erase(std::remove(gChatWins.begin(), gChatWins.end(), this), gChatWins.end());
+        if (gChatWin == this)
+            gChatWin = nullptr;
+        servers = nullptr;
+        convs = nullptr;
         log = nullptr;
         input = nullptr;
         TWindow::shutDown();
     }
 
-    TColorAttr mapColor(uchar index) override { return cyanWindowColor(index, this); }
-};
-
-TChatWindow *chatWin(const std::string &conv)
-{
-    for (TChatWindow *w : gChatWins)
-        if (w->convId() == conv)
-            return w;
-    return nullptr;
-}
-
-// Open the conversation's window, or bring it to the front.
-void openChat(const std::string &conv)
-{
-    if (TChatWindow *w = chatWin(conv))
+    void changeBounds(const TRect &bounds) override
     {
-        w->select();
-        return;
-    }
-    TRect r = TProgram::deskTop->getExtent();
-    r.grow(-4, -2);
-    int n = (int)gChatWins.size() % 5; // cascade a little
-    r.a.x += 2 * n;
-    r.a.y += n;
-    if (r.b.x - r.a.x < 30 || r.b.y - r.a.y < 6)
-        r = TProgram::deskTop->getExtent();
-    TProgram::deskTop->insert(new TChatWindow(r, conv));
-}
-
-// -------------------------------------------------- conversations list ---
-// Every conversation of every account: protocol tag, name, unread count.
-// Enter (or a double click) opens or focuses its window.
-struct ConvRow
-{
-    std::string id, text;
-};
-
-class TConvList : public TListViewer
-{
-public:
-    std::vector<ConvRow> rows;
-
-    TConvList(const TRect &b, TScrollBar *vsb) : TListViewer(b, 1, nullptr, vsb)
-    {
-        growMode = gfGrowHiX | gfGrowHiY;
-        refresh();
-    }
-
-    // Read the model again, keeping the highlight on the same conversation.
-    void refresh()
-    {
-        std::string keep = focused >= 0 && focused < (short)rows.size() ? rows[focused].id : "";
-        const auto &accts = chat().accounts();
-        auto rank = [&](const ChatConv &c)
-        {
-            size_t a = 0;
-            while (a < accts.size() && accts[a].id != accountIdOf(c.id))
-                ++a;
-            int k = c.kind == "server" ? 0 : c.kind == "channel" ? 1 : c.kind == "group" ? 2 : 3;
-            return std::make_tuple(a, k, lowered(c.title));
-        };
-        std::vector<const ChatConv *> cs;
-        for (const auto &kv : chat().convs())
-            cs.push_back(&kv.second);
-        std::sort(cs.begin(), cs.end(), [&](const ChatConv *x, const ChatConv *y)
-                  { return rank(*x) < rank(*y); });
-        rows.clear();
-        for (const ChatConv *c : cs)
-        {
-            const ChatAccount *a = findAccount(accountIdOf(c->id));
-            std::string tag = "[" + (a ? a->protocol : std::string("?")) + "]";
-            std::string t = fitCols(tag, 6) + " " + convName(c->id);
-            if (c->unread > 0)
-                t += "  (" + std::to_string(c->unread) + ")";
-            rows.push_back({c->id, t});
-        }
-        setRange((short)rows.size());
-        for (size_t i = 0; i < rows.size(); ++i)
-            if (rows[i].id == keep)
-                focusItem((short)i);
-        drawView();
-    }
-
-    void getText(char *dest, short item, short maxLen) override
-    {
-        if (item < 0 || item >= (short)rows.size())
-        {
-            dest[0] = 0;
-            return;
-        }
-        putText(dest, rows[item].text, maxLen);
-    }
-
-    void selectItem(short item) override
-    {
-        if (item >= 0 && item < (short)rows.size())
-            openChat(rows[item].id);
-    }
-
-    void handleEvent(TEvent &e) override
-    {
-        if (e.what == evKeyDown && e.keyDown.keyCode == kbEnter)
-        {
-            selectItem(focused);
-            clearEvent(e);
-            return;
-        }
-        TListViewer::handleEvent(e);
-    }
-
-    TColorAttr mapColor(uchar i) override
-    {
-        switch (i)
-        {
-        case 1:
-        case 2:
-            return cNorm();
-        case 3:
-            return cFocus();
-        case 4:
-            return cCur();
-        case 5:
-            return cDiv();
-        }
-        return TView::mapColor(i);
-    }
-};
-
-class TConversationsWindow;
-TConversationsWindow *gConvWin = nullptr;
-
-class TConversationsWindow : public TViewerWindow
-{
-    TConvList *list;
-
-public:
-    TConversationsWindow(const TRect &b)
-        : TWindowInit(&TConversationsWindow::initFrame),
-          TViewerWindow(b, "Conversations")
-    {
-        palette = wpCyanWindow;
-        options |= ofTileable;
-        TScrollBar *v = standardScrollBar(sbVertical | sbHandleKeyboard);
-        TRect r = getExtent();
-        r.grow(-1, -1);
-        list = new TConvList(r, v);
-        insert(list);
-        gConvWin = this;
-    }
-
-    void handleEvent(TEvent &e) override
-    {
-        TViewerWindow::handleEvent(e); // Esc closes (and may delete this)
-        if (e.what == evBroadcast &&
-            (e.message.command == cmChatEvent || e.message.command == cmChatReset))
-            list->refresh();
-    }
-
-    void shutDown() override
-    {
-        if (gConvWin == this)
-            gConvWin = nullptr;
-        TViewerWindow::shutDown();
+        TWindow::changeBounds(bounds);
+        Rects R = paneRects();
+        srvTitle->changeBounds(R.srvTitle);
+        servers->changeBounds(R.servers);
+        vdiv->changeBounds(R.vbar);
+        convTitle->changeBounds(R.convTitle);
+        convs->changeBounds(R.convs);
+        convVsb->changeBounds(R.convVsb);
+        logTitle->changeBounds(R.logTitle);
+        log->changeBounds(R.log);
+        logVsb->changeBounds(R.logVsb);
+        prompt->changeBounds(R.prompt);
+        input->changeBounds(R.input);
     }
 
     TColorAttr mapColor(uchar index) override { return cyanWindowColor(index, this); }
 };
 
-void openConversations()
+// The chat window to the front (made the first time), on this account /
+// conversation if given.
+void openChatWindow(const std::string &account = std::string(), const std::string &c = std::string())
 {
-    if (gConvWin)
-    {
-        gConvWin->select();
-        return;
-    }
-    TRect r = TProgram::deskTop->getExtent();
-    r.a.x = std::max<int>(r.a.x, r.b.x - 52);
-    r.grow(0, -1);
-    TProgram::deskTop->insert(new TConversationsWindow(r));
+    if (!gChatWin)
+        TProgram::deskTop->insert(new TChatMainWindow(TProgram::deskTop->getExtent()));
+    else
+        gChatWin->select();
+    if (gChatWin && (!account.empty() || !c.empty()))
+        gChatWin->goTo(account, c);
+}
+
+bool chatInFront()
+{
+    return gChatWin && TProgram::deskTop && TProgram::deskTop->current == gChatWin;
 }
 
 // ------------------------------------------------------------ dialogs ---
@@ -908,32 +1193,32 @@ void joinDialog()
         messageBox(mfError | mfOKButton, "%s", err.c_str());
         return;
     }
-    pollNow(); // conv-new: the window opens with its name
+    pollNow(); // conv-new: the list shows it with its name
     std::string conv = trimmed(body);
     if (!conv.empty())
-        openChat(conv);
+        openChatWindow(std::string(), conv);
 }
 
-void leaveFocused()
+// Leave: part the conversation the chat window shows; its conv-gone takes
+// it out of the list.
+void leaveShown()
 {
-    TChatWindow *w = dynamic_cast<TChatWindow *>(TProgram::deskTop->current);
-    if (!w)
+    if (!chatInFront())
     {
-        flashStatus("Leave: focus the chat window first");
+        flashStatus("Leave: Alt-C to the chat window first");
         return;
     }
     std::string body, err;
-    if (!ask("part " + shq(w->convId()), body, err))
+    if (!ask("part " + shq(gChatWin->convId()), body, err))
     {
         messageBox(mfError | mfOKButton, "%s", err.c_str());
         return;
     }
     pollNow();
-    w->close(); // asks first if its input holds an unsent message
 }
 
-// Chat > <account>: its server window (MOTD, notices, errors) - connecting
-// it first if it is not.
+// Chat > <account>: the chat window on that account - connecting it first
+// if it is not.
 void accountItem(int i)
 {
     const auto &as = chat().accounts();
@@ -942,11 +1227,7 @@ void accountItem(int i)
     ChatAccount a = as[i]; // connectAccount() polls, which may reshape as
     if (!isLive(a))
         connectAccount(a);
-    std::string conv = a.id + "/*";
-    if (chat().convs().count(conv))
-        openChat(conv);
-    else
-        flashStatus(menuSafe(a.display) + ": " + chat().accounts()[i].state);
+    openChatWindow(a.id);
 }
 
 // ---------------------------------------------------------- the menu ---
@@ -973,7 +1254,7 @@ TMenu *buildChatMenu()
     };
     add(new TMenuItem("~C~onnect...", cmChatConnect, kbNoKey, hcNoContext));
     add(new TMenuItem("~D~isconnect...", cmChatDisconnect, kbNoKey, hcNoContext));
-    add(new TMenuItem("C~o~nversations...", cmChatConvs, kbNoKey, hcNoContext, "Alt-C"));
+    add(new TMenuItem("Chat ~w~indow", cmChatConvs, kbNoKey, hcNoContext, "Alt-C"));
     add(new TMenuItem("~J~oin...", cmChatJoin, kbNoKey, hcNoContext));
     add(new TMenuItem("~L~eave", cmChatLeave, kbNoKey, hcNoContext));
     add(&newLine());
@@ -1018,8 +1299,7 @@ void chatMenuGrey()
     if (!gChatItem || !gChatItem->subMenu)
         return;
     bool on = chatOn();
-    bool inChat = TProgram::deskTop &&
-                  dynamic_cast<TChatWindow *>(TProgram::deskTop->current) != nullptr;
+    bool inChat = chatInFront() && !gChatWin->showingServer();
     for (TMenuItem *p = gChatItem->subMenu->items; p; p = p->next)
         if (p->name && p->command)
             p->disabled = Boolean(!on || p->command == cmChatOff ||
@@ -1045,14 +1325,17 @@ bool chatCommand(ushort command)
     case cmChatDisconnect:
         disconnectDialog();
         break;
-    case cmChatConvs:
-        openConversations();
+    case cmChatConvs: // Alt-C: to the chat window, and from it back to mail
+        if (chatInFront())
+            showMailWindow();
+        else
+            openChatWindow();
         break;
     case cmChatJoin:
         joinDialog();
         break;
     case cmChatLeave:
-        leaveFocused();
+        leaveShown();
         break;
     default:
         if (command >= cmChatAccount)
