@@ -1,6 +1,6 @@
 # tvmail chat add-on — Claude Code handoff
 
-Started Oct 20, 2026 · @Chris Pollitt · updated Oct 21, 2026 after milestone 4 · Oct 20: milestones 1-3 merged to `main`, web hosting notes (cp1)
+Started Oct 20, 2026 · @Chris Pollitt · updated Oct 21, 2026 (evening): milestone 4 + the 3-pane chat window merged to `main`, Ergo on cpbee, bug #46 · Oct 20: milestones 1-3 merged to `main`, web hosting notes (cp1)
 
 This is the living version of the original handoff: the plan, what has been
 built, and the decisions made since. Where the code and this file disagree,
@@ -15,14 +15,22 @@ the code wins - and this file should be fixed.
 | – | Split `src/tvmail.cpp` (approved by Chris) | done | 73060b6 |
 | 3 | C++ plumbing | done | 62347cf |
 | 4 | Chat windows | done; live check passed on cpbee's Ergo (Oct 21; Libera's reset after a send not seen again, not retested) | 611efde |
-| – | Chat as one 3-pane window like mail (asked by Chris, Oct 21) | done | see git log |
+| – | Bug #46: SASL got the mail password from `~/.mu-tickets` | fixed | b97d83c |
+| – | Chat as one 3-pane window like mail (asked by Chris, Oct 21) | done; Chris has not tried it yet | a945288 |
 | – | mingw compiles again (bug #45) | done | 1e43880 |
 | 5 | IRC hardening | **next** | |
 | 6 | Delta Chat adapter | | |
 | 7 | Docs | | |
 
-Milestones 1-3 were built on branch `ccr-b4320bfb-x90pzx`, merged into `main` (fast-forward to 69d442c) and the branch deleted on Oct 20. Milestone 4 was built on branch `claude/sweet-thompson-nzz0zz` from `main` at cee1cc5 (Oct 21); `./test.sh` passes all 9 layers on Linux (`mingw_compile` is new, see Testing) - not yet run on Cygwin. The last pre-chat state is tagged `tvmail-v1.2.0`.
+Milestones 1-3 were built on branch `ccr-b4320bfb-x90pzx`, merged into `main` (fast-forward to 69d442c) and the branch deleted on Oct 20. Milestone 4 was built on branch `claude/sweet-thompson-nzz0zz` from `main` at cee1cc5 (Oct 21); with the diagnostics, bug #46 and the 3-pane window on top it was fast-forwarded into `main` (a945288), pushed, and the branch deleted on Oct 21. All 9 test layers pass on Cygwin and Linux. The last pre-chat state is tagged `tvmail-v1.2.0`.
 Stop for Chris's review after each milestone.
+
+### Where we stopped (Oct 21, evening)
+
+- **Installed on cmlaptop** (`/usr/local/bin`): the `main` build - tvmail with the 3-pane chat window, and `tvchat-backend` with bug #46's fix.
+- **cpbee runs Ergo 2.19.1** (`chrispollitt/POSIX` `chat-setup/scripts/configure-ergo.sh`): server `cpbee.cmnet`, TLS on 192.168.10.1:6697, NickServ accounts `chris-pollitt` and `tester2`. The laptop's `tvchat.conf` has `[account:cpbee]` (written by `chat-setup/scripts/configure-tvchat.sh`; not in `autoconnect`), its password in `~/.netrc`. `configure-ergo.sh` has not been re-run on cpbee since it started publishing `/opt/ergo/ca.pem` (POSIX bb1cc79) - the laptop got its CA another way.
+- **Live checks:** on cpbee, connect, SASL, join `#test` and a sent line all work - no reset. Libera connects and SASL works, but **the `Connection reset by peer` right after a send there has not been retested**: send one line in `#tvmail-test` with `tvmail --debug` and read `debug.chat.log` (the end-of-connection line says phase, error and bytes unsent).
+- **Next:** Chris tries the 3-pane window; the Libera retest; then milestone 5 (IRC hardening), on a new branch from `main`.
 
 ## Purpose and scope
 
