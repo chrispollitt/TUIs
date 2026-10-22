@@ -22,8 +22,9 @@ the code wins - and this file should be fixed.
 | – | Split into its own app, tvchat, with `../tvcommon` (asked by Chris, Oct 21) | done on branch `split-tvchat`, not merged | 4dcfd2a (tvcommon), then the split |
 | – | mingw compiles again (bug #45) | done | 1e43880 |
 | 5 | IRC hardening | **next** | |
-| 6 | Delta Chat adapter | | |
-| 7 | Docs | | |
+| 6 | talk(1) adapter (asked by Chris, Oct 22) | | |
+| 7 | Delta Chat adapter | | |
+| 8 | Docs | | |
 
 Milestones 1-3 were built on branch `ccr-b4320bfb-x90pzx`, merged into `main` (fast-forward to 69d442c) and the branch deleted on Oct 20. Milestone 4 was built on branch `claude/sweet-thompson-nzz0zz` from `main` at cee1cc5 (Oct 21); with the diagnostics, bug #46 and the 3-pane window on top it was fast-forwarded into `main` (a945288), pushed, and the branch deleted on Oct 21. All 9 test layers pass on Cygwin and Linux. The last pre-chat state is tagged `tvmail-v1.2.0`.
 Stop for Chris's review after each milestone.
@@ -89,7 +90,7 @@ tvmail (v1.2.0) is a thin C++17 Turbo Vision face over stdlib-only Python helper
    |-- mailBackend() -- pipe ---> tvmail-backend serve     (mail, unchanged)
    '-- chatBackend() -- pipe ---> tvchat-backend serve     (stdlib Python)
          ^ ChatClient                |-- IrcAdapter -------- TLS socket --> irc.libera.chat:6697
-                                     '-- DeltaChatAdapter -- (milestone 6: stdio JSON-RPC
+                                     '-- DeltaChatAdapter -- (milestone 7: stdio JSON-RPC
                                                               --> deltachat-rpc-server --> cpbee)
 ```
 
@@ -148,7 +149,39 @@ Hand-written, stdlib `socket` + `ssl`, on the shared loop.
 - **Flood control:** at most one line per 500 ms outbound, queued.
 - **Commands typed in a chat window:** `/me`, `/join`, `/part`, `/msg NICK TEXT`, `/nick`, `/topic`, `/quote RAW`; any other `/word` is an error event, not sent. Today `send` sends text as-is.
 
-## Delta Chat adapter (milestone 6 - not started)
+## talk(1) adapter (milestone 6 - not started)
+
+Chris, Oct 22: "talk(1)!!! tvchat *must* have it" - before Delta Chat. The
+Unix `talk` / `ntalk` protocol: two users, a split screen, every keystroke
+sent as typed (not lines). A third protocol behind the same adapter
+interface, in stdlib Python.
+
+- **Wire:** the ntalk protocol (talkd on UDP 518; `talk` 517 is the old one):
+  LOOK_UP / ANNOUNCE / LEAVE_INVITE / DELETE messages to the peer's talkd,
+  then a direct TCP connection between the two clients carrying the edit
+  characters (erase, kill, word-erase - exchanged first) and the text.
+  Check against a real `talk`/`ytalk` and the BSD `talkd` sources before
+  coding; byte order and the sockaddr layout in the control message are
+  the classic traps.
+- **Both directions:** `talk user[@host] [tty]` from tvchat (an invitation
+  through the peer's talkd), and answering an invitation addressed to us
+  ("Message from Talk_Daemon@host ... respond with: talk you@host") - which
+  needs a local talkd (inetd/xinetd `talkd`, or a tiny one in the backend?)
+  and a way to hear about invitations: the daemon writes them to the tty,
+  so this needs thought.
+- **The model:** a talk session is a `direct` conversation, but the chat
+  pane is line-based. Options: show the peer's text as it is typed (a live
+  line at the bottom of the log, committed on newline), or a talk-style
+  split pane for talk conversations only. Decide with Chris.
+- **Accounts:** `[account:talk] protocol = talk` with the local user name
+  and which hosts to allow; no passwords (talk has none - LAN only).
+- **Tests:** a fake talkd (UDP) and a fake peer (TCP) in the unit tests; an
+  interop check against the system `talk` where installed (exits 77 if not).
+- **Wish list, "crazy talk" (Chris):** a gateway to OpenVMS `PHONE` - e.g.
+  on the SIMH VAX (cpvax). PHONE speaks DECnet task-to-task (object 29), so
+  it needs DECnet on both sides; noted, not planned.
+
+## Delta Chat adapter (milestone 7 - not started)
 
 Do not reimplement Delta Chat. Spawn the official `deltachat-rpc-server` as a child of `tvchat-backend` and speak JSON-RPC 2.0 to it, one JSON object per line over stdin/stdout. The core handles Autocrypt/OpenPGP, encryption, IMAP IDLE, SMTP and its own database. Today `DeltaChatAdapter` is a placeholder whose `connect` answers "not supported yet".
 
@@ -248,7 +281,7 @@ Nine layers under `./test.sh` (see `tests/README.md`); no test needs network acc
 
 - [x] ~~IRC nick, NickServ registration, test channel?~~ Libera.Chat, nick `chris-pollitt`, registered (SASL user `chris-pollitt`), channel `#tvmail-test`, autoconnect on (Oct 21). His `tvchat.conf` and SASL password live on his machine only; `irc-tail libera` works there. Milestone 4's live check (a conversation in `#tvmail-test` from tvmail) is his.
 - [x] ~~Split `src/tvmail.cpp`?~~ Yes (Oct 20) - done.
-- [ ] Dedicated Delta Chat address on cpbee: which one, and is the mailbox created by mail-setup (a change in the `chrispollitt/POSIX` repo, not yet attached to the session) or by hand? (milestone 6)
+- [ ] Dedicated Delta Chat address on cpbee: which one, and is the mailbox created by mail-setup (a change in the `chrispollitt/POSIX` repo, not yet attached to the session) or by hand? (milestone 7)
 - [x] ~~Should IRC logs persist to disk between sessions?~~ No - in memory for v1 (Oct 21). The window's log is the backend's ring (2,000 per conversation); gone when tvmail exits. Worth asking again if an always-on backend (the web app) ever happens.
 - [x] ~~Must chat keep polling while a modal dialog is open?~~ No (Oct 21): `cmChatEvents` is simply not posted under a menu or dialog (bug #44); nothing is lost - the backend queue holds every event until the next `events --after`.
 - [ ] Later, separate project: self-host an Ergo IRC server on cpbee, and how to keep it reachable if cpbee moves to a phone-tethered connection.
