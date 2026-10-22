@@ -205,7 +205,7 @@ Nine layers under `./test.sh` (see `tests/README.md`); no test needs network acc
 
 ## Bugs found along the way
 
-- **#46 (fixed):** chat SASL sent the mail password - `~/.mu-tickets`' `*://chris:...@cpbee` matched before the right `~/.netrc` entry, because the borrowed mail lookup falls back to any user on the host. Found in the first live check on cpbee's Ergo (Oct 21), which otherwise passed: no reset after "hello" there.
+- **#46 (fixed, b97d83c):** chat SASL sent the mail password - `~/.mu-tickets`' `*://chris:...@cpbee` matched before the right `~/.netrc` entry, because the borrowed mail lookup falls back to any user on the host. Found in the first live check on cpbee's Ergo (Oct 21), which otherwise passed: no reset after "hello" there.
 - **#44 (fixed, 611efde):** with an account connected, every menu closed by itself within 250 ms - `idle()` posted the chat poll as a command, and any command ends a tvision menu. `idle()` now posts nothing while `TopView()` is not the app (a menu or a dialog is up); the backend queue holds the events. Found building the Chat menu.
 - **#45 (fixed, 1e43880):** the mingw build did not compile - `main()`'s `setenv("ESCDELAY", ...)` (668ea6b, pre-chat). Now POSIX only (ESCDELAY is an ncurses setting; the Windows build reads the Win32 console). Found by the first mingw compile since the split.
 - **#43 (fixed, 62347cf):** a signal during a backend round trip - `SIGWINCH` from any terminal resize - made `poll()`/`fgetc()` fail with `EINTR`, which was taken for a dead backend: the call fell back to the slow shell path, and during a start the co-process was given up for the session. Pre-dates chat; found by `e2e_chat` flaking.
