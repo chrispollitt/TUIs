@@ -194,7 +194,11 @@ kill, word-erase), then text.
    table, the four requests, and the classic tty announcement for users
    logged in on cpbee (utmp) - a drop-in for the stock talkd.  Tests: a fake
    talk client over UDP on a high port.
-2. **tvchat users + relay:** a small line protocol over TCP (LAN only, no
+2. **tvchat users + relay** - done Oct 22 (POSIX; the protocol is in
+   talkd.py's docstring: HELLO / CALL / RING / ACCEPT / DECLINE / HANGUP /
+   CONNECT + a second connection `ATTACH TOKEN` carrying the raw bytes;
+   TCP 518).  Interop with inetutils `talk` both ways through the relay.
+   Was: a small line protocol over TCP (LAN only, no
    auth - like talk itself): tvchat registers its user; an ANNOUNCE for a
    registered user becomes an invitation event there instead of a tty
    message; talkd itself connects to the caller's address and splices that
