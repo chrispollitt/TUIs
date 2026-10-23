@@ -206,7 +206,14 @@ kill, word-erase), then text.
    tvchat asks talkd to call user[@host]; talkd does the LEAVE_INVITE /
    ANNOUNCE ritual (to itself or to another host's talkd) with its own
    relay port as the address.
-3. **`chat-setup/scripts/configure-talkd.sh`:** a `talkd` system user, a
+3. **`configure-talkd.sh`** - written Oct 22 (POSIX), **not run on cpbee
+   yet**: Chris runs it there (`--firewall-plan` first, then
+   `--open-firewall`), then an interop check with Debian's `talk`.
+   cmpi-router's `setup-router.sh` (master copy on cmlaptop,
+   ~/src/Claude/cmpi-router, not git; copied to cpbee) now reads
+   `/etc/router-setup/lan0-udp-ports` (Chris chose this over a live rule).
+   talkd gained `--relay-ports` (a firewall-listable range for callees on
+   other hosts) and `--allow` (loopback + lan0's subnet).  Was: a `talkd` system user, a
    systemd unit (CAP_NET_BIND_SERVICE for 518), the stock talkd/inetd entry
    off, UDP 518 opened on lan0 (cmpi-router's port lists are TCP only today
    - the same lossless way as Ergo's).  Interop check on cpbee with
