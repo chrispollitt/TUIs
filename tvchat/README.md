@@ -47,6 +47,14 @@ shows what it points at, and a conversation counts as read once the chat pane
 has the focus. Unsent text stays with its conversation; Alt-X asks before it
 is thrown away.
 
+Ctrl-L (Window ▸ Redraw screen) repaints the whole screen. While tvchat
+runs, its terminal takes no messages - it clears the terminal's group-write
+bit, as `mesg n` does - so `talk` requests and `write` / `wall` messages from
+ordinary users don't land on top of the window; the mode goes back on exit,
+while a command run from it has the terminal, and while it is stopped. Root's
+messages (`wall` run by root, shutdown notices) still get through: Ctrl-L
+clears them. `mesg = y` under `[ui]` in `tvchat.conf` keeps taking messages.
+
 ## Quick start
 
 ```sh

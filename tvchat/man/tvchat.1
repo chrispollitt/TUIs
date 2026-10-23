@@ -49,6 +49,9 @@ help.
 next window.
 .B Alt\-0
 window list.
+.B Ctrl\-L
+redraw the whole screen
+.RB ( "Window \(-> Redraw screen" ).
 .B Alt\-X
 quit (asking first about text typed and not sent).
 .SH COMMANDS
@@ -105,6 +108,32 @@ the backend's cProfile data to
 .B --selftest
 Start the backend, read the accounts, poll once and ping, without the
 interface; exit 0 if all of that worked.
+.SH "MESSAGES FROM OTHER USERS"
+While tvchat runs, its terminal takes no messages: tvchat clears the
+terminal's group\-write bit, as
+.B "mesg n"
+does, so
+.BR talk (1)
+requests and
+.BR write (1)
+or
+.BR wall (1)
+messages from ordinary users do not land on top of the windows.
+The mode goes back when tvchat exits, while a command run from it has
+the terminal, and while it is stopped.
+Root's messages (\fBwall\fP run by root, shutdown notices) still get
+through; press
+.B Ctrl\-L
+to clear them off the screen.
+To keep taking messages, set
+.RS
+.nf
+[ui]
+mesg = y
+.fi
+.RE
+in
+.IR tvchat.conf .
 .SH FILES
 .TP
 .I ~/.config/tvchat/tvchat.conf
@@ -114,6 +143,10 @@ the accounts (see
 names another file.
 .I ~/.config/tvmail/tvchat.conf
 is read when it is missing.
+tvchat itself reads
+.B [ui] mesg
+(see
+.BR "MESSAGES FROM OTHER USERS" ).
 .TP
 .IR ~/.netrc ", " ~/.mu-tickets
 where the SASL passwords are (or

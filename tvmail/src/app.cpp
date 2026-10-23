@@ -68,6 +68,7 @@ TMenuBar *TVMailApp::initMenuBar(TRect r)
                             *new TMenuItem("~T~ile", cmTile, kbNoKey, hcNoContext) +
                             *new TMenuItem("C~a~scade", cmCascade, kbNoKey, hcNoContext) +
                             *new TMenuItem("~L~ist...", cmWindowList, kbAlt0, hcNoContext, "Alt-0") +
+                            *new TMenuItem("~R~edraw screen", cmRedrawScreen, kbCtrlL, hcNoContext, "Ctrl-L") +
                             newLine() +
                             *new TMenuItem("~C~lose", cmClose, kbAltF3, hcNoContext, "Alt-F3") +
                             *new TSubMenu("~H~elp", kbAltH) +

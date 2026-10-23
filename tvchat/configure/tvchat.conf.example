@@ -13,6 +13,15 @@
 # connect these accounts when tvchat starts (comma-separated section names)
 autoconnect = libera
 
+# The terminal while tvchat runs (read by tvchat itself).
+[ui]
+# n (the default): no talk(1) requests or write / wall messages from ordinary
+#   users land on top of the window - the terminal's group-write bit is
+#   cleared, as `mesg n` does, and put back on exit.  Root's messages still
+#   get through: Ctrl-L (Window > Redraw screen) clears them off the screen.
+# y: leave the terminal as it is.
+#mesg = n
+
 # One section per account, [account:NAME].  NAME is the account's id in the
 # UI and in conversation ids, so no '/', '\' or spaces in it.
 #   protocol = irc | deltachat      (required)

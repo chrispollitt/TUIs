@@ -258,6 +258,7 @@ save-a-copy-on-send.
 | `F3` | local: pull mail (`mail-pull`) · remote: file `***SPAM***` mail · `F5` reload |
 | `F4` | address book |
 | `F6` / `Shift-F6` | next / previous window · `Alt-0` window list · `F10` menu · `Alt-X` quit |
+| `Ctrl-L` | redraw the whole screen (**Window ▸ Redraw screen**) |
 | *(type)* | (Messages) filter the list by From / Subject · `Backspace` trims it · `Esc` clears it |
 
 Editing keys (compose body, signature): `Shift-Del` cut, `Ctrl-Ins` copy,
@@ -267,6 +268,16 @@ The **Message** menu has a few more actions with no dedicated key - Reply
 All, Forward, `Parts...`, Mark read / Mark unread, `Move to...` - reach them
 with `F10` or `Alt-M`. **File ▸ Purge...** does the same for a whole folder at
 once.
+
+### Messages from other users
+
+While tvmail runs, its terminal takes no messages - it clears the terminal's
+group-write bit, as `mesg n` does - so `talk` requests and `write` / `wall`
+messages from ordinary users don't land on top of the windows. The mode goes
+back when tvmail exits, while a command run from it has the terminal, and
+while it is stopped. Root's messages (`wall` run by root, shutdown notices)
+still get through: `Ctrl-L` clears them off the screen. To keep taking
+messages, set `mesg = y` under `[ui]` in `~/.config/tvmail/tvmail.conf`.
 
 ## Reading
 

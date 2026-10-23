@@ -71,6 +71,8 @@ int main(int argc, char **argv)
     gRemote = backendRun("mode").rfind("remote", 0) == 0;
     gHost = splitLines(backendRun("host")).front();
 
+    const char *conf = getenv("TVMAIL_CONF");
+    mesgFromConf(conf && *conf ? conf : homePath(".config/tvmail/tvmail.conf"));
     TVMailApp app;
     long long tuiStarted = gTraceLog ? traceMicros() : 0;
     app.run();

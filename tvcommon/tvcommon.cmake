@@ -49,6 +49,7 @@ set(TVCOMMON_SOURCES
     ${TVCOMMON_DIR}/src/dialogs.cpp
     ${TVCOMMON_DIR}/src/cli.cpp
     ${TVCOMMON_DIR}/src/tvapp.cpp
+    ${TVCOMMON_DIR}/src/tty.cpp
     ${TVCOMMON_DIR}/src/textwin.cpp)
 
 function(tvcommon_setup target)

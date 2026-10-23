@@ -408,3 +408,29 @@ cp1 can serve the static front end but cannot host the gateway or the backends:
 So even with the IRC ports opened by the host, a permanently connected backend fights Passenger's idle shutdown and the LVE limits, and the credentials would sit on a shared server.
 
 Non-interactive `ssh whatwelove.org` sits behind a per-session MFA gate: until Chris approves a fresh token every command prints only `token: Error` (exit status 0) and runs nothing. Claude does not generate or enter the code.
+
+## Redraw and mesg n (Oct 22, branch `redraw-mesg`)
+
+Asked by Chris while adding talk(1): how do the apps cope with messages other
+processes write onto the terminal (talk rings, wall, shutdown notices)?  They
+didn't.  Now, in `tvcommon/` for both apps:
+
+- **Ctrl-L / Window > Redraw screen** (`TTvApp::redrawScreen`, `cmRedrawScreen`
+  2044): `TScreen::clearScreen()` (which also forgets what tvision thinks is on
+  the terminal), `redraw()`, `flushScreen()`.  Caught in `TTvApp::getEvent`,
+  so it works inside dialogs and editors too (it takes Ctrl-L from TEditor,
+  whose Find again is still on the Edit menu).
+- **mesg n while the app runs** (`tvcommon/src/tty.cpp`): `main()` calls
+  `mesgFromConf(conf)` before the app is built; it clears the group-write bit
+  of `ttyname(0)` and puts the mode back on exit (atexit), around
+  `shInteractive` (`mesgRelease` / `mesgRetake`), on SIGTSTP and on
+  SIGTERM / INT / QUIT / HUP (its handlers go in before tvision's, which chain
+  to them).  Setting: `[ui] mesg = n | y` (default n) in tvmail.conf /
+  tvchat.conf, read by the C++ (`confValue`), not the backends.  No-ops on the
+  mingw build.  Root's messages still get through - Ctrl-L.
+- Tests: `redraw_clears_scribbles` in both `e2e_regress.py` (junk written to
+  the pty from outside, then Ctrl-L and the menu item; mode 620 -> 600 while
+  running -> 620 after exit), tvchat's `mesg_y_leaves_tty`.  `tvscreen.Tv`
+  grew `tty_mode` and `tty()`.
+- Not merged, not pushed; tvchat's own talk calls (branch `m6-talk-tvchat`)
+  ring through talkd in tvchat, so they are unaffected.
