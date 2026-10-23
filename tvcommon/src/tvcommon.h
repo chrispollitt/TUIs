@@ -89,6 +89,7 @@ const ushort cmShowHelp = 2022;     // in-app help window
 const ushort cmPaneFocused = 2024;  // broadcast: a 3-pane pane took focus
 const ushort cmWindowList = 2034;   // Window > List... (Alt-0)
 const ushort cmToggleWrap = 2043;   // View > Wrap long lines (body pane / focused text window)
+const ushort cmRedrawScreen = 2044; // Window > Redraw screen (Ctrl-L)
 
 // -------------------------------------------------------- classic colors ----
 // The Turbo Vision DOS look, in exact RGB.  BIOS colour numbers are not
@@ -155,6 +156,17 @@ long procId();
 std::string writeTemp(const std::string &content, const char *suffix);
 std::string shCapture(const std::string &body);
 int shInteractive(const std::string &body);
+
+// ------------------------------------------------------------- the tty ---
+// tty.cpp: "mesg n" while the app runs - talk rings and wall from ordinary
+// users stay off the screen (root's still get through: Ctrl-L clears them).
+// mesgFromConf reads [ui] mesg = n | y (default n) from the app's .conf and
+// calls mesgHold; it goes in main(), before the app is constructed.
+void mesgHold(bool on); // clear the tty's group-write bit until exit
+void mesgRelease();     // put it back while a helper has the terminal ...
+void mesgRetake();      // ... and clear it again after
+void mesgFromConf(const std::string &confPath);
+std::string confValue(const std::string &path, const char *section, const char *key);
 
 // ------------------------------------------------------------- dialogs ---
 // dialogs.cpp: the Find / Replace dialogs TEditor and TMailText ask for

@@ -121,6 +121,30 @@ void TTvApp::handleEvent(TEvent &e)
         windowList();
         clearEvent(e);
     }
+    if (e.what == evCommand && e.message.command == cmRedrawScreen)
+    {
+        redrawScreen();
+        clearEvent(e);
+    }
+}
+
+void TTvApp::getEvent(TEvent &e)
+{
+    TApplication::getEvent(e);
+    if (e.what == evKeyDown && e.keyDown.keyCode == kbCtrlL)
+    {
+        redrawScreen();
+        e.what = evNothing;
+    }
+}
+
+// clearScreen() also forgets what tvision thinks is on the terminal, so the
+// redraw sends every cell again instead of only those it thinks changed.
+void TTvApp::redrawScreen()
+{
+    TScreen::clearScreen();
+    redraw();
+    TScreen::flushScreen();
 }
 
 // ------------------------------------------------------------ Window list ---

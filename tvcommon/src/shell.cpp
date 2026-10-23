@@ -193,6 +193,7 @@ int shInteractive(const std::string &body)
 {
     std::string sp = writeScript(body);
     TProgram::application->suspend();
+    mesgRelease(); // the helper's terminal takes messages as the user set it
     std::fputs("\n", stdout);
     int rc = std::system(shInvoke(sp).c_str());
     std::fprintf(stdout, "\n[%s] done - press Enter to return ", gAppName);
@@ -200,6 +201,7 @@ int shInteractive(const std::string &body)
     for (int c; (c = std::getchar()) != '\n' && c != EOF;)
     {
     }
+    mesgRetake();
     TProgram::application->resume();
     TProgram::application->redraw();
     remove(sp.c_str());

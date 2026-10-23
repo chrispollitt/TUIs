@@ -39,6 +39,7 @@ public:
     // else the ~/.config/tvmail/tvchat.conf of when chat was part of tvmail
     // - the backend's own order): only then is the co-process started.
     static bool configured();
+    static std::string confPath(); // that file (the first, if none is there)
 
     // Start tvchat-backend and read the accounts and conversations.
     bool start();

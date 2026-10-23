@@ -15,6 +15,7 @@ import argparse
 import os
 import re
 import shutil
+import stat
 import sys
 import tempfile
 import time
@@ -165,6 +166,9 @@ class Tv:
     after it, for what one case needs."""
 
     last = None          # the newest one, for run() to close
+    # the pty's mode before the app starts (0o620: a login terminal that
+    # takes messages); None leaves it as pty.fork() made it
+    tty_mode = None
     prefix = "tv-regress-"
     # variables of the user's own setup that must not reach the app
     drop_env = ("COLORTERM",)
@@ -201,6 +205,10 @@ class Tv:
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
             try:
+                tty = os.ttyname(0)
+                if self.tty_mode is not None:
+                    os.chmod(tty, self.tty_mode)
+                (self.tmp / "tty").write_text(tty)
                 os.execvpe(argv[0], argv, self.env)
             finally:
                 os._exit(127)
@@ -214,6 +222,10 @@ class Tv:
 
     def prepare(self):
         """The app's own setup of the temp HOME (a subclass's)."""
+
+    def tty(self):
+        """The app's terminal: the pty's slave side."""
+        return (self.tmp / "tty").read_text()
 
     # -- the screen --
     def pump(self, t=0.3):
@@ -381,6 +393,48 @@ def low_contrast(tv, limit=3.0, box=None):
                 bad.setdefault((y, fg, bg, round(r, 2)), []).append(ch)
     return ["row %d %r: #%s on #%s = %.2f:1" % (y, "".join(chs), fg, bg, r)
             for (y, fg, bg, r), chs in sorted(bad.items())]
+
+
+def tty_mode(tv):
+    return stat.S_IMODE(os.stat(tv.tty()).st_mode)
+
+
+def scribble(tv, text):
+    """Write text onto the app's terminal from outside, as wall(1) does."""
+    fd = os.open(tv.tty(), os.O_WRONLY | os.O_NOCTTY)
+    try:
+        os.write(fd, text.encode("utf-8"))
+    finally:
+        os.close(fd)
+
+
+def redraw_and_mesg(tv, c, started):
+    """Both apps' case for tvcommon's full redraw and mesg n.  tv: started
+    with tty_mode 0o620; started(tv, c) waits for its first screen."""
+    started(tv, c)
+    c.check(tty_mode(tv) == 0o600,
+            "the terminal still takes messages while the app runs (mode %o)"
+            % tty_mode(tv))
+    tv.pump(0.5)
+    before = tv.lines()
+    # root's wall, where the cursor is: it may scroll the whole screen
+    scribble(tv, "\r\nBroadcast message from root: JUNKJUNK going down\r\n")
+    c.check(tv.wait("JUNKJUNK", 3), "the scribble never reached the screen")
+    tv.send("\x0c", settle=0.6)                   # Ctrl-L
+    c.check(not tv.has("JUNKJUNK"), "Ctrl-L left the scribble on the screen")
+    c.check(tv.lines() == before, "Ctrl-L did not repaint the screen as it was")
+    # Window > Redraw screen, away from where the menu drops down
+    scribble(tv, "\x1b[%d;%dHSCRIBBLE" % (ROWS - 6, COLS - 20))
+    c.check(tv.wait("SCRIBBLE", 3), "the second scribble never reached the screen")
+    tv.send(alt("w"))
+    c.check(tv.wait("Redraw screen", 3), "Window > Redraw screen is not in the menu")
+    tv.send("r", settle=0.6)
+    c.check(not tv.has("SCRIBBLE"), "Window > Redraw screen left the scribble")
+    c.check(tv.lines() == before, "Window > Redraw screen did not repaint as it was")
+    tv.send(alt("x"))
+    c.check(tv.wait(lambda: not tv.alive(), 5), "Alt-X did not end the app")
+    c.check(tty_mode(tv) == 0o620,
+            "the terminal's mode was not put back on exit (%o)" % tty_mode(tv))
 
 
 # ------------------------------------------------------------------ run ---

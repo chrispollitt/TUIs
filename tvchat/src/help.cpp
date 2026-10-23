@@ -58,7 +58,12 @@ static const char *kHelpText =
     "\n"
     "KEYS AT A GLANCE\n"
     "  F1 help    F6 next window    Alt-0 window list    F10 menu\n"
-    "  Tab pane   Enter send   PgUp older   Alt-X quit\n";
+    "  Tab pane   Enter send   PgUp older   Alt-X quit   Ctrl-L redraw\n"
+    "\n"
+    "MESSAGES FROM OTHER USERS\n"
+    "  While tvchat runs, talk requests and write / wall messages from ordinary\n"
+    "  users are kept off the screen ([ui] mesg in tvchat.conf).  Root's still\n"
+    "  get through: Ctrl-L (Window > Redraw screen) clears them.\n";
 
 TWindow *newHelpWindow(const TRect &bounds)
 {

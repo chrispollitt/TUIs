@@ -79,6 +79,7 @@ TMenuBar *TVChatApp::initMenuBar(TRect r)
                             *new TMenuItem("~N~ext", cmNext, kbF6, hcNoContext, "F6") +
                             *new TMenuItem("~P~revious", cmPrev, kbShiftF6, hcNoContext, "Shift-F6") +
                             *new TMenuItem("~L~ist...", cmWindowList, kbAlt0, hcNoContext, "Alt-0") +
+                            *new TMenuItem("~R~edraw screen", cmRedrawScreen, kbCtrlL, hcNoContext, "Ctrl-L") +
                             newLine() +
                             *new TMenuItem("~C~lose", cmClose, kbAltF3, hcNoContext, "Alt-F3") +
                             *new TSubMenu("~H~elp", kbAltH) +

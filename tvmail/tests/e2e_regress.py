@@ -649,6 +649,17 @@ def out_of_office_keeps_entries(opts):
     return tv
 
 
+@case()
+def redraw_clears_scribbles(opts):
+    # tvcommon: Ctrl-L / Window > Redraw screen repaints what wall wrote over
+    # the windows; mesg n while tvmail runs, put back on exit
+    def setup(t):
+        t.tty_mode = 0o620
+    tv = Tv(opts, setup=setup)
+    redraw_and_mesg(tv, Case(tv), started)
+    return tv
+
+
 # (#43's case - a resize while a co-process starts - is tvchat's now: its
 # fix is tvcommon's CoProcess, and only tvchat starts one inside the running
 # app; tvmail's mail backend starts before the resize handler exists.)

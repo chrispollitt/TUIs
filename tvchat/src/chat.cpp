@@ -33,13 +33,22 @@ ChatClient &ChatClient::instance()
     return c;
 }
 
-bool ChatClient::configured()
+// $TVCHAT_CONF, else the first of these there is (tvchat-backend's rule)
+std::string ChatClient::confPath()
 {
     const char *env = getenv("TVCHAT_CONF");
     if (env && *env)
-        return ::access(env, R_OK) == 0;
-    return ::access(homePath(".config/tvchat/tvchat.conf").c_str(), R_OK) == 0 ||
-           ::access(homePath(".config/tvmail/tvchat.conf").c_str(), R_OK) == 0;
+        return env;
+    std::string p = homePath(".config/tvchat/tvchat.conf");
+    if (::access(p.c_str(), F_OK) == 0)
+        return p;
+    std::string old = homePath(".config/tvmail/tvchat.conf");
+    return ::access(old.c_str(), F_OK) == 0 ? old : p;
+}
+
+bool ChatClient::configured()
+{
+    return ::access(confPath().c_str(), R_OK) == 0;
 }
 
 bool ChatClient::request(const std::string &req, std::string &body, int &status)

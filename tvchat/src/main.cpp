@@ -55,6 +55,7 @@ int main(int argc, char **argv)
         return ok ? 0 : 1;
     }
 
+    mesgFromConf(ChatClient::confPath());
     TVChatApp app;
     long long tuiStarted = gTraceLog ? traceMicros() : 0;
     app.run();

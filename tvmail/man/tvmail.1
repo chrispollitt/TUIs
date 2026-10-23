@@ -206,6 +206,11 @@ Cycle to the next / previous window.
 .B F10
 Enter the menu bar.
 .TP
+.B Ctrl\-L
+Redraw the whole screen
+.RB ( "Window \(-> Redraw screen" ),
+clearing what other programs wrote over the windows.
+.TP
 .B Alt\-X
 Quit.
 .PP
@@ -287,12 +292,42 @@ opens
 in a full editor window.
 .B Ctrl\-S
 writes the file; closing an unsaved change prompts first.
+.SH "MESSAGES FROM OTHER USERS"
+While tvmail runs, its terminal takes no messages: tvmail clears the
+terminal's group\-write bit, as
+.B "mesg n"
+does, so
+.BR talk (1)
+requests and
+.BR write (1)
+or
+.BR wall (1)
+messages from ordinary users do not land on top of the windows.
+The mode goes back when tvmail exits, while a command run from it has
+the terminal, and while it is stopped.
+Root's messages (\fBwall\fP run by root, shutdown notices) still get
+through; press
+.B Ctrl\-L
+to clear them off the screen.
+To keep taking messages, set
+.RS
+.nf
+[ui]
+mesg = y
+.fi
+.RE
+in
+.IR ~/.config/tvmail/tvmail.conf .
 .SH FILES
 .TP
 .I ~/.config/tvmail/tvmail.conf
 Local vs. remote, and the IMAP/SMTP host in remote mode.
 See
 .BR tvmail\-backend (1).
+tvmail itself reads
+.B [ui] mesg
+(see
+.BR "MESSAGES FROM OTHER USERS" ).
 .TP
 .I ~/.mail
 GNU Mailutils' own host and port, used as a fallback when

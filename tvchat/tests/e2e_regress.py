@@ -545,5 +545,32 @@ def resize_keeps_backend(opts):
     return tv
 
 
+@case()
+def redraw_clears_scribbles(opts):
+    # tvcommon: Ctrl-L / Window > Redraw screen repaints what wall wrote over
+    # the windows; mesg n while tvchat runs, put back on exit
+    def setup(t):
+        t.tty_mode = 0o620
+    tv = Tv(opts, setup=setup)
+    redraw_and_mesg(tv, Case(tv), started)
+    return tv
+
+
+@case()
+def mesg_y_leaves_tty(opts):
+    # [ui] mesg = y: tvchat leaves the terminal taking messages
+    def setup(t):
+        t.tty_mode = 0o620
+        conf = t.tmp / "tvchat.conf"
+        conf.write_text("[ui]\nmesg = y\n")
+        t.env["TVCHAT_CONF"] = str(conf)
+    tv = Tv(opts, setup=setup)
+    c = Case(tv)
+    started(tv, c)
+    c.check(tty_mode(tv) == 0o620,
+            "[ui] mesg = y, yet tvchat changed the terminal's mode (%o)" % tty_mode(tv))
+    return tv
+
+
 if __name__ == "__main__":
     run("tvchat")
