@@ -669,9 +669,11 @@ class TChatMainWindow : public TWindow
         std::string text = inputText();
         if (trimmed(text).empty())
             return;
-        if (isServer())
+        // the server messages take /commands (/join, /msg, /nick ...) only
+        if (isServer() && text[0] != '/')
         {
-            flashStatus("Pick a channel or a person to talk to - this is " + name);
+            flashStatus("Pick a channel or a person to talk to - this is " + name +
+                        " (it takes /commands)");
             return;
         }
         std::string body, err;
@@ -799,6 +801,16 @@ class TChatMainWindow : public TWindow
         }
         else if (t == "topic" && f.size() >= 3 && f[1] == conv)
             note("topic: " + f[2]);
+        // the server's own history (IRCv3 chathistory) was merged in:
+        // "latest" on joining - read it all again; "before" - what PgUp
+        // at the top asked the server for has come
+        else if (t == "history" && f.size() >= 3 && f[1] == conv)
+        {
+            if (f[2] == "before")
+                loadOlder();
+            else
+                loadHistory();
+        }
         else if ((t == "conv-new" || t == "conv-gone") && f.size() >= 2)
         {
             bool gone = t == "conv-gone" && f[1] == conv;

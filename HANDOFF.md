@@ -21,7 +21,7 @@ the code wins - and this file should be fixed.
 | – | Chat as one 3-pane window like mail (asked by Chris, Oct 21) | done; Chris tried it and loves it | a945288 |
 | – | Split into its own app, tvchat, with `../tvcommon` (asked by Chris, Oct 21) | done; independence checks passed; fast-forwarded into `main` and pushed Oct 22 | 4dcfd2a (tvcommon), 9d39d6e (the split) |
 | – | mingw compiles again (bug #45) | done | 1e43880 |
-| 5 | IRC hardening | **next** | |
+| 5 | IRC hardening | done on branch `m5-irc-hardening` (Oct 22), **awaiting Chris's review**; live check on cpbee's Ergo is his | |
 | 6 | talk(1) adapter (asked by Chris, Oct 22) | | |
 | 7 | Delta Chat adapter | | |
 | 8 | Docs | | |
@@ -41,7 +41,7 @@ Stop for Chris's review after each milestone.
 - Branch **`split-tvchat`** (from `main` 38266d7): 4dcfd2a extracted `tvcommon/` (all 9 tvmail layers passed); the next commit moves chat into `tvchat/` and takes it out of tvmail. tvchat: 5 layers (chat_unit, backend_pipe, e2e_chat, e2e_regress - the chat cases plus #43 and #44 -, install_roundtrip) pass on Cygwin.
 - **Ready to merge (Oct 22):** POSIX 2a8103b (committed, not pushed): `configure-tvchat.sh` writes `~/.config/tvchat/` and copies an old `~/.config/tvmail/tvchat.conf` there first (chat-setup tests: 76 pass). On `split-tvchat`: tvchat's own `tests/README.md`; tvmail's test README and man page lose their chat parts; this file moved to the top of the repo. Independence checks passed: tvchat built and tested from a copy of TUIs without `tvmail/` (5/5); `dist.sh src` tarballs of tvchat (5/5) and tvmail (7/7; `e2e_regress` #4 `source_draft_found_by_content` flaked once, then passed 5 times in a row) each build and test alone. Both apps are installed on cmlaptop (fixperms run; the pre-split `share/doc/tvmail/tvchat.conf.example` removed). Chris's `tvchat.conf` is still in `~/.config/tvmail/` (read through the fallback; the next `configure-tvchat.sh` run copies it). **Merged (Oct 22, Chris approved):** `split-tvchat` fast-forwarded into `main`, the branch deleted, TUIs and POSIX pushed.
 - `tvcommon/third_party/POSIX.stale-20261021`: Chris's old mail-setup checkout (13 commits that were all rebased into POSIX already; clean tree) - safe to delete.
-- **Then:** milestone 5 (IRC hardening), in `tvchat/`.
+- **Then:** milestone 5 (IRC hardening), in `tvchat/` - built Oct 22 on branch `m5-irc-hardening` (see its section below); stopped for Chris's review and live check. Next after that: milestone 6, talk(1).
 
 ## Purpose and scope
 
@@ -142,12 +142,18 @@ Hand-written, stdlib `socket` + `ssl`, on the shared loop.
 - **Sending:** split at 400 bytes on a UTF-8 boundary, one line per newline.
 - **Passwords:** `$TVCHAT_PASS_<ACCOUNT>` (e.g. `$TVCHAT_PASS_LIBERA`), then `~/.mu-tickets` (borrowed from the `tvmail-backend` installed beside it - chat may lean on mail, never the reverse), then `~/.netrc`. This is the mail backend's real order (environment first). In both files only an entry for the SASL login counts (bug #46: the mail lookup's any-user fallback sent the mail password); a failed login says where its password came from (`find_password_where()`, which `chat-setup`'s `configure-tvchat.sh` also calls). No password with `sasl =` set → `connect` answers status 1 saying where to put it.
 
-### Still to do in milestone 5
+### Milestone 5 - IRC hardening (built Oct 22, branch `m5-irc-hardening`)
 
-- **Keepalive and reconnect:** our own `PING` after 90 s of silence, dead after 30 s more; reconnect with backoff (2, 4, 8 … capped at 300 s), keep emitting `state`, rejoin open channels (`on_welcome` already rejoins every open channel conversation). `IrcAdapter._lost()` is the hook. Keep the account `connecting` during backoff so tvmail keeps its 250 ms poll.
-- **History:** with `chathistory`, `history --before` issues `CHATHISTORY BEFORE` and returns the batch; fetch the latest 50 on join. Without it, the in-memory ring (as now).
-- **Flood control:** at most one line per 500 ms outbound, queued.
-- **Commands typed in a chat window:** `/me`, `/join`, `/part`, `/msg NICK TEXT`, `/nick`, `/topic`, `/quote RAW`; any other `/word` is an error event, not sent. Today `send` sends text as-is.
+All in `IrcAdapter` (`tvchat/backend/tvchat-backend`); the tunables are class attributes (`PING_IDLE`, `RETRY_FIRST`, `BURST`, ...) so tests shrink them.
+
+- **Keepalive:** `_keepalive()` (a timer while `up`): our `PING :tvchat` after `PING_IDLE` = 90 s without a byte from the server; any byte in clears it; nothing within `PING_GRACE` = 30 s more → `_lost("no reply from the server for N s")`.
+- **Reconnect:** `_lost()` of a connection that was `up` (or of a reconnect attempt) → `_retry()`: 2, 4, 8 … 300 s (`attempt` resets once a connection had stayed up `RETRY_STABLE` = 60 s), a note in the server window and `state ACCOUNT connecting "WHY - reconnecting in N s"` - so the UI keeps its 250 ms poll and lists it under Disconnect. `_fail()` during reconnecting retries too. A *first* connect that fails or is hung up on is **not** retried (error / disconnected, as before - bad host, cert, ...). `disconnect` (Chat > Disconnect, quit) cancels the wait. `on_welcome` rejoins the open channels (as before) and notes "reconnected". A password gone missing stops the retries with `error`. Timers of a dead connection are no-ops (`_later()` checks `gen`); `retry_timer`/`attempt`/`auto` live outside `_reset()`.
+- **Flood control:** once `up`, `send_raw()` queues (`outq`) behind a token bucket - a burst of `BURST` = 5, then one per `RATE` = 0.5 s (`_pump()`); PONG, our PING and QUIT are `urgent` and skip it; registration is never paced. Disconnect sends what is queued, then QUIT. Lines still queued when a connection is lost are dropped with a note in the server window ("N lines not sent").
+- **Typed commands** (`send`): `/me`, `/join #CHAN [KEY]`, `/part [#CHAN] [REASON]`, `/msg NICK TEXT` (opens the conversation), `/nick`, `/topic [TEXT]` (none: shows it), `/quote` (alias `/raw`); `//x` sends `/x`. The whole text is checked first: an unknown `/word`, a bad argument or a plain line in the server window refuses it all (status 1, nothing sent) - the UI then shows "not sent: ..." and keeps the text. The server window now takes `/` lines (C++ `sendInput`). Reply: the last message's id, `""` for commands only.
+- **Server history (IRCv3 `chathistory` / `draft/chathistory` + `batch`):** our own JOIN → `CHATHISTORY LATEST #chan * 50` (capped by ISUPPORT `CHATHISTORY=`); opening a query with `join` too. `history --before` that reaches the start of the ring → `CHATHISTORY BEFORE target msgid=OLDEST 50`, answered with status 1 `asking the server for older messages...` (the UI flashes it and does not mark "no older"). `on_BATCH` merges a `chathistory` batch into the ring in time order, once per msgid, never unread, no `msg` events, then pushes the **new event `history CONV latest|before`**; the chat pane reloads (latest) or calls `loadOlder()` again (before). An empty `before` batch, or `FAIL CHATHISTORY ...`, sets `history_done` - after that `--before` is simply empty ("No older messages"). Without the caps: the ring, as before. Libera has no chathistory; Ergo does.
+- **Tests:** `chat_unit` 67 (new `TestIrcHardening`: reconnect + rejoin against a fake that `reaccept()`s, backoff sequence, keepalive, flood pacing with PONG first, commands and refusals, CHATHISTORY latest/before/FAIL; `test_server_hangup_reconnects`, `test_first_connect_hung_up_on_is_not_retried`); `e2e_regress` `chat_typed_commands`.
+- **Live check (Chris):** on cpbee's Ergo - `/me`, `/msg tester2 hi`, `/join #other` from the server messages; restart Ergo (or pull the cable) and watch "reconnecting in 2 s" → "reconnected" and `#test` rejoined; PgUp past the top in `#test` after a restart of tvchat (Ergo's history).
+- **Not done (later):** `/commands` that make the UI switch to the new conversation (`/join`, `/msg` only list it); persisting nothing across tvchat restarts (unchanged); `labeled-response` is requested but unused.
 
 ## talk(1) adapter (milestone 6 - not started)
 

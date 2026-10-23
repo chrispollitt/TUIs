@@ -32,7 +32,15 @@ running as a co-process. The two apps share their common C++ in
   its server messages (MOTD, notices, SASL results), then channels and
   people.
 - **The chat (bottom right):** the conversation picked, its log over the
-  input line. Enter sends; PgUp at the top of the log fetches older lines.
+  input line. Enter sends; PgUp at the top of the log fetches older lines
+  (from the server too, when it keeps history - IRCv3 `chathistory`, as
+  Ergo does). A line can be a command: `/me`, `/join`, `/part`, `/msg`,
+  `/nick`, `/topic`, `/quote`; the server messages take commands only.
+
+A lost connection comes back by itself: tvchat pings a quiet server, and
+reconnects after 2 s, 4 s, 8 s ... up to 5 minutes, rejoining its channels.
+What you send is paced (a burst of 5 lines, then 2 a second), so a long
+paste does not get you thrown off the server.
 
 Tab moves servers → conversations → input. As in tvmail, moving a highlight
 shows what it points at, and a conversation counts as read once the chat pane

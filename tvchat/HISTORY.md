@@ -1,5 +1,21 @@
 # tvchat history
 
+## Unreleased - milestone 5, IRC hardening (October 2026)
+
+- **Keepalive:** a PING after 90 s without a word from the server; no
+  answer in 30 s more and the connection counts as lost.
+- **Reconnect:** a connection that was up and is lost is made again after
+  2, 4, 8 ... 300 s, the open channels rejoined; the account stays
+  `connecting` meanwhile and Chat > Disconnect stops it. A first connection
+  that fails is not retried.
+- **Flood control:** once registered, a burst of 5 lines, then one every
+  0.5 s; PONG, our PING and QUIT jump the queue.
+- **Typed commands:** `/me`, `/join`, `/part`, `/msg`, `/nick`, `/topic`,
+  `/quote` (`//` for a line starting with `/`); any other `/word` is
+  refused and stays in the input line. The server messages take commands.
+- **Server history:** with IRCv3 `chathistory` (Ergo), joining fetches the
+  latest 50, and PgUp past what is kept asks the server for 50 more.
+
 ## 0.1.0 - October 2026
 
 The first tvchat. It was built inside tvmail as its chat add-on (milestones

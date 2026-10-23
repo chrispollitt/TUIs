@@ -28,17 +28,27 @@ carriage return or backslash inside a field is escaped as \\t \\n \\r \\\\):
   join ACCOUNT TARGET       open a channel or a query; prints the conv id
   part CONV                 leave it
   send CONV TEXT            prints the local message id; with IRCv3
-                            echo-message the server's copy arrives as an event
+                            echo-message the server's copy arrives as an event.
+                            A line may be a command: /me ACTION, /join #CHAN
+                            [KEY], /part [#CHAN] [REASON], /msg NICK TEXT,
+                            /nick NEW, /topic [TEXT], /quote RAW; '//x' sends
+                            '/x'.  The server conversation takes commands only.
   history CONV [--before MSGID] [--limit N]
                             message lines, oldest first:
                             msgid <TAB> conv <TAB> utc-iso8601 <TAB>
                             sender-address <TAB> sender-display <TAB>
                             flags <TAB> text
                             (flags: s self, n notice/system, a /me action,
-                            e encrypted, r read)
+                            e encrypted, r read).  When --before reaches the
+                            start of what is kept and the server has IRCv3
+                            chathistory, it is asked (status 1 says so) and a
+                            'history CONV before' event follows
   members CONV              address <TAB> display <TAB> role
   mark-read CONV [MSGID]
   events [--after SEQ]      queued events, oldest first: seq <TAB> type <TAB> ...
+                            (state, msg, conv-new, conv-gone, members, topic,
+                            unread, and history CONV latest|before: the
+                            server's history was merged in - read it again)
                             --after SEQ also forgets every event up to SEQ -
                             the UI passes the last seq it applied, so nothing
                             is ever applied twice.  Empty when nothing is queued.
@@ -175,6 +185,7 @@ class Conversation:
         self.unread = 0
         self.topic = ""
         self.history = deque(maxlen=HISTORY_CAP)
+        self.history_done = False        # the server has nothing older to give
         self.members = {}
 
     def wire(self):
@@ -659,6 +670,22 @@ class IrcAdapter:
                  "chathistory", "draft/chathistory", "away-notify",
                  "account-tag", "multi-prefix", "labeled-response")
     TIMEOUT = 60                         # connect + TLS + registration
+    # keepalive: our own PING after this long without a byte from the
+    # server, and the connection is dead if nothing comes back in GRACE
+    PING_IDLE = 90
+    PING_GRACE = 30
+    # reconnect after losing a connection that was up: 2, 4, 8 ... 300 s;
+    # one that stayed up this long starts the count again
+    RETRY_FIRST = 2
+    RETRY_MAX = 300
+    RETRY_STABLE = 60
+    # flood control once registered: a burst of this many lines, then one
+    # every RATE seconds (PONG, our PING and QUIT go first, unqueued)
+    BURST = 5
+    RATE = 0.5
+    HISTORY_FETCH = 50                   # CHATHISTORY: messages per request
+    # what may be typed in a chat pane; anything else /word is refused
+    COMMANDS = ("me", "join", "part", "msg", "nick", "topic", "quote")
 
     def __init__(self, chat, account):
         self.chat = chat
@@ -679,6 +706,10 @@ class IrcAdapter:
         self.gen = 0                     # bumped on close: stale callbacks no-op
         self._ids = 0
         self.raw_tap = None              # irc-tail --raw: fn(direction, line)
+        # reconnecting survives _reset(): it spans several connections
+        self.retry_timer = None
+        self.attempt = 0                 # reconnects tried since the last good one
+        self.auto = False                # reconnecting by ourselves (not asked)
         self._reset()
 
     def _reset(self):
@@ -686,6 +717,15 @@ class IrcAdapter:
         self.phase = "down"              # down, resolving, connecting, tls,
         self.rbuf = b""                  # registering, up
         self.wbuf = b""
+        self.outq = deque()              # encoded lines waiting for flood control
+        self.tokens = float(self.BURST)
+        self.t_tok = None
+        self.pump_timer = None
+        self.ka_timer = None
+        self.ping_out = None             # when our keepalive PING went out
+        self.t_welcome = None
+        self.batches = {}                # open BATCH ref -> [type, target, msgs]
+        self.fetching = {}               # conv id -> "latest" / "before": asked
         self.timer = None
         self.addrs = []
         self.nick = self.want_nick
@@ -697,16 +737,24 @@ class IrcAdapter:
         self.server = self.host
         self.casemapping = "rfc1459"
         self.chantypes = "#&"
+        self.history_max = 0             # ISUPPORT CHATHISTORY=N (0: no limit given)
         self.prefixes = dict(_PREFIX_ROLE)
         # for the log: why a connection ended is easier to tell with these
         self.t_up = None                 # when the TCP connection was made
         self.t_in = None                 # when the server last sent anything
         self.n_in = self.n_out = 0       # bytes read / written
 
+    def _later(self, delay, fn):
+        """call_later for this connection only: a no-op once it is closed."""
+        gen = self.gen
+        return self.loop.call_later(delay, lambda: gen == self.gen and fn())
+
     # -- lifecycle ----------------------------------------------------------
     def connect(self):
         if self.phase != "down":
             return
+        self.loop.cancel(self.retry_timer)   # asked to now: no need to wait
+        self.retry_timer = None
         if not self.host:
             raise UserError("[account:%s] has no host=" % self.account.id)
         self.password = self.password_from = None
@@ -771,7 +819,7 @@ class IrcAdapter:
             self.sock = None
             self._try_next(os.strerror(err))
             return
-        self.t_up = self.t_in = time.monotonic()
+        self.t_up = self.t_in = self.loop.clock()
         try:
             _log.debug("%s: connected %s -> %s", self.account.id,
                        self.sock.getsockname(), self.sock.getpeername())
@@ -822,7 +870,9 @@ class IrcAdapter:
 
     def disconnect(self, message="tvchat"):
         if self.phase in ("registering", "up") and self.sock is not None:
-            self.send_raw("QUIT :%s" % message)
+            while self.outq:             # what you typed still goes, then QUIT
+                self.wbuf += self.outq.popleft()
+            self.send_raw("QUIT :%s" % message, urgent=True)
             try:                         # best effort: one push of what's queued
                 self.sock.setblocking(True)
                 self.sock.settimeout(2)
@@ -830,13 +880,23 @@ class IrcAdapter:
             except (OSError, ssl.SSLError):
                 pass
         was = self.phase
+        retrying = self.retry_timer is not None or self.auto
+        self._stop_retrying()
         self._close()
-        if was != "down":
+        if was != "down" or retrying:
             self.chat.set_state(self.account, "disconnected", "")
+
+    def _stop_retrying(self):
+        self.loop.cancel(self.retry_timer)
+        self.retry_timer = None
+        self.auto = False
+        self.attempt = 0
 
     def _close(self):
         self.gen += 1
         self.loop.cancel(self.timer)
+        self.loop.cancel(self.pump_timer)
+        self.loop.cancel(self.ka_timer)
         if self.sock is not None:
             try:
                 self.loop.watch(self.sock)
@@ -853,34 +913,108 @@ class IrcAdapter:
         self._reset()
 
     def _ended(self, how, why):
-        now = time.monotonic()
+        now = self.loop.clock()
         _log.debug("%s: %s in phase %s: %s (up %s s, %s s since the server last "
-                   "sent anything, %d bytes in, %d out, %d unsent)",
+                   "sent anything, %d bytes in, %d out, %d unsent, %d queued)",
                    self.account.id, how, self.phase, why,
                    "%.1f" % (now - self.t_up) if self.t_up else "-",
                    "%.1f" % (now - self.t_in) if self.t_in else "-",
-                   self.n_in, self.n_out, len(self.wbuf))
+                   self.n_in, self.n_out, len(self.wbuf), len(self.outq))
+
+    def _drop_queue(self):
+        """Lines flood control still held when the connection went: said in
+        the server window, since a local echo may already show them."""
+        if self.outq:
+            n = len(self.outq)
+            self.outq.clear()
+            self.system(self.server_conv(), "%d line%s not sent: the connection was lost"
+                        % (n, "" if n == 1 else "s"))
 
     def _fail(self, why):
+        """A connection attempt that did not get through."""
         self._ended("failed", why)
+        self._drop_queue()
         self._close()
-        self.chat.set_state(self.account, "error", why)
+        if self.auto:
+            self._retry(why)
+        else:
+            self.chat.set_state(self.account, "error", why)
 
     def _lost(self, why):
-        # (milestone 5 reconnects from here with backoff)
+        """A connection that was made and is gone.  One that was up (or is
+        a reconnect) is tried again, with backoff; a first attempt that the
+        server hung up on is not - that is for the user to retry."""
         self._ended("lost", why)
+        again = self.phase == "up" or self.auto
+        if self.t_welcome is not None and \
+                self.loop.clock() - self.t_welcome >= self.RETRY_STABLE:
+            self.attempt = 0             # it had been fine for a while
+        self._drop_queue()
         self._close()
-        self.chat.set_state(self.account, "disconnected", why)
+        if again:
+            self._retry(why)
+        else:
+            self.chat.set_state(self.account, "disconnected", why)
+
+    def _retry(self, why):
+        """Wait 2, 4, 8 ... 300 s, then connect again.  The account stays
+        'connecting' meanwhile, so the UI keeps polling quickly and lists
+        it under Disconnect; on_welcome rejoins the open channels."""
+        delay = min(self.RETRY_MAX, self.RETRY_FIRST * 2 ** min(self.attempt, 16))
+        self.attempt += 1
+        self.auto = True
+        what = "%s - reconnecting in %s s" % (why, ("%g" % delay))
+        self.system(self.server_conv(), what)
+        self.chat.set_state(self.account, "connecting", what)
+        self.retry_timer = self.loop.call_later(delay, self._reconnect)
+
+    def _reconnect(self):
+        self.retry_timer = None
+        if not self.auto or self.phase != "down":
+            return
+        try:
+            self.connect()
+        except UserError as e:           # e.g. the password is gone now
+            self._stop_retrying()
+            self.chat.set_state(self.account, "error", str(e))
 
     # -- the socket ---------------------------------------------------------
-    def send_raw(self, text, secret=False):
+    def send_raw(self, text, secret=False, urgent=False):
+        """Queue one line.  Before registration completes, and for urgent
+        lines (PONG, our PING, QUIT), it goes straight out; after that,
+        flood control paces it - the server would cut us off for a burst
+        (a long paste)."""
         data = text.encode("utf-8", "replace")[:510] + b"\r\n"
         shown = text.split(" ", 1)[0] + " <redacted>" if secret else text
         _log.debug("%s >> %s", self.account.id, shown)
         if self.raw_tap:
             self.raw_tap(">>", shown)
-        self.wbuf += data
+        if urgent or self.phase != "up":
+            self.wbuf += data
+        else:
+            self.outq.append(data)
+            self._pump()
         self._rewatch()
+
+    def _pump(self):
+        """Move queued lines to the socket as the token bucket allows; if
+        some must wait, come back when the next token is due."""
+        self.loop.cancel(self.pump_timer)
+        self.pump_timer = None
+        now = self.loop.clock()
+        if self.t_tok is not None:
+            self.tokens = min(float(self.BURST),
+                              self.tokens + (now - self.t_tok) / self.RATE)
+        self.t_tok = now
+        moved = False
+        while self.outq and self.tokens >= 1:
+            self.wbuf += self.outq.popleft()
+            self.tokens -= 1
+            moved = True
+        if self.outq:
+            self.pump_timer = self._later((1 - self.tokens) * self.RATE, self._pump)
+        if moved:
+            self._rewatch()
 
     def _rewatch(self):
         if self.sock is not None and self.phase in ("registering", "up"):
@@ -917,7 +1051,8 @@ class IrcAdapter:
                 break
             self.rbuf += data
             self.n_in += len(data)
-            self.t_in = time.monotonic()
+            self.t_in = self.loop.clock()
+            self.ping_out = None         # anything at all answers a keepalive
         # what arrived before a hang-up still counts - above all the server's
         # ERROR line, which says why it hung up
         while b"\n" in self.rbuf and gen == self.gen:
@@ -966,6 +1101,11 @@ class IrcAdapter:
 
     # -- protocol -----------------------------------------------------------
     def handle(self, m):
+        ref = m.tags.get("batch")
+        if ref and ref in self.batches and self.batches[ref][0] == "chathistory":
+            if m.command in ("PRIVMSG", "NOTICE"):
+                self.on_PRIVMSG(m, notice=m.command == "NOTICE", into=self.batches[ref][2])
+            return                       # replayed JOINs &c: not asked for
         fn = getattr(self, "on_" + m.command, None)
         if fn is not None:
             fn(m)
@@ -973,7 +1113,28 @@ class IrcAdapter:
             self.on_numeric(m)
 
     def on_PING(self, m):
-        self.send_raw("PONG :%s" % (m.params[-1] if m.params else ""))
+        self.send_raw("PONG :%s" % (m.params[-1] if m.params else ""), urgent=True)
+
+    def _keepalive(self):
+        """Every connection that is up: after PING_IDLE s of silence send a
+        PING; nothing back within PING_GRACE s and the connection is dead
+        (a NAT that forgot it, a laptop that slept) - _lost reconnects."""
+        self.ka_timer = None
+        if self.phase != "up":
+            return
+        now = self.loop.clock()
+        if self.ping_out is not None:
+            if now - self.ping_out >= self.PING_GRACE:
+                self._lost("no reply from the server for %d s" % round(now - self.t_in))
+                return
+            due = self.ping_out + self.PING_GRACE
+        elif now - self.t_in >= self.PING_IDLE:
+            self.ping_out = now
+            self.send_raw("PING :tvchat", urgent=True)
+            due = now + self.PING_GRACE
+        else:
+            due = self.t_in + self.PING_IDLE
+        self.ka_timer = self._later(max(0.01, due - now), self._keepalive)
 
     def on_ERROR(self, m):
         self._lost(m.params[-1] if m.params else "ERROR")
@@ -1079,6 +1240,12 @@ class IrcAdapter:
         self.loop.cancel(self.timer)
         self.timer = None
         self.cap_done = True
+        self.t_welcome = self.t_tok = self.loop.clock()
+        self.tokens = float(self.BURST)
+        if self.auto:                    # a reconnect that worked
+            self.system(self.server_conv(), "reconnected")
+        self.auto = False
+        self._keepalive()
         self.chat.set_state(self.account, "connected", self.server)
         self.system(self.server_conv(), " ".join(m.params[1:]))
         # the configured channels, plus any still open from before a reconnect
@@ -1096,6 +1263,8 @@ class IrcAdapter:
                 self.casemapping = v.lower()
             elif k == "CHANTYPES" and v:
                 self.chantypes = v
+            elif k == "CHATHISTORY" and v.isdigit() and int(v) > 0:
+                self.history_max = int(v)
             elif k == "PREFIX" and v.startswith("("):
                 modes, _, syms = v[1:].partition(")")
                 names = {"q": "owner", "a": "admin", "o": "op", "h": "halfop",
@@ -1111,6 +1280,7 @@ class IrcAdapter:
             conv = self.conv_for(chan, "channel")
             conv.title = chan
             conv.members.clear()
+            self.fetch_history(conv, "latest")   # what was said before (or while away)
         else:
             conv = self.find_conv(chan)
             if conv is None:
@@ -1188,7 +1358,71 @@ class IrcAdapter:
     def when(self, m):
         return parse_server_time(m.tags.get("time")) or time.time()
 
-    def on_PRIVMSG(self, m, notice=False):
+    # -- server-side history (IRCv3 chathistory) ------------------------------
+    def has_history(self):
+        return "batch" in self.caps and bool(
+            self.caps & {"chathistory", "draft/chathistory"})
+
+    def fetch_history(self, conv, which):
+        """Ask the server for history: 'latest' (on joining - it overlaps
+        what we have, msgids sort that out) or 'before' the oldest we have.
+        The answer is a BATCH; on_BATCH merges it.  False: nothing asked."""
+        if not self.has_history() or self.phase != "up" or conv.kind == "server" \
+                or conv.id in self.fetching:
+            return False
+        n = min(self.HISTORY_FETCH, self.history_max or self.HISTORY_FETCH)
+        if which == "before":
+            oldest = next((x for x in conv.history if not self.is_local(x.id)), None)
+            if oldest is None:
+                return False
+            ref = "msgid=%s" % oldest.id
+        else:
+            ref = "*"
+        self.fetching[conv.id] = which
+        self.send_raw("CHATHISTORY %s %s %s %d" % (which.upper(), conv.title, ref, n))
+        return True
+
+    def is_local(self, msgid):
+        """Our own ids (no server msgid): ACCOUNT:N."""
+        return msgid.startswith(self.account.id + ":")
+
+    def on_BATCH(self, m):
+        if not m.params:
+            return
+        ref = m.params[0]
+        if ref.startswith("+"):
+            kind = m.params[1] if len(m.params) > 1 else ""
+            target = m.params[2] if len(m.params) > 2 else ""
+            self.batches[ref[1:]] = [kind, target, []]
+            return
+        b = self.batches.pop(ref[1:], None)
+        if b is None or b[0] != "chathistory":
+            return
+        conv = self.find_conv(b[1])
+        if conv is None:                 # left meanwhile
+            return
+        which = self.fetching.pop(conv.id, "latest")
+        new = self.chat.merge_history(conv, b[2])
+        if which == "before" and not new:
+            conv.history_done = True     # the server has nothing older either
+        self.chat.events.push("history", conv.id, which)
+
+    def on_FAIL(self, m):
+        """IRCv3 standard replies: FAIL COMMAND CODE [context ...] :text.
+        A refused CHATHISTORY must not leave its request hanging."""
+        p = m.params
+        text = p[-1] if p else "FAIL"
+        if p and p[0] == "CHATHISTORY":
+            for cid, which in list(self.fetching.items()):
+                del self.fetching[cid]
+                conv = self.account.convs.get(cid)
+                if conv is not None:
+                    if which == "before":
+                        conv.history_done = True
+                    self.chat.events.push("history", cid, which)
+        self.system(self.server_conv(), "%s failed: %s" % (p[0] if p else "?", text))
+
+    def on_PRIVMSG(self, m, notice=False, into=None):
         if len(m.params) < 2:
             return
         target, text = m.params[0], m.params[1]
@@ -1197,13 +1431,19 @@ class IrcAdapter:
             inner = text.strip("\x01")
             verb, _, rest = inner.partition(" ")
             if verb.upper() != "ACTION":
-                if verb.upper() == "VERSION" and not notice and not self.is_me(m.nick):
+                if verb.upper() == "VERSION" and not notice and not self.is_me(m.nick) \
+                        and into is None:
                     self.send_raw("NOTICE %s :\x01VERSION tvchat %s\x01"
                                   % (m.nick, __version__))
                 return
             text, flags = rest, flags + "a"
         mine = self.is_me(m.nick)
         bare = target.lstrip("".join(self.prefixes))      # STATUSMSG: @#chan
+        if into is not None:             # replayed history: the batch's conv
+            flags += "s" if mine else ""
+            into.append(Message(m.tags.get("msgid") or self.local_id(), "", self.when(m),
+                                Contact(m.nick), strip_formatting(text), flags + "r"))
+            return
         if self.is_channel(bare):
             conv = self.conv_for(bare, "channel")
         elif "!" not in m.prefix and not mine or self.phase != "up" or target == "*":
@@ -1234,7 +1474,10 @@ class IrcAdapter:
         if self.is_channel(target):
             self.send_raw("JOIN %s" % target)
             return self.conv_for(target, "channel")
-        return self.conv_for(target, "direct")
+        conv = self.conv_for(target, "direct")
+        if not conv.history:
+            self.fetch_history(conv, "latest")
+        return conv
 
     def part(self, conv):
         if conv.kind == "server":
@@ -1244,24 +1487,108 @@ class IrcAdapter:
         self.chat.remove_conv(conv)
 
     def send(self, conv, text):
-        if conv.kind == "server":
-            raise UserError("the server window takes no messages")
+        """Each line of text: a /command, or a message to conv ('//x' sends
+        '/x').  Replies with the last message's local id ('' when there was
+        only commands).  A line the server window cannot take, an unknown
+        /command or a bad argument refuses the whole text before anything
+        is sent, so it can be fixed and sent again."""
         self.need_up()
-        msgid = None
+        todo = []
         for ln in text.split("\n"):
             ln = ln.rstrip("\r")
-            if not ln:
+            if not ln.strip():
                 continue
-            for piece in split_utf8(ln, 400):
-                self.send_raw("PRIVMSG %s :%s" % (conv.title, piece))
-                msgid = self.local_id()
-                if "echo-message" not in self.caps:  # else the server echoes it
-                    self.chat.add_message(conv, Message(
-                        msgid, conv.id, time.time(), Contact(self.nick), piece, "s"),
-                        count=False)
-        if msgid is None:
+            if ln.startswith("/") and not ln.startswith("//"):
+                todo.append(self._command(conv, ln))
+            elif conv.kind == "server":
+                raise UserError("the server window takes no messages - only "
+                                "/commands (/join, /msg, /nick, /quote ...)")
+            else:
+                todo.append((self._say, (conv, ln[1:] if ln.startswith("//") else ln)))
+        if not todo:
             raise UserError("nothing to send")
+        msgid = ""
+        for fn, args in todo:
+            msgid = fn(*args) or msgid
         return msgid
+
+    def _say(self, conv, text, action=False):
+        """PRIVMSG text to conv, split to fit; ours goes in the log at once
+        unless the server echoes it (echo-message)."""
+        msgid = None
+        for piece in split_utf8(text, 400):
+            body = "\x01ACTION %s\x01" % piece if action else piece
+            self.send_raw("PRIVMSG %s :%s" % (conv.title, body))
+            msgid = self.local_id()
+            if "echo-message" not in self.caps:
+                self.chat.add_message(conv, Message(
+                    msgid, conv.id, time.time(), Contact(self.nick), piece,
+                    "sa" if action else "s"), count=False)
+        return msgid
+
+    def _command(self, conv, ln):
+        """One typed /command -> (fn, args) to run once the whole text is
+        known to be good."""
+        word, _, rest = ln[1:].partition(" ")
+        word, rest = word.lower(), rest.strip()
+        talk = conv.kind != "server"
+
+        def need(cond, usage):
+            if not cond:
+                raise UserError("usage: %s" % usage)
+
+        if word == "me":
+            need(rest, "/me ACTION")
+            if not talk:
+                raise UserError("/me needs a channel or a person, not the server window")
+            return (self._say, (conv, rest, True))
+        if word == "join":
+            need(rest and len(rest.split()) <= 2, "/join #CHANNEL [KEY]")
+            chan, _, key = rest.partition(" ")
+            if not self.is_channel(chan):
+                raise UserError("/join: %s is not a channel (to talk to a person: /msg)" % chan)
+            return (self._join_cmd, (chan, key.strip()))
+        if word == "part":
+            target = conv
+            if rest and self.is_channel(rest.split()[0]):
+                chan, _, rest = rest.partition(" ")
+                target = self.find_conv(chan)
+                if target is None:
+                    raise UserError("/part: not in %s" % chan)
+            elif not talk:
+                raise UserError("usage: /part #CHANNEL [REASON] (in the server window)")
+            return (self._part_cmd, (target, rest.strip()))
+        if word == "msg":
+            nick, _, said = rest.partition(" ")
+            need(nick and said.strip() and "," not in nick, "/msg NICK TEXT")
+            return (self._msg_cmd, (nick, said.strip()))
+        if word == "nick":
+            need(rest and " " not in rest, "/nick NEWNICK")
+            return (self.send_raw, ("NICK %s" % rest,))
+        if word == "topic":
+            if not talk or conv.kind != "channel":
+                raise UserError("/topic needs a channel")
+            if not rest:                 # just show it
+                return (self.system, (conv, "topic: %s" % (conv.topic or "(none)")))
+            return (self.send_raw, ("TOPIC %s :%s" % (conv.title, rest),))
+        if word in ("quote", "raw"):
+            need(rest, "/quote RAW IRC LINE")
+            return (self.send_raw, (rest,))
+        raise UserError("unknown command /%s - there are /%s; //text sends a line "
+                        "starting with /" % (word, ", /".join(self.COMMANDS)))
+
+    def _join_cmd(self, chan, key):
+        self.send_raw("JOIN %s%s" % (chan, " " + key if key else ""))
+        self.conv_for(chan, "channel")
+
+    def _part_cmd(self, conv, reason):
+        if conv.kind == "channel":
+            self.send_raw("PART %s%s" % (conv.title, " :" + reason if reason else ""))
+        self.chat.remove_conv(conv)
+
+    def _msg_cmd(self, nick, text):
+        target = self.conv_for(nick, "channel" if self.is_channel(nick) else "direct")
+        return self._say(target, text)
 
 
 class DeltaChatAdapter:
@@ -1350,6 +1677,23 @@ class Chat:
         if count:
             conv.unread += 1
             self.events.push("unread", conv.id, conv.unread)
+
+    def merge_history(self, conv, msgs):
+        """Messages from the server's history into the ring, in time order,
+        each msgid once; never unread (they are the past).  Returns how many
+        were new.  The ring may grow past HISTORY_CAP by what was fetched
+        older, so fetching never throws away the very lines asked for."""
+        have = set(m.id for m in conv.history)
+        new = []
+        for m in msgs:
+            if m.id not in have:
+                have.add(m.id)
+                m.conv = conv.id
+                new.append(m)
+        if new:
+            merged = sorted(list(conv.history) + new, key=lambda m: m.when)
+            conv.history = deque(merged, maxlen=max(HISTORY_CAP, len(merged)))
+        return len(new)
 
     def set_topic(self, conv, text):
         conv.topic = text
@@ -1449,11 +1793,20 @@ def cmd_send(a):
 
 
 def cmd_history(a):
-    conv = _chat().conv(a.conv)
+    chat = _chat()
+    conv = chat.conv(a.conv)
     msgs = list(conv.history)
     if a.before:
         ids = [m.id for m in msgs]
         msgs = msgs[:ids.index(a.before)] if a.before in ids else []
+        # the ring is used up: the server may have more (chathistory).  The
+        # answer comes later, as a 'history CONV before' event - the UI asks
+        # again then.  Meanwhile this says so instead of "nothing older".
+        if not msgs and a.before in ids and not conv.history_done:
+            ad = chat.adapter(conv.account)
+            if getattr(ad, "fetching", {}).get(conv.id) == "before" or \
+                    (hasattr(ad, "fetch_history") and ad.fetch_history(conv, "before")):
+                raise UserError("asking the server for older messages...")
     for msg in msgs[-a.limit:] if a.limit > 0 else []:
         sys.stdout.write(line(*msg.fields()))
     return 0

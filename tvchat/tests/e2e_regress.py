@@ -225,6 +225,37 @@ def chat_join_and_leave(opts):
 
 
 @case()
+def chat_typed_commands(opts):
+    tv, srv = chat_tv(opts)
+    c = Case(tv)
+    started(tv, c)
+    open_chat(tv, c, srv)
+    tv.send("/me dances", "Enter", settle=0.8)
+    c.check(tv.wait(lambda: srv.sent("PRIVMSG #e2e :\x01ACTION dances\x01"), 3),
+            "/me was not sent as a CTCP ACTION")
+    c.check(tv.wait("* tester dances", 3), "/me is not in the log as * nick action")
+    # an unknown command: refused in the log, kept in the input, never sent
+    tv.send("/bogus x", "Enter", settle=0.8)
+    c.check(tv.wait("not sent: unknown command /bogus", 3),
+            "an unknown /command was not refused in the log")
+    c.check(re.search(r">\s*/bogus x", tv.text()), "the refused line left the input")
+    c.check(not srv.sent("BOGUS") and not srv.sent("PRIVMSG #e2e :/bogus"),
+            "an unknown /command went to the server")
+    tv.send(*["\x7f"] * 8)
+    # the server messages take /commands: Tab, Tab to the list, Up to them
+    tv.send("Tab", "Tab", "Up", "Enter", settle=0.8)
+    c.check(tv.wait(lambda: re.search(r"\[ .*server messages", tv.text()), 3),
+            "could not get to the server messages' input")
+    tv.send("/join #cmds", "Enter", settle=0.8)
+    c.check(tv.wait(lambda: srv.sent("JOIN #cmds"), 3),
+            "/join in the server messages did not join")
+    c.check(tv.wait(lambda: re.search(r"│ ?#cmds\b", tv.text()), 3),
+            "the channel /joined is not in the conversation list")
+    c.check(tv.alive(), "tvchat exited")
+    return tv
+
+
+@case()
 def chat_log_utf8_columns(opts):
     tv, srv = chat_tv(opts)
     c = Case(tv)

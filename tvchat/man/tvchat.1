@@ -36,7 +36,8 @@ on a conversation: go to the input line;
 in the input line: send.
 .TP
 .B PgUp ", " PgDn ", " Up ", " Down
-scroll the log from the input line; PgUp at the top fetches older messages.
+scroll the log from the input line; PgUp at the top fetches older messages
+(asking the server, when it keeps history).
 .TP
 .B Alt\-A
 the Chat menu: Connect..., Disconnect..., Join... (a channel or a nick),
@@ -50,6 +51,38 @@ next window.
 window list.
 .B Alt\-X
 quit (asking first about text typed and not sent).
+.SH COMMANDS
+A line typed in the input line may be a command; the server messages take
+nothing else.
+.TP
+.BI /me " ACTION"
+an action, shown as
+.IR "* nick ACTION" .
+.TP
+.BI /join " #CHANNEL" " \fR[\fPKEY\fR]"
+join a channel.
+.TP
+.BR /part " [\fI#CHANNEL\fP] [\fIREASON\fP]"
+leave this channel, or the one named.
+.TP
+.BI /msg " NICK TEXT"
+talk to someone; their conversation opens in the list.
+.TP
+.BI /nick " NEWNICK"
+change your nick.
+.TP
+.BR /topic " [\fITEXT\fP]"
+set this channel's topic, or show it.
+.TP
+.BI /quote " LINE"
+send a raw IRC line.
+.PP
+Any other
+.BI / word
+is refused and stays in the input line;
+.B //text
+sends a line that starts with
+.BR / .
 .SH OPTIONS
 .TP
 .BI "--debug " [FILE]

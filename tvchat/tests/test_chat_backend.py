@@ -520,6 +520,13 @@ class FakeIrc:
     def hang_up(self):
         self.conn.close()
 
+    def reaccept(self):
+        """The client's next connection (a reconnect), with fresh buffers."""
+        self.conn, _ = self.sock.accept()
+        self.conn.settimeout(10)
+        self.buf = b""
+        self.pending = []
+
     def close(self):
         for s in (self.conn, self.sock):
             try:
@@ -759,7 +766,7 @@ class TestIrcSession(IrcBase):
         self.assertTrue(any("from $TVCHAT_PASS_LIBERA" in m[6] for m in self.msgs()))
         self.chat.close()
 
-    def test_server_hangup_is_disconnected(self):
+    def test_server_hangup_reconnects(self):
         def script(srv):
             welcome(srv)
             srv.expect("JOIN #Test")
@@ -772,9 +779,14 @@ class TestIrcSession(IrcBase):
             srv.hang_up()
 
         self.setup_irc(script)
+        self.chat.adapter(self.acct).RETRY_FIRST = 60        # no reconnect yet
         self.verb("connect", "libera")
-        self.turn(lambda: self.acct.state == "disconnected")
+        # it was up: lost, so it waits and tries again - still "connecting"
+        self.turn(lambda: "reconnecting in 60 s" in self.acct.detail)
+        self.assertEqual(self.acct.state, "connecting")
         self.assertIn("too many cooks", self.events("state")[-1][3])
+        self.assertTrue(any(m[6].endswith("too many cooks - reconnecting in 60 s")
+                            for m in self.msgs() if m[1] == "libera/*"))
         self.assertTrue(any("alice has quit (bye)" == m[6] for m in self.msgs()))
         self.assertEqual(self.acct.convs["libera/#test"].members, {})
         # the conversation outlives the connection, so its window stays put
@@ -782,6 +794,20 @@ class TestIrcSession(IrcBase):
         st, body = self.verb("send", "libera/#test", "anyone?")
         self.assertEqual(st, 1)
         self.assertIn(b"not connected", body)
+        # Disconnect while it waits: it stops trying
+        self.assertEqual(self.verb("disconnect", "libera"), (0, b""))
+        self.assertEqual(self.acct.state, "disconnected")
+        self.assertIsNone(self.chat.adapter(self.acct).retry_timer)
+
+    def test_first_connect_hung_up_on_is_not_retried(self):
+        def script(srv):
+            srv.expect("CAP LS 302")
+            srv.hang_up()
+
+        self.setup_irc(script)
+        self.verb("connect", "libera")
+        self.turn(lambda: self.acct.state == "disconnected")
+        self.assertIsNone(self.chat.adapter(self.acct).retry_timer)
 
     def test_join_query_part_and_local_echo(self):
         def script(srv):
@@ -842,6 +868,242 @@ class TestIrcSession(IrcBase):
                                          "b", "bob", "a", "waves")))
         self.assertEqual(f(("state", "libera", "connected", "srv")),
                          "** state libera connected srv")
+
+
+class TestIrcHardening(IrcBase):
+    """Milestone 5: keepalive, reconnect with backoff, flood control, typed
+    /commands, server-side history (chathistory)."""
+
+    def adapter(self, **attrs):
+        ad = self.chat.adapter(self.acct)
+        for k, v in attrs.items():
+            setattr(ad, k, v)
+        return ad
+
+    def test_reconnect_rejoins_open_channels(self):
+        def script(srv):
+            welcome(srv)
+            srv.expect("JOIN #Test")
+            srv.send(":tester!u@h JOIN #Test")
+            srv.expect("JOIN #more")
+            srv.send(":tester!u@h JOIN #more")
+            srv.hang_up()
+            srv.reaccept()
+            welcome(srv)
+            srv.expect("JOIN #Test")
+            srv.expect("JOIN #more")
+            srv.send(":tester!u@h JOIN #Test")
+            srv.send(":alice!a@h PRIVMSG #Test :welcome back")
+            srv.expect("QUIT")
+
+        self.setup_irc(script)
+        ad = self.adapter(RETRY_FIRST=0.2)
+        self.verb("connect", "libera")
+        self.turn(lambda: self.acct.state == "connected")
+        self.verb("join", "libera", "#more")
+        self.turn(lambda: any(m[6] == "welcome back" for m in self.msgs()))
+        states = [(f[2], f[3]) for f in self.events("state")]
+        lost = states.index(("connecting", "connection closed by the server - "
+                                           "reconnecting in 0.2 s"))
+        self.assertEqual(states[-1][0], "connected")
+        self.assertNotIn("disconnected", [s for s, _ in states[lost:]])
+        texts = [m[6] for m in self.msgs() if m[1] == "libera/*"]
+        self.assertIn("reconnected", texts)
+        self.assertFalse(ad.auto)
+        self.chat.close()
+        self.srv.thread.join(5)
+        self.assertIsNone(self.srv.error)
+
+    def test_backoff_doubles_up_to_five_minutes(self):
+        self.setup_irc(lambda srv: None)
+        ad = self.adapter()
+        delays = []
+        ad.loop.call_later = lambda d, fn: delays.append(d) or [0, 0, fn, True]
+        for _ in range(10):
+            ad._retry("gone")
+        self.assertEqual(delays, [2, 4, 8, 16, 32, 64, 128, 256, 300, 300])
+        self.assertEqual((self.acct.state, self.acct.detail),
+                         ("connecting", "gone - reconnecting in 300 s"))
+        # a connection that had been up a while starts the count again
+        ad.phase, ad.t_welcome = "up", ad.loop.clock() - 61
+        ad._lost("dropped")
+        self.assertEqual(delays[-1], 2)
+        # Disconnect stops it
+        self.verb("disconnect", "libera")
+        self.assertEqual((self.acct.state, ad.auto, ad.attempt), ("disconnected", False, 0))
+
+    def test_keepalive_pings_then_gives_up(self):
+        stage = {}
+
+        def script(srv):
+            welcome(srv)
+            srv.expect("JOIN #Test")
+            srv.expect("PING :tvchat")       # quiet for PING_IDLE
+            stage["t1"] = time.time()
+            srv.send(":srv PONG srv :tvchat")
+            srv.expect("PING :tvchat")       # quiet again, and no answer
+            stage["t2"] = time.time()
+
+        self.setup_irc(script)
+        self.adapter(PING_IDLE=0.3, PING_GRACE=0.3, RETRY_FIRST=60)
+        self.verb("connect", "libera")
+        self.turn(lambda: self.acct.state == "connected")
+        self.turn(lambda: "no reply from the server" in self.acct.detail)
+        self.assertEqual(self.acct.state, "connecting")      # and will retry
+        self.assertGreaterEqual(stage["t2"] - stage["t1"], 0.25)
+        self.chat.close()
+
+    def test_flood_control_paces_lines_and_pong_jumps_the_queue(self):
+        stage = {}
+
+        def script(srv):
+            welcome(srv)
+            srv.expect("JOIN #Test")
+            srv.send(":tester!u@h JOIN #Test")
+            srv.expect("PRIVMSG #Test :line 0")
+            srv.send("PING :x")
+            srv.expect("PONG :x")
+            srv.expect("PRIVMSG #Test :line 4")
+            stage["t"] = time.time()
+            srv.expect("QUIT")
+
+        self.setup_irc(script)
+        ad = self.adapter(BURST=2, RATE=0.3)
+        self.verb("connect", "libera")
+        self.turn(lambda: "libera/#test" in self.acct.convs)
+        t0 = time.time()
+        st, _ = self.verb("send", "libera/#test", "\n".join("line %d" % i for i in range(5)))
+        self.assertEqual(st, 0)
+        self.assertEqual(len(ad.outq), 4)          # the JOIN took one of the two
+        self.turn(lambda: "t" in stage)
+        self.assertGreaterEqual(stage["t"] - t0, 1.0)   # 4 more, 0.3 s apart
+        got = self.srv.got
+        self.assertLess(got.index("PONG :x"), got.index("PRIVMSG #Test :line 1"))
+        self.assertEqual([g for g in got if g.startswith("PRIVMSG")],
+                         ["PRIVMSG #Test :line %d" % i for i in range(5)])
+        self.chat.close()
+
+    def test_typed_commands(self):
+        stage = {}
+
+        def script(srv):
+            welcome(srv)
+            srv.expect("JOIN #Test")
+            srv.send(":tester!u@h JOIN #Test")
+            srv.expect("PRIVMSG #Test :\x01ACTION waves\x01")
+            srv.expect("PRIVMSG Dave :hi there")
+            srv.expect("JOIN #more secret")
+            srv.expect("PART #more :bye now")
+            srv.expect("TOPIC #Test :new topic")
+            srv.expect("NICK tester2")
+            srv.expect("MODE #Test +m")
+            srv.expect("PRIVMSG #Test :/not a command")
+            srv.expect("JOIN #x")
+            stage["done"] = True
+            srv.expect("QUIT")
+
+        self.setup_irc(script)
+        self.adapter(BURST=50)
+        self.verb("connect", "libera")
+        self.turn(lambda: "libera/#test" in self.acct.convs)
+        say = lambda conv, text: self.verb("send", conv, text)
+        # refused: nothing at all is sent, the text can be fixed and resent
+        st, body = say("libera/#test", "fine line\n/bogus thing")
+        self.assertEqual(st, 1)
+        self.assertIn(b"unknown command /bogus", body)
+        self.assertEqual(say("libera/#test", "/me")[0], 1)
+        self.assertEqual(say("libera/#test", "/msg Dave")[0], 1)
+        self.assertEqual(say("libera/#test", "/join nochannel")[0], 1)
+        self.assertEqual(say("libera/*", "hello")[0], 1)
+        self.assertEqual(say("libera/*", "/me waves")[0], 1)
+
+        self.assertEqual(say("libera/#test", "/me waves")[0], 0)
+        action = [m for m in self.msgs() if m[6] == "waves"][0]
+        self.assertEqual((action[1], action[5]), ("libera/#test", "sa"))
+        self.assertEqual(say("libera/#test", "/msg Dave hi there")[0], 0)
+        self.assertIn("libera/dave", self.acct.convs)
+        self.assertTrue(any(m[1] == "libera/dave" and m[6] == "hi there" for m in self.msgs()))
+        self.assertEqual(say("libera/#test", "/join #more secret"), (0, b"\n"))
+        self.assertIn("libera/#more", self.acct.convs)
+        self.assertEqual(say("libera/#test", "/part #more bye now")[0], 0)
+        self.assertNotIn("libera/#more", self.acct.convs)
+        self.assertEqual(say("libera/#test", "/topic new topic")[0], 0)
+        self.assertEqual(say("libera/#test", "/topic")[0], 0)
+        self.assertTrue(any(m[6] == "topic: (none)" for m in self.msgs()))
+        self.assertEqual(say("libera/#test", "/NICK tester2")[0], 0)
+        self.assertEqual(say("libera/#test", "/quote MODE #Test +m")[0], 0)
+        self.assertEqual(say("libera/#test", "//not a command")[0], 0)
+        self.assertEqual(say("libera/*", "/join #x")[0], 0)     # the server window takes these
+        self.turn(lambda: "done" in stage)
+        self.assertFalse(any("fine line" in g or "bogus" in g for g in self.srv.got))
+        self.chat.close()
+
+    def test_chathistory_on_join_and_before(self):
+        stage = {}
+
+        def script(srv):
+            srv.expect("CAP LS 302")
+            srv.send(":srv CAP * LS :batch server-time message-tags draft/chathistory")
+            srv.expect("CAP REQ")
+            srv.send(":srv CAP * ACK :batch server-time message-tags draft/chathistory")
+            srv.expect("CAP END")
+            srv.expect("USER ")
+            srv.send(":srv 001 tester :hi")
+            srv.send(":srv 005 tester CHATHISTORY=100 :are supported")
+            srv.expect("JOIN #Test")
+            srv.send("@time=2026-10-22T10:00:05.000Z :tester!u@h JOIN #Test")
+            stage["latest"] = srv.expect("CHATHISTORY LATEST")
+            srv.send("BATCH +h1 chathistory #Test")
+            srv.send("@batch=h1;time=2026-10-22T08:00:00.000Z;msgid=old1 "
+                     ":bob!b@h PRIVMSG #Test :earliest")
+            srv.send("@batch=h1;time=2026-10-22T09:00:00.000Z;msgid=old2 "
+                     ":alice!a@h PRIVMSG #Test :earlier")
+            srv.send("BATCH -h1")
+            stage["before"] = srv.expect("CHATHISTORY BEFORE")
+            srv.send("BATCH +h2 chathistory #Test")
+            srv.send("@batch=h2;time=2026-10-21T08:00:00.000Z;msgid=old0 "
+                     ":bob!b@h PRIVMSG #Test :yesterday")
+            srv.send("BATCH -h2")
+            stage["before2"] = srv.expect("CHATHISTORY BEFORE")
+            srv.send("BATCH +h3 chathistory #Test")
+            srv.send("BATCH -h3")
+            srv.expect("QUIT")
+
+        self.setup_irc(script)
+        self.verb("connect", "libera")
+        hist = lambda: ("history", "libera/#test", "latest") in self.events()
+        self.turn(hist)
+        self.assertEqual(stage["latest"], "CHATHISTORY LATEST #Test * 50")
+        texts = lambda *a: [ln.split("\t")[6] for ln in
+                            self.verb("history", "libera/#test", *a)[1].decode().splitlines()]
+        self.assertEqual(texts(), ["earliest", "earlier", "tester has joined #Test"])
+        # the past is neither unread nor a live msg event
+        self.assertEqual(self.acct.convs["libera/#test"].unread, 0)
+        self.assertFalse(any(m[0] in ("old1", "old2") for m in self.msgs()))
+
+        before = lambda: [f for f in self.events("history") if f[2] == "before"]
+        st, body = self.verb("history", "libera/#test", "--before", "old1")
+        self.assertEqual((st, body), (1, b"asking the server for older messages...\n"))
+        self.assertEqual(self.verb("history", "libera/#test", "--before", "old1")[0], 1)
+        self.turn(lambda: len(before()) == 1)
+        self.assertEqual(stage["before"], "CHATHISTORY BEFORE #Test msgid=old1 50")
+        self.assertEqual(texts("--before", "old1"), ["yesterday"])
+        self.assertEqual(self.verb("history", "libera/#test", "--before", "old0")[0], 1)
+        self.turn(lambda: len(before()) == 2)
+        # the server had nothing older: from now on, simply nothing
+        self.assertEqual(self.verb("history", "libera/#test", "--before", "old0"), (0, b""))
+        self.assertEqual(sum(g.startswith("CHATHISTORY BEFORE") for g in self.srv.got), 2)
+
+        # a refused request does not hang: FAIL ends it
+        ad = self.adapter()
+        conv = self.acct.convs["libera/#test"]
+        conv.history_done = False
+        ad.fetching[conv.id] = "before"
+        ad.handle(cb.parse_line("FAIL CHATHISTORY MESSAGE_ERROR BEFORE #Test :boom"))
+        self.assertEqual(ad.fetching, {})
+        self.assertTrue(conv.history_done)
+        self.assertEqual(len(before()), 3)
+        self.chat.close()
 
 
 class TestIrcTls(IrcBase):
@@ -946,7 +1208,8 @@ class TestDiagnostics(IrcBase):
         self.turn(lambda: self.acct.state == "connected")
         self.turn(lambda: "libera/#test" in self.acct.convs)
         self.assertEqual(self.verb("send", "libera/#test", "hello there")[0], 0)
-        self.turn(lambda: self.acct.state == "disconnected")
+        self.turn(lambda: "reconnecting" in self.acct.detail)
+        self.chat.close()
         log = self.logbuf.getvalue()
         self.assertIn("libera: state connecting", log)
         self.assertIn("libera: connected ", log)

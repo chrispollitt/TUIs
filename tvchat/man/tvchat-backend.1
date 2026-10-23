@@ -42,6 +42,43 @@ Verbs:
 .RI [ "\-\-after SEQ" ],
 .BR ping ,
 .BR quit .
+.B send
+takes the commands
+.BR /me ,
+.BR /join ,
+.BR /part ,
+.BR /msg ,
+.BR /nick ,
+.B /topic
+and
+.B /quote
+.RB ( //
+for a line starting with
+.BR / );
+a server conversation takes nothing else.
+When
+.B history \-\-before
+reaches the start of what is kept and the server has IRCv3
+.BR chathistory ,
+it asks the server, answers status 1 saying so, and a
+.B history
+.I CONV
+.B before
+event follows; joining a channel asks for its latest 50 the same way
+(event
+.BR "history CONV latest" ).
+.PP
+A quiet IRC server gets a PING after 90 s, and the connection is dead
+after 30 s more with no answer.
+A connection that was up and is lost is made again after 2, 4, 8 ... up to
+300 s (the account stays
+.B connecting
+meanwhile;
+.B disconnect
+stops it) and the open channels are joined again.
+Once registered, lines go out in a burst of 5, then one every 0.5 s;
+PONG and QUIT go first.
+.PP
 Replies are TAB-separated lines; inside a field TAB, newline, CR and
 backslash are written
 .BR \et ", " \en ", " \er ", " \e\e .
