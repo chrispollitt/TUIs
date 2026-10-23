@@ -164,6 +164,10 @@ All in `IrcAdapter` (`tvchat/backend/tvchat-backend`); the tunables are class at
   the chat pane of the three-pane window** (Chris): classic splits the
   bottom-right pane in two - theirs over yours - and Servers and
   Conversations stay where they are; no separate window.
+  **Default: classic** (Chris, Oct 22) - it is what a talk caller expects,
+  and what a real `talk` at the other end shows; `talk_view = classic | irc`
+  in tvchat.conf changes it (per account), the toggle per conversation.
+  Only talk conversations have the choice; IRC ones are always the log.
 - **What is sent follows the view** (Chris, Oct 22): in *classic* every
   keystroke goes as typed (erase / kill / word-erase too), as real talk
   does; in *IRC mode* whole lines, on Enter.  What the other side types
