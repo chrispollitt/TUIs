@@ -43,6 +43,26 @@ Stop for Chris's review after each milestone.
 - `tvcommon/third_party/POSIX.stale-20261021`: Chris's old mail-setup checkout (13 commits that were all rebased into POSIX already; clean tree) - safe to delete.
 - **Then:** milestone 5 (IRC hardening), in `tvchat/` - built Oct 22 on branch `m5-irc-hardening` (see its section below); stopped for Chris's review and live check. Next after that: milestone 6, talk(1).
 
+## Small to-dos from Chris (Oct 23) - not started
+
+- **Servers pane: always show the protocol, in brackets** - `Libera [irc]`,
+  `cpbee talk [talk]` (irc, talk, deltachat ...).  `TServerPane::getText` in
+  `tvchat/src/chatwin.cpp`; the protocol is `ChatAccount::protocol`.
+- **Shorten the state to `con` / `dis`** (connected / disconnected) in the same
+  pane, to save width.  Probably `connecting` -> `...ing` too (decide when
+  doing it, e.g. `try`), and `error` stays - the Chat menu and the Connect /
+  Disconnect dialogs list the full word, so shorten only the pane's text.
+  Tests that look for "connected" on screen (`e2e_regress`, `e2e_chat`)
+  need the new words.
+- **Default `--debug` / `--trace` file names carry the app's name** so tvmail
+  and tvchat stop overwriting each other's: `debug.tvchat.log`,
+  `trace.tvchat.log` (tvmail the same).  The defaults are in
+  `tvcommon/src/cli.cpp` (`debug.log`, `trace.log`), the helpers' derived names
+  (`debug.chat.log`, `debug.backend.log`, `trace.*.log`, see `backendFlags` in
+  `tvcommon/src/shell.cpp`) follow from them; update the `--help` texts, both
+  man pages, READMEs and the tests that read those logs
+  (`tvchat/tests/e2e_chat.py` reads `debug.chat.log`).
+
 ## Purpose and scope
 
 Add instant messaging to tvmail (repo `chrispollitt/TUIs`, directory `tvmail/`) as two protocol backends behind one chat UI: IRC with IRCv3 extensions, and Delta Chat (encrypted chat carried over email). IRC first; Delta Chat second, through the same abstraction.
