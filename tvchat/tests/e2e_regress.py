@@ -295,6 +295,14 @@ def talk_classic_call_in(opts):
     c.check(srv.attached(), "the session never attached")
     c.check(tv.wait(lambda: talk_rule(tv, "miche — connected") is not None, 4),
             "classic: no rule saying miche - connected")
+    # the rule is faint but seen: its words and its line (live check, Oct 22:
+    # drawn cyan on cyan, it was not there at all)
+    ry = talk_rule(tv, "miche")
+    bad = low_contrast(tv, box=(ry, 24, ry, COLS - 2))
+    line = [x for x in range(24, COLS - 2) if tv.screen.buffer[ry][x].data == "─"]
+    c.check(not bad, "classic: the rule's words are hard to read: %s" % bad)
+    c.check(line and contrast(*cell_colours(tv.screen.buffer[ry][line[0]])) >= 2.5,
+            "classic: the rule's line cannot be seen")
     # theirs: as typed, their own erase (^H) applied; an unfinished line live
     srv.peer("hi chrix\x08s\nhalf a li")
     c.check(tv.wait("half a li", 4), "classic: their unfinished line does not show as typed")

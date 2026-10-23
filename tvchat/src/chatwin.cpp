@@ -423,8 +423,10 @@ public:
                 b.moveStr(0, me[y], cOwn());
             writeLine(0, y, W, 1, b);
         }
-        b.moveChar(0, '\xC4', cDiv(), W); // the rule, as the panes' dividers
-        b.moveStr(2, fitCols(" " + rule + " ", std::max(W - 4, 0)), cDiv());
+        // the rule between you and them: faint, the system lines' dark grey
+        // (cDiv() is cyan on cyan - the lists' separators are meant unseen)
+        b.moveChar(0, '\xC4', cSystem(), W);
+        b.moveStr(2, fitCols(" " + rule + " ", std::max(W - 4, 0)), cSystem());
         writeLine(0, top, W, 1, b);
         int rows = H - top - 1;
         std::vector<std::string> them = tail(theirs, typing, W, rows);
