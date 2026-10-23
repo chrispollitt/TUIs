@@ -9,18 +9,21 @@
 struct ChatAccount
 {
     std::string id, protocol, state, display, detail;
+    std::string view; // talk accounts: how talk conversations start - classic or irc
 };
 
 struct ChatConv
 {
     std::string id, kind, title; // kind: server, channel, direct, group
     int unread = 0;
-    std::string topic; // from `topic` events only: `convs` does not carry it
+    std::string topic;  // from `topic` events only: `convs` does not carry it
+    std::string state;  // a talk call: calling, ringing, incoming, connected, ended
+    std::string typing; // a talk call: the other side's unfinished line
 };
 
 // One event from `events`: its sequence number and its fields, unescaped.
 // fields[0] is the type (state, msg, conv-new, conv-gone, members, topic,
-// unread); the rest are as documented in tvchat-backend.
+// unread, talk, typing); the rest are as documented in tvchat-backend.
 struct ChatEvent
 {
     long long seq = 0;

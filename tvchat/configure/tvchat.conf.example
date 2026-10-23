@@ -37,6 +37,20 @@ sasl     = yournick
 channels = #tvmail-test
 # plain-text port 6667 only if you mean it:  tls = false  (port follows)
 
+[account:talk]
+# talk(1) through chat-setup's talkd on the LAN master (one talkd for the
+# LAN; chrispollitt/POSIX chat-setup/scripts/configure-talkd.sh sets it up).
+# No password: talk has none, so talkd answers the LAN only.
+protocol  = talk
+display   = cpbee talk
+host      = cpbee
+# port   = 518
+# your user name there (default: your login name here)
+#user    = yourname
+# how a talk conversation starts: classic (talk's split screen, every
+# keystroke sent) or irc (the log, whole lines, "... is typing")
+talk_view = classic
+
 [account:delta]
 protocol = deltachat
 display  = Delta Chat

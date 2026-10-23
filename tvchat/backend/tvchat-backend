@@ -2283,9 +2283,11 @@ def cmd_answer(a):
 
 
 def cmd_keys(a):
+    """keys CONV TEXT: TEXT escaped as reply fields are (\\n \\r \\t \\\\) -
+    a request is one line, and a typed newline must fit in it."""
     chat = _chat()
     conv = chat.conv(a.conv)
-    _talk(conv, chat).keys(conv, a.text)
+    _talk(conv, chat).keys(conv, unesc(a.text))
     return 0
 
 

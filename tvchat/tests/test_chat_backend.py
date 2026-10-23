@@ -173,7 +173,8 @@ class TestConfig(Base):
     def test_shipped_example_loads(self):
         os.environ["TVCHAT_CONF"] = str(EXAMPLE)
         accts, auto = cb.load_config()
-        self.assertEqual(sorted(a.protocol for a in accts), ["deltachat", "irc"])
+        self.assertEqual(sorted(a.protocol for a in accts), ["deltachat", "irc", "talk"])
+        self.assertEqual([a.view for a in accts if a.protocol == "talk"], ["classic"])
         for a in accts:
             self.assertNotIn("password", a.opts)    # never in the example
         self.assertTrue(set(auto) <= set(a.id for a in accts))

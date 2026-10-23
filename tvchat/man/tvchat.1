@@ -51,6 +51,26 @@ next window.
 window list.
 .B Alt\-X
 quit (asking first about text typed and not sent).
+.SH TALK
+An account with
+.B protocol = talk
+talks talk(1) through the LAN master's talkd.
+Chat > Join... calls a user (or user@host); a call for you shows in the
+status line and the conversation list, and Enter (or Chat > Answer) in it
+answers; Chat > Leave hangs up or declines.
+.TP
+.B classic
+talk's own screen in the chat pane: you on top, them below, every key sent
+as typed (Backspace, Ctrl-U, Ctrl-W too).
+.TP
+.B IRC
+the log: a line goes on Enter; \(lq... is typing\(rq shows while their line
+is unfinished.
+.PP
+View > Talk view (Ctrl-T) switches the conversation shown; an account starts
+in its
+.B talk_view
+(classic unless it says irc).
 .SH COMMANDS
 A line typed in the input line may be a command; the server messages take
 nothing else.

@@ -228,8 +228,37 @@ kill, word-erase), then text.
    off, UDP 518 opened on lan0 (cmpi-router's port lists are TCP only today
    - the same lossless way as Ergo's).  Interop check on cpbee with
    Debian's `talk` package.
-4. **tvchat:** `protocol = talk` accounts, the adapter in tvchat-backend,
-   the classic / IRC views.
+4. **tvchat** - built Oct 22 on branch `m6-talk-tvchat`, **awaiting Chris's
+   review and a live check**:
+   - *backend* (`TalkAdapter`): one control connection to talkd per talk
+     account; one conversation per person (kind direct; talkd's own host
+     dropped from the name).  `join` calls, new verb `answer CONV`, `part`
+     hangs up / declines (no call: leaves).  `send` = whole lines (IRC
+     mode), new verb `keys CONV TEXT` = keystrokes (classic; TEXT escaped
+     like reply fields, since a request is one line).  The other side's
+     erase / kill / word-erase are applied as bytes arrive: finished lines
+     are `msg` (unread), the unfinished one the new `typing CONV TEXT`
+     event; call state on the new `talk CONV STATE DETAIL` (calling,
+     ringing, incoming, connected, ended).  `accounts` gains a 5th field
+     (talk_view) and `convs` / `conv-new` a 5th (call state) - only for
+     talk, IRC lines unchanged.
+   - *window*: `TTalkView` (classic: you on top, a rule "miche - connected",
+     them below; every key via `keys`) replaces log + input for a classic
+     talk conversation; IRC mode is the usual log plus a dim "miche is
+     typing..." line.  View > Talk view (Ctrl-T) per conversation; Chat >
+     Answer (or Enter) answers; "- calling you" in the list, a status-line
+     flash for a call.  Gotcha fixed on the way: hiding the input line made
+     tvision move the focus to the server pane (`applyView` restores it).
+   - *tests*: chat_unit +8 (a fake talkd; the real talkd when
+     chat-setup/talkd/talkd.py is at hand), e2e_regress `talk_classic_call_in`,
+     `talk_irc_mode_call_out_and_toggle` (tests/fake_talkd.py).  All 5 layers
+     pass.
+   - *live check (Chris)*: on cpbee `configure-talkd.sh --open-firewall`
+     (TCP 518 for the laptops); an `[account:talk]` (host = cpbee) in each
+     tvchat.conf; chris and miche call each other from tvchat, and a real
+     `talk chris@cpbee` from a cpbee shell rings tvchat.
+   - *not yet*: reconnecting a lost talkd connection by itself (IRC's
+     backoff is not reused yet); ^L / redraw of the peer's screen.
 
 Chris, Oct 22: "talk(1)!!! tvchat *must* have it" - before Delta Chat. The
 Unix `talk` / `ntalk` protocol: two users, a split screen, every keystroke

@@ -67,6 +67,37 @@ std::string convName(const std::string &conv)
     return it->second.title + " \xE2\x80\x94 " + acct; // em dash
 }
 
+const ChatConv *convOf(const std::string &conv)
+{
+    auto it = chat().convs().find(conv);
+    return it == chat().convs().end() ? nullptr : &it->second;
+}
+
+// A talk(1) conversation: a person on a talk account.  It has a call (its
+// state) and two views - classic, talk's own split screen, or IRC, the log.
+bool isTalk(const std::string &conv)
+{
+    const ChatAccount *a = findAccount(accountIdOf(conv));
+    const ChatConv *c = convOf(conv);
+    return a && a->protocol == "talk" && c && c->kind != "server";
+}
+
+// The call, in words: what the heading, the classic rule and the list say.
+std::string callNote(const std::string &state)
+{
+    if (state == "incoming")
+        return "calling you - Enter answers, Chat > Leave declines";
+    if (state == "calling")
+        return "calling...";
+    if (state == "ringing")
+        return "ringing...";
+    if (state == "connected")
+        return "connected";
+    if (state == "ended")
+        return "hung up - Chat > Join... calls again";
+    return "no call - Chat > Join... calls";
+}
+
 // Ask the app to poll now: what a request just set off (our own message, a
 // state change) shows at once instead of at the next idle tick.
 void pollNow()
@@ -323,6 +354,160 @@ public:
     }
 };
 
+// ------------------------------------------------------ talk, classic ---
+// talk(1)'s own screen, in the chat pane: what you type on top, a rule
+// naming them and the call, what they type below - both as typed, a
+// keystroke at a time (erase, kill and word-erase too).  The window keeps
+// it filled from the conversation's lines; it only types.
+class TTalkView : public TView
+{
+public:
+    std::vector<std::string> mine, theirs; // finished lines, oldest first
+    std::string cur;                       // ours, unfinished (sent key by key already)
+    std::string typing;                    // theirs, unfinished
+    std::string rule;                      // "miche - connected"
+    std::function<void(const std::string &)> keys; // keystrokes to the backend
+    std::function<bool()> live;                    // a session to type into
+    std::function<void()> enterOff;                // Enter with none: answer, or say why not
+
+    TTalkView(const TRect &b) : TView(b)
+    {
+        options |= ofSelectable;
+        growMode = 0; // placed by changeBounds(), as the log is
+        showCursor();
+    }
+
+    // s cut into rows of at most w columns, never inside a character
+    static std::vector<std::string> wrap(const std::string &s, int w)
+    {
+        std::vector<std::string> out;
+        size_t at = 0;
+        do
+        {
+            size_t len = 0, width = 0;
+            TStringView rest = TStringView(s).substr(at);
+            TText::scroll(rest, std::max(w, 1), False, len, width);
+            if (len == 0 && !rest.empty())
+                len = TText::next(rest); // one character wider than the row
+            out.push_back(s.substr(at, len));
+            at += len;
+        } while (at < s.size());
+        return out;
+    }
+
+    // the last `rows` rows of the lines and the unfinished one after them
+    static std::vector<std::string> tail(const std::vector<std::string> &lines,
+                                         const std::string &last, int w, int rows)
+    {
+        std::vector<std::string> all;
+        for (const std::string &l : lines)
+            for (std::string &p : wrap(l, w))
+                all.push_back(std::move(p));
+        for (std::string &p : wrap(last, w))
+            all.push_back(std::move(p));
+        if ((int)all.size() > rows)
+            all.erase(all.begin(), all.end() - std::max(rows, 0));
+        return all;
+    }
+
+    void draw() override
+    {
+        int W = size.x, H = size.y;
+        int top = std::max(1, (H - 1) / 2); // rows for you; the rule; the rest for them
+        TDrawBuffer b;
+        std::vector<std::string> me = tail(mine, cur, W, top);
+        for (int y = 0; y < top; ++y)
+        {
+            b.moveChar(0, ' ', cNorm(), W);
+            if (y < (int)me.size())
+                b.moveStr(0, me[y], cOwn());
+            writeLine(0, y, W, 1, b);
+        }
+        b.moveChar(0, '\xC4', cDiv(), W); // the rule, as the panes' dividers
+        b.moveStr(2, fitCols(" " + rule + " ", std::max(W - 4, 0)), cDiv());
+        writeLine(0, top, W, 1, b);
+        int rows = H - top - 1;
+        std::vector<std::string> them = tail(theirs, typing, W, rows);
+        for (int y = 0; y < rows; ++y)
+        {
+            b.moveChar(0, ' ', cNorm(), W);
+            if (y < (int)them.size())
+                b.moveStr(0, them[y], cNorm());
+            writeLine(0, top + 1 + y, W, 1, b);
+        }
+        int cy = std::max(0, (int)me.size() - 1);
+        int cx = me.empty() ? 0 : std::min(W - 1, (int)TText::width(me.back()));
+        setCursor(cx, cy);
+    }
+
+    void handleEvent(TEvent &e) override
+    {
+        TView::handleEvent(e);
+        if (e.what != evKeyDown || !(state & sfFocused))
+            return;
+        ushort k = e.keyDown.keyCode;
+        bool mod = e.keyDown.controlKeyState & (kbCtrlShift | kbAltShift);
+        std::string send;
+        if (k == kbEnter)
+        {
+            if (!live || !live())
+            {
+                if (enterOff)
+                    enterOff();
+                clearEvent(e);
+                return;
+            }
+            send = "\n";
+            mine.push_back(cur); // the backend's copy replaces it on the next refill
+            cur.clear();
+        }
+        else if (k == kbBack)
+        {
+            send = "\x7f";
+            while (!cur.empty() && ((uchar)cur.back() & 0xC0) == 0x80)
+                cur.pop_back();
+            if (!cur.empty())
+                cur.pop_back();
+        }
+        else if (k == kbCtrlU)
+        {
+            send = "\x15";
+            cur.clear();
+        }
+        else if (k == kbCtrlW)
+        {
+            send = "\x17";
+            while (!cur.empty() && cur.back() == ' ')
+                cur.pop_back();
+            while (!cur.empty() && cur.back() != ' ')
+                cur.pop_back();
+        }
+        else if (e.keyDown.textLength > 0 && !mod)
+        {
+            send.assign(e.keyDown.text, e.keyDown.textLength);
+            cur += send;
+        }
+        else
+            return; // not ours: scrolling keys, menus, Tab ...
+        if (!live || !live())
+        {
+            flashStatus("Not talking yet - nothing is sent");
+            cur.clear();
+        }
+        else if (keys)
+            keys(send);
+        drawView();
+        clearEvent(e);
+    }
+
+    void setState(ushort aState, Boolean enable) override
+    {
+        TView::setState(aState, enable);
+        if (enable && (aState & sfFocused) && owner)
+            message(owner, evBroadcast, cmPaneFocused, this);
+    }
+};
+
 // Conversations of one account in list order: its server messages, then
 // channels, groups and direct talk, by name.
 std::vector<std::string> convsOf(const std::string &acct)
@@ -468,6 +653,8 @@ public:
         std::string t = c.kind == "server" ? std::string("* server messages") : c.title;
         if (c.kind != "server" && c.unread > 0)
             t += " (" + std::to_string(c.unread) + ")";
+        if (c.state == "incoming")
+            t += "  - calling you";
         putText(dest, t, maxLen);
     }
 };
@@ -485,6 +672,9 @@ class TChatMainWindow : public TWindow
     TConvPane *convs = nullptr;
     TChatPaneLog *log = nullptr;
     TChatInput *input = nullptr;
+    TTalkView *talk = nullptr;                   // the chat pane of a talk call in classic
+    std::map<std::string, bool> classicOf;      // per talk conversation: the view picked
+    std::map<std::string, std::string> talkCur; // per talk conversation: our unfinished line
 
     std::string acct, conv, name;                  // shown: account, conversation, its name
     std::map<std::string, std::string> lastConv;   // per account: the conversation last shown
@@ -526,7 +716,78 @@ class TChatMainWindow : public TWindow
     }
 
     bool front() const { return (state & sfActive) && (state & sfSelected); }
-    bool inChatPane() const { return current == input || current == log; }
+    bool inChatPane() const { return current == input || current == log || current == talk; }
+
+    // the shown talk conversation in classic: its account's talk_view
+    // until View > Talk view switches it
+    bool classic() const
+    {
+        if (!isTalk(conv))
+            return false;
+        auto it = classicOf.find(conv);
+        if (it != classicOf.end())
+            return it->second;
+        const ChatAccount *a = findAccount(accountIdOf(conv));
+        return !a || a->view != "irc";
+    }
+    // where typing goes: the input line, or the classic pane
+    TView *chatPane() const { return classic() ? (TView *)talk : (TView *)input; }
+    std::string callState() const
+    {
+        const ChatConv *c = convOf(conv);
+        return c ? c->state : std::string();
+    }
+
+    // The chat pane for the conversation shown: the log and the input, or
+    // talk's split screen.  The focus follows to what is shown.
+    void applyView()
+    {
+        bool c = classic();
+        TView *was = current;
+        bool wasHere = was == input || was == log || was == talk;
+        TView *irc[] = {log, logVsb, prompt, input};
+        for (TView *v : irc)
+            if (c)
+                v->hide();
+            else
+                v->show();
+        if (c)
+            talk->show();
+        else
+            talk->hide();
+        // hiding a selectable view makes tvision reset the focus to the
+        // first one (the server pane): put it back where it belongs
+        if (wasHere)
+            chatPane()->select();
+        else if (was && (was->state & sfVisible))
+            was->select();
+        refillTalk();
+    }
+
+    // The classic pane from the conversation's lines: ours on top, theirs
+    // below, notes (flag n) in neither - the rule says how the call stands.
+    void refillTalk()
+    {
+        if (!talk || !classic())
+            return;
+        talk->mine.clear();
+        talk->theirs.clear();
+        for (const ChatLine &m : msgs)
+            if (!m.has('n'))
+                (m.has('s') ? talk->mine : talk->theirs).push_back(m.text);
+        const ChatConv *c = convOf(conv);
+        talk->typing = c ? c->typing : std::string();
+        talk->rule = name + " \xE2\x80\x94 " + callNote(callState());
+        talk->drawView();
+    }
+
+    void answerCall()
+    {
+        std::string body, err;
+        if (!ask("answer " + shq(conv), body, err))
+            flashStatus(err);
+        pollNow();
+    }
     bool isServer() const
     {
         auto it = chat().convs().find(conv);
@@ -556,7 +817,15 @@ class TChatMainWindow : public TWindow
         std::vector<char> ks;
         for (const ChatLine &m : msgs)
             renderLine(m, ls, ks);
+        // a talk call in IRC mode: that they are typing, under the last line
+        const ChatConv *c = isTalk(conv) && !classic() ? convOf(conv) : nullptr;
+        if (c && !c->typing.empty())
+        {
+            ls.push_back(nowHHMM() + " -- " + name + " is typing...");
+            ks.push_back(lkSystem);
+        }
         log->show(std::move(ls), std::move(ks), top, keepSel);
+        refillTalk();
     }
 
     void loadHistory()
@@ -667,6 +936,12 @@ class TChatMainWindow : public TWindow
     void sendInput()
     {
         std::string text = inputText();
+        // a talk call ringing here: Enter answers (what you typed stays)
+        if (isTalk(conv) && callState() == "incoming")
+        {
+            answerCall();
+            return;
+        }
         if (trimmed(text).empty())
             return;
         // the server messages take /commands (/join, /msg, /nick ...) only
@@ -694,7 +969,10 @@ class TChatMainWindow : public TWindow
             name = n;
         else if (conv.empty())
             name = "Chat";
-        logTitle->setLabel(isServer() ? name.substr(0, name.rfind(" (server)")) + " - server messages" : name);
+        if (isTalk(conv))
+            logTitle->setLabel(name + " \xE2\x80\x94 talk: " + callNote(callState()));
+        else
+            logTitle->setLabel(isServer() ? name.substr(0, name.rfind(" (server)")) + " - server messages" : name);
         const ChatAccount *a = findAccount(acct);
         convTitle->setLabel(a ? "Conversations - " + menuSafe(a->display) : std::string("Conversations"));
         // "tvchat (3)" while it is not the window you are in (Help is):
@@ -743,14 +1021,17 @@ class TChatMainWindow : public TWindow
                 drafts.erase(conv);
             else
                 drafts[conv] = d;
+            talkCur[conv] = talk->cur;
         }
         conv = c;
         if (!acct.empty())
             lastConv[acct] = conv;
         auto d = drafts.find(conv);
         setInput(d != drafts.end() ? d->second : std::string());
+        talk->cur = talkCur[conv];
         name = convName(conv);
         loadHistory();
+        applyView();
         updateTitles();
         markRead();
     }
@@ -768,7 +1049,7 @@ class TChatMainWindow : public TWindow
     {
         srvTitle->setActive(Boolean(v == servers));
         convTitle->setActive(Boolean(v == convs));
-        logTitle->setActive(Boolean(v == log || v == input));
+        logTitle->setActive(Boolean(v == log || v == input || v == talk));
     }
 
     void onEvent(const ChatEvent &ev)
@@ -801,6 +1082,23 @@ class TChatMainWindow : public TWindow
         }
         else if (t == "topic" && f.size() >= 3 && f[1] == conv)
             note("topic: " + f[2]);
+        // a talk call: its state (the heading, the classic rule, the list),
+        // and the other side's unfinished line
+        else if (t == "talk" && f.size() >= 3)
+        {
+            if (f[2] == "incoming" && (f[1] != conv || !front()))
+                flashStatus(convName(f[1]) + " is calling (talk) - pick them in the chat window, Enter answers");
+            if (f[2] == "ended" && f[1] == conv)
+                talk->cur.clear();
+            convs->drawView();
+            if (f[1] == conv)
+            {
+                updateTitles();
+                render(log->atBottom() ? -1 : log->firstShownLine(), true);
+            }
+        }
+        else if (t == "typing" && f.size() >= 3 && f[1] == conv)
+            render(log->atBottom() ? -1 : log->firstShownLine(), true);
         // the server's own history (IRCv3 chathistory) was merged in:
         // "latest" on joining - read it all again; "before" - what PgUp
         // at the top asked the server for has come
@@ -844,6 +1142,31 @@ public:
         { loadOlder(); };
         prompt = new TStaticText(R.prompt, ">");
         input = new TChatInput(R.input, 2000);
+        talk = new TTalkView(TRect(R.log.a.x, R.log.a.y, R.input.b.x, R.input.b.y));
+        talk->keys = [this](const std::string &k)
+        {
+            // a request is one line: newline, CR, TAB and backslash go
+            // escaped, as reply fields do (the backend's `keys` undoes it)
+            std::string esc;
+            for (char ch : k)
+                esc += ch == '\n' ? "\\n" : ch == '\r' ? "\\r" : ch == '\t' ? "\\t"
+                     : ch == '\\' ? "\\\\" : std::string(1, ch);
+            std::string body, err;
+            if (!ask("keys " + shq(conv) + " " + shq(esc), body, err))
+                flashStatus(err);
+            else if (k == "\n")
+                pollNow(); // our finished line, from the backend, at once
+        };
+        talk->live = [this]
+        { return callState() == "connected"; };
+        talk->enterOff = [this]
+        {
+            if (callState() == "incoming")
+                answerCall();
+            else
+                flashStatus(name + ": " + callNote(callState()));
+        };
+        talk->hide();
 
         insert(vdiv);
         insert(srvTitle);
@@ -853,6 +1176,7 @@ public:
         insert(logVsb);
         insert(prompt);
         insert(log);
+        insert(talk);
         insert(convs);
         insert(input);
         insert(servers); // first to have the focus; Tab: see handleEvent
@@ -884,11 +1208,40 @@ public:
         }
         convs->setIds(convs->ids, c); // a channel just joined is not listed yet
         showConv(c);
-        input->select();
+        chatPane()->select();
     }
 
     const std::string &convId() const { return conv; }
     bool showingServer() const { return isServer(); }
+    bool showingCall() const { return isTalk(conv) && callState() == "incoming"; }
+
+    // Chat > Answer
+    void answerShown()
+    {
+        if (!showingCall())
+        {
+            flashStatus("Nobody is calling in the conversation shown");
+            return;
+        }
+        answerCall();
+        chatPane()->select();
+    }
+
+    // View > Talk view: classic <-> IRC, for this conversation
+    void toggleTalkView()
+    {
+        if (!isTalk(conv))
+        {
+            flashStatus("Talk view: show a talk conversation first");
+            return;
+        }
+        classicOf[conv] = !classic();
+        applyView();
+        render(-1, false);
+        chatPane()->select();
+        flashStatus(std::string("Talk view: ") + (classic() ? "classic - every keystroke is sent"
+                                                            : "IRC - whole lines, sent with Enter"));
+    }
     bool unsent() const
     {
         if (!trimmed(inputText()).empty())
@@ -933,7 +1286,7 @@ public:
         // it goes on as from the input
         if (e.what == evKeyDown && (e.keyDown.keyCode == kbTab || e.keyDown.keyCode == kbShiftTab))
         {
-            TView *order[] = {servers, convs, input};
+            TView *order[] = {servers, convs, chatPane()};
             int at = current == servers ? 0 : current == convs ? 1 : 2;
             at = (at + (e.keyDown.keyCode == kbTab ? 1 : 2)) % 3;
             order[at]->select();
@@ -981,7 +1334,7 @@ public:
             }
             else if (e.message.infoPtr == convs)
             {
-                input->select();
+                chatPane()->select();
                 clearEvent(e);
             }
             break;
@@ -1034,6 +1387,7 @@ public:
         convs = nullptr;
         log = nullptr;
         input = nullptr;
+        talk = nullptr;
         TWindow::shutDown();
     }
 
@@ -1052,6 +1406,7 @@ public:
         logVsb->changeBounds(R.logVsb);
         prompt->changeBounds(R.prompt);
         input->changeBounds(R.input);
+        talk->changeBounds(TRect(R.log.a.x, R.log.a.y, R.input.b.x, R.input.b.y));
     }
 
     TColorAttr mapColor(uchar index) override { return cyanWindowColor(index, this); }
@@ -1260,6 +1615,7 @@ TMenu *buildChatMenu()
     add(new TMenuItem("~C~onnect...", cmChatConnect, kbNoKey, hcNoContext));
     add(new TMenuItem("~D~isconnect...", cmChatDisconnect, kbNoKey, hcNoContext));
     add(new TMenuItem("~J~oin...", cmChatJoin, kbNoKey, hcNoContext));
+    add(new TMenuItem("~A~nswer", cmChatAnswer, kbNoKey, hcNoContext));
     add(new TMenuItem("~L~eave", cmChatLeave, kbNoKey, hcNoContext));
     add(&newLine());
     const auto &as = chat().accounts();
@@ -1309,10 +1665,12 @@ void chatMenuGrey()
         return;
     bool on = chatOn();
     bool inChat = chatInFront() && !gChatWin->showingServer();
+    bool call = chatInFront() && gChatWin->showingCall();
     for (TMenuItem *p = gChatItem->subMenu->items; p; p = p->next)
         if (p->name && p->command)
             p->disabled = Boolean(!on || p->command == cmChatOff ||
-                                  (p->command == cmChatLeave && !inChat));
+                                  (p->command == cmChatLeave && !inChat) ||
+                                  (p->command == cmChatAnswer && !call));
 }
 
 bool chatCommand(ushort command)
@@ -1339,6 +1697,15 @@ bool chatCommand(ushort command)
         break;
     case cmChatLeave:
         leaveShown();
+        break;
+    case cmChatAnswer:
+    case cmChatTalkView:
+        if (!chatInFront())
+            flashStatus("Show the chat window first (Alt-0 lists the windows)");
+        else if (command == cmChatAnswer)
+            gChatWin->answerShown();
+        else
+            gChatWin->toggleTalkView();
         break;
     default:
         if (command >= cmChatAccount)

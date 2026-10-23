@@ -13,6 +13,11 @@
 - **Typed commands:** `/me`, `/join`, `/part`, `/msg`, `/nick`, `/topic`,
   `/quote` (`//` for a line starting with `/`); any other `/word` is
   refused and stays in the input line. The server messages take commands.
+- **talk(1)** (`protocol = talk`, milestone 6): through chat-setup's talkd on
+  the LAN master. Join calls, Enter (or Chat > Answer) answers, Leave hangs
+  up. Two views, View > Talk view (Ctrl-T): classic - talk's split screen,
+  every keystroke sent (the default, `talk_view`) - or IRC - the log, whole
+  lines, "... is typing".
 - **Server history:** with IRCv3 `chathistory` (Ergo), joining fetches the
   latest 50, and PgUp past what is kept asks the server for 50 more.
 

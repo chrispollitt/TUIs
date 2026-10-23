@@ -37,6 +37,13 @@ running as a co-process. The two apps share their common C++ in
   Ergo does). A line can be a command: `/me`, `/join`, `/part`, `/msg`,
   `/nick`, `/topic`, `/quote`; the server messages take commands only.
 
+**talk(1)** too (`protocol = talk`): through the one talkd on the LAN master
+(chrispollitt/POSIX `chat-setup`), so a plain `talk you@cpbee` from any shell
+rings you in tvchat. Chat > Join... calls, Enter answers, Chat > Leave hangs
+up. A talk conversation has two views, View > Talk view (Ctrl-T): *classic*,
+talk's own split screen in the chat pane with every keystroke sent (the
+default), or *IRC*, the log with whole lines and "... is typing".
+
 A lost connection comes back by itself: tvchat pings a quiet server, and
 reconnects after 2 s, 4 s, 8 s ... up to 5 minutes, rejoining its channels.
 What you send is paced (a burst of 5 lines, then 2 a second), so a long

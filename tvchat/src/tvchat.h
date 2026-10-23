@@ -20,9 +20,11 @@ const ushort cmChatEvent = 2101;  // broadcast, one per event: infoPtr = const C
 const ushort cmChatReset = 2102;  // broadcast: the chat backend restarted, re-read everything
 const ushort cmChatConnect = 2103;    // Chat > Connect... (pick an account)
 const ushort cmChatDisconnect = 2104; // Chat > Disconnect
+const ushort cmChatAnswer = 2105;     // Chat > Answer: a talk call to the conversation shown
 const ushort cmChatJoin = 2106;       // Chat > Join... (channel, nick or address)
 const ushort cmChatLeave = 2107;      // Chat > Leave: part the conversation the chat window shows
 const ushort cmChatOff = 2108;        // a note in a menu or the status line: never does anything
+const ushort cmChatTalkView = 2109;   // View > Talk view: classic <-> IRC, for the talk conversation shown
 const ushort cmChatAccount = 2110;    // + i: Chat > <account i> shows it in the chat window
 const int kChatMaxAccounts = 30;      // so 2110-2139
 const ushort cmChatAcctPicked = 2140; // broadcast: the chat window's server pane moved

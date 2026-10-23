@@ -255,6 +255,111 @@ def chat_typed_commands(opts):
     return tv
 
 
+def talk_tv(opts, view=None):
+    from fake_talkd import FakeTalkd
+    srv = FakeTalkd()
+    srv.start()
+    conf = srv.conf(view=view)
+    srv.conf = lambda: conf              # Tv writes srv.conf() as tvchat.conf
+    try:
+        tv = Tv(opts, srv)
+    except Exception:
+        srv.stop()
+        raise
+    return tv, srv
+
+
+def talk_rule(tv, text):
+    """The row of the classic view's rule holding text, or None."""
+    return next((y for y, l in enumerate(tv.lines()) if "─ " + text in l), None)
+
+
+@case()
+def talk_classic_call_in(opts):
+    tv, srv = talk_tv(opts)                      # talk_view not set: classic
+    c = Case(tv)
+    started(tv, c)
+    c.check(srv.greeted(), "tvchat-backend never said HELLO to talkd")
+    c.check(tv.wait(lambda: re.search(r"Talk\b.*connected", tv.text()), 5),
+            "the server pane does not show Talk connected")
+    srv.ring("miche@cpbee", "t1")
+    c.check(tv.wait("miche is calling", 4), "a talk call did not say so on the status line")
+    tv.send("Enter")                             # Servers -> Conversations
+    c.check(tv.wait(lambda: re.search(r"miche.*- calling you", tv.text()), 4),
+            "the conversation list does not show miche calling")
+    tv.send("Down", "Enter", settle=0.8)         # onto miche, into the chat pane
+    c.check(tv.wait("talk: calling you - Enter answers", 3),
+            "the heading does not say how to answer")
+    tv.send("Enter", settle=0.8)                 # answers
+    c.check(srv.wait(lambda: srv.sent("ACCEPT t1")), "Enter did not ACCEPT the call")
+    c.check(srv.attached(), "the session never attached")
+    c.check(tv.wait(lambda: talk_rule(tv, "miche — connected") is not None, 4),
+            "classic: no rule saying miche - connected")
+    # theirs: as typed, their own erase (^H) applied; an unfinished line live
+    srv.peer("hi chrix\x08s\nhalf a li")
+    c.check(tv.wait("half a li", 4), "classic: their unfinished line does not show as typed")
+    rule = talk_rule(tv, "miche")
+    lines = tv.lines()
+    below = "\n".join(lines[rule + 1:])
+    c.check(rule is not None and "hi chris" in below and "hi chrix" not in below and
+            "half a li" in below, "classic: their text is not below the rule, erase applied")
+    # ours: every keystroke at once, Backspace as our erase
+    tv.send("y", "o", "u", "\x7f", settle=0.6)
+    c.check(srv.wait(lambda: srv.heard() == b"you\x7f", 3),
+            "classic: keystrokes were not sent as typed: %r" % srv.heard())
+    above = "\n".join(tv.lines()[:talk_rule(tv, "miche")])
+    c.check("yo" in above and "you" not in above, "classic: our line is not above the rule as typed")
+    tv.send("Enter", settle=0.6)
+    c.check(srv.wait(lambda: srv.heard() == b"you\x7f\n", 3), "classic: Enter did not send a newline")
+    srv.hang_up()
+    c.check(tv.wait(lambda: talk_rule(tv, "miche — hung up") is not None, 4),
+            "the rule does not say the call ended")
+    c.check(tv.alive(), "tvchat exited")
+    return tv
+
+
+@case()
+def talk_irc_mode_call_out_and_toggle(opts):
+    tv, srv = talk_tv(opts, view="irc")
+    c = Case(tv)
+    started(tv, c)
+    c.check(srv.greeted(), "tvchat-backend never said HELLO to talkd")
+    c.check(tv.wait(lambda: re.search(r"Talk\b.*connected", tv.text()), 5),
+            "the server pane does not show Talk connected")
+    tv.send(alt("a"), "j")
+    c.check(tv.wait("nick / address to talk to", 3), "Chat > Join... did not ask")
+    tv.send("miche", "Enter", settle=0.8)
+    c.check(srv.wait(lambda: srv.sent("CALL ")), "Join did not CALL")
+    cid = srv.sent("CALL ")[0].split()[1]
+    c.check(tv.wait("talk: ringing...", 4), "the heading does not say it is ringing")
+    srv.connect(cid)
+    c.check(srv.attached(), "the session never attached")
+    c.check(tv.wait("talk: connected", 4), "the heading does not say connected")
+    # IRC mode: nothing goes until Enter, then the whole line
+    tv.send("hello there", settle=0.6)
+    c.check(srv.heard() == b"", "IRC mode sent keystrokes before Enter: %r" % srv.heard())
+    tv.send("Enter", settle=0.6)
+    c.check(srv.wait(lambda: srv.heard() == b"hello there\n", 3),
+            "IRC mode: the line did not go on Enter: %r" % srv.heard())
+    c.check(tv.wait("<chris> hello there", 3), "IRC mode: our line is not in the log")
+    srv.peer("typ")
+    c.check(tv.wait("miche is typing...", 4), "IRC mode: no 'miche is typing...'")
+    srv.peer("ed a line\n")
+    c.check(tv.wait("<miche> typed a line", 4), "IRC mode: their finished line is not in the log")
+    c.check(tv.wait(lambda: not tv.has("is typing..."), 3), "'is typing...' stayed after the line ended")
+    # Ctrl-T: classic for this conversation, and back
+    tv.send("\x14", settle=0.8)
+    c.check(tv.wait(lambda: talk_rule(tv, "miche — connected") is not None, 3),
+            "Ctrl-T did not switch to the classic view")
+    tv.send("x", settle=0.5)
+    c.check(srv.wait(lambda: srv.heard().endswith(b"\nx"), 3), "classic after Ctrl-T: a keystroke did not go at once")
+    tv.send("\x14", settle=0.8)
+    c.check(tv.wait(lambda: talk_rule(tv, "miche") is None and tv.has("<miche> typed a line"), 3),
+            "Ctrl-T again did not come back to the log")
+    c.check(tv.alive(), "tvchat exited")
+    return tv
+
+
 @case()
 def chat_log_utf8_columns(opts):
     tv, srv = chat_tv(opts)

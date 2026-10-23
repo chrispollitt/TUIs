@@ -68,6 +68,30 @@ event follows; joining a channel asks for its latest 50 the same way
 (event
 .BR "history CONV latest" ).
 .PP
+A
+.B protocol = talk
+account is a client of chat-setup's talkd on the LAN master (\fBhost\fP,
+\fBport\fP 518, \fBuser\fP, \fBtalk_view\fP classic | irc):
+.B join
+calls,
+.B answer
+.I CONV
+answers a call,
+.B part
+hangs up or declines;
+.B send
+sends whole lines,
+.B keys
+.I CONV TEXT
+keystrokes as typed (TEXT escaped as reply fields are).
+Events:
+.B talk
+.I CONV STATE DETAIL
+(calling, ringing, incoming, connected, ended) and
+.B typing
+.I CONV TEXT
+(the other side's unfinished line).
+.PP
 A quiet IRC server gets a PING after 90 s, and the connection is dead
 after 30 s more with no answer.
 A connection that was up and is lost is made again after 2, 4, 8 ... up to

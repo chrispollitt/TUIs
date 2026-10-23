@@ -73,6 +73,7 @@ TMenuBar *TVChatApp::initMenuBar(TRect r)
                             *new TMenuItem("Find a~g~ain", cmSearchAgain, kbNoKey, hcNoContext) +
                             *new TSubMenu("~V~iew", kbAltV) +
                             *new TMenuItem("~W~rap long lines", cmToggleWrap, kbNoKey, hcNoContext) +
+                            *new TMenuItem("~T~alk view: classic / IRC", cmChatTalkView, kbCtrlT, hcNoContext, "Ctrl-T") +
                             chatSubMenu() +
                             *new TSubMenu("~W~indow", kbAltW) +
                             *new TMenuItem("~N~ext", cmNext, kbF6, hcNoContext, "F6") +
