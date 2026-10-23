@@ -210,9 +210,15 @@ kill, word-erase), then text.
    tvchat asks talkd to call user[@host]; talkd does the LEAVE_INVITE /
    ANNOUNCE ritual (to itself or to another host's talkd) with its own
    relay port as the address.
-3. **`configure-talkd.sh`** - written Oct 22 (POSIX), **not run on cpbee
-   yet**: Chris runs it there (`--firewall-plan` first, then
-   `--open-firewall`), then an interop check with Debian's `talk`.
+3. **`configure-talkd.sh`** - done; **live check passed Oct 22**: Chris and
+   miche, both ssh'd into cpbee, talked with Debian's `talk` (netkit
+   0.17) through our talkd.  Three fixes on the way (POSIX e574cdd,
+   9b29f81, 47db1f9): the script stopped silently under `set -e` (now an
+   ERR trap names the line); talkd answered 127.0.1.1 requests from
+   127.0.0.1, which Debian's talk (it connect()s) never saw - now
+   IP_PKTINFO; Debian 13 has no /run/utmp (`who` uses logind) - talkd
+   now reads the terminals' owners where utmp is missing.  Not yet run:
+   `--open-firewall` (needed before tvchat on a laptop can reach TCP 518).
    cmpi-router's `setup-router.sh` (master copy on cmlaptop,
    ~/src/Claude/cmpi-router, not git; copied to cpbee) now reads
    `/etc/router-setup/lan0-udp-ports` (Chris chose this over a live rule).
