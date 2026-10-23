@@ -45,13 +45,17 @@ Stop for Chris's review after each milestone.
 
 ## Small to-dos from Chris (Oct 23) - not started
 
-- **Servers pane: always show the protocol, in brackets** - `Libera [irc]`
-  (irc, talk, deltachat ...) - **but not twice**: when the account's name
-  already says it as a whole word, case-insensitively (`cpbee talk`, `My
-  IRC`), the bracket is left off - never `cpbee talk [talk]` (Chris, Oct 23).
-  `TServerPane::getText` in `tvchat/src/chatwin.cpp`; the protocol is
-  `ChatAccount::protocol`.  Alternative if that reads badly: take the word
-  out of the name and bracket it (`cpbee [talk]`).
+- **Servers pane: always show the protocol, in brackets** - `Libera [irc]`,
+  `cpbee [talk]` (irc, talk, deltachat ...) - on EVERY row (Chris, Oct 23).
+  When the account's name already says the protocol as a whole word,
+  case-insensitively (`cpbee talk`, `My IRC`), take that word out of the name
+  and keep the bracket: `cpbee talk` -> `cpbee [talk]`, never `cpbee talk
+  [talk]`.  Tidy the name: collapse the spaces left behind, drop a dangling
+  `-`, `:` or `(`/`)`; if nothing is left (a name that is just `talk`) show
+  the account id.  Pane only: the Chat menu, dialogs and window headings keep
+  the display name as configured.  `TServerPane::getText` in
+  `tvchat/src/chatwin.cpp`; the protocol is `ChatAccount::protocol`.  Test
+  the name rule on its own (a plain function) and on screen.
 - **Shorten the state to `con` / `dis`** (connected / disconnected) in the same
   pane, to save width.  Probably `connecting` -> `...ing` too (decide when
   doing it, e.g. `try`), and `error` stays - the Chat menu and the Connect /
