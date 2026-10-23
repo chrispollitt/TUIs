@@ -1106,6 +1106,334 @@ class TestIrcHardening(IrcBase):
         self.chat.close()
 
 
+# --------------------------------------------------------------------------
+# talk(1): a scripted fake of chat-setup's talkd (its control protocol, and
+# the ATTACH connection a CONNECT asks for), then the real talkd when a
+# chrispollitt/POSIX checkout with chat-setup/talkd/talkd.py is at hand.
+# --------------------------------------------------------------------------
+class FakeTalkd:
+    def __init__(self, script):
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen(4)
+        self.port = self.sock.getsockname()[1]
+        self.script = script
+        self.got = []
+        self.error = None
+        self.conn = None
+        self.buf = b""
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def _run(self):
+        try:
+            self.sock.settimeout(10)
+            self.conn, _ = self.sock.accept()
+            self.conn.settimeout(10)
+            self.script(self)
+        except Exception as e:
+            self.error = e
+
+    def send(self, text):
+        self.conn.sendall(text.encode("utf-8") + b"\n")
+
+    def expect(self, prefix):
+        while True:
+            while b"\n" not in self.buf:
+                data = self.conn.recv(4096)
+                if not data:
+                    raise AssertionError("tvchat hung up waiting for %r" % prefix)
+                self.buf += data
+            ln, self.buf = self.buf.split(b"\n", 1)
+            ln = ln.decode("utf-8")
+            self.got.append(ln)
+            if ln.startswith(prefix):
+                return ln
+
+    def data(self, token):
+        """The session connection tvchat opens for CONNECT ... TOKEN: (socket,
+        what came after the ATTACH line)."""
+        s, _ = self.sock.accept()
+        s.settimeout(10)
+        buf = b""
+        while b"\n" not in buf:
+            buf += s.recv(4096)
+        first, rest = buf.split(b"\n", 1)
+        if first != b"ATTACH " + token.encode():
+            raise AssertionError("wanted ATTACH %s, got %r" % (token, first))
+        return s, rest
+
+    def close(self):
+        for s in (self.conn, self.sock):
+            try:
+                s.close()
+            except Exception:
+                pass
+
+
+def recv_some(s, want, secs=5):
+    s.settimeout(secs)
+    got = b""
+    while want not in got:
+        data = s.recv(4096)
+        if not data:
+            break
+        got += data
+    return got
+
+
+class TalkBase(IrcBase):
+    def setup_talk(self, script, extra="", port=None):
+        srv = FakeTalkd(script)
+        self.addCleanup(srv.close)
+        self.conf("""\
+            [account:talk]
+            protocol = talk
+            display  = cpbee talk
+            host     = 127.0.0.1
+            port     = %d
+            user     = chris
+            %s
+            """ % (port or srv.port, extra))
+        self.chat = cb._chat()
+        self.acct = self.chat.by_id["talk"]
+        self.srv = srv
+        return srv
+
+    def hello(self, srv):
+        srv.expect("HELLO chris")
+        srv.send("OK chris@cpbee")
+
+    def talks(self, conv_id):
+        return [f[2:] for f in self.events("talk") if f[1] == conv_id]
+
+
+class TestTalk(TalkBase):
+    def test_config_and_wire(self):
+        self.conf("""\
+            [account:t]
+            protocol = talk
+            host = cpbee
+            [account:i]
+            protocol = irc
+            host = x
+            """)
+        chat = cb._chat()
+        self.assertEqual(chat.by_id["t"].wire(), "t\ttalk\tdisconnected\tt\tclassic\n")
+        self.assertEqual(chat.by_id["i"].wire(), "i\tirc\tdisconnected\ti\n")   # as before
+        cb._CHAT = None
+        self.conf("[account:t]\nprotocol = talk\ntalk_view = irc\n")
+        self.assertEqual(cb._chat().by_id["t"].view, "irc")
+        cb._CHAT = None
+        self.conf("[account:t]\nprotocol = talk\ntalk_view = split\n")
+        with self.assertRaises(cb.UserError) as e:
+            cb.load_config()
+        self.assertIn("talk_view must be one of classic, irc", str(e.exception))
+
+    def test_editing_a_line(self):
+        def run(chars, edit="\x7f\x15\x17"):
+            line, done = "", []
+            for ch in chars:
+                line, d = cb._edit_line(line, ch, *edit)
+                if d is not None:
+                    done.append(d)
+            return line, done
+        self.assertEqual(run("hellp\x7fo"), ("hello", []))
+        self.assertEqual(run("abc\x08d"), ("abd", []))                 # ^H too
+        self.assertEqual(run("one two three\x17"), ("one two ", []))
+        self.assertEqual(run("one two  \x17"), ("one ", []))
+        self.assertEqual(run("word\x17"), ("", []))
+        self.assertEqual(run("gone\x15kept\n"), ("", ["kept"]))
+        self.assertEqual(run("a\x07b\x0cc"), ("abc", []))              # bell, ^L: nothing
+        self.assertEqual(run("x#y", edit="#@!"), ("y", []))             # their own erase
+        self.assertEqual(run("x" * 1000)[1], ["x" * 1000])              # cut at the cap
+
+    def test_calling_out_classic_and_irc_lines(self):
+        stage = {}
+
+        def script(srv):
+            self.hello(srv)
+            call = srv.expect("CALL ")
+            stage["call"] = call
+            cid = call.split()[1]
+            srv.send("STATE %s ringing miche on pts/1" % cid)
+            srv.send("CONNECT %s tok1" % cid)
+            s, first = srv.data("tok1")
+            # tvchat's three edit characters (in the ATTACH write, or after it)
+            stage["edit"] = (first if len(first) >= 3 else first + recv_some(s, b"\x17"))[:3]
+            # miche's talk: ^H as her erase; a line, then half of one
+            s.sendall(b"\x08\x15\x17hix\x08 there\nhalf")
+            # the keys raw, erase and all (the receiver applies it), then lines
+            stage["lines"] = recv_some(s, b"line two\n")
+            s.close()                            # she hangs up
+            srv.expect("QUIT-never")
+
+        self.setup_talk(script)
+        self.verb("connect", "talk")
+        self.turn(lambda: self.acct.state == "connected")
+        self.assertEqual(self.acct.detail, "chris@cpbee")
+        self.assertEqual(self.verb("join", "talk", "miche"), (0, b"talk/miche\n"))
+        self.turn(lambda: "call" in stage)             # the fake runs on its own thread
+        self.assertTrue(stage["call"].endswith(" miche"))
+        self.turn(lambda: ("connected", "") in self.talks("talk/miche"))
+        self.assertIn(("ringing", "ringing miche on pts/1"), self.talks("talk/miche"))
+        self.turn(lambda: "edit" in stage)
+        self.assertEqual(stage["edit"], b"\x7f\x15\x17")       # ours, first
+        self.turn(lambda: ("typing", "talk/miche", "half") in self.events("typing"))
+        theirs = [m for m in self.msgs() if m[1] == "talk/miche" and m[5] == ""]
+        self.assertEqual([(m[3], m[6]) for m in theirs], [("miche", "hi there")])
+        self.assertEqual(self.acct.convs["talk/miche"].unread, 1)
+        # classic: keystrokes go as typed; a finished line is ours in the log
+        self.assertEqual(self.verb("keys", "talk/miche", "ab\x7fc\n"), (0, b""))
+        # irc mode: whole lines
+        self.assertEqual(self.verb("send", "talk/miche", "line one\nline two")[0], 0)
+        self.turn(lambda: "lines" in stage)
+        self.assertEqual(stage["lines"], b"ab\x7fc\nline one\nline two\n")
+        mine = [m[6] for m in self.msgs() if m[1] == "talk/miche" and m[5] == "s"]
+        self.assertEqual(mine, ["ac", "line one", "line two"])
+        # she hangs up: her unfinished line still counts
+        self.turn(lambda: self.acct.convs["talk/miche"].state == "ended")
+        self.assertEqual(self.talks("talk/miche")[-1], ("ended", "miche hung up"))
+        self.assertIn("half", [m[6] for m in self.msgs() if m[3] == "miche"])
+        self.assertEqual(self.events("typing")[-1], ("typing", "talk/miche", ""))
+        st, body = self.verb("send", "talk/miche", "anyone?")
+        self.assertEqual(st, 1)
+        self.assertIn(b"not talking to miche now", body)
+        self.chat.close()
+
+    def test_answering_and_declining(self):
+        stage = {}
+
+        def script(srv):
+            self.hello(srv)
+            srv.send("RING t1 alice@cmlaptop")
+            srv.expect("ACCEPT t1")
+            srv.send("CONNECT t1 tok9")
+            s, _ = srv.data("tok9")
+            s.sendall(b"\x7f\x15\x17")
+            stage["attached"] = True
+            srv.expect("HANGUP t1")
+            srv.send("GONE t1 hung up")          # talkd says so too: harmless
+            srv.send("RING t2 miche@cpbee")
+            stage["declined"] = srv.expect("DECLINE t2")
+            srv.expect("QUIT-never")
+
+        self.setup_talk(script)
+        self.verb("connect", "talk")
+        self.turn(lambda: "talk/alice@cmlaptop" in self.acct.convs)
+        conv = self.acct.convs["talk/alice@cmlaptop"]
+        self.assertEqual(conv.state, "incoming")
+        self.assertEqual(conv.unread, 1)                  # a call is news
+        self.assertTrue(any(m[6] == "alice@cmlaptop wants to talk" for m in self.msgs()))
+        st, body = self.verb("send", "talk/alice@cmlaptop", "hi")
+        self.assertEqual((st, b"answer first" in body), (1, True))
+        self.assertEqual(self.verb("answer", "talk/alice@cmlaptop"), (0, b""))
+        self.turn(lambda: conv.state == "connected" and "attached" in stage)
+        self.assertEqual(self.verb("part", "talk/alice@cmlaptop"), (0, b""))
+        self.assertEqual(self.talks("talk/alice@cmlaptop")[-1], ("ended", "you hung up"))
+        # a call from talkd's own host is just the user: talk/miche
+        self.turn(lambda: "talk/miche" in self.acct.convs)
+        self.assertEqual(self.verb("part", "talk/miche"), (0, b""))
+        self.turn(lambda: "declined" in stage)
+        self.assertEqual(self.acct.convs["talk/miche"].state, "ended")
+        # with no call, part leaves the conversation
+        self.assertEqual(self.verb("part", "talk/miche"), (0, b""))
+        self.assertNotIn("talk/miche", self.acct.convs)
+        self.assertEqual(self.verb("answer", "talk/alice@cmlaptop")[0], 1)
+        self.chat.close()
+
+    def test_refusals(self):
+        def script(srv):
+            srv.expect("HELLO chris")
+            srv.send("ERR HELLO needs a user name")
+
+        self.setup_talk(script)
+        self.assertEqual(self.verb("join", "talk", "miche")[0], 1)        # not connected
+        self.verb("connect", "talk")
+        self.turn(lambda: self.acct.state == "error")
+        self.assertIn("talkd: HELLO needs a user name", self.acct.detail)
+
+    def test_no_talkd_there(self):
+        s = socket.socket()
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+        s.close()                                # nothing listens on it
+        self.setup_talk(lambda srv: None, port=port)
+        self.verb("connect", "talk")
+        self.turn(lambda: self.acct.state == "error")
+        self.assertIn("configure-talkd.sh", self.acct.detail)
+
+    def test_keys_and_answer_are_talk_only(self):
+        self.conf("[account:i]\nprotocol = irc\nhost = x\n")
+        chat = cb._chat()
+        chat.ensure_conv(chat.by_id["i"], "#x", "channel")
+        self.assertEqual(self.verb("keys", "i/#x", "a")[0], 1)
+        self.assertEqual(self.verb("answer", "i/#x")[0], 1)
+
+
+def _real_talkd():
+    """chat-setup's talkd.py: $TALKD_PY, tvcommon's POSIX checkout, or one
+    beside TUIs (as on cmlaptop: ~/gh_cp/POSIX)."""
+    for p in (os.environ.get("TALKD_PY", ""),
+              str(HERE.parent.parent / "tvcommon" / "third_party" / "POSIX" / "chat-setup" / "talkd" / "talkd.py"),
+              str(HERE.parent.parent.parent / "POSIX" / "chat-setup" / "talkd" / "talkd.py")):
+        if p and os.path.isfile(p):
+            return p
+    return None
+
+
+@unittest.skipUnless(_real_talkd(), "no chat-setup/talkd/talkd.py at hand (set $TALKD_PY)")
+class TestTalkWithTheRealTalkd(TalkBase):
+    def test_two_accounts_call_each_other(self):
+        loader = importlib.machinery.SourceFileLoader("talkd", _real_talkd())
+        spec = importlib.util.spec_from_loader("talkd", loader)
+        td = importlib.util.module_from_spec(spec)
+        loader.exec_module(td)
+        srv = td.Server("127.0.0.1", 0, tcp_port=0,
+                        daemon=td.TalkDaemon(logins=lambda: [], hostname="cpbee"))
+        stop = threading.Event()
+        th = threading.Thread(target=srv.run, args=(stop.is_set,), daemon=True)
+        th.start()
+        self.addCleanup(srv.close)
+        self.addCleanup(th.join, 3)
+        self.addCleanup(stop.set)
+        port = srv.tcp.getsockname()[1]
+        self.conf("""\
+            [account:chris]
+            protocol = talk
+            host = 127.0.0.1
+            port = %d
+            user = chris
+            [account:miche]
+            protocol = talk
+            host = 127.0.0.1
+            port = %d
+            user = miche
+            talk_view = irc
+            """ % (port, port))
+        self.chat = cb._chat()
+        self.srv = type("S", (), {"error": None, "got": []})()
+        c, m = self.chat.by_id["chris"], self.chat.by_id["miche"]
+        self.verb("connect", "chris")
+        self.verb("connect", "miche")
+        self.turn(lambda: c.state == m.state == "connected")
+        self.assertEqual((c.detail, m.detail), ("chris@cpbee", "miche@cpbee"))
+        self.verb("join", "chris", "miche")
+        self.turn(lambda: "miche/chris" in m.convs and m.convs["miche/chris"].state == "incoming")
+        self.verb("answer", "miche/chris")
+        self.turn(lambda: c.convs["chris/miche"].state == m.convs["miche/chris"].state == "connected")
+        self.verb("keys", "chris/miche", "hellp\x7fo miche\nhalf")
+        self.verb("send", "miche/chris", "hi chris")
+        self.turn(lambda: ("typing", "miche/chris", "half") in self.events("typing") and
+                  any(x[1] == "chris/miche" and x[6] == "hi chris" for x in self.msgs()))
+        self.assertIn(("miche/chris", "chris", "", "hello miche"),
+                      [(x[1], x[3], x[5], x[6]) for x in self.msgs()])
+        self.verb("part", "chris/miche")
+        self.turn(lambda: m.convs["miche/chris"].state == "ended")
+        self.chat.close()
+
+
 class TestIrcTls(IrcBase):
     """TLS with certificate verification against a throwaway self-signed
     cert - the cafile= path a LAN server needs.  openssl makes the cert."""

@@ -79,7 +79,7 @@ the user), 2 internal error (bad request, bug).
 """
 
 import sys, os, io, argparse, base64, configparser, heapq, re, selectors, shlex, socket
-import errno, logging, ssl, threading, time
+import codecs, errno, logging, ssl, threading, time
 from collections import deque
 
 
@@ -90,7 +90,8 @@ __version__ = "1.2.0"
 # sends to $TVCHAT_BACKEND_LOG or /dev/null).
 _log = logging.getLogger("tvchat-backend")
 
-PROTOCOLS = ("irc", "deltachat")
+PROTOCOLS = ("irc", "deltachat", "talk")
+TALK_VIEWS = ("classic", "irc")
 STATES = ("disconnected", "connecting", "connected", "error")
 
 # An event queue the UI never drains (no chat window open for a day) must
@@ -155,9 +156,15 @@ class Account:
         self.state = "disconnected"
         self.detail = ""
         self.convs = {}                  # conv id -> Conversation
+        # how the UI shows a talk conversation: classic (talk's split screen,
+        # every keystroke sent) or irc (the log, whole lines); "" elsewhere
+        self.view = ((opts.get("talk_view") or "classic").strip().lower()
+                     if protocol == "talk" else "")
 
     def wire(self):
-        return line(self.id, self.protocol, self.state, self.display)
+        # the view only where there is one: IRC's lines stay as they were
+        return line(self.id, self.protocol, self.state, self.display,
+                    *([self.view] if self.view else []))
 
 
 class Contact:
@@ -187,9 +194,16 @@ class Conversation:
         self.history = deque(maxlen=HISTORY_CAP)
         self.history_done = False        # the server has nothing older to give
         self.members = {}
+        # a talk call's state (talk accounts only): calling, ringing (them),
+        # incoming (us), connected, ended - "" when there has been no call
+        self.state = ""
 
     def wire(self):
-        return line(self.id, self.kind, self.unread, self.title)
+        return line(*self.fields())
+
+    def fields(self):
+        """conv, kind, unread, title [, call state - talk only, once a call was]"""
+        return (self.id, self.kind, self.unread, self.title) + ((self.state,) if self.state else ())
 
 
 class Message:
@@ -441,6 +455,10 @@ def load_config(path=None):
             raise UserError("%s: [%s] protocol must be one of %s (got %r)"
                             % (path, sect, ", ".join(PROTOCOLS), proto))
         display = c.get(sect, "display", fallback="").strip() or ident
+        view = c.get(sect, "talk_view", fallback="classic").strip().lower()
+        if proto == "talk" and view not in TALK_VIEWS:
+            raise UserError("%s: [%s] talk_view must be one of %s (got %r)"
+                            % (path, sect, ", ".join(TALK_VIEWS), view))
         accounts.append(Account(ident, proto, display, dict(c.items(sect))))
     ids = set(a.id for a in accounts)
     auto = [x.strip() for x in c.get("chat", "autoconnect", fallback="").split(",")
@@ -1591,6 +1609,460 @@ class IrcAdapter:
         return self._say(target, text)
 
 
+# --------------------------------------------------------------------------
+# The talk(1) adapter.  chrispollitt/POSIX chat-setup's talkd, on the LAN
+# master, does the talk protocol and carries every conversation; this is a
+# client of its control protocol (TCP, one line each way):
+#   HELLO USER -> OK USER@HOST   CALL CID TARGET -> STATE CID ..., CONNECT/GONE
+#   RING ID WHO (a call for us)  ACCEPT / DECLINE / HANGUP ID   PING -> PONG
+# and of the second connection a CONNECT asks for: "ATTACH TOKEN", then the
+# session's raw bytes - each side's three edit characters first, as talk
+# does.  One conversation per person (kind direct); its call's state rides
+# on the 'talk' event, the other side's unfinished line on 'typing'.
+# --------------------------------------------------------------------------
+TALK_EDIT = "\x7f\x15\x17"               # ours: erase (DEL), kill (^U), word-erase (^W)
+TALK_LINE_MAX = 1000                     # a line nobody ends is cut here
+TALK_TIMEOUT = 20                        # to reach talkd and be greeted
+
+
+def _edit_line(line, ch, erase, kill, werase):
+    """One typed character applied to an unfinished line: (line, done) -
+    done is the finished line (on a newline) or None."""
+    if ch in ("\n", "\r"):
+        return "", line
+    if ch == erase or ch in ("\x08", "\x7f"):
+        return line[:-1], None
+    if ch == kill:
+        return "", None
+    if ch == werase:
+        return line.rstrip(" ").rpartition(" ")[0] + (" " if " " in line.rstrip(" ") else ""), None
+    if ch == "\t" or ch >= " ":
+        line += ch
+        if len(line) >= TALK_LINE_MAX:
+            return "", line
+        return line, None
+    return line, None                    # bell, ^L and the like: nothing to show
+
+
+class TalkCall:
+    """One call: tid is the id talkd knows it by (cN: ours, tN: talkd's)."""
+
+    def __init__(self, conv, tid, outgoing):
+        self.conv, self.tid, self.outgoing = conv, tid, outgoing
+        self.data = None                 # the session's socket, once CONNECTed
+        self.wbuf = b""
+        self.edit = None                 # their erase, kill, word-erase
+        self.head = b""                  # their first bytes, until the three are in
+        self.dec = codecs.getincrementaldecoder("utf-8")("replace")
+        self.theirs = ""                 # their unfinished line
+        self.mine = ""                   # ours, as keys typed it
+        self.after_cr = False            # a "\n" right after "\r" is the same newline
+        self.done = False
+
+
+class TalkAdapter:
+    def __init__(self, chat, account):
+        self.chat, self.account, self.loop = chat, account, chat.loop
+        o = account.opts
+        self.host = (o.get("host") or "").strip()
+        self.port = int(o.get("port") or 518)
+        self.user = (o.get("user") or "").strip() or _me()
+        self.gen = 0
+        self._ids = 0
+        self.calls = {}                  # tid -> TalkCall
+        self._reset()
+
+    def _reset(self):
+        self.sock = None
+        self.phase = "down"              # down, connecting, hello, up
+        self.rbuf = b""
+        self.wbuf = b""
+        self.home = ""                   # talkd's host name, from its OK
+        self.timer = None
+
+    def local_id(self):
+        self._ids += 1
+        return "%s:%d" % (self.account.id, self._ids)
+
+    def server_conv(self):
+        return self.chat.ensure_conv(self.account, "*", "server", self.account.display)
+
+    def system(self, conv, text):
+        self.chat.add_message(conv, Message(self.local_id(), conv.id, time.time(),
+                                            Contact(""), text, "n"), count=False)
+
+    # -- the control connection ---------------------------------------------
+    def connect(self):
+        if self.phase != "down":
+            return
+        if not self.host:
+            raise UserError("[account:%s] has no host= (the host running chat-setup's talkd)"
+                            % self.account.id)
+        self.server_conv()
+        self.phase = "connecting"
+        gen = self.gen
+        self.timer = self.loop.call_later(TALK_TIMEOUT,
+                                          lambda: gen == self.gen and self._fail("timed out"))
+        self.chat.set_state(self.account, "connecting",
+                            "talkd on %s port %d" % (self.host, self.port))
+        host, port = self.host, self.port
+        self.loop.run_in_thread(
+            lambda: socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM),
+            lambda res, err: gen == self.gen and self._resolved(res, err))
+
+    def _resolved(self, res, err):
+        if err is not None or not res:
+            self._fail("cannot look up %s: %s" % (self.host, err))
+            return
+        family, stype, proto, _, addr = res[0]
+        s = socket.socket(family, stype, proto)
+        s.setblocking(False)
+        rc = s.connect_ex(addr)
+        if rc not in (0, errno.EINPROGRESS, errno.EWOULDBLOCK):
+            s.close()
+            self._fail("cannot connect to %s port %d: %s" % (self.host, self.port, os.strerror(rc)))
+            return
+        self.sock = s
+        self.loop.watch(s, on_write=self._connected)
+
+    def _connected(self):
+        err = self.sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+        if err:
+            self._fail("cannot connect to talkd on %s port %d: %s (is it set up there? "
+                       "chat-setup/scripts/configure-talkd.sh)" % (self.host, self.port,
+                                                                   os.strerror(err)))
+            return
+        self.phase = "hello"
+        self.say("HELLO %s" % self.user)
+
+    def say(self, text):
+        _log.debug("%s >> %s", self.account.id, text)
+        self.wbuf += (text + "\n").encode("utf-8")
+        self._rewatch()
+
+    def _rewatch(self):
+        if self.sock is not None:
+            self.loop.watch(self.sock, on_read=self._on_read,
+                            on_write=self._on_write if self.wbuf else None)
+
+    def _on_write(self):
+        try:
+            n = self.sock.send(self.wbuf)
+            self.wbuf = self.wbuf[n:]
+        except (BlockingIOError, InterruptedError):
+            pass
+        except OSError as e:
+            self._lost(str(e))
+            return
+        self._rewatch()
+
+    def _on_read(self):
+        gen = self.gen
+        try:
+            data = self.sock.recv(4096)
+        except (BlockingIOError, InterruptedError):
+            return
+        except OSError as e:
+            data, why = b"", str(e)
+        else:
+            why = "talkd closed the connection"
+        if not data:
+            self._lost(why)
+            return
+        self.rbuf += data
+        while b"\n" in self.rbuf and gen == self.gen:
+            raw, self.rbuf = self.rbuf.split(b"\n", 1)
+            text = raw.decode("utf-8", "replace").rstrip("\r")
+            _log.debug("%s << %s", self.account.id, text)
+            try:
+                self._line(text)
+            except Exception:
+                _log.exception("%s: handling %r failed", self.account.id, text)
+
+    def _line(self, text):
+        word, _, rest = text.partition(" ")
+        if word == "OK" and self.phase == "hello":
+            self.phase = "up"
+            self.home = rest.partition("@")[2]
+            self.loop.cancel(self.timer)
+            self.timer = None
+            self.chat.set_state(self.account, "connected", rest)
+            self.system(self.server_conv(), "talkd on %s: you are %s" % (self.host, rest))
+            return
+        if word == "ERR":
+            if self.phase == "hello":
+                self._fail("talkd: %s" % rest)
+            else:
+                self.system(self.server_conv(), "talkd: %s" % rest)
+            return
+        tid, _, arg = rest.partition(" ")
+        call = self.calls.get(tid)
+        if word == "RING" and arg:
+            self._incoming(tid, arg)
+        elif word == "STATE" and call is not None:
+            self.chat.set_call(call.conv, "ringing" if arg.startswith("ringing") else "calling", arg)
+            self.system(call.conv, arg)
+        elif word == "CONNECT" and call is not None and arg:
+            self._attach(call, arg)
+        elif word == "GONE" and call is not None:
+            self._ended(call, arg or "gone")
+
+    def disconnect(self):
+        for call in list(self.calls.values()):
+            if call.data is None and not call.outgoing:
+                self.say("DECLINE %s" % call.tid)
+            self._ended(call, "you disconnected", tell=True)
+        was = self.phase
+        self._close()
+        if was != "down":
+            self.chat.set_state(self.account, "disconnected", "")
+
+    def _close(self):
+        self.gen += 1
+        self.loop.cancel(self.timer)
+        if self.sock is not None:
+            try:
+                if self.wbuf:            # a last HANGUP / DECLINE, best effort
+                    self.sock.setblocking(True)
+                    self.sock.settimeout(1)
+                    self.sock.sendall(self.wbuf)
+            except OSError:
+                pass
+            _close_sock(self.loop, self.sock)
+        self._reset()
+
+    def _fail(self, why):
+        self._close()
+        self.chat.set_state(self.account, "error", why)
+
+    def _lost(self, why):
+        # calls still ringing die with the connection; ones in progress
+        # carry on - their bytes go over their own connections
+        for call in list(self.calls.values()):
+            if call.data is None:
+                self._ended(call, "lost talkd: %s" % why)
+        self._close()
+        self.chat.set_state(self.account, "disconnected", why)
+
+    # -- calls -------------------------------------------------------------
+    def peer(self, who):
+        """user@host as a conversation names them: just the user when the
+        host is talkd's own."""
+        user, _, host = who.partition("@")
+        if host and host.lower() in (self.home.lower(), self.home.split(".")[0].lower(),
+                                     self.host.lower(), "localhost"):
+            return user
+        return who
+
+    def conv_for(self, who):
+        p = self.peer(who)
+        return self.chat.ensure_conv(self.account, p.lower(), "direct", p)
+
+    def call_of(self, conv):
+        for call in self.calls.values():
+            if call.conv is conv and not call.done:
+                return call
+        return None
+
+    def need_up(self):
+        if self.phase != "up":
+            raise UserError("%s is not connected" % self.account.display)
+
+    def join(self, target):
+        """Call someone: USER, or USER@HOST (another host's own talkd)."""
+        self.need_up()
+        target = target.strip()
+        user, _, host = target.partition("@")
+        if not user or len(user) > 12 or any(c.isspace() for c in target):
+            raise UserError("not a talk user: %r (USER or USER@HOST)" % target)
+        conv = self.conv_for(target)
+        call = self.call_of(conv)
+        if call is not None:
+            if not call.outgoing and call.data is None:
+                self.answer(conv)        # they are calling us already
+            return conv
+        self._ids += 1
+        call = TalkCall(conv, "c%d" % self._ids, True)
+        self.calls[call.tid] = call
+        self.say("CALL %s %s" % (call.tid, target))
+        self.chat.set_call(conv, "calling", "calling %s" % target)
+        return conv
+
+    def _incoming(self, tid, who):
+        conv = self.conv_for(who)
+        call = TalkCall(conv, tid, False)
+        self.calls[tid] = call
+        self.chat.set_call(conv, "incoming", who)
+        self.chat.add_message(conv, Message(self.local_id(), conv.id, time.time(),
+                                            Contact(who), "%s wants to talk" % who, "n"))
+
+    def answer(self, conv):
+        self.need_up()
+        call = self.call_of(conv)
+        if call is None or call.outgoing or call.data is not None:
+            raise UserError("nobody is calling in %s" % conv.title)
+        self.say("ACCEPT %s" % call.tid)
+        self.chat.set_call(conv, "incoming", "answering")
+
+    def part(self, conv):
+        """Hang up (or decline) the call; with none, leave the conversation."""
+        if conv.kind == "server":
+            raise UserError("the server window cannot be left - disconnect instead")
+        call = self.call_of(conv)
+        if call is None:
+            self.chat.remove_conv(conv)
+            return
+        if self.phase == "up":
+            self.say("%s %s" % ("DECLINE" if not call.outgoing and call.data is None
+                                else "HANGUP", call.tid))
+        self._ended(call, "you hung up")
+
+    # -- the session ---------------------------------------------------------
+    def _attach(self, call, token):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.setblocking(False)
+        addr = self.sock.getpeername() if self.sock is not None else (self.host, self.port)
+        rc = s.connect_ex(addr)
+        if rc not in (0, errno.EINPROGRESS, errno.EWOULDBLOCK):
+            s.close()
+            self._ended(call, "cannot connect to talkd: %s" % os.strerror(rc))
+            return
+        call.data = s
+        call.wbuf = ("ATTACH %s\n" % token).encode("ascii") + TALK_EDIT.encode("latin-1")
+        self.chat.set_call(call.conv, "connected", "")
+        self.system(call.conv, "connected")
+        self._rewatch_data(call)
+
+    def _rewatch_data(self, call):
+        if call.data is not None:
+            self.loop.watch(call.data, on_read=lambda: self._data_read(call),
+                            on_write=(lambda: self._data_write(call)) if call.wbuf else None)
+
+    def _data_write(self, call):
+        try:
+            n = call.data.send(call.wbuf)
+            call.wbuf = call.wbuf[n:]
+        except (BlockingIOError, InterruptedError):
+            pass
+        except OSError as e:
+            self._ended(call, "connection lost: %s" % e)
+            return
+        self._rewatch_data(call)
+
+    def _data_read(self, call):
+        try:
+            data = call.data.recv(4096)
+        except (BlockingIOError, InterruptedError):
+            return
+        except OSError:
+            data = b""
+        if not data:
+            self._ended(call, "%s hung up" % call.conv.title)
+            return
+        if call.edit is None:            # their three edit characters come first
+            call.head += data
+            if len(call.head) < 3:
+                return
+            call.edit = call.head[:3].decode("latin-1")
+            data, call.head = call.head[3:], b""
+        before = call.theirs
+        for ch in call.dec.decode(data):
+            if ch == "\n" and call.after_cr:
+                call.after_cr = False
+                continue
+            call.after_cr = ch == "\r"
+            call.theirs, done = _edit_line(call.theirs, ch, *call.edit)
+            if done:
+                self.chat.add_message(call.conv, Message(
+                    self.local_id(), call.conv.id, time.time(),
+                    Contact(call.conv.title), done, ""))
+        if call.theirs != before:
+            self.chat.typing(call.conv, call.theirs)
+
+    def _ended(self, call, why, tell=False):
+        if call.done:
+            return
+        call.done = True
+        if call.theirs:                  # what they had typed still counts
+            self.chat.add_message(call.conv, Message(
+                self.local_id(), call.conv.id, time.time(), Contact(call.conv.title),
+                call.theirs, ""))
+            call.theirs = ""
+            self.chat.typing(call.conv, "")
+        if call.mine:
+            self._mine(call.conv, call.mine)
+            call.mine = ""
+        if tell and call.data is not None and self.phase == "up":
+            self.say("HANGUP %s" % call.tid)
+        if call.data is not None:
+            _close_sock(self.loop, call.data)
+            call.data = None
+        self.calls.pop(call.tid, None)
+        self.chat.set_call(call.conv, "ended", why)
+        self.system(call.conv, why)
+
+    def _mine(self, conv, text):
+        msgid = self.local_id()
+        self.chat.add_message(conv, Message(msgid, conv.id, time.time(), Contact(self.user),
+                                            text, "s"), count=False)
+        return msgid
+
+    def _session(self, conv):
+        if conv.kind == "server":
+            raise UserError("the server window takes no messages - call someone (Chat > Join...)")
+        call = self.call_of(conv)
+        if call is None:
+            raise UserError("not talking to %s now - Chat > Join... to call" % conv.title)
+        if call.data is None:
+            raise UserError("%s has not answered yet" % conv.title if call.outgoing
+                            else "%s is calling - answer first" % conv.title)
+        return call
+
+    def send(self, conv, text):
+        """IRC mode: whole lines.  Each goes out with its newline, and is in
+        the log at once (talk has no echo)."""
+        call = self._session(conv)
+        msgid = ""
+        for ln in text.split("\n"):
+            ln = ln.rstrip("\r")
+            if not ln.strip():
+                continue
+            call.wbuf += (ln + "\n").encode("utf-8")
+            msgid = self._mine(conv, ln)
+        if not msgid:
+            raise UserError("nothing to send")
+        self._rewatch_data(call)
+        return msgid
+
+    def keys(self, conv, text):
+        """Classic: keystrokes as typed - erase (DEL or ^H), kill (^U),
+        word-erase (^W) and newlines included.  Sent at once; a finished
+        line also goes in the log."""
+        call = self._session(conv)
+        out = []
+        for ch in text:
+            if ch == "\x08":
+                ch = TALK_EDIT[0]        # talk sees our erase character
+            out.append(ch)
+            call.mine, done = _edit_line(call.mine, ch, *TALK_EDIT)
+            if done:
+                self._mine(conv, done)
+        call.wbuf += "".join(out).encode("utf-8")
+        self._rewatch_data(call)
+        return ""
+
+
+def _close_sock(loop, sock):
+    try:
+        loop.watch(sock)
+    except (OSError, ValueError, KeyError):
+        pass
+    try:
+        sock.close()
+    except OSError:
+        pass
+
+
 class DeltaChatAdapter:
     """Placeholder until milestone 6 (deltachat-rpc-server over JSON-RPC)."""
 
@@ -1606,7 +2078,7 @@ class DeltaChatAdapter:
     join = part = send = lambda self, *a: self.connect()
 
 
-ADAPTERS = {"irc": IrcAdapter, "deltachat": DeltaChatAdapter}
+ADAPTERS = {"irc": IrcAdapter, "deltachat": DeltaChatAdapter, "talk": TalkAdapter}
 
 
 # --------------------------------------------------------------------------
@@ -1664,12 +2136,23 @@ class Chat:
         conv = account.convs.get(cid)
         if conv is None:
             conv = account.convs[cid] = Conversation(account, target, kind, title)
-            self.events.push("conv-new", conv.id, conv.kind, conv.unread, conv.title)
+            self.events.push("conv-new", *conv.fields())
         return conv
 
     def remove_conv(self, conv):
         if conv.account.convs.pop(conv.id, None) is not None:
-            self.events.push("conv-gone", conv.id, conv.kind, conv.unread, conv.title)
+            self.events.push("conv-gone", *conv.fields())
+
+    def set_call(self, conv, state, detail=""):
+        """A talk call's state changed: 'talk CONV STATE DETAIL'."""
+        conv.state = state
+        self.events.push("talk", conv.id, state, detail)
+
+    def typing(self, conv, text):
+        """The other side's unfinished line in a talk call ('' when none):
+        'typing CONV TEXT'.  Classic shows it as typed; IRC mode, that they
+        are typing."""
+        self.events.push("typing", conv.id, text)
 
     def add_message(self, conv, msg, count=True):
         conv.history.append(msg)
@@ -1782,6 +2265,27 @@ def cmd_part(a):
     chat = _chat()
     conv = chat.conv(a.conv)
     chat.adapter(conv.account).part(conv)
+    return 0
+
+
+def _talk(conv, chat):
+    ad = chat.adapter(conv.account)
+    if not isinstance(ad, TalkAdapter):
+        raise UserError("%s is not a talk conversation" % conv.id)
+    return ad
+
+
+def cmd_answer(a):
+    chat = _chat()
+    conv = chat.conv(a.conv)
+    _talk(conv, chat).answer(conv)
+    return 0
+
+
+def cmd_keys(a):
+    chat = _chat()
+    conv = chat.conv(a.conv)
+    _talk(conv, chat).keys(conv, a.text)
     return 0
 
 
@@ -2057,6 +2561,8 @@ def build_parser():
     p = sub.add_parser("join"); p.add_argument("account"); p.add_argument("target"); p.set_defaults(fn=cmd_join)
     p = sub.add_parser("part"); p.add_argument("conv"); p.set_defaults(fn=cmd_part)
     p = sub.add_parser("send"); p.add_argument("conv"); p.add_argument("text"); p.set_defaults(fn=cmd_send)
+    p = sub.add_parser("answer"); p.add_argument("conv"); p.set_defaults(fn=cmd_answer)
+    p = sub.add_parser("keys"); p.add_argument("conv"); p.add_argument("text"); p.set_defaults(fn=cmd_keys)
     p = sub.add_parser("history"); p.add_argument("conv"); p.add_argument("--before")
     p.add_argument("--limit", type=int, default=50); p.set_defaults(fn=cmd_history)
     p = sub.add_parser("members"); p.add_argument("conv"); p.set_defaults(fn=cmd_members)
