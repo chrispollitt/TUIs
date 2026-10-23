@@ -157,6 +157,59 @@ All in `IrcAdapter` (`tvchat/backend/tvchat-backend`); the tunables are class at
 
 ## talk(1) adapter (milestone 6 - not started)
 
+**Decided (Chris, Oct 22, after milestone 5):**
+- **The view is the user's choice:** a talk conversation shows either
+  *classic* (talk's split screen: you on top, them below) or *IRC mode*
+  (the usual log). A setting, plus a toggle in the window.  **Both live in
+  the chat pane of the three-pane window** (Chris): classic splits the
+  bottom-right pane in two - theirs over yours - and Servers and
+  Conversations stay where they are; no separate window.
+- **What is sent follows the view** (Chris, Oct 22): in *classic* every
+  keystroke goes as typed (erase / kill / word-erase too), as real talk
+  does; in *IRC mode* whole lines, on Enter.  What the other side types
+  arrives as typed either way - IRC mode shows it once their line ends.
+- **IRC mode shows "NAME is typing..."** (Chris, Oct 22) while the other
+  side has an unfinished line - the keystrokes arrive anyway, so it is free.
+- **The daemon first**, then the tvchat adapter and UI on top of it.
+
+**The wire (checked against FreeBSD's `protocols/talkd.h` and
+`libexec/talkd/process.c`, Oct 22):** UDP 518, `CTL_MSG` 84 bytes =
+vers(1) type(1) answer(1) pad(1) id_num(4) addr(16) ctl_addr(16) pid(4)
+l_name(12) r_name(12) r_tty(16); `CTL_RESPONSE` 24 bytes = vers type answer
+pad id_num addr.  **Everything multi-byte is big-endian, including the
+sockaddr's `sa_family`** (talkd does `ntohs(sa_family)` and checks AF_INET =
+2); a sockaddr is the 4.3BSD 16 bytes: family(2) port(2) IPv4(4) zero(8).
+Types LEAVE_INVITE 0, LOOK_UP 1, DELETE 2, ANNOUNCE 3; answers SUCCESS 0,
+NOT_HERE 1, FAILED 2, MACHINE_UNKNOWN 3, PERMISSION_DENIED 4,
+UNKNOWN_REQUEST 5, BADVERSION 6, BADADDR 7, BADCTLADDR 8; TALK_VERSION 1;
+invitations live MAX_LIFE 60 s, callers re-announce every RING_WAIT 30 s.
+On the TCP connection each side first writes its 3 edit characters (erase,
+kill, word-erase), then text.
+
+**Plan (in order, each stopped for review):**
+1. **talkd core** - done Oct 22, POSIX (see its commit); interop checked
+   against inetutils `talk` on Cygwin (two real clients rang, looked up,
+   connected, talked, deleted). (`chrispollitt/POSIX` `chat-setup/talkd/`, stdlib Python,
+   one `selectors` loop like tvchat-backend): the codec, the invitation
+   table, the four requests, and the classic tty announcement for users
+   logged in on cpbee (utmp) - a drop-in for the stock talkd.  Tests: a fake
+   talk client over UDP on a high port.
+2. **tvchat users + relay:** a small line protocol over TCP (LAN only, no
+   auth - like talk itself): tvchat registers its user; an ANNOUNCE for a
+   registered user becomes an invitation event there instead of a tty
+   message; talkd itself connects to the caller's address and splices that
+   stream to tvchat's, so laptops take no inbound connections.  Outgoing:
+   tvchat asks talkd to call user[@host]; talkd does the LEAVE_INVITE /
+   ANNOUNCE ritual (to itself or to another host's talkd) with its own
+   relay port as the address.
+3. **`chat-setup/scripts/configure-talkd.sh`:** a `talkd` system user, a
+   systemd unit (CAP_NET_BIND_SERVICE for 518), the stock talkd/inetd entry
+   off, UDP 518 opened on lan0 (cmpi-router's port lists are TCP only today
+   - the same lossless way as Ergo's).  Interop check on cpbee with
+   Debian's `talk` package.
+4. **tvchat:** `protocol = talk` accounts, the adapter in tvchat-backend,
+   the classic / IRC views.
+
 Chris, Oct 22: "talk(1)!!! tvchat *must* have it" - before Delta Chat. The
 Unix `talk` / `ntalk` protocol: two users, a split screen, every keystroke
 sent as typed (not lines). A third protocol behind the same adapter
