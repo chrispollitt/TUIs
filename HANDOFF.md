@@ -22,7 +22,7 @@ the code wins - and this file should be fixed.
 | – | Split into its own app, tvchat, with `../tvcommon` (asked by Chris, Oct 21) | done; independence checks passed; fast-forwarded into `main` and pushed Oct 22 | 4dcfd2a (tvcommon), 9d39d6e (the split) |
 | – | mingw compiles again (bug #45) | done | 1e43880 |
 | 5 | IRC hardening | done; live check passed on cpbee's Ergo (Chris and miche in #test, Oct 22); merged | ac53da8 |
-| 6 | talk(1) adapter (asked by Chris, Oct 22) | **next** | |
+| 6 | talk(1) adapter (asked by Chris, Oct 22) | done; live check passed Oct 22-23; merged to local `main` Oct 23, **not pushed** | 5b0adec, 8c9f189, 30a3457 |
 | 7 | Delta Chat adapter | | |
 | 8 | Docs | | |
 
@@ -228,8 +228,11 @@ kill, word-erase), then text.
    off, UDP 518 opened on lan0 (cmpi-router's port lists are TCP only today
    - the same lossless way as Ergo's).  Interop check on cpbee with
    Debian's `talk` package.
-4. **tvchat** - built Oct 22 on branch `m6-talk-tvchat`, **awaiting Chris's
-   review and a live check**:
+4. **tvchat** - built Oct 22, **live check passed** (Chris, Oct 22-23: calls and
+   both views against a real talk), merged into `main` Oct 23 together with
+   `redraw-mesg` (Ctrl-L redraw, `mesg n`): tvchat 5/5 and tvmail 7/7 pass
+   on the merge.  The classic rule was invisible (cyan on cyan) in the first
+   live check - now faint grey (30a3457).  Details:
    - *backend* (`TalkAdapter`): one control connection to talkd per talk
      account; one conversation per person (kind direct; talkd's own host
      dropped from the name).  `join` calls, new verb `answer CONV`, `part`
