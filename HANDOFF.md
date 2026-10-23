@@ -19,7 +19,7 @@ the code wins - and this file should be fixed.
 | 4 | Chat windows | done; live check passed on cpbee's Ergo (Oct 21; Libera's reset after a send not seen again, not retested) | 611efde |
 | – | Bug #46: SASL got the mail password from `~/.mu-tickets` | fixed | b97d83c |
 | – | Chat as one 3-pane window like mail (asked by Chris, Oct 21) | done; Chris tried it and loves it | a945288 |
-| – | Split into its own app, tvchat, with `../tvcommon` (asked by Chris, Oct 21) | done on branch `split-tvchat`; independence checks passed Oct 22; not merged | 4dcfd2a (tvcommon), 9d39d6e (the split) |
+| – | Split into its own app, tvchat, with `../tvcommon` (asked by Chris, Oct 21) | done; independence checks passed; fast-forwarded into `main` and pushed Oct 22 | 4dcfd2a (tvcommon), 9d39d6e (the split) |
 | – | mingw compiles again (bug #45) | done | 1e43880 |
 | 5 | IRC hardening | **next** | |
 | 6 | talk(1) adapter (asked by Chris, Oct 22) | | |
@@ -39,7 +39,7 @@ Stop for Chris's review after each milestone.
 ### Where we stopped (Oct 21, night): the split
 
 - Branch **`split-tvchat`** (from `main` 38266d7): 4dcfd2a extracted `tvcommon/` (all 9 tvmail layers passed); the next commit moves chat into `tvchat/` and takes it out of tvmail. tvchat: 5 layers (chat_unit, backend_pipe, e2e_chat, e2e_regress - the chat cases plus #43 and #44 -, install_roundtrip) pass on Cygwin.
-- **Ready to merge (Oct 22):** POSIX 2a8103b (committed, not pushed): `configure-tvchat.sh` writes `~/.config/tvchat/` and copies an old `~/.config/tvmail/tvchat.conf` there first (chat-setup tests: 76 pass). On `split-tvchat`: tvchat's own `tests/README.md`; tvmail's test README and man page lose their chat parts; this file moved to the top of the repo. Independence checks passed: tvchat built and tested from a copy of TUIs without `tvmail/` (5/5); `dist.sh src` tarballs of tvchat (5/5) and tvmail (7/7; `e2e_regress` #4 `source_draft_found_by_content` flaked once, then passed 5 times in a row) each build and test alone. Both apps are installed on cmlaptop (fixperms run; the pre-split `share/doc/tvmail/tvchat.conf.example` removed). Chris's `tvchat.conf` is still in `~/.config/tvmail/` (read through the fallback; the next `configure-tvchat.sh` run copies it). Left: merge `split-tvchat` into `main` (Chris approves) and push TUIs and POSIX.
+- **Ready to merge (Oct 22):** POSIX 2a8103b (committed, not pushed): `configure-tvchat.sh` writes `~/.config/tvchat/` and copies an old `~/.config/tvmail/tvchat.conf` there first (chat-setup tests: 76 pass). On `split-tvchat`: tvchat's own `tests/README.md`; tvmail's test README and man page lose their chat parts; this file moved to the top of the repo. Independence checks passed: tvchat built and tested from a copy of TUIs without `tvmail/` (5/5); `dist.sh src` tarballs of tvchat (5/5) and tvmail (7/7; `e2e_regress` #4 `source_draft_found_by_content` flaked once, then passed 5 times in a row) each build and test alone. Both apps are installed on cmlaptop (fixperms run; the pre-split `share/doc/tvmail/tvchat.conf.example` removed). Chris's `tvchat.conf` is still in `~/.config/tvmail/` (read through the fallback; the next `configure-tvchat.sh` run copies it). **Merged (Oct 22, Chris approved):** `split-tvchat` fast-forwarded into `main`, the branch deleted, TUIs and POSIX pushed.
 - `tvcommon/third_party/POSIX.stale-20261021`: Chris's old mail-setup checkout (13 commits that were all rebased into POSIX already; clean tree) - safe to delete.
 - **Then:** milestone 5 (IRC hardening), in `tvchat/`.
 
