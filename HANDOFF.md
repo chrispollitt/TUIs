@@ -21,8 +21,8 @@ the code wins - and this file should be fixed.
 | – | Chat as one 3-pane window like mail (asked by Chris, Oct 21) | done; Chris tried it and loves it | a945288 |
 | – | Split into its own app, tvchat, with `../tvcommon` (asked by Chris, Oct 21) | done; independence checks passed; fast-forwarded into `main` and pushed Oct 22 | 4dcfd2a (tvcommon), 9d39d6e (the split) |
 | – | mingw compiles again (bug #45) | done | 1e43880 |
-| 5 | IRC hardening | done on branch `m5-irc-hardening` (Oct 22), **awaiting Chris's review**; live check on cpbee's Ergo is his | |
-| 6 | talk(1) adapter (asked by Chris, Oct 22) | | |
+| 5 | IRC hardening | done; live check passed on cpbee's Ergo (Chris and miche in #test, Oct 22); merged | ac53da8 |
+| 6 | talk(1) adapter (asked by Chris, Oct 22) | **next** | |
 | 7 | Delta Chat adapter | | |
 | 8 | Docs | | |
 
