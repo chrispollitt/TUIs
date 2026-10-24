@@ -14,7 +14,9 @@ Each app keeps the same set; tvcommon has the ones that apply to shared code.
 | --- | --- |
 | `README.md` | what it is and how to use it |
 | `INSTALL.md` | building and installing (tvmail, tvchat) |
-| `HISTORY.md` | what changed, release by release (tvchat); why tvmail exists (tvmail) |
+| `HISTORY.md` | what changed, release by release |
+| `WHY.md` | why tvmail exists (tvmail) |
+| `WARNINGS.txt` | caveats about mail setups worth knowing before you build one (tvmail) |
 | `BUGS.md` | defects: open ones, and squashed ones with the commit and the test that guards them |
 | `TO-DO.txt` | features and wishes not done yet |
 | `DESIGN.md` | how it is built (tvchat) |

@@ -72,3 +72,11 @@ chat-setup/scripts/configure-tvchat.sh --host SERVER --nick yournick
 The second script copies the server's CA, checks that TLS verifies, writes the
 account into `tvchat.conf`, stores the password in `~/.netrc`, and logs in once
 to prove it.
+
+## Over ssh from Windows Terminal
+
+If keys go missing or stray text such as `[68;32;100;1;0;1_` appears when you
+run tvchat over ssh from Windows Terminal, see
+[`../tvcommon/README.md`](../tvcommon/README.md#over-ssh-from-windows-terminal):
+the apps already allow for it (`ESCDELAY`), and there are workarounds
+(`wincygterm`, mintty, WSL).

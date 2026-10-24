@@ -53,7 +53,9 @@ first), and the open bugs in tvmail/BUGS.md.
 | `tvcommon/README.md` | the shared code, and the conventions both apps rely on |
 | `*/BUGS.md` | defects, open and squashed (next free number: the highest in tvmail's and tvchat's tables plus one) |
 | `*/TO-DO.txt` | features and wishes not done yet |
-| `*/HISTORY.md` | tvchat: what changed per release; tvmail: why it exists |
+| `*/HISTORY.md` | what changed, release by release |
+| `tvmail/WHY.md`, `tvmail/WARNINGS.txt` | why tvmail exists; caveats about mail setups (IMAP namespaces, local mode beside Dovecot, WAN latency) |
+| `tvcommon/TERMINAL-HISTORY.md` | the essay behind the Windows Terminal / ssh fix (the short version is in `tvcommon/README.md`) |
 | `*/tests/README.md` | what each test layer covers |
 | man pages | `tvmail`, `tvmail-backend`, `tvchat`, `tvchat-backend` (the backend verbs are in the last) |
 

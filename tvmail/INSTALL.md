@@ -146,7 +146,7 @@ timer from step 1 does the pulling.
 
 Why not local mode on the master? Local mode makes tvmail edit
 `/var/mail/$USER` directly while Dovecot is doing the same, and the two
-don't lock the file the same way (`!WARNINGS.txt`, Warning 3). If you answer
+don't lock the file the same way (`WARNINGS.txt`, Warning 2). If you answer
 `local` anyway, `setup.sh` warns and asks again.
 
 **Changing your mind later** (no need to re-run the whole wizard):
@@ -318,7 +318,7 @@ refused" instead means managesieve is not running (`ss -ltn | grep 4190`).
     machine you own.
 - In Windows Terminal, a Cygwin tab that starts `bash` directly runs on Cygwin's
   own console, which loses terminal replies and (over ssh) key input; see
-  `!WARNINGS.txt`, Warning 1. `wincygterm` (CWPutils/toolbox) gives the shell a
+  `../tvcommon/README.md` (Windows Terminal over ssh). `wincygterm` (CWPutils/toolbox) gives the shell a
   real pty instead.
 
 ## 6. What the scripts do (reference)
@@ -395,7 +395,7 @@ still runs it. To remove the mail system itself, use your package manager
 | mail reaches the master's Postfix but not `/var/mail` | `sudo postqueue -p`; "alias database unavailable" → re-run `configure-sendmail-relay.sh` (it pins `alias_maps`) |
 | `build.sh`: couldn't fetch mail-setup | only a warning; the build continues. Check network/GitHub, or set `MAIL_SETUP_DIR` |
 | check a master end to end | `sudo MAIL_SETUP_E2E_USER=$USER bash ../tvcommon/third_party/POSIX/mail-setup/tests/e2e/e2e_master.sh` |
-| slow folder switching | tvmail is talking to a WAN IMAP host; see `!WARNINGS.txt`, Warning 4 (use a LAN master) |
+| slow folder switching | tvmail is talking to a WAN IMAP host; see `WARNINGS.txt`, Warning 3 (use a LAN master) |
 
 More: `README.md` (usage), `man tvmail`, `man tvmail-backend`,
-`!WARNINGS.txt`, `tests/README.md`.
+`WARNINGS.txt`, `tests/README.md`.

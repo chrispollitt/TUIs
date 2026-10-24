@@ -1,62 +1,5 @@
 ** WARNING 1 **
 
-Running tvmail over SSH from inside Windows Terminal used to garble the
-screen: stray text such as "[68;32;100;1;0;1_" appeared in the message you
-were typing, and keystrokes or mouse clicks went missing.  Cause: tvmail
-asks Windows Terminal for win32-input-mode, so every key press arrives as a
-record "ESC [ Vk;Sc;Uc;Kd;Cs;Rc _".  On the way through ssh, the Cygwin pty
-and ConPTY, some of those records arrive cut in two, the second half 16-33 ms
-after the first.  ncurses (tvision's input layer) waits only 10 ms after an
-ESC before deciding it was the Escape key, so the ESC became a keypress and
-the rest was typed as text.  (The same can happen to the terminal's replies
-to tvmail's capability questions.)
-
-This is FIXED in tvmail: it now defaults ESCDELAY to 100 ms, and build.sh
-builds tvision with a 50 ms read timeout instead of 10 ms.  You need a tvmail
-built from this tree, on the host where tvmail runs (the Pi, not the
-Windows side).  Confirmed: Windows Terminal -> ssh -> Cygwin sshd.  Not
-re-tested separately: the older "garbage replies" and "dropped keys with
-CYGWIN=disable_pcon" symptoms, other ssh clients, and other remote hosts.
-A bare Escape key press now takes up to 100 ms to register (ESCDELAY=10
-restores the old feel, if your link is fast).
-
-To check a path without tvmail, run termprobe (CWPutils/toolbox):
-
-    termprobe --tvision          # replays tvision's startup, tests typing and
-                                 # clicking, reports records cut in two and
-                                 # how late the rest came
-
-If it still reports split records with gaps longer than your ESCDELAY, raise
-ESCDELAY, or use a workaround:
-
-  1. Run ssh under wincygterm (CWPutils/toolbox, next to termprobe).  It runs
-     a Cygwin program on a real pty inside Windows Terminal instead of
-     Cygwin's own console layer, which is what swallows the terminal's
-     colour reply and hands ncurses its key input in fragments.  The tvmail
-     TUI was tested in such a tab and works.  Make a
-     Windows Terminal profile from the output of
-
-         python wincygterm --profile
-
-     (a NATIVE Windows Python, not Cygwin's), and end its command line with
-     "-- ssh cpbee" to land straight in the session, or leave that off for
-     a Cygwin shell that has the fix and run ssh from there.  See
-     "man wincygterm".  Not needed in mintty.
-  2. Run ssh from mintty instead of Windows Terminal.
-  3. Run ssh from inside WSL (the old workaround, before wincygterm), e.g. a
-     Windows Terminal profile whose command line is
-         wsl.exe -d Ubuntu-20.04 ssh cpbee
-
-(For the curious -- including the measurements behind the diagnosis -- see
-the accompanying TERMINAL-HISTORY.md, section 7.  Which layer cuts the
-records in two, and why in multiples of about 16 ms, is still an open
-question; so is why Cygwin's own console swallows OSC colour queries.  Old
-geezers who remember when terminals just worked are encouraged to make some
-noise. ;)
-
-
-** WARNING 2 **
-
 IMAP servers disagree on folder-namespace layout, and mail(1)'s
 "+name" plus-notation cannot bridge the difference.
 
@@ -87,7 +30,7 @@ or wrap it in a shell function, e.g.:
   mailf() { mail --headers -f "+INBOX.$1"; }
 
 
-** WARNING 3 **
+** WARNING 2 **
 
 Don't run tvmail in local mode on a host that's also running Dovecot
 (or any other IMAP server) over the same mailstore -- even though
@@ -111,7 +54,7 @@ box -- master included -- talks to it the same way, over IMAP. See
 README.md's "Plumbing" section.
 
 
-** WARNING 4 **
+** WARNING 3 **
 
 Pointing tvmail straight at a WAN/Internet IMAP host (e.g. [imap]
 host = mail.u-l.ca) works fine -- nothing about the protocol requires
@@ -127,7 +70,7 @@ threaded, blocking design without a much bigger architecture change
 (see the "busy" status-line indicator added instead, which just makes
 the wait visible rather than eliminating it).
 
-The fix is the same "Plumbing" setup as Warning 3, and it solves both
+The fix is the same "Plumbing" setup as Warning 2, and it solves both
 problems with one piece of infrastructure: run a local LAN Dovecot as
 the master, have mail-pull (mail-setup's pop-pull or getmail, --timer N)
 fetch mail down from the WAN host on a timer, and point every client's

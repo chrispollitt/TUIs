@@ -2,7 +2,7 @@
 
 For decades, the developer experience on Unix/Linux and MS-DOS/Windows was separated by a fundamental architectural divide: **how programs communicate with the terminal screen**. Unix built an ecosystem around character streams, teletypes, and ANSI/VT control sequences. Windows, by contrast, built its command-line interface around object handles, memory buffers, and programmatic Win32 API calls.
 
-This document traces the history of how screen addressing and terminal control diverged between these OS paradigms, the legacy abstractions created on both sides, and the modern engineering efforts (from WinPty to Windows Terminal and ConPTY) that brought them back together — and the specific corner where, as of 2026, they still haven't: `tvmail` (this repo) running over SSH into a Windows Terminal client (§7).
+This document traces the history of how screen addressing and terminal control diverged between these OS paradigms, the legacy abstractions created on both sides, and the modern engineering efforts (from WinPty to Windows Terminal and ConPTY) that brought them back together — and the specific corner where, as of 2026, they still haven't: `tvmail` and `tvchat` (this repo) running over SSH into a Windows Terminal client (§7).
 
 ---
 

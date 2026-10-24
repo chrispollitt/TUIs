@@ -18,6 +18,7 @@ compiles `src/` into its own executable. Nothing here knows about mail or chat.
 | `src/dialogs.cpp`, `textwin.cpp` | the Find / Replace dialogs; the read-only text window (Help) |
 | `tvcommon.cmake` | locates Turbo Vision, sets the Cygwin defines and the shell the helper scripts run through |
 | `third_party.sh` | fetches Turbo Vision (patched by `patches/`) and chrispollitt/POSIX's `mail-setup` + `chat-setup` once into `third_party/`, for both apps |
+| `TERMINAL-HISTORY.md` | an essay on how Unix and Windows terminals diverged and met, ending with the ssh-from-Windows-Terminal case study (section 7) |
 | `tests/tvscreen.py` | the pty + [pyte](https://pypi.org/project/pyte/) test harness: `Tv` runs an app in a pty on its own temp HOME and reads its screen into a model you can check cell by cell (columns and colours), `Case`, key names, contrast scoring, and `render_png` for the README screenshots |
 
 ## Conventions the apps rely on
@@ -42,3 +43,51 @@ compiles `src/` into its own executable. Nothing here knows about mail or chat.
 
 tvcommon has no build of its own: build and test through an app (`./build.sh`,
 `./test.sh` in `tvmail/` or `tvchat/`). A change here should be tested in both.
+
+## Over ssh from Windows Terminal
+
+Running tvmail or tvchat over ssh from inside Windows Terminal used to garble
+the screen: stray text such as `[68;32;100;1;0;1_` appeared in what you were
+typing, and keystrokes or mouse clicks went missing. The app asks Windows
+Terminal for win32-input-mode, so every key press arrives as a record `ESC [
+Vk;Sc;Uc;Kd;Cs;Rc _`. On the way through ssh, the Cygwin pty and ConPTY, some
+of those records arrive cut in two, the second half 16-33 ms after the first.
+ncurses (tvision's input layer) waits only 10 ms after an ESC before deciding it
+was the Escape key, so the ESC became a keypress and the rest was typed as text.
+(The same can happen to the terminal's replies to the app's capability
+questions.)
+
+**Fixed in the apps:** `ESCDELAY` defaults to 100 ms (`src/cli.cpp`) and
+`build.sh` builds tvision with a 50 ms read timeout instead of 10 ms. You need
+a build from this tree, on the host where the app runs (the Pi, not the
+Windows side). Confirmed: Windows Terminal -> ssh -> Cygwin sshd. Not
+re-tested: the older "garbage replies" and "dropped keys with
+`CYGWIN=disable_pcon`" symptoms, other ssh clients, other remote hosts. A bare
+Escape key press now takes up to 100 ms to register (`ESCDELAY=10` restores the
+old feel on a fast link).
+
+To check a path without the app, run `termprobe` (CWPutils/toolbox):
+
+    termprobe --tvision      # replays tvision's startup, tests typing and
+                             # clicking, reports records cut in two and how
+                             # late the rest came
+
+If it still reports split records with gaps longer than your `ESCDELAY`, raise
+`ESCDELAY`, or work around it:
+
+1. Run ssh under **wincygterm** (CWPutils/toolbox, next to termprobe). It runs
+   a Cygwin program on a real pty inside Windows Terminal instead of Cygwin's
+   own console layer, which is what swallows the terminal's colour reply and
+   hands ncurses its key input in fragments. Make a Windows Terminal profile
+   from the output of `python wincygterm --profile` (a native Windows Python,
+   not Cygwin's), and end its command line with `-- ssh cpbee` to land
+   straight in the session, or leave that off for a Cygwin shell and run ssh
+   from there. See `man wincygterm`. Not needed in mintty.
+2. Run ssh from mintty instead of Windows Terminal.
+3. Run ssh from inside WSL (the old workaround), e.g. a Windows Terminal
+   profile whose command line is `wsl.exe -d Ubuntu-20.04 ssh cpbee`.
+
+The measurements behind the diagnosis are in
+[TERMINAL-HISTORY.md](TERMINAL-HISTORY.md), section 7. Which layer cuts the
+records in two, and why in multiples of about 16 ms, is still an open question;
+so is why Cygwin's own console swallows OSC colour queries.

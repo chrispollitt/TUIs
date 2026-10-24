@@ -5,11 +5,11 @@ dialog boxes with drop shadows, the cyan desktop, `F10` for the menu bar.
 Built on [magiblot/tvision](https://github.com/magiblot/tvision), the modern C++
 port of Borland's Turbo Vision. It is 2026. This is fine.
 
-See [HISTORY.md](HISTORY.md) for the twenty-year excuse.
+See [WHY.md](WHY.md) for the twenty-year excuse.
 
 **Installing:** see [INSTALL.md](INSTALL.md). It covers the master/client
 setup, the mail system (via mail-setup), building, updating and uninstalling.
-The Requirements, Build and Install sections below are a short summary.
+The Install section below is a short summary.
 
 ![tvmail in a terminal: the folders table (Folder, Total, New) on the left, the message list top right, the message below, the menu bar and F-key line](images/tvmail.png)
 
@@ -56,11 +56,11 @@ are remote clients.
   replies back. All of it is set up by
   [**mail-setup**](https://github.com/chrispollitt/POSIX/tree/main/mail-setup),
   a separate project that `./configure.sh` fetches into
-  `../tvcommon/third_party/POSIX/mail-setup` (see *Requirements*). Its `mail-pull` wrapper
+  `../tvcommon/third_party/POSIX/mail-setup` (see [INSTALL.md](INSTALL.md)). Its `mail-pull` wrapper
   runs whichever puller you picked, on the schedule the wizard asks for
   (systemd timer, or cron where there's none). On the master itself tvmail
   reads through Dovecot too: `./setup.sh` spots Dovecot and writes that
-  config, never local mode beside it (`!WARNINGS.txt`, Warning 3). So F3
+  config, never local mode beside it (`WARNINGS.txt`, Warning 2). So F3
   there files spam and the timer does the pulling. Follow each pull with
   `tvmail-backend purge spool --subject "***SPAM***" --to-folder spam` (over
   `localhost` IMAP, so Dovecot owns the move) and spam is filed for every
@@ -80,89 +80,24 @@ are remote clients.
 Builds and runs natively on **Linux** (including Raspberry Pi and WSL),
 **macOS** and the **BSDs**; the app is a normal ncurses program and the backend
 is pure‑stdlib Python 3. **Cygwin** works too, with a small tvision patch (see
-*Build*) — as a client only. Setting up the mail *master* (Postfix + Dovecot)
+[INSTALL.md](INSTALL.md), section 5) — as a client only. Setting up the mail *master* (Postfix + Dovecot)
 is Linux-only; the pullers and client setup are portable, and the app itself
 runs the same everywhere.
 
-## Requirements
-
-(Full walkthrough: [INSTALL.md](INSTALL.md).)
-
-`./configure.sh` is a wizard that checks/installs all of this for you: first
-the dev tools, then it hands off to
-[mail-setup](https://github.com/chrispollitt/POSIX/tree/main/mail-setup) for
-the mail system (Postfix, Dovecot and a puller on the master; a sendmail shim
-on a client; GNU Mailutils on both). Run it first if you'd rather answer
-prompts than read the list below.
-
-mail-setup is imported the way tvision is: `configure.sh` sparse-clones
-`github.com/chrispollitt/POSIX` (just `mail-setup/`) into
-`../tvcommon/third_party/POSIX` on first run. Update it with
-`git -C ../tvcommon/third_party/POSIX pull`. Set `MAIL_SETUP_DIR=/path/to/mail-setup` to
-use a checkout of your own instead. It has its own tests
-(`../tvcommon/third_party/POSIX/mail-setup/tests/run-tests.sh`).
-
-- `cmake`, a C++17 compiler, `ncurses(w)` headers, `git`
-  - Debian/Ubuntu/Pi: `apt install cmake g++ libncursesw5-dev git`
-  - Fedora: `dnf install cmake gcc-c++ ncurses-devel git`
-  - macOS: Xcode Command Line Tools + `brew install cmake`
-  - Cygwin: `setup-x86_64.exe -q -P cmake libncurses-devel gcc-g++ git`
-- a working **Python 3** (≥ 3.6) somewhere on `PATH` — `python3`, or a
-  versioned `python3.x`; the backend's sh/python polyglot shebang copes with a
-  broken `/usr/bin/python3` symlink
-- an MTA for sending: `sendmail`, or `msmtp`, or set `$SENDMAIL`
-- Cygwin `--mingw` builds only: `mingw64-x86_64-gcc-g++`
-
-## Build
-
-On Linux/macOS/BSD `./build.sh` just builds. On **Cygwin** only, Turbo Vision
-needs a small compatibility patch first (its Unix backend assumes Linux/BSD:
-`FIONREAD` on pipes, `SA_NOCLDWAIT`, XSI `wcwidth`, C‑linkage `strupr`) —
-`patches/cygwin_patch.py`, which `build.sh` applies automatically.
+## Install
 
 ```bash
-./build.sh                # fetches ../tvcommon/third_party/ (tvision, mail-setup), patches, builds
-./clean.sh                # removes build/, dist/, logs, __pycache__/
-./clean.sh --all          # ...and ../tvcommon/third_party/, so the next build re-fetches it
+./configure.sh      # a wizard: build tools, then the mail system (mail-setup)
+./build.sh          # fetches and patches Turbo Vision, builds
+./setup.sh          # installs (~/.local or /usr/local), writes tvmail.conf
 ```
 
-- `./build.sh --mingw` — cross-compile a static native `tvmail.exe` instead
-  (only useful from a real Windows console, not mintty).
-- On Linux / macOS `build.sh` just builds natively.
-- `../tvcommon/third_party/` (shared with tvchat) is filled by
-  `../tvcommon/third_party.sh`, which `build.sh` and `configure.sh` both
-  run: `tvision` from magiblot/tvision, and `POSIX` (a sparse clone of
-  chrispollitt/POSIX, just `mail-setup/` and `chat-setup/`). Existing
-  checkouts are left alone; `../tvcommon/third_party.sh --update` pulls
-  them. Only tvision is needed to compile, so a failed mail-setup fetch just
-  warns.
-
-Install and configure it with the wizard:
-
-```bash
-./setup.sh                 # local (~/.local) or system-wide (/usr/local);
-                            # offers to write tvmail.conf and smoke-test it
-```
-
-...or by hand:
-
-```bash
-cmake --install build --prefix ~/.local
-export PATH="$HOME/.local/bin:$PATH"        # add to ~/.bashrc
-```
-
-To remove it again:
-
-```bash
-./uninstall.sh             # finds it in ~/.local and /usr/local, lists, asks
-./uninstall.sh -n          # just show what would go
-./uninstall.sh --purge     # also offer to remove ~/.config/tvmail/
-```
-
-It leaves the mail system alone (mail-setup's Postfix, Dovecot and pullers,
-plus `~/.mail`, `~/.mu-tickets` and `~/.netrc`, which `mail(1)` uses too). The
-exception is a `pop-pull` that older tvmail versions installed next to
-`tvmail`: it offers to remove that one, unless a `mail-pull` still runs it.
+You need `cmake`, a C++17 compiler, ncurses(w) headers, `git` and a Python 3
+(3.6 or newer), plus an MTA for sending (`sendmail`, `msmtp`, or `$SENDMAIL`).
+[INSTALL.md](INSTALL.md) has the whole walkthrough: picking a role for each
+machine, the prerequisites per system, the master and client steps, Cygwin and
+the native Windows build (`./build.sh --mingw`), updating, uninstalling
+(`./uninstall.sh`), and troubleshooting.
 
 ## Run
 
@@ -186,30 +121,9 @@ step above puts it on `PATH`. Otherwise:
 
 ## Tests
 
-```bash
-./test.sh                 # build, then ctest every layer
-./test.sh -R backend_unit # just one
-./test.sh -LE mail_setup  # everything but mail-setup's suites
-```
-
-- **`backend_unit`** — stdlib `unittest` over `tvmail-backend`: mbox parsing,
-  flags, `delete` → trash + backup, `~/.mailrc` aliases, lock sweeping,
-  `save-draft`, and the `serve` frame protocol. No build needed
-  (`python3 -m unittest discover -s tests`).
-- **`backend_pipe`** — `tvmail --selftest`: the C++ side forks the `serve`
-  co-process, handshakes, round-trips a request, exercises `spawnLogged`.
-- **`e2e_tui`** — drives the built binary in a pty: launch, panes populate,
-  `Tab` walks the active-pane marker, the body scrolls, `F3` pulls in the
-  background. Reports *skipped* where there's no usable terminal.
-- **`install_roundtrip`** — `cmake --install` into a temp prefix, then
-  `./uninstall.sh` it; nothing may be left behind (and a legacy `pop-pull`
-  that a `mail-pull` still runs must survive).
-- **`mail_setup`** — mail-setup's own unit, shell and pull-e2e suites from
-  `../tvcommon/third_party/POSIX/mail-setup` (F3 runs its `mail-pull`). Temp dirs only;
-  never its live-master check. Skipped if mail-setup hasn't been fetched.
-
-Details in [tests/README.md](tests/README.md). No dependencies beyond a
-Python 3 and (for `e2e_tui`) a pty.
+`./test.sh` builds and runs every layer through ctest, with no network and no
+real account. [tests/README.md](tests/README.md) says what each layer covers
+and how to run one.
 
 ## The three panes
 

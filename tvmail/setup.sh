@@ -8,7 +8,7 @@
 #   * offers to write ~/.config/tvmail/tvmail.conf:
 #       master - Dovecot is installed here: remote mode against this box's own
 #                Dovecot (IMAP 993) + Postfix (localhost:25), never local mode
-#                beside Dovecot (!WARNINGS.txt #3); warns if no pull timer
+#                beside Dovecot (WARNINGS.txt #2); warns if no pull timer
 #       remote - a client: the master's IMAP/SMTP (or just mode=remote when
 #                GNU Mailutils' ~/.mail from ./configure.sh has the hosts)
 #       local  - this box owns /var/mail and nothing else touches it
@@ -131,14 +131,14 @@ esac
 step "Configure tvmail"
 if ask "Write ~/.config/tvmail/tvmail.conf now?"; then
   # A box running Dovecot is the mail master.  tvmail there must read through
-  # Dovecot too, not edit /var/mail behind its back (!WARNINGS.txt, Warning 3).
+  # Dovecot too, not edit /var/mail behind its back (WARNINGS.txt, Warning 2).
   have_dovecot=0
   { command -v doveconf >/dev/null 2>&1 || [ -x /usr/sbin/doveconf ] || [ -d /etc/dovecot ]; } \
     && have_dovecot=1
   if [ "$have_dovecot" = 1 ]; then
     echo "Dovecot is installed here, so this is the mail master.  tvmail should read"
     echo "through Dovecot on this box (remote mode, IMAP on localhost) rather than edit"
-    echo "/var/mail itself - see !WARNINGS.txt, Warning 3."
+    echo "/var/mail itself - see WARNINGS.txt, Warning 2."
     mode=$(readval "master (via this box's Dovecot), local or remote" "master")
     case "$mode" in
       l|L|local|Local)
