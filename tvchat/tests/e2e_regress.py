@@ -88,8 +88,8 @@ def heading_active(tv, label):
 def open_chat(tv, c, srv):
     """The #e2e conversation of account Fake, the input focused."""
     c.check(srv.wait_joined("#e2e"), "the chat backend never joined #e2e")
-    c.check(tv.wait(lambda: re.search(r"Fake\b.*connected", tv.text()), 5),
-            "the server pane does not show Fake connected")
+    c.check(tv.wait(lambda: re.search(r"Fake\b.*\bYes\b", tv.text()), 5),
+            "the server pane does not show Fake as connected (Yes)")
     c.check(heading_active(tv, "Servers"), "tvchat did not start on the server pane")
     tv.send("Enter")                              # Enter on a server: its conversations
     c.check(tv.wait(lambda: heading_active(tv, "Conversations"), 3) and
@@ -280,8 +280,8 @@ def talk_classic_call_in(opts):
     c = Case(tv)
     started(tv, c)
     c.check(srv.greeted(), "tvchat-backend never said HELLO to talkd")
-    c.check(tv.wait(lambda: re.search(r"Talk\b.*connected", tv.text()), 5),
-            "the server pane does not show Talk connected")
+    c.check(tv.wait(lambda: re.search(r"Talk\b.*\bYes\b", tv.text()), 5),
+            "the server pane does not show Talk as connected (Yes)")
     srv.ring("miche@cpbee", "t1")
     c.check(tv.wait("miche is calling", 4), "a talk call did not say so on the status line")
     tv.send("Enter")                             # Servers -> Conversations
@@ -332,8 +332,8 @@ def talk_irc_mode_call_out_and_toggle(opts):
     c = Case(tv)
     started(tv, c)
     c.check(srv.greeted(), "tvchat-backend never said HELLO to talkd")
-    c.check(tv.wait(lambda: re.search(r"Talk\b.*connected", tv.text()), 5),
-            "the server pane does not show Talk connected")
+    c.check(tv.wait(lambda: re.search(r"Talk\b.*\bYes\b", tv.text()), 5),
+            "the server pane does not show Talk as connected (Yes)")
     tv.send(alt("a"), "j")
     c.check(tv.wait("nick / address to talk to", 3), "Chat > Join... did not ask")
     tv.send("miche", "Enter", settle=0.8)

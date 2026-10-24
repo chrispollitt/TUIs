@@ -45,6 +45,14 @@ Stop for Chris's review after each milestone.
 
 ## Small to-dos from Chris (Oct 23) - not started
 
+- **Servers pane is now a table (done, branch `tvchat-servers-table-83c863`)** -
+  `Name | Proto | Conn` under a heading row, faint `│` rules (`cSystem()`
+  grey), proto `IRC`/`talk`, Conn `Yes`/`No` (`...` connecting, `Err` error).
+  This **supersedes the two to-dos below** (bracketed protocol, `con`/`dis`);
+  the name is no longer stripped of its protocol word.  `drawServerRow` /
+  `TServerHead` / `TServerPane` in `tvchat/src/chatwin.cpp` - move them to
+  `tvcommon` when tvmail gets the same table.  e2e_regress looks for `Yes`.
+
 - **Servers pane: always show the protocol, in brackets** - `Libera [irc]`,
   `cpbee [talk]` (irc, talk, deltachat ...) - on EVERY row (Chris, Oct 23).
   When the account's name already says the protocol as a whole word,

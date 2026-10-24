@@ -615,25 +615,71 @@ public:
     }
 };
 
-// "Libera (3)      connected": the account, its unread count, its state.
+// The Servers table: Name | Proto | Conn, the columns split by faint rules.
+// The Name column takes what the other two leave.
+const int kProtoW = 5, kConnW = 4;
+
+// "Libera (3)│IRC  │Yes ", or the heading when `a` is null.  `rule` is the
+// colour of the separators.
+void drawServerRow(TDrawBuffer &b, int w, const std::string &name, const std::string &proto,
+                   const std::string &conn, TColorAttr text, TColorAttr rule)
+{
+    int nameW = std::max(w - kProtoW - kConnW - 2, 1);
+    b.moveChar(0, ' ', text, w);
+    b.moveStr(0, fitCols(name, nameW), text);
+    b.moveChar(nameW, '\xB3', rule, 1);
+    b.moveStr(nameW + 1, fitCols(proto, kProtoW), text);
+    b.moveChar(nameW + 1 + kProtoW, '\xB3', rule, 1);
+    b.moveStr(nameW + 2 + kProtoW, fitCols(conn, kConnW), text);
+}
+
+// The one row over the table.
+class TServerHead : public TView
+{
+public:
+    TServerHead(const TRect &b) : TView(b) { growMode = 0; }
+    void draw() override
+    {
+        TDrawBuffer b;
+        drawServerRow(b, size.x, "Name", "Proto", "Conn", cNorm(), cSystem());
+        writeLine(0, 0, size.x, 1, b);
+    }
+};
+
 class TServerPane : public TChatList
 {
 public:
     TServerPane(const TRect &b) : TChatList(b, nullptr, cmChatAcctPicked) {}
+    void draw() override
+    {
+        bool front = (state & sfActive) && (state & sfSelected);
+        TDrawBuffer b;
+        for (short y = 0; y < size.y; ++y)
+        {
+            short item = y + topItem;
+            const ChatAccount *a = item < (short)ids.size() ? findAccount(ids[item]) : nullptr;
+            TColorAttr text = front ? getColor(1) : getColor(2), rule = cSystem();
+            if (a && item == focused)
+                rule = text = (state & sfFocused) ? getColor(3) : getColor(4);
+            std::string name, proto, conn; // below the last account: just the rules
+            if (a)
+            {
+                name = a->display;
+                int n = unreadOf(a->id);
+                if (n > 0)
+                    name += " (" + std::to_string(n) + ")";
+                proto = a->protocol == "irc" ? "IRC" : a->protocol;
+                conn = a->state == "connected" ? "Yes" : a->state == "connecting" ? "..."
+                     : a->state == "error" ? "Err" : "No";
+            }
+            drawServerRow(b, size.x, name, proto, conn, text, rule);
+            writeLine(0, y, size.x, 1, b);
+        }
+    }
     void getText(char *dest, short item, short maxLen) override
     {
         const ChatAccount *a = item >= 0 && item < (short)ids.size() ? findAccount(ids[item]) : nullptr;
-        if (!a)
-        {
-            dest[0] = 0;
-            return;
-        }
-        std::string name = a->display;
-        int n = unreadOf(a->id);
-        if (n > 0)
-            name += " (" + std::to_string(n) + ")";
-        int w = size.x - 1 - (int)a->state.size() - 1;
-        putText(dest, w > 3 ? fitCols(name, w) + " " + a->state : name, maxLen);
+        putText(dest, a ? a->display : std::string(), maxLen);
     }
 };
 
@@ -666,6 +712,7 @@ TChatMainWindow *gChatWin = nullptr; // the one chat window, once made
 
 class TChatMainWindow : public TWindow
 {
+    TServerHead *srvHead = nullptr;
     TPaneTitle *srvTitle = nullptr, *convTitle = nullptr, *logTitle = nullptr;
     TDivider *vdiv = nullptr;
     TScrollBar *convVsb = nullptr, *logVsb = nullptr;
@@ -688,7 +735,7 @@ class TChatMainWindow : public TWindow
 
     struct Rects
     {
-        TRect srvTitle, servers, vbar, convTitle, convs, convVsb,
+        TRect srvTitle, srvHead, servers, vbar, convTitle, convs, convVsb,
             logTitle, log, logVsb, prompt, input;
     };
     Rects paneRects() const
@@ -702,7 +749,8 @@ class TChatMainWindow : public TWindow
             sy = H - 5;
         Rects r;
         r.srvTitle = TRect(1, 1, 1 + FW, 2);
-        r.servers = TRect(1, 2, 1 + FW, H - 1);
+        r.srvHead = TRect(1, 2, 1 + FW, 3);
+        r.servers = TRect(1, 3, 1 + FW, H - 1);
         r.vbar = TRect(1 + FW, 1, 2 + FW, H - 1);
         r.convTitle = TRect(2 + FW, 1, W - 1, 2);
         r.convs = TRect(2 + FW, 2, W - 2, sy);
@@ -1134,6 +1182,7 @@ public:
         convTitle = new TPaneTitle(R.convTitle, "Conversations");
         logTitle = new TPaneTitle(R.logTitle, "Chat");
         vdiv = new TDivider(R.vbar, true);
+        srvHead = new TServerHead(R.srvHead);
         servers = new TServerPane(R.servers);
         convVsb = new TScrollBar(R.convVsb);
         convs = new TConvPane(R.convs, convVsb);
@@ -1172,6 +1221,7 @@ public:
 
         insert(vdiv);
         insert(srvTitle);
+        insert(srvHead);
         insert(convTitle);
         insert(logTitle);
         insert(convVsb);
@@ -1398,6 +1448,7 @@ public:
         TWindow::changeBounds(bounds);
         Rects R = paneRects();
         srvTitle->changeBounds(R.srvTitle);
+        srvHead->changeBounds(R.srvHead);
         servers->changeBounds(R.servers);
         vdiv->changeBounds(R.vbar);
         convTitle->changeBounds(R.convTitle);
