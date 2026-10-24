@@ -752,7 +752,7 @@ public:
         for (const TableCol &c : cols)
             cells.push_back(c.head);
         TDrawBuffer b;
-        drawTableRow(b, size.x, cols, cells, cNorm(), cSystem());
+        drawTableRow(b, size.x, cols, cells, cNorm(), cRule());
         writeLine(0, 0, size.x, 1, b);
     }
 };
@@ -769,7 +769,7 @@ inline void drawTableList(TListViewer &v, const TableCols &cols,
     {
         short item = y + v.topItem;
         bool real = item < v.range;
-        TColorAttr text = front ? v.getColor(1) : v.getColor(2), rule = cSystem();
+        TColorAttr text = front ? v.getColor(1) : v.getColor(2), rule = cRule();
         if (real && item == v.focused)
             rule = text = (v.state & sfFocused) ? v.getColor(3) : v.getColor(4);
         drawTableRow(b, v.size.x, cols, real ? cells(item) : std::vector<std::string>(), text, rule);

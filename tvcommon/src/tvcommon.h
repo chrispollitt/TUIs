@@ -124,7 +124,8 @@ inline TColorAttr cDiv() { return vga(0x33); }           // cyan on cyan
 inline TColorAttr cFrame() { return vga(0x30); }         // black on cyan: frames + titles
                                                                 // (white on cyan is < 3:1 anywhere)
 inline TColorAttr cDim() { return vga(0x38); }           // grey on cyan: pane rules
-inline TColorAttr cSystem() { return TColorAttr(TColorRGB(0x444444), TColorRGB(0x00AAAA)); } // dark grey on cyan: system lines, table rules
+inline TColorAttr cSystem() { return TColorAttr(TColorRGB(0x444444), TColorRGB(0x00AAAA)); } // dark grey on cyan: system lines
+inline TColorAttr cRule() { return TColorAttr(TColorRGB(0x227777), TColorRGB(0x00AAAA)); }   // fainter still: the table column rules
 
 // ---------------------------------------------------------- command line ---
 // cli.cpp: --debug [FILE] / --trace [FILE] / --selftest / --help / --version.

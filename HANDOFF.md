@@ -45,6 +45,8 @@ Stop for Chris's review after each milestone.
 
 ## Small to-dos from Chris (Oct 23) - not started
 
+- **TOP PRIORITY: the flaky e2e cases** - tvmail BUGS.md #47 (`e2e_regress` #4, sometimes #28 / #29).  Chris wants it fixed before more features.
+
 - **Servers pane is now a table (done, branch `tvchat-servers-table-83c863`)** -
   `Name | Proto | Conn` under a heading row, faint `│` rules (`cSystem()`
   grey), proto `IRC`/`talk`, Conn `Yes`/`No` (`...` connecting, `Err` error).

@@ -14,6 +14,7 @@ close).
 
 | # | Bug | Notes |
 |---|-----|-------|
+| 47 | **Top priority - intermittent test failures.** `e2e_regress` #4 `source_draft_found_by_content` fails now and then (seen Oct 22 and Oct 23: 1 run in 5 once an extra backend round trip was added to the folder counts; the screen showed "Working..."); #28 and #29 also failed once in a full run and passed on rerun.  Every case is timing-based (fixed `settle` waits), and the app blocks on each backend call, so a slow spawn under load tips them.  A flaky suite hides real regressions | Make the cases wait on a condition, not a delay; find out whether the app itself (not just the test) mishandles a slow backend (see #33) |
 | 6 | Ctrl-D / Ctrl-R / Ctrl-N are status-line keys, caught before the focused view, so in a compose or signature editor they open "Delete message?", a reply or a new message instead of acting as editor keys | Fix: a compose-window status line (helpCtx) without them |
 | 10 | Body pane: Home goes to column 0 but End goes to the last line; no page-up key to pair with Space | |
 | 13 | View > Sort by date is mailbox order, not date order - moved or pulled mail lands out of date order | |
