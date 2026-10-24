@@ -198,7 +198,6 @@ enum LineKind : char
 // cyan (e2e_regress #36 scores every cell): blue (4.6:1) and a dark grey,
 // dimmer than the black of everyone else's lines (3.4:1).
 inline TColorAttr cOwn() { return vga(0x31); }
-inline TColorAttr cSystem() { return TColorAttr(TColorRGB(0x444444), TColorRGB(0x00AAAA)); }
 
 // "HH:MM <nick> text", "HH:MM * nick does", "HH:MM -nick- notice"; [e] for
 // an encrypted (Delta Chat) message; the lines after the first of a
@@ -615,36 +614,8 @@ public:
     }
 };
 
-// The Servers table: Name | Proto | Conn, the columns split by faint rules.
-// The Name column takes what the other two leave.
-const int kProtoW = 5, kConnW = 4;
-
-// "Libera (3)│IRC  │Yes ", or the heading when `a` is null.  `rule` is the
-// colour of the separators.
-void drawServerRow(TDrawBuffer &b, int w, const std::string &name, const std::string &proto,
-                   const std::string &conn, TColorAttr text, TColorAttr rule)
-{
-    int nameW = std::max(w - kProtoW - kConnW - 2, 1);
-    b.moveChar(0, ' ', text, w);
-    b.moveStr(0, fitCols(name, nameW), text);
-    b.moveChar(nameW, '\xB3', rule, 1);
-    b.moveStr(nameW + 1, fitCols(proto, kProtoW), text);
-    b.moveChar(nameW + 1 + kProtoW, '\xB3', rule, 1);
-    b.moveStr(nameW + 2 + kProtoW, fitCols(conn, kConnW), text);
-}
-
-// The one row over the table.
-class TServerHead : public TView
-{
-public:
-    TServerHead(const TRect &b) : TView(b) { growMode = 0; }
-    void draw() override
-    {
-        TDrawBuffer b;
-        drawServerRow(b, size.x, "Name", "Proto", "Conn", cNorm(), cSystem());
-        writeLine(0, 0, size.x, 1, b);
-    }
-};
+// The Servers table: Name | Proto | Conn (the table pieces are in views.h).
+const TableCols kServerCols = {{"Name", 0}, {"Proto", 5}, {"Conn", 4}};
 
 class TServerPane : public TChatList
 {
@@ -652,29 +623,18 @@ public:
     TServerPane(const TRect &b) : TChatList(b, nullptr, cmChatAcctPicked) {}
     void draw() override
     {
-        bool front = (state & sfActive) && (state & sfSelected);
-        TDrawBuffer b;
-        for (short y = 0; y < size.y; ++y)
-        {
-            short item = y + topItem;
+        drawTableList(*this, kServerCols, [this](short item) -> std::vector<std::string>
+                      {
             const ChatAccount *a = item < (short)ids.size() ? findAccount(ids[item]) : nullptr;
-            TColorAttr text = front ? getColor(1) : getColor(2), rule = cSystem();
-            if (a && item == focused)
-                rule = text = (state & sfFocused) ? getColor(3) : getColor(4);
-            std::string name, proto, conn; // below the last account: just the rules
-            if (a)
-            {
-                name = a->display;
-                int n = unreadOf(a->id);
-                if (n > 0)
-                    name += " (" + std::to_string(n) + ")";
-                proto = a->protocol == "irc" ? "IRC" : a->protocol;
-                conn = a->state == "connected" ? "Yes" : a->state == "connecting" ? "..."
-                     : a->state == "error" ? "Err" : "No";
-            }
-            drawServerRow(b, size.x, name, proto, conn, text, rule);
-            writeLine(0, y, size.x, 1, b);
-        }
+            if (!a)
+                return {};
+            std::string name = a->display;
+            int n = unreadOf(a->id);
+            if (n > 0)
+                name += " (" + std::to_string(n) + ")";
+            return {name, a->protocol == "irc" ? "IRC" : a->protocol,
+                    a->state == "connected" ? "Yes" : a->state == "connecting" ? "..."
+                    : a->state == "error" ? "Err" : "No"}; });
     }
     void getText(char *dest, short item, short maxLen) override
     {
@@ -712,7 +672,7 @@ TChatMainWindow *gChatWin = nullptr; // the one chat window, once made
 
 class TChatMainWindow : public TWindow
 {
-    TServerHead *srvHead = nullptr;
+    TTableHead *srvHead = nullptr;
     TPaneTitle *srvTitle = nullptr, *convTitle = nullptr, *logTitle = nullptr;
     TDivider *vdiv = nullptr;
     TScrollBar *convVsb = nullptr, *logVsb = nullptr;
@@ -1182,7 +1142,7 @@ public:
         convTitle = new TPaneTitle(R.convTitle, "Conversations");
         logTitle = new TPaneTitle(R.logTitle, "Chat");
         vdiv = new TDivider(R.vbar, true);
-        srvHead = new TServerHead(R.srvHead);
+        srvHead = new TTableHead(R.srvHead, kServerCols);
         servers = new TServerPane(R.servers);
         convVsb = new TScrollBar(R.convVsb);
         convs = new TConvPane(R.convs, convVsb);

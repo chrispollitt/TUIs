@@ -75,7 +75,7 @@ static void setRowFlag(int idx, char flag)
             r.flag = flag;
 }
 
-// Per-folder message and unread counts, for "inbox (3)" in the folder pane.
+// Per-folder message and unread counts, for the folder table.
 // -1 = not known (the backend had no line for it).
 static int gTotal[gFolderCount];
 static int gUnread[gFolderCount];
@@ -139,6 +139,9 @@ static void loadList()
 // message content (bottom-right).  Panes talk via evBroadcast: folder focus
 // reloads the list, message focus loads the content.
 
+// Folder | Total | New (the table pieces are in views.h)
+const TableCols kFolderCols = {{"Folder", 0}, {"Total", 5, true}, {"New", 4, true}};
+
 class TFolderPane : public TListViewer
 {
 public:
@@ -147,25 +150,23 @@ public:
         setRange(gFolderCount);
         TListViewer::focusItem(gFolderIdx);
     }
+    void draw() override
+    {
+        drawTableList(*this, kFolderCols, [](short item) -> std::vector<std::string>
+                      {
+            if (item < 0 || item >= gFolderCount)
+                return {};
+            // how many there are, and how many of them are new (unread, for
+            // the mail folders; drafts / sent / trash / dead.letter have none: 0)
+            const std::string m = gFolders[item].mbox;
+            bool mail = m == "spool" || m == "mbox" || m == "spam";
+            return {gFolders[item].name,
+                    gTotal[item] >= 0 ? std::to_string(gTotal[item]) : std::string(),
+                    !mail ? "0" : gUnread[item] >= 0 ? std::to_string(gUnread[item]) : std::string()}; });
+    }
     void getText(char *dest, short item, short maxLen) override
     {
-        if (item < 0 || item >= gFolderCount)
-        {
-            dest[0] = 0;
-            return;
-        }
-        // "inbox (3)": unread for the mail folders, how many are waiting
-        // for drafts; nothing for sent / trash / dead.letter.
-        std::string label = gFolders[item].name;
-        const std::string m = gFolders[item].mbox;
-        int n = -1;
-        if (m == "spool" || m == "mbox" || m == "spam")
-            n = gUnread[item];
-        else if (m == "drafts")
-            n = gTotal[item];
-        if (n > 0)
-            label += " (" + std::to_string(n) + ")";
-        putText(dest, label, maxLen);
+        putText(dest, item >= 0 && item < gFolderCount ? gFolders[item].name : std::string(), maxLen);
     }
     // TListViewer calls this for every click and arrow key, even when the
     // highlight lands where it already was (clicking the pane to focus it,
@@ -358,12 +359,13 @@ class TMailWindow : public TWindow
     Boolean ready = False;
     TScrollBar *msgVsb = nullptr, *contentVsb = nullptr;
     TDivider *vdiv = nullptr;
+    TTableHead *folderHead = nullptr;
     TPaneTitle *folderTitle = nullptr, *msgTitle = nullptr, *contentTitle = nullptr;
     int activePane = 0;
 
     struct Rects
     {
-        TRect folderTitle, folder, vbar, msgTitle, msg, msgVsb,
+        TRect folderTitle, folderHead, folder, vbar, msgTitle, msg, msgVsb,
             contentTitle, content, contentVsb;
     };
     Rects paneRects() const
@@ -377,7 +379,8 @@ class TMailWindow : public TWindow
             sy = H - 5;
         Rects r;
         r.folderTitle = TRect(1, 1, 1 + FW, 2);
-        r.folder = TRect(1, 2, 1 + FW, H - 1);
+        r.folderHead = TRect(1, 2, 1 + FW, 3);
+        r.folder = TRect(1, 3, 1 + FW, H - 1);
         r.vbar = TRect(1 + FW, 1, 2 + FW, H - 1);
         r.msgTitle = TRect(2 + FW, 1, W - 1, 2);
         r.msg = TRect(2 + FW, 2, W - 2, sy);
@@ -405,6 +408,7 @@ public:
         folderTitle = new TPaneTitle(R.folderTitle, "Folders");
         msgTitle = new TPaneTitle(R.msgTitle, "Messages");
         contentTitle = new TPaneTitle(R.contentTitle, "Message");
+        folderHead = new TTableHead(R.folderHead, kFolderCols);
         folderPane = new TFolderPane(R.folder);
         vdiv = new TDivider(R.vbar, true);
         msgVsb = new TScrollBar(R.msgVsb);
@@ -414,6 +418,7 @@ public:
 
         insert(vdiv);
         insert(folderTitle);
+        insert(folderHead);
         insert(msgTitle);
         insert(contentTitle);
         insert(msgVsb);
@@ -644,6 +649,7 @@ public:
         TWindow::changeBounds(bounds);
         Rects R = paneRects();
         folderTitle->changeBounds(R.folderTitle);
+        folderHead->changeBounds(R.folderHead);
         folderPane->changeBounds(R.folder);
         vdiv->changeBounds(R.vbar);
         msgTitle->changeBounds(R.msgTitle);

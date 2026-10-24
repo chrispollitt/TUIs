@@ -11,7 +11,7 @@ See [HISTORY.md](HISTORY.md) for the twenty-year excuse.
 setup, the mail system (via mail-setup), building, updating and uninstalling.
 The Requirements, Build and Install sections below are a short summary.
 
-![tvmail in a terminal: folders on the left with an unread count, the message list top right, the message below, the menu bar and F-key line](images/tvmail.png)
+![tvmail in a terminal: the folders table (Folder, Total, New) on the left, the message list top right, the message below, the menu bar and F-key line](images/tvmail.png)
 
 ## What it is
 
@@ -285,9 +285,10 @@ messages, set `mesg = y` under `[ui]` in `~/.config/tvmail/tvmail.conf`.
   *previews* a message (its body appears below, the `N` flag stays). It's marked
   read when the body pane takes focus — `Enter` or `Tab` — or by **Message ▸
   Mark read**. **Mark unread** puts the `N` back and it stays put.
-- **Folder counts.** The folder pane shows what's waiting: `inbox (3)` is three
-  unread (the same for `saved` and `spam`); `drafts (2)` is two drafts. They
-  refresh on `F5`, after a pull, and as you read.
+- **Folder counts.** The folder pane is a table, `Folder | Total | New`: how
+  many messages each folder holds, and how many of them are unread (New is
+  shown for the mail folders - inbox, `saved`, `spam` - and `0` for drafts,
+  sent and the rest). They refresh on `F5`, after a pull, and as you read.
 - **Type to filter.** In the message list just start typing: the list narrows
   to messages whose From or Subject contains the text (any case), and the
   heading shows `filter: foo_  (3 of 120)`. `Backspace` trims it, `Esc` (or

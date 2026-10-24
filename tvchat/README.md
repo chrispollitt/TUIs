@@ -11,23 +11,13 @@ lives in a stdlib-only Python helper, `tvchat-backend`, which tvchat keeps
 running as a co-process. The two apps share their common C++ in
 [`../tvcommon`](../tvcommon).
 
-```text
-┌─────────────────────────────── tvchat ───────────────────────────────┐
-│[ Servers ]─────────│  Conversations - cpbee  ───────────────────────│
-│ Libera   connected │ * server messages                               │
-│ cpbee (2) connected│ #test (2)                                       │
-│                    │ tester2                                         │
-│                    │──  #test — cpbee  ─────────────────────────────│
-│                    │18:17 <tester2> hi                               │
-│                    │18:17 <chris-pollitt> hello                      │
-│                    │> _                                              │
-└──────────────────────────────────────────────────────────────────────┘
- Tab Pane  Enter Send  PgUp Older  F6 Next  Alt-X Exit  F1 Help   2 new
-```
+![tvchat in a terminal: the Servers table (Name, Proto, Conn) on the left, the conversations top right, the chat below, the menu bar and key line](images/tvchat.png)
 
 ## The window
 
-- **Servers (left):** each account with its unread count and its state.
+- **Servers (left):** a table, `Name | Proto | Conn`: each account with its unread
+  count, its protocol (`IRC`, `talk`) and whether it is connected (`Yes`, `No`;
+  `...` while connecting, `Err` after an error).
 - **Conversations (top right):** the highlighted account's, starting with
   its server messages (MOTD, notices, SASL results), then channels and
   people.

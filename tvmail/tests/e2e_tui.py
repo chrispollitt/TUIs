@@ -203,7 +203,7 @@ def main():
                 fail("showing a message in the preview marked it read")
             #     the folder pane carries the unread count
             #     (s is still the startup screen from step 1)
-            if not re.search(r"inbox \(1\)", s):
+            if not re.search(r"inbox\W+\d+\W+1\b", s):
                 fail("no unread count on the inbox folder\n---\n%s" % s[-1500:])
             done.append("preview-leaves-unread+folder-count")
 

@@ -121,7 +121,7 @@ def body_rows(tv):
     the scroll bar, which only a focused pane draws)."""
     top = next((y for y, l in enumerate(tv.lines())
                 if "Message " in l and "──" in l), 13)
-    x0 = tv.line(top).index("│") + 1          # the folder pane is ASCII
+    x0 = tv.line(top).index("│", 20) + 1       # past the folder table's own rules
     return [tv.line(y)[x0:].rstrip(" ║│▲▼▓▒■") for y in range(top + 1, ROWS - 2)]
 
 
@@ -322,7 +322,7 @@ def find_copy_paste(opts):
     tv.send("ShiftDown", settle=0.6)
     # the selected line: the one body row drawn in other colours
     top = next(y for y, l in enumerate(tv.lines()) if "Message " in l and "──" in l)
-    x0 = tv.line(top).index("│") + 1
+    x0 = tv.line(top).index("│", 20) + 1
     xr = x0 + 40                                  # past the text: no find match
     looks = {}
     for y in range(top + 1, ROWS - 2):

@@ -697,3 +697,82 @@ public:
         return TView::mapColor(index);
     }
 };
+
+// ------------------------------------------------------------- tables ------
+// The left pane of the mail and chat windows (folders, servers) is a small
+// table: a heading row, then one row per item, the columns split by faint
+// rules.  `w` is the column's width; 0 = the one column that takes what the
+// others leave.  A row is one cell per column; no cells = an empty row (the
+// rules run on below the last item).
+struct TableCol
+{
+    std::string head;
+    int w;
+    bool right = false; // numbers: flush right
+};
+using TableCols = std::vector<TableCol>;
+
+inline void drawTableRow(TDrawBuffer &b, int width, const TableCols &cols,
+                         const std::vector<std::string> &cells, TColorAttr text, TColorAttr rule)
+{
+    int fixed = 0;
+    for (const TableCol &c : cols)
+        fixed += c.w;
+    int rest = std::max(width - fixed - (int)cols.size() + 1, 1);
+    b.moveChar(0, ' ', text, width);
+    int x = 0;
+    for (size_t i = 0; i < cols.size(); ++i)
+    {
+        int w = cols[i].w ? cols[i].w : rest;
+        if (i)
+            b.moveChar(x++, '\xB3', rule, 1); // the vertical rule
+        std::string s = i < cells.size() ? cells[i] : std::string();
+        s = fitCols(s, w);
+        if (cols[i].right) // fitCols pads on the right: move the padding over
+        {
+            size_t e = s.find_last_not_of(' ');
+            std::string t = e == std::string::npos ? std::string() : s.substr(0, e + 1);
+            s = std::string(s.size() - t.size(), ' ') + t;
+        }
+        b.moveStr(x, s, text);
+        x += w;
+    }
+}
+
+// The heading row over the table.
+class TTableHead : public TView
+{
+    TableCols cols;
+
+public:
+    TTableHead(const TRect &b, TableCols c) : TView(b), cols(std::move(c)) { growMode = 0; }
+    void draw() override
+    {
+        std::vector<std::string> cells;
+        for (const TableCol &c : cols)
+            cells.push_back(c.head);
+        TDrawBuffer b;
+        drawTableRow(b, size.x, cols, cells, cNorm(), cSystem());
+        writeLine(0, 0, size.x, 1, b);
+    }
+};
+
+// Draw a list as the table's rows: `cells(item)` gives an item's cells.  The
+// colours are TListViewer's (1 normal, 2 inactive, 3 focused, 4 current but
+// unfocused), the rules in the row's own colour on the highlighted row.
+inline void drawTableList(TListViewer &v, const TableCols &cols,
+                          const std::function<std::vector<std::string>(short)> &cells)
+{
+    bool front = (v.state & sfActive) && (v.state & sfSelected);
+    TDrawBuffer b;
+    for (short y = 0; y < v.size.y; ++y)
+    {
+        short item = y + v.topItem;
+        bool real = item < v.range;
+        TColorAttr text = front ? v.getColor(1) : v.getColor(2), rule = cSystem();
+        if (real && item == v.focused)
+            rule = text = (v.state & sfFocused) ? v.getColor(3) : v.getColor(4);
+        drawTableRow(b, v.size.x, cols, real ? cells(item) : std::vector<std::string>(), text, rule);
+        v.writeLine(0, y, v.size.x, 1, b);
+    }
+}

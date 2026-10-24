@@ -485,3 +485,29 @@ def run(app):
         print("FAILED %d of %d: %s" % (len(failed), len(todo), ", ".join(failed)))
         raise SystemExit(1)
     print("PASS: %d cases" % len(todo))
+
+
+# ------------------------------------------------------------ screenshots ---
+def render_png(tv, path, size=18, font="/cygdrive/c/Windows/Fonts/consola.ttf"):
+    """The app's screen as a PNG (for the READMEs): every cell's colours and
+    character, in a monospace font.  Needs Pillow and the font file; the
+    cursor and bold are not drawn."""
+    from PIL import Image, ImageDraw, ImageFont
+    f = ImageFont.truetype(font, size)
+    cw = round(f.getlength("M"))
+    ch = round(size * 1.25)
+    img = Image.new("RGB", (cw * COLS, ch * ROWS))
+    d = ImageDraw.Draw(img)
+    for y in range(ROWS):
+        row = tv.screen.buffer[y]
+        for x in range(COLS):
+            c = row[x]
+            fg, bg = cell_colours(c)
+            d.rectangle([x * cw, y * ch, (x + 1) * cw - 1, (y + 1) * ch - 1],
+                        fill="#" + bg)
+        for x in range(COLS):
+            c = row[x]
+            if c.data.strip():
+                fg, bg = cell_colours(c)
+                d.text((x * cw, y * ch), c.data, font=f, fill="#" + fg)
+    img.save(path, optimize=True)
