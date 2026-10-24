@@ -12,12 +12,11 @@ is next, what was decided, and the live setup.
   key lines, the app-named `--debug` / `--trace` logs, and the fix for the
   flaky e2e case (tvmail BUGS #47). **Not pushed** (`main` is ahead of
   `origin/main`; Chris pushes after his own manual testing).
-- **Installed on cmlaptop** (`/usr/local/bin`): the build from before the
-  UI alignment (Chat was still on Alt-A there). Reinstall with `./build.sh &&
+- **Installed on cmlaptop** (`/usr/local/bin`): the current `main` (Oct 23, after
+  the UI alignment and the docs tidy-up). Reinstall with `./build.sh &&
   ./install.sh` in `tvchat/` and `tvmail/`.
 - **Tests:** tvchat 5/5 and tvmail 7/7 layers pass on Cygwin (tvchat's
-  `e2e_regress` ~2 min, tvmail's ~3 min). After the last merge only the pieces
-  that changed were rerun; run both full suites before releasing.
+  `e2e_regress` ~2 min, tvmail's ~3 min). Both full suites passed on this `main` before the install.
 - **Branches** merged into `main` and safe to delete: `claude/tvchat-servers-
   table-83c863`, `claude/ui-align-2d1c4d`, `menu-order`, `log-names`,
   `tvmail-dead-count`, `flaky-e2e`, `docs-tidy`. The old `tvmail-v1.2.0` tag
