@@ -84,6 +84,7 @@ extern const char *gAppName;
 
 // ------------------------------------------------ commands both apps use ---
 // Numbered with tvmail's (2000-2099); an app's own commands go in its header.
+const ushort cmReload = 2001;       // File > Reload (F5)
 const ushort cmAboutBox = 2007;
 const ushort cmFocusContent = 2014; // Enter in a list pane -> on to the next pane
 const ushort cmShowHelp = 2022;     // in-app help window

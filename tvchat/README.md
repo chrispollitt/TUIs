@@ -44,6 +44,11 @@ shows what it points at, and a conversation counts as read once the chat pane
 has the focus. Unsent text stays with its conversation; Alt-X asks before it
 is thrown away.
 
+The menus and the key line follow tvmail's: File ▸ Reload (`F5`) and Exit
+(`Alt-X`), Chat (`Alt-C`, where tvmail has Message), Edit, View, Window (Next,
+Previous, Zoom, Tile, Cascade, List `Alt-0`, Redraw, Close), Help; the key line
+ends `F5 Reload  F6 Next  Alt-X Exit  F1 Help` in both apps.
+
 Ctrl-L (Window ▸ Redraw screen) repaints the whole screen. While tvchat
 runs, its terminal takes no messages - it clears the terminal's group-write
 bit, as `mesg n` does - so `talk` requests and `write` / `wall` messages from

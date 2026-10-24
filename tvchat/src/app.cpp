@@ -64,45 +64,31 @@ TMenuBar *TVChatApp::initMenuBar(TRect r)
     r.b.y = r.a.y + 1;
     return new TVChatMenuBar(r,
                         *new TSubMenu("~F~ile", kbAltF) +
-                            *new TMenuItem("E~x~it", cmQuit, kbAltX, hcNoContext, "Alt-X") +
+                            tvReloadItem() +
+                            tvExitItem() +
                             chatSubMenu() +
                             *new TSubMenu("~E~dit", kbAltE) +
                             *new TMenuItem("~C~opy", cmCopy, kbCtrlIns, hcNoContext, "Ctrl-Ins") +
                             *new TMenuItem("~P~aste", cmPaste, kbShiftIns, hcNoContext, "Shift-Ins") +
                             newLine() +
-                            *new TMenuItem("~F~ind...", cmFind, kbNoKey, hcNoContext) +
-                            *new TMenuItem("Find a~g~ain", cmSearchAgain, kbNoKey, hcNoContext) +
+                            tvFindItems(false) +
                             *new TSubMenu("~V~iew", kbAltV) +
-                            *new TMenuItem("~W~rap long lines", cmToggleWrap, kbNoKey, hcNoContext) +
                             *new TMenuItem("~T~alk view: classic / IRC", cmChatTalkView, kbCtrlT, hcNoContext, "Ctrl-T") +
-                            *new TSubMenu("~W~indow", kbAltW) +
-                            *new TMenuItem("~N~ext", cmNext, kbF6, hcNoContext, "F6") +
-                            *new TMenuItem("~P~revious", cmPrev, kbShiftF6, hcNoContext, "Shift-F6") +
-                            *new TMenuItem("~L~ist...", cmWindowList, kbAlt0, hcNoContext, "Alt-0") +
-                            *new TMenuItem("~R~edraw screen", cmRedrawScreen, kbCtrlL, hcNoContext, "Ctrl-L") +
                             newLine() +
-                            *new TMenuItem("~C~lose", cmClose, kbAltF3, hcNoContext, "Alt-F3") +
-                            *new TSubMenu("~H~elp", kbAltH) +
-                            *new TMenuItem("~C~ontents", cmShowHelp, kbF1, hcNoContext, "F1") +
-                            newLine() +
-                            *new TMenuItem("~A~bout", cmAboutBox, kbNoKey, hcNoContext));
+                            *new TMenuItem("~W~rap long lines", cmToggleWrap, kbNoKey, hcNoContext) +
+                            tvWindowMenu() +
+                            tvHelpMenu());
 }
 
 TStatusLine *TVChatApp::initStatusLine(TRect r)
 {
     r.a.y = r.b.y - 1;
     return new TVChatStatusLine(r,
-                           *new TStatusDef(0, 0xFFFF) +
-                               // hints only: cmChatOff does nothing
-                               *new TStatusItem("~Tab~ Pane", kbNoKey, cmChatOff) +
-                               *new TStatusItem("~Enter~ Send", kbNoKey, cmChatOff) +
-                               *new TStatusItem("~PgUp~ Older", kbNoKey, cmChatOff) +
-                               *new TStatusItem("~F6~ Next", kbF6, cmNext) +
-                               *new TStatusItem("~Alt-X~ Exit", kbAltX, cmQuit) +
-                               *new TStatusItem("~F1~ Help", kbF1, cmShowHelp) +
-                               *new TStatusItem(nullptr, kbF10, cmMenu) +
-                               *new TStatusItem(nullptr, kbShiftF6, cmPrev) +
-                               *new TStatusItem(nullptr, kbAltF3, cmClose));
+                           // hints only: cmChatOff does nothing
+                           tvStatusDef(*new TStatusDef(0, 0xFFFF) +
+                                       *new TStatusItem("~Tab~ Pane", kbNoKey, cmChatOff) +
+                                       *new TStatusItem("~Enter~ Send", kbNoKey, cmChatOff) +
+                                       *new TStatusItem("~PgUp~ Older", kbNoKey, cmChatOff)));
 }
 
 void TVChatApp::post(ushort command)
@@ -160,24 +146,9 @@ void TVChatApp::chatEvents()
 
 void TVChatApp::aboutBox()
 {
-    // its own dialog, sized to the text: messageBox() holds about five lines
-    static const char *kAbout =
-        "\003tvchat " TVCHAT_VERSION "\n" // \003 centres a line (each one)
-        "\n"
-        "\003A Turbo Vision chat client:\n"
-        "\003IRC (with IRCv3) today, Delta Chat to come.\n"
-        "\n"
-        "\003Chris Pollitt  -  MIT licence, no warranty.\n"
-        "\003https://github.com/chrispollitt/TUIs\n"
-        "\n"
-        "\003Turbo Vision by magiblot.\n"
-        "\003See HISTORY.md.";
-    TDialog *d = new TDialog(TRect(0, 0, 54, 17), "About tvchat");
-    d->options |= ofCentered;
-    d->insert(new TStaticText(TRect(2, 2, 52, 12), kAbout)); // \003: centred
-    d->insert(new TButton(TRect(21, 13, 33, 15), "O~K~", cmOK, bfDefault));
-    deskTop->execView(d);
-    TObject::destroy(d);
+    tvAboutBox(deskTop, "tvchat", TVCHAT_VERSION,
+               "A Turbo Vision chat client:\nIRC (with IRCv3) and talk(1), Delta Chat to come.",
+               "Plumbing: tvchat-backend.");
 }
 
 void TVChatApp::handleEvent(TEvent &e)
@@ -194,6 +165,13 @@ void TVChatApp::handleEvent(TEvent &e)
     {
     case cmChatEvents:
         chatEvents();
+        break;
+    case cmReload: // File > Reload: the windows re-read the backend's state
+        if (chatOn())
+        {
+            message(deskTop, evBroadcast, cmChatReset, nullptr);
+            chatMenuRebuild();
+        }
         break;
     case cmShowHelp:
     {

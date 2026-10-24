@@ -13,7 +13,7 @@ TMenuBar *TVMailApp::initMenuBar(TRect r)
                         *new TSubMenu("~F~ile", kbAltF) +
                             *new TMenuItem(gRemote ? "File ~s~pam" : "~P~ull mail",
                                            cmPull, kbF3, hcNoContext, "F3") +
-                            *new TMenuItem("~R~eload", cmReload, kbF5, hcNoContext, "F5") +
+                            tvReloadItem() +
                             *new TMenuItem("Sa~v~e message as...", cmSaveMsg, kbNoKey, hcNoContext) +
                             *new TMenuItem("~O~ut of office...", cmOutOfOffice, kbNoKey, hcNoContext) +
                             *new TMenuItem("P~u~rge...", cmPurgeMsgs, kbNoKey, hcNoContext) +
@@ -21,8 +21,7 @@ TMenuBar *TVMailApp::initMenuBar(TRect r)
                             newLine() +
                             *new TMenuItem("Edit si~g~nature", cmEditSig, kbNoKey, hcNoContext) +
                             *new TMenuItem("Resume dead.~l~etter", cmResumeDead, kbNoKey, hcNoContext) +
-                            newLine() +
-                            *new TMenuItem("E~x~it", cmQuit, kbAltX, hcNoContext, "Alt-X") +
+                            tvExitItem() +
                             *new TSubMenu("~M~essage", kbAltM) +
                             *new TMenuItem("~R~eply", cmReplyMsg, kbCtrlR, hcNoContext, "Ctrl-R") +
                             *new TMenuItem("Repl~y~ All", cmReplyAllMsg, kbNoKey, hcNoContext) +
@@ -49,9 +48,7 @@ TMenuBar *TVMailApp::initMenuBar(TRect r)
                             *new TMenuItem("~C~opy", cmCopy, kbCtrlIns, hcNoContext, "Ctrl-Ins") +
                             *new TMenuItem("~P~aste", cmPaste, kbShiftIns, hcNoContext, "Shift-Ins") +
                             newLine() +
-                            *new TMenuItem("~F~ind...", cmFind, kbNoKey, hcNoContext) +
-                            *new TMenuItem("~R~eplace...", cmReplace, kbNoKey, hcNoContext) +
-                            *new TMenuItem("Find a~g~ain", cmSearchAgain, kbNoKey, hcNoContext) +
+                            tvFindItems(true) +
                             *new TSubMenu("~V~iew", kbAltV) +
                             *new TMenuItem("Sort by ~d~ate", cmSortDate, kbNoKey, hcNoContext) +
                             *new TMenuItem("Sort by ~f~rom", cmSortFrom, kbNoKey, hcNoContext) +
@@ -61,39 +58,20 @@ TMenuBar *TVMailApp::initMenuBar(TRect r)
                             newLine() +
                             *new TMenuItem("~W~rap long lines", cmToggleWrap, kbNoKey, hcNoContext) +
                             *new TMenuItem("~C~lear filter", cmClearFilter, kbNoKey, hcNoContext, "Esc") +
-                            *new TSubMenu("~W~indow", kbAltW) +
-                            *new TMenuItem("~N~ext", cmNext, kbF6, hcNoContext, "F6") +
-                            *new TMenuItem("~P~revious", cmPrev, kbShiftF6, hcNoContext, "Shift-F6") +
-                            *new TMenuItem("~Z~oom", cmZoom, kbNoKey, hcNoContext) +
-                            *new TMenuItem("~T~ile", cmTile, kbNoKey, hcNoContext) +
-                            *new TMenuItem("C~a~scade", cmCascade, kbNoKey, hcNoContext) +
-                            *new TMenuItem("~L~ist...", cmWindowList, kbAlt0, hcNoContext, "Alt-0") +
-                            *new TMenuItem("~R~edraw screen", cmRedrawScreen, kbCtrlL, hcNoContext, "Ctrl-L") +
-                            newLine() +
-                            *new TMenuItem("~C~lose", cmClose, kbAltF3, hcNoContext, "Alt-F3") +
-                            *new TSubMenu("~H~elp", kbAltH) +
-                            *new TMenuItem("~C~ontents", cmShowHelp, kbF1, hcNoContext, "F1") +
-                            newLine() +
-                            *new TMenuItem("~A~bout", cmAboutBox, kbNoKey, hcNoContext));
+                            tvWindowMenu() +
+                            tvHelpMenu());
 }
 
 TStatusLine *TVMailApp::initStatusLine(TRect r)
 {
     r.a.y = r.b.y - 1;
     return new TStatusLine(r,
-                           *new TStatusDef(0, 0xFFFF) +
-                               *new TStatusItem(gRemote ? "~F3~ Spam" : "~F3~ Pull", kbF3, cmPull) +
-                               *new TStatusItem("~F5~ Reload", kbF5, cmReload) +
-                               *new TStatusItem("~^R~ Reply", kbCtrlR, cmReplyMsg) +
-                               *new TStatusItem("~^N~ New", kbCtrlN, cmCompose) +
-                               *new TStatusItem("~F2~ Send", kbF2, cmSendMsg) +
-                               *new TStatusItem("~^D~ Del", kbCtrlD, cmDeleteMsg) +
-                               *new TStatusItem("~F6~ Next", kbF6, cmNext) +
-                               *new TStatusItem("~Alt-X~ Exit", kbAltX, cmQuit) +
-                               *new TStatusItem("~F1~ Help", kbF1, cmShowHelp) +
-                               *new TStatusItem(nullptr, kbF10, cmMenu) +
-                               *new TStatusItem(nullptr, kbShiftF6, cmPrev) +
-                               *new TStatusItem(nullptr, kbAltF3, cmClose));
+                           tvStatusDef(*new TStatusDef(0, 0xFFFF) +
+                                       *new TStatusItem(gRemote ? "~F3~ Spam" : "~F3~ Pull", kbF3, cmPull) +
+                                       *new TStatusItem("~^R~ Reply", kbCtrlR, cmReplyMsg) +
+                                       *new TStatusItem("~^N~ New", kbCtrlN, cmCompose) +
+                                       *new TStatusItem("~F2~ Send", kbF2, cmSendMsg) +
+                                       *new TStatusItem("~^D~ Del", kbCtrlD, cmDeleteMsg)));
 }
 
 int TVMailApp::currentRow()
@@ -857,29 +835,10 @@ void TVMailApp::handleEvent(TEvent &e)
         break;
     }
     case cmAboutBox:
-    {
-        // its own dialog, sized to the text: messageBox() holds about five
-        // lines and silently cut the credits off
-        static const char *kAbout =
-            "\003tvmail " TVMAIL_VERSION "\n" // \003 centres a line (each one)
-            "\n"
-            "\003A Turbo Vision mail client - a local mbox\n"
-            "\003on the mail host, IMAP / SMTP anywhere else.\n"
-            "\n"
-            "\003Chris Pollitt  -  MIT licence, no warranty.\n"
-            "\003https://github.com/chrispollitt/TUIs\n"
-            "\n"
-            "\003Turbo Vision by magiblot.\n"
-            "\003Plumbing: Postfix + tvmail-backend + pop-pull.\n"
-            "\003See HISTORY.md.";
-        TDialog *d = new TDialog(TRect(0, 0, 54, 18), "About tvmail");
-        d->options |= ofCentered;
-        d->insert(new TStaticText(TRect(2, 2, 52, 13), kAbout)); // \003: centred
-        d->insert(new TButton(TRect(21, 14, 33, 16), "O~K~", cmOK, bfDefault));
-        deskTop->execView(d);
-        TObject::destroy(d);
+        tvAboutBox(deskTop, "tvmail", TVMAIL_VERSION,
+                   "A Turbo Vision mail client - a local mbox\non the mail host, IMAP / SMTP anywhere else.",
+                   "Plumbing: Postfix + tvmail-backend + pop-pull.");
         break;
-    }
     default:
         handled = false;
     }

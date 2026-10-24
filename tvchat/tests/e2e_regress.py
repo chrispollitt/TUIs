@@ -206,7 +206,7 @@ def chat_join_and_leave(opts):
     c = Case(tv)
     started(tv, c)
     c.check(srv.wait_joined("#e2e"), "the chat backend never joined #e2e")
-    tv.send(alt("a"), "j")
+    tv.send(alt("c"), "j")
     c.check(tv.wait("nick / address to talk to", 3), "Chat > Join... did not ask")
     tv.send("#Other", "Enter", settle=0.8)
     c.check(srv.wait_joined("#other") and srv.sent("JOIN #Other"),
@@ -215,7 +215,7 @@ def chat_join_and_leave(opts):
             "Join did not show the channel in the chat window")
     c.check(tv.wait(lambda: re.search(r"│ ?#Other\b", tv.text()), 3),
             "the channel joined is not in the conversation list")
-    tv.send(alt("a"), "l", settle=0.8)
+    tv.send(alt("c"), "l", settle=0.8)
     c.check(srv.sent("PART #Other"), "Chat > Leave did not part the channel")
     c.check(tv.wait(lambda: chat_heading(tv, "#Other — Fake") is None and
                     not re.search(r"│ ?#Other\b", tv.text()), 4),
@@ -334,7 +334,7 @@ def talk_irc_mode_call_out_and_toggle(opts):
     c.check(srv.greeted(), "tvchat-backend never said HELLO to talkd")
     c.check(tv.wait(lambda: re.search(r"Talk\b.*\bYes\b", tv.text()), 5),
             "the server pane does not show Talk as connected (Yes)")
-    tv.send(alt("a"), "j")
+    tv.send(alt("c"), "j")
     c.check(tv.wait("nick / address to talk to", 3), "Chat > Join... did not ask")
     tv.send("miche", "Enter", settle=0.8)
     c.check(srv.wait(lambda: srv.sent("CALL ")), "Join did not CALL")
@@ -470,14 +470,14 @@ def menus_stay_open_while_chat_polls(opts):
     c = Case(tv)
     started(tv, c)
     c.check(srv.wait_joined("#e2e"), "the chat backend never joined #e2e")
-    for key, item in (("f", "Exit"), ("a", "Join...")):
+    for key, item in (("f", "Exit"), ("c", "Join...")):
         tv.send(alt(key))
         c.check(tv.wait(item, 3), "Alt-%s did not open its menu" % key.upper())
         tv.pump(1.5)
         c.check(tv.has(item), "#44 the menu closed by itself while chat polled")
         tv.send("\x1b", "\x1b", settle=0.5)
     # the Chat menu lists the account with its state
-    tv.send(alt("a"))
+    tv.send(alt("c"))
     c.check(tv.wait(lambda: re.search(r"Fake\s+connected", tv.text()), 3),
             "the Chat menu does not list the account as connected")
     tv.send("\x1b", "\x1b", settle=0.5)
@@ -495,7 +495,7 @@ def chat_menu_greyed_without_config(opts):
     c.check(tv.wait("Exit", 3), "the File menu did not open")
     y, x = tv.find("Exit")
     enabled = cell_colours(tv.screen.buffer[y][x + 1])[0]
-    tv.send("\x1b", "\x1b", alt("a"))
+    tv.send("\x1b", "\x1b", alt("c"))
     c.check(tv.wait("no tvchat.conf", 3), "the Chat menu does not say chat is off")
     for item in ("Connect...", "Join...", "Leave"):
         y, x = tv.find(item)

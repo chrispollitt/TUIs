@@ -227,3 +227,93 @@ void TTvApp::windowList()
     if (r != cmCancel && sel >= 0 && sel < (short)wins.size())
         wins[sel].view->select();
 }
+
+// ----------------------------------------------- shared menus and status ---
+TMenuItem &tvExitItem()
+{
+    return newLine() +
+           *new TMenuItem("E~x~it", cmQuit, kbAltX, hcNoContext, "Alt-X");
+}
+
+TMenuItem &tvReloadItem()
+{
+    return *new TMenuItem("~R~eload", cmReload, kbF5, hcNoContext, "F5");
+}
+
+TMenuItem &tvFindItems(bool withReplace)
+{
+    TMenuItem &m = *new TMenuItem("~F~ind...", cmFind, kbNoKey, hcNoContext);
+    if (withReplace)
+        return m + *new TMenuItem("~R~eplace...", cmReplace, kbNoKey, hcNoContext) +
+               *new TMenuItem("Find a~g~ain", cmSearchAgain, kbNoKey, hcNoContext);
+    return m + *new TMenuItem("Find a~g~ain", cmSearchAgain, kbNoKey, hcNoContext);
+}
+
+TSubMenu &tvWindowMenu()
+{
+    return *new TSubMenu("~W~indow", kbAltW) +
+           *new TMenuItem("~N~ext", cmNext, kbF6, hcNoContext, "F6") +
+           *new TMenuItem("~P~revious", cmPrev, kbShiftF6, hcNoContext, "Shift-F6") +
+           *new TMenuItem("~Z~oom", cmZoom, kbNoKey, hcNoContext) +
+           *new TMenuItem("~T~ile", cmTile, kbNoKey, hcNoContext) +
+           *new TMenuItem("C~a~scade", cmCascade, kbNoKey, hcNoContext) +
+           *new TMenuItem("~L~ist...", cmWindowList, kbAlt0, hcNoContext, "Alt-0") +
+           *new TMenuItem("~R~edraw screen", cmRedrawScreen, kbCtrlL, hcNoContext, "Ctrl-L") +
+           newLine() +
+           *new TMenuItem("~C~lose", cmClose, kbAltF3, hcNoContext, "Alt-F3");
+}
+
+TSubMenu &tvHelpMenu()
+{
+    return *new TSubMenu("~H~elp", kbAltH) +
+           *new TMenuItem("~C~ontents", cmShowHelp, kbF1, hcNoContext, "F1") +
+           newLine() +
+           *new TMenuItem("~A~bout", cmAboutBox, kbNoKey, hcNoContext);
+}
+
+TStatusDef &tvStatusDef(TStatusDef &appItems)
+{
+    return appItems +
+           *new TStatusItem("~F5~ Reload", kbF5, cmReload) +
+           *new TStatusItem("~F6~ Next", kbF6, cmNext) +
+           *new TStatusItem("~Alt-X~ Exit", kbAltX, cmQuit) +
+           *new TStatusItem("~F1~ Help", kbF1, cmShowHelp) +
+           *new TStatusItem(nullptr, kbF10, cmMenu) +
+           *new TStatusItem(nullptr, kbShiftF6, cmPrev) +
+           *new TStatusItem(nullptr, kbAltF3, cmClose);
+}
+
+void tvAboutBox(TDeskTop *desk, const char *app, const char *version,
+                const char *tagline, const char *plumbing)
+{
+    // its own dialog, sized to the text: messageBox() holds about five lines
+    // (\003 centres a line, each one)
+    std::string text = std::string("\003") + app + " " + version + "\n\n";
+    std::string line;
+    for (const char *p = tagline;; ++p)
+    {
+        if (*p == '\n' || !*p)
+        {
+            text += "\003" + line + "\n";
+            line.clear();
+            if (!*p)
+                break;
+        }
+        else
+            line += *p;
+    }
+    text += "\n"
+            "\003Chris Pollitt  -  MIT licence, no warranty.\n"
+            "\003https://github.com/chrispollitt/TUIs\n"
+            "\n"
+            "\003Turbo Vision by magiblot.\n";
+    text += std::string("\003") + plumbing + "\n"
+            "\003See HISTORY.md.";
+    std::string title = std::string("About ") + app;
+    TDialog *d = new TDialog(TRect(0, 0, 54, 18), title.c_str());
+    d->options |= ofCentered;
+    d->insert(new TStaticText(TRect(2, 2, 52, 13), text.c_str()));
+    d->insert(new TButton(TRect(21, 14, 33, 16), "O~K~", cmOK, bfDefault));
+    desk->execView(d);
+    TObject::destroy(d);
+}

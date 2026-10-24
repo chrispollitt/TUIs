@@ -24,3 +24,24 @@ public:
     // wall, shutdown notices), which tvision's repaints never cover.
     void redrawScreen();
 };
+
+// ---- the pieces of the menu bar, status line and About box both apps share,
+// so the same action sits in the same place under the same key.
+// File: a rule, then "Exit" (Alt-X), after the app's own items.
+TMenuItem &tvExitItem();
+// File's "Reload" (F5)
+TMenuItem &tvReloadItem();
+// Edit: Find... / Replace... (if withReplace) / Find again; the apps add
+// Undo, Cut, Copy and Paste before them.
+TMenuItem &tvFindItems(bool withReplace);
+// Window: Next, Previous, Zoom, Tile, Cascade, List..., Redraw screen, Close
+TSubMenu &tvWindowMenu();
+// Help: Contents (F1), About
+TSubMenu &tvHelpMenu();
+// The status line: `appItems` (a TStatusDef(0, 0xFFFF) with the app's own items), then the shared closing slots
+// F5 Reload, F6 Next, Alt-X Exit, F1 Help (and the hidden F10, Shift-F6, Alt-F3).
+TStatusDef &tvStatusDef(TStatusDef &appItems);
+// Help > About: `tagline` is the centred description (lines split by \n),
+// `plumbing` the one line about what the app runs on.
+void tvAboutBox(TDeskTop *desk, const char *app, const char *version,
+                const char *tagline, const char *plumbing);

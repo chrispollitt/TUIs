@@ -16,9 +16,8 @@ CoProcess &mailBackend(); // tvmail-backend serve (backend.cpp)
 
 // ---------------------------------------------------------------- commands ---
 // (2007 About, 2014 focus content, 2022 help, 2024 pane focused, 2034 Window
-// list and 2043 wrap are tvcommon.h's: the shared views use them.)
+// list, 2043 wrap and 2001 reload are tvcommon.h's: the shared views use them.)
 const ushort cmPull = 2000;
-const ushort cmReload = 2001;
 const ushort cmOpenMsg = 2002;
 const ushort cmReplyMsg = 2003;
 const ushort cmCompose = 2004;

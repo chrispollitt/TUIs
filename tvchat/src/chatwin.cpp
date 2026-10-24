@@ -1223,6 +1223,7 @@ public:
         chatPane()->select();
     }
 
+    const std::string &accountId() const { return acct; } // the Servers pane's pick
     const std::string &convId() const { return conv; }
     bool showingServer() const { return isServer(); }
     bool showingCall() const { return isTalk(conv) && callState() == "incoming"; }
@@ -1546,6 +1547,14 @@ void joinDialog()
         rb = new TRadioButtons(TRect(3, 6, 47, 6 + n), items);
         d->insert(rb);
         d->insert(new TLabel(TRect(2, 5, 47, 6), "~A~ccount", rb));
+        // start on the account picked in the Servers pane, when it is connected
+        if (gChatWin)
+            for (size_t i = 0; i < cand.size(); ++i)
+                if (as[cand[i]].id == gChatWin->accountId())
+                {
+                    ushort s = (ushort)i;
+                    rb->setData(&s);
+                }
     }
     int by = 5 + n + (n ? 1 : 0);
     d->insert(new TButton(TRect(12, by, 24, by + 2), "~J~oin", cmOK, bfDefault));
@@ -1654,7 +1663,7 @@ bool chatOn()
 
 TSubMenu &chatSubMenu()
 {
-    TSubMenu *s = new TSubMenu("Ch~a~t", kbAltA);
+    TSubMenu *s = new TSubMenu("~C~hat", kbAltC);
     s->subMenu = buildChatMenu();
     gChatItem = s;
     return *s;
