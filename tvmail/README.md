@@ -286,9 +286,7 @@ messages, set `mesg = y` under `[ui]` in `~/.config/tvmail/tvmail.conf`.
   read when the body pane takes focus — `Enter` or `Tab` — or by **Message ▸
   Mark read**. **Mark unread** puts the `N` back and it stays put.
 - **Folder counts.** The folder pane is a table, `Folder | Total | New`: how
-  many messages each folder holds, and how many of them are unread (New is
-  shown for the mail folders - inbox, `saved`, `spam` - and `0` for drafts,
-  sent and the rest). They refresh on `F5`, after a pull, and as you read.
+  many messages each folder holds, and how many of them are unread (dead.letter is 1, or 0 when there is no file). They refresh on `F5`, after a pull, and as you read.
 - **Type to filter.** In the message list just start typing: the list narrows
   to messages whose From or Subject contains the text (any case), and the
   heading shows `filter: foo_  (3 of 120)`. `Backspace` trims it, `Esc` (or

@@ -84,7 +84,7 @@ static void loadCounts()
 {
     for (int i = 0; i < gFolderCount; ++i)
         gTotal[i] = gUnread[i] = -1;
-    std::istringstream is(backendRun("counts"));
+    std::istringstream is(backendRun("counts spool drafts sent mbox spam trash dead") /* dead only when named */);
     std::string line;
     while (std::getline(is, line))
     {
@@ -156,13 +156,10 @@ public:
                       {
             if (item < 0 || item >= gFolderCount)
                 return {};
-            // how many there are, and how many of them are new (unread, for
-            // the mail folders; drafts / sent / trash / dead.letter have none: 0)
-            const std::string m = gFolders[item].mbox;
-            bool mail = m == "spool" || m == "mbox" || m == "spam";
+            // how many there are, and how many of them are unread
             return {gFolders[item].name,
                     gTotal[item] >= 0 ? std::to_string(gTotal[item]) : std::string(),
-                    !mail ? "0" : gUnread[item] >= 0 ? std::to_string(gUnread[item]) : std::string()}; });
+                    gUnread[item] >= 0 ? std::to_string(gUnread[item]) : std::string()}; });
     }
     void getText(char *dest, short item, short maxLen) override
     {

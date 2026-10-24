@@ -22,6 +22,7 @@ INBOX/Archive/Trash/Drafts/Sent/Junk):
                             (idx = 0-based position; flags: 'N' new/unread, '.' seen)
   counts [MBOX...]          one line per mailbox, TAB-separated:
                             name <TAB> total <TAB> unseen   (default: all folders)
+                            (dead.letter is counted only when named: 1 or 0)
   show  IDX [MBOX] [--mark-read]   decoded headers + best-effort text/plain
                             body on stdout; --mark-read also flags it \\Seen,
                             reusing this call's IMAP SELECT/SEARCH instead of
@@ -963,6 +964,8 @@ def cmd_counts(a):
     names = a.mboxes or ["spool", "drafts", "sent", "mbox", "spam", "trash"]
     for n in names:
         if n == "dead":
+            # only when named (not in the default list): one message, or no file
+            print("dead	%d	0" % (_dead_msg() is not None))
             continue
         try:
             if _is_remote():

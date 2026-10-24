@@ -357,6 +357,14 @@ class TestCli(Base):
                  self.be("counts").stdout.decode().splitlines()]
         self.assertEqual(names, ["spool", "drafts", "sent", "mbox", "spam", "trash"])
 
+    def test_counts_dead_letter_when_named(self):
+        dead = self.home / "dl"
+        os.environ["DEAD"] = str(dead)
+        self.addCleanup(os.environ.pop, "DEAD", None)
+        self.assertEqual(self.be("counts", "dead").stdout.decode(), "dead\t0\t0\n")  # no file
+        dead.write_text("From: a@b\nSubject: s\n\nbody\n")
+        self.assertEqual(self.be("counts", "dead").stdout.decode(), "dead\t1\t0\n")
+
     def test_show_does_not_mark_read(self):
         # the UI previews with plain show and marks read separately, so a
         # message you only arrowed past stays unread
