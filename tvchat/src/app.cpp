@@ -65,6 +65,7 @@ TMenuBar *TVChatApp::initMenuBar(TRect r)
     return new TVChatMenuBar(r,
                         *new TSubMenu("~F~ile", kbAltF) +
                             *new TMenuItem("E~x~it", cmQuit, kbAltX, hcNoContext, "Alt-X") +
+                            chatSubMenu() +
                             *new TSubMenu("~E~dit", kbAltE) +
                             *new TMenuItem("~C~opy", cmCopy, kbCtrlIns, hcNoContext, "Ctrl-Ins") +
                             *new TMenuItem("~P~aste", cmPaste, kbShiftIns, hcNoContext, "Shift-Ins") +
@@ -74,7 +75,6 @@ TMenuBar *TVChatApp::initMenuBar(TRect r)
                             *new TSubMenu("~V~iew", kbAltV) +
                             *new TMenuItem("~W~rap long lines", cmToggleWrap, kbNoKey, hcNoContext) +
                             *new TMenuItem("~T~alk view: classic / IRC", cmChatTalkView, kbCtrlT, hcNoContext, "Ctrl-T") +
-                            chatSubMenu() +
                             *new TSubMenu("~W~indow", kbAltW) +
                             *new TMenuItem("~N~ext", cmNext, kbF6, hcNoContext, "F6") +
                             *new TMenuItem("~P~revious", cmPrev, kbShiftF6, hcNoContext, "Shift-F6") +
