@@ -32,7 +32,7 @@ rmv() {   # rmv PATH... - remove the ones that exist
 }
 
 rmv build dist _inst
-rmv build.log test.log install.log run.log trace.log trace.backend.log trace.result.log
+rmv build.log test.log install.log run.log trace.tvmail.log trace.tvmail.backend.log trace.result.log debug.tvmail.log debug.tvmail.backend.log
 find . -path ./third_party -prune -o -path '*/BAK' -prune -o \
      -type d -name __pycache__ -print | while read -r d; do rmv "$d"; done
 

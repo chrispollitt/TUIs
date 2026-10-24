@@ -112,18 +112,18 @@ sends a line that starts with
 Write diagnostic logging to
 .I FILE
 (default:
-.IR debug.log );
+.IR debug.tvchat.log );
 .B tvchat\-backend
 logs beside it, to
-.I debug.chat.log
+.I debug.tvchat.backend.log
 \(em every request, every IRC line in and out (SASL redacted), and why a
 connection ended.
 .TP
 .BI "--trace " [FILE]
 Write Chrome Trace Event profiling data (default:
-.IR trace.log ;
+.IR trace.tvchat.log ;
 the backend's cProfile data to
-.IR trace.chat.log ).
+.IR trace.tvchat.backend.log ).
 .TP
 .B --selftest
 Start the backend, read the accounts, poll once and ping, without the

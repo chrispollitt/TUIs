@@ -20,10 +20,10 @@ static const char kUsage[] =
     "Usage: tvmail [--debug [FILE]] [--trace [FILE]] [--help] [--version]\n"
     "       tvmail --selftest\n\n"
     "Options:\n"
-    "  --debug [FILE]   write diagnostic logging (default: debug.log;\n"
-    "                   the mail backend's: *.backend.log)\n"
-    "  --trace [FILE]   write Chrome Trace Event profiling data (default: trace.log;\n"
-    "                   the backend's cProfile data: *.backend.log)\n"
+    "  --debug [FILE]   write diagnostic logging (default: debug.tvmail.log;\n"
+    "                   the backend's: debug.tvmail.backend.log)\n"
+    "  --trace [FILE]   write Chrome Trace Event profiling data (default: trace.tvmail.log;\n"
+    "                   the backend's cProfile data: trace.tvmail.backend.log)\n"
     "  --help           show this help\n"
     "  --version        show the tvmail version\n";
 

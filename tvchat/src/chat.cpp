@@ -4,7 +4,7 @@
 
 CoProcess &chatBackend()
 {
-    static CoProcess b("tvchat-backend", "TVCHAT_BACKEND_LOG", "chat");
+    static CoProcess b("tvchat-backend", "TVCHAT_BACKEND_LOG", "backend");
     return b;
 }
 

@@ -171,11 +171,11 @@ tvmail
 ```
 
 Both programs accept `--help` and `--version`. `--debug [FILE]` writes
-diagnostic logging (default `debug.log`); `--trace [FILE]` writes profiling
-data (default `trace.log`). The backend trace is standard `cProfile` data;
+diagnostic logging (default `debug.tvmail.log`); `--trace [FILE]`
+writes profiling data (default `trace.tvmail.log`). The backend trace is standard `cProfile` data;
 the frontend trace is Chrome Trace Event JSON. When these flags are passed to
-`tvmail`, the backend receives them too, using a distinct filename such as
-`debug.backend.log` or `trace.backend.log`. After a `--trace` run, `./trace.sh
+`tvmail`, the backend receives them too, using a distinct filename: `debug.tvmail.backend.log` or
+`trace.tvmail.backend.log`. After a `--trace` run, `./trace.sh
 [FILE [BACKEND_FILE]]` runs the matching profiler on each (cProfile's `pstats`
 for the backend, a hot-spot summary for the frontend JSON) and prints the top
 entries.

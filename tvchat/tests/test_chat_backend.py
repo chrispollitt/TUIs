@@ -1587,15 +1587,15 @@ class TestDiagnostics(IrcBase):
         self.assertIn("ZeroDivisionError", self.logbuf.getvalue())
 
     def test_cli_flags(self):
-        self.assertEqual(cb._normalize_cli(["--debug", "serve"]), ["--debug=debug.log", "serve"])
+        self.assertEqual(cb._normalize_cli(["--debug", "serve"]), ["--debug=debug.tvchat.backend.log", "serve"])
         self.assertEqual(cb._normalize_cli(["--debug", "x.log", "serve"]), ["--debug", "x.log", "serve"])
-        self.assertEqual(cb._normalize_cli(["--trace"]), ["--trace=trace.log"])
+        self.assertEqual(cb._normalize_cli(["--trace"]), ["--trace=trace.tvchat.backend.log"])
         a = cb.build_parser().parse_args(["irc-tail", "--raw", "libera"])
         self.assertTrue(a.raw)
 
     def test_serve_debug_logs_requests_not_idle_polls(self):
         self.conf("[account:libera]\nprotocol = irc\nhost = 127.0.0.1\n")
-        log = self.tmp / "debug.chat.log"
+        log = self.tmp / "debug.tvchat.backend.log"
         p = subprocess.Popen([sys.executable, str(BACKEND), "--debug", str(log), "serve"],
                              stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                              stderr=subprocess.DEVNULL, env=dict(os.environ))

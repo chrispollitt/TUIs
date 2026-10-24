@@ -72,14 +72,7 @@ Stop for Chris's review after each milestone.
   Disconnect dialogs list the full word, so shorten only the pane's text.
   Tests that look for "connected" on screen (`e2e_regress`, `e2e_chat`)
   need the new words.
-- **Default `--debug` / `--trace` file names carry the app's name** so tvmail
-  and tvchat stop overwriting each other's: `debug.tvchat.log`,
-  `trace.tvchat.log` (tvmail the same).  The defaults are in
-  `tvcommon/src/cli.cpp` (`debug.log`, `trace.log`), the helpers' derived names
-  (`debug.chat.log`, `debug.backend.log`, `trace.*.log`, see `backendFlags` in
-  `tvcommon/src/shell.cpp`) follow from them; update the `--help` texts, both
-  man pages, READMEs and the tests that read those logs
-  (`tvchat/tests/e2e_chat.py` reads `debug.chat.log`).
+- **Default `--debug` / `--trace` names carry the app (done, branch `log-names`):** `debug.tvmail.log` + `debug.tvmail.backend.log`, `trace.tvmail.log` + `trace.tvmail.backend.log`, the same for tvchat.  The defaults come from `gAppName` in `tvcommon/src/cli.cpp`; the helpers insert `.backend` (tvchat's coprocess tag was `chat`, now `backend`).
 
 ## Purpose and scope
 
@@ -161,8 +154,8 @@ Debug sub-command, not allowed in `serve`: `tvchat-backend irc-tail [--raw] ACCO
 
 ### Diagnostics
 
-- **`tvchat-backend --debug [FILE]`** (default `debug.log`; before the sub-command, as with `tvmail-backend`) logs every `serve` request with its status, size and time (an `events` poll only when it brought something), account state changes, every IRC line in (`ACCOUNT << ...`) and out (`ACCOUNT >> ...`, SASL `AUTHENTICATE` payloads as `<redacted>`), the connect address, the TLS version and cipher, and why a connection ended - phase, error, seconds up, seconds since the server last sent anything, bytes in / out / unsent. `--trace [FILE]` writes cProfile data on exit.
-- **`tvmail --debug FILE`** passes it on: the chat backend logs to `FILE.chat.ext` (`debug.log` -> `debug.chat.log`), the mail backend to `debug.backend.log` as before (`CoProcess`'s diagnostics tag; `backendFlags(tag)` in `shell.cpp`). tvmail's own log gets one line per chat request (status, size, ms) besides the events it applies. `$TVCHAT_BACKEND_LOG` still names a file for the backend's stderr.
+- **`tvchat-backend --debug [FILE]`** (default `debug.tvchat.backend.log`; before the sub-command, as with `tvmail-backend`) logs every `serve` request with its status, size and time (an `events` poll only when it brought something), account state changes, every IRC line in (`ACCOUNT << ...`) and out (`ACCOUNT >> ...`, SASL `AUTHENTICATE` payloads as `<redacted>`), the connect address, the TLS version and cipher, and why a connection ended - phase, error, seconds up, seconds since the server last sent anything, bytes in / out / unsent. `--trace [FILE]` writes cProfile data on exit.
+- **`tvmail --debug FILE`** passes it on: the mail backend logs to `FILE.backend.ext` (`debug.tvmail.log` -> `debug.tvmail.backend.log`), (chat has its own app now) as before (`CoProcess`'s diagnostics tag; `backendFlags(tag)` in `shell.cpp`). tvmail's own log gets one line per chat request (status, size, ms) besides the events it applies. `$TVCHAT_BACKEND_LOG` still names a file for the backend's stderr.
 - **A handler bug is not fatal:** an exception in an IRC line's handler is logged with its traceback and the next line is read; any loop callback (socket, timer, DNS result) that raises is logged and the loop carries on - before, it ended `serve` and with it every account's connection.
 - Added Oct 21 to chase Chris's first live check: `Connection reset by peer` right after his first `send` in `#tvmail-test`, with no `ERROR` line from Libera first.
 

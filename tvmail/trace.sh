@@ -2,7 +2,7 @@
 # Profile a --trace run: run tvmail (or tvmail-backend) with --trace [FILE]
 # first, quit, then run this against the files it left behind.
 #
-#   ./trace.sh                     trace.log + trace.backend.log (the defaults)
+#   ./trace.sh                     trace.tvmail.log + trace.tvmail.backend.log (the defaults)
 #   ./trace.sh FILE                FILE + FILE's backend sibling (same rule
 #                                   tvmail uses: name.ext -> name.backend.ext)
 #   ./trace.sh FRONTEND BACKEND    an explicit pair
@@ -26,7 +26,7 @@ if [ "${1:-}" = "-n" ]; then
   shift 2
 fi
 
-front="${1:-trace.log}"
+front="${1:-trace.tvmail.log}"
 if [ -n "${2:-}" ]; then
   back="$2"
 else

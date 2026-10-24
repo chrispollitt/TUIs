@@ -137,7 +137,7 @@ class Tv(tvscreen.Tv):
         conf.write_text("[chat]\nautoconnect = fake\n\n[account:fake]\n"
                         "protocol = irc\nhost = 127.0.0.1\nport = %d\ntls = false\n"
                         "nick = e2e\nchannels = #e2e\n" % self.port)
-        self.log = self.tmp / "debug.log"
+        self.log = self.tmp / "debug.tvchat.log"
         self.env.update(TVCHAT_CONF=str(conf),
                         TVMAIL_MU_TICKETS=str(self.tmp / "no-tickets"),
                         PATH=self.opts.backend_dir + os.pathsep + self.env["PATH"])
@@ -188,12 +188,12 @@ def main():
         c.check(tv.has("<e2e> hi from tvchat"), "our own line is not in the chat pane")
         # --debug reached the chat backend: its log beside tvchat's has the
         # wire both ways and the request; tvchat's has the request
-        clog = tv.tmp / "debug.chat.log"
+        clog = tv.tmp / "debug.tvchat.backend.log"
         ctext = clog.read_text() if clog.exists() else ""
         for w in ("fake >> PRIVMSG #e2e :hi from tvchat é",
                   "fake << :bob!",
                   "request: send "):
-            c.check(w in ctext, "not in debug.chat.log: %s\n---\n%s" % (w, ctext[-2500:]))
+            c.check(w in ctext, "not in debug.tvchat.backend.log: %s\n---\n%s" % (w, ctext[-2500:]))
         wait_log(tv, log, [r"chat: send '?fake/#e2e.* -> 0"])
 
         # kill the chat co-process: the next poll restarts it, re-reads the

@@ -23,16 +23,16 @@ bool parseOptions(int argc, char **argv, CliOptions &options,
             continue;
         }
         std::string *path = nullptr;
-        const char *name = nullptr;
+        std::string name;
         if (arg == "--debug")
         {
             path = &options.debugPath;
-            name = "debug.log";
+            name = std::string("debug.") + gAppName + ".log";
         }
         else if (arg == "--trace")
         {
             path = &options.tracePath;
-            name = "trace.log";
+            name = std::string("trace.") + gAppName + ".log";
         }
         else if (arg.rfind("--debug=", 0) == 0)
         {

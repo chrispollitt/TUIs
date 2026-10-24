@@ -68,11 +68,11 @@ carriage return or backslash inside a field is escaped as \\t \\n \\r \\\\):
   irc-tail --raw ACCOUNT    the same, plus every IRC line in (<<) and out (>>)
 
 Diagnostics (before the sub-command, as tvchat passes them):
-  --debug [FILE]            log to FILE (default debug.log): every request and
+  --debug [FILE]            log to FILE (default debug.tvchat.backend.log): every request and
                             its reply status, account state changes, every IRC
                             line in and out (SASL secrets redacted), socket and
                             TLS details, and why a connection ended
-  --trace [FILE]            write cProfile data to FILE on exit (default trace.log)
+  --trace [FILE]            write cProfile data to FILE on exit (default trace.tvchat.backend.log)
 
 Exit / frame status: 0 ok, 1 user-facing error (the body says what to tell
 the user), 2 internal error (bad request, bug).
@@ -2549,10 +2549,10 @@ def build_parser():
     ap = _ArgParser(prog="tvchat-backend", add_help=True)
     ap.add_argument("--version", action="version",
                     version="tvchat-backend %s" % __version__)
-    ap.add_argument("--debug", nargs="?", const="debug.log", metavar="FILE",
-                    help="write diagnostic logging to FILE (default: debug.log)")
-    ap.add_argument("--trace", nargs="?", const="trace.log", metavar="FILE",
-                    help="write cProfile data to FILE (default: trace.log)")
+    ap.add_argument("--debug", nargs="?", const="debug.tvchat.backend.log", metavar="FILE",
+                    help="write diagnostic logging to FILE (default: debug.tvchat.backend.log)")
+    ap.add_argument("--trace", nargs="?", const="trace.tvchat.backend.log", metavar="FILE",
+                    help="write cProfile data to FILE (default: trace.tvchat.backend.log)")
     sub = ap.add_subparsers(dest="cmd", parser_class=_ArgParser)
     sub.required = True
 
@@ -2592,7 +2592,7 @@ def _normalize_cli(argv):
         if value in ("--debug", "--trace"):
             nxt = argv[i + 1] if i + 1 < len(argv) else None
             if nxt is None or nxt.startswith("-") or nxt in _COMMANDS:
-                out.append(value + ("=debug.log" if value == "--debug" else "=trace.log"))
+                out.append(value + ("=debug.tvchat.backend.log" if value == "--debug" else "=trace.tvchat.backend.log"))
                 continue
         out.append(value)
     return out

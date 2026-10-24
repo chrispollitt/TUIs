@@ -95,7 +95,7 @@ void stopDiagnostics()
 }
 
 // A helper's log beside the app's: insert .TAG before the extension
-// (debug.log -> debug.backend.log, debug.chat.log), or append it if there's
+// (debug.tvmail.log -> debug.tvmail.backend.log), or append it if there's
 // none.  trace.sh knows the same rule.
 static std::string helperPath(const std::string &path, const char *tag)
 {
