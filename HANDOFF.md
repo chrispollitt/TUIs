@@ -45,7 +45,7 @@ Stop for Chris's review after each milestone.
 
 ## Small to-dos from Chris (Oct 23) - not started
 
-- **TOP PRIORITY: the flaky e2e cases** - tvmail BUGS.md #47 (`e2e_regress` #4, sometimes #28 / #29).  Chris wants it fixed before more features.
+- **Flaky e2e (BUGS #47): cause found and fixed (branch `flaky-e2e`)** - a test racing the cold backend, not an app bug.  Next time a case flakes, hold the backend up with `Tv(slow={"cmd": secs})` to reproduce it.
 
 - **Servers pane is now a table (done, branch `tvchat-servers-table-83c863`)** -
   `Name | Proto | Conn` under a heading row, faint `│` rules (`cSystem()`

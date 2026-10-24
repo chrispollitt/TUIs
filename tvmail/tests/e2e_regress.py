@@ -73,9 +73,10 @@ class Tv(tvscreen.Tv):
                 "TVMAIL_SIEVE_PASS", "TVMAIL_MU_CONF", "TVMAIL_MU_TICKETS")
 
     def __init__(self, opts, fixture=FIXTURE, env=None, fail_save_draft=False,
-                 setup=None):
+                 setup=None, slow=None):
         self.fixture = fixture
         self.fail_save_draft = fail_save_draft
+        self.slow = slow or {}      # {backend command: seconds it is held up}
         super().__init__(opts, env=env, setup=setup)
 
     def prepare(self):
@@ -84,19 +85,22 @@ class Tv(tvscreen.Tv):
         bindir = self.bindir
         real = bindir / "tvmail-backend"
         shutil.copy2(os.path.join(self.opts.backend_dir, "tvmail-backend"), real)
-        if self.fail_save_draft:
-            # save-draft never goes through the serve co-process, so a shim
-            # can fail it on demand (while ~/fail-save-draft exists)
+        if self.fail_save_draft or self.slow:
+            # save-draft, delete and the like never go through the serve
+            # co-process, so a shim can fail one on demand (save-draft, while
+            # ~/fail-save-draft exists) or hold one up: a cold Python start is
+            # slow and uneven, and a test must wait for its result, not a time
             real = real.rename(bindir / "tvmail-backend.real")
             shim = bindir / "tvmail-backend"
-            shim.write_text(
-                '#!/bin/sh\n'
-                'for a in "$@"; do\n'
-                '  if [ "$a" = save-draft ] && [ -e "$HOME/fail-save-draft" ]; then\n'
-                '    cat >/dev/null; echo "tvmail-backend: disk full (test)"; exit 1\n'
-                '  fi\n'
-                'done\n'
-                'exec "$HOME/bin/tvmail-backend.real" "$@"\n')
+            body = '#!/bin/sh\nfor a in "$@"; do\n'
+            if self.fail_save_draft:
+                body += ('  if [ "$a" = save-draft ] && [ -e "$HOME/fail-save-draft" ]; then\n'
+                         '    cat >/dev/null; echo "tvmail-backend: disk full (test)"; exit 1\n'
+                         '  fi\n')
+            for cmd, secs in self.slow.items():
+                body += '  [ "$a" = %s ] && sleep %s\n' % (cmd, secs)
+            body += 'done\nexec "$HOME/bin/tvmail-backend.real" "$@"\n'
+            shim.write_text(body)
             shim.chmod(0o755)
         self.spool = self.tmp / "spool.mbox"
         self.spool.write_bytes(self.fixture.encode("utf-8"))
@@ -504,11 +508,13 @@ def quit_asks_about_unsaved_signature(opts):
     tv.send("AltF3")
     c.check(tv.wait("Save changes to ~/.signature?", 3),
             "Alt-F3 did not ask to save the signature")
-    tv.send("y", settle=1.0)
-    c.check(not tv.has("SIGTEXT") and not tv.has("Signature saved.")
-            and not tv.has("Information"),
-            "#26 saving the signature on close showed an extra box")
+    tv.send("y")
     sig = tv.home / ".signature"
+    c.check(tv.wait(lambda: sig.exists() and not tv.has("SIGTEXT"), 5),
+            "#26 the signature was not saved")
+    tv.pump(0.8)                                  # an extra box would be up by now
+    c.check(not tv.has("Signature saved.") and not tv.has("Information"),
+            "#26 saving the signature on close showed an extra box")
     c.check(sig.exists() and "SIGTEXT one" in sig.read_text(),
             "#26 the signature was not saved")
     # with nothing unsaved, a quit asks nothing
@@ -573,7 +579,8 @@ def source_draft_found_by_content(opts):
                 "To: x@example.com\nSubject: DRAFT-%s\n"
                 "Date: Mon, 01 Sep 2026 1%d:00:00 -0700\n\nbody %s\n"
                 % (n, i, n)).encode())
-    tv = Tv(opts, setup=setup)
+    # delete and save-draft held up 2 s: the checks below must wait for them
+    tv = Tv(opts, setup=setup, slow={"delete": 2, "save-draft": 2})
     c = Case(tv)
 
     def subjects():
@@ -592,15 +599,18 @@ def source_draft_found_by_content(opts):
     tv.send("F6", settle=0.8)
     tv.send("Up", "CtrlD")
     c.check(tv.wait('Move "DRAFT-A" to the trash?', 4), "could not delete DRAFT-A")
-    tv.send("y", settle=1.5)
-    c.check(subjects() == ["DRAFT-B", "DRAFT-C"], "DRAFT-A was not deleted")
-    tv.send("F6", settle=0.8)
-    c.check(field(tv, "Subject") == "DRAFT-B", "F6 did not go back to the draft")
+    # delete and save run a one-shot backend (a cold Python start, slow and
+    # uneven under Cygwin): wait for the result, never a fixed time
+    tv.send("y")
+    c.check(tv.wait(lambda: subjects() == ["DRAFT-B", "DRAFT-C"], 15), "DRAFT-A was not deleted")
+    tv.send("F6")
+    c.check(tv.wait(lambda: field(tv, "Subject") == "DRAFT-B", 5),
+            "F6 did not go back to the draft")
     tv.send(alt("s"), "End", " v2", settle=0.4)
     tv.send("AltF3")
     c.check(tv.wait("Unsent message", 3), "closing the edited draft did not ask")
-    tv.send("s", settle=1.5)
-    c.check(sorted(subjects()) == ["DRAFT-B v2", "DRAFT-C"],
+    tv.send("s")
+    c.check(tv.wait(lambda: sorted(subjects()) == ["DRAFT-B v2", "DRAFT-C"], 15),
             "#4 saving deleted the wrong source draft: %s" % subjects())
     return tv
 
