@@ -2,8 +2,7 @@
 
 A chat client for the text terminal, wearing the face of Borland's Turbo
 Vision: drop-down menus, shadowed dialogs, the cyan desktop, F10 for the menu
-bar. IRC today (with the IRCv3 extensions a modern server offers); Delta Chat,
-chat carried over email, is next.
+bar. IRC (with the IRCv3 extensions a modern server offers) and talk(1).
 
 It is tvmail's sibling: the same look and the same split. The C++ front end
 draws windows. Everything protocol-specific (sockets, TLS, SASL, parsing)
@@ -80,5 +79,7 @@ the LAN, `chrispollitt/POSIX`'s `chat-setup` installs Ergo
 | `backend/tvchat-backend` | the Python helper (`man tvchat-backend`) |
 | `configure/tvchat.conf.example` | a commented configuration |
 | `tests/` | `./test.sh` runs them all (see [tests/README.md](tests/README.md)) |
-| `HANDOFF.md` | the plan, what has been built, and the decisions made since |
+| `DESIGN.md` | how it is built: the backend, the protocol, the IRC and talk adapters, the window |
+| `TO-DO.txt` | what is not done yet |
 | `BUGS.md` | the bug list |
+| `HISTORY.md` | what changed, release by release |

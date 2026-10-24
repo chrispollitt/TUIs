@@ -1,0 +1,10 @@
+Shared code that is not done. A feature for one app is in that app's TO-DO.
+
+1 The tvmail and tvchat panes still differ in small ways that could be one
+  class: the list pane base (`TChatList` in tvchat, `TFolderPane` in tvmail)
+  repeats the same colours, focus and broadcast plumbing. Move it to views.h.
+2 Both apps' menu bars grey items by hand (tvision tracks only commands
+  0-255); a shared helper would save each app doing it.
+3 `third_party/POSIX.stale-20261021` is an old mail-setup checkout whose 13
+  commits were all rebased into POSIX already; safe to delete.
+4 `tests/tvscreen.py`'s screenshot renderer draws no cursor and no bold.

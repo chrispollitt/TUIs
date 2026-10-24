@@ -872,7 +872,7 @@ class TestIrcSession(IrcBase):
 
 
 class TestIrcHardening(IrcBase):
-    """Milestone 5: keepalive, reconnect with backoff, flood control, typed
+    """IRC hardening: keepalive, reconnect with backoff, flood control, typed
     /commands, server-side history (chathistory)."""
 
     def adapter(self, **attrs):

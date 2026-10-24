@@ -1,30 +1,39 @@
 # tvchat history
 
-## Unreleased - milestone 5, IRC hardening (October 2026)
+## Unreleased (October 2026)
 
-- **Keepalive:** a PING after 90 s without a word from the server; no
-  answer in 30 s more and the connection counts as lost.
+- **talk(1)** (`protocol = talk`): through chat-setup's talkd on the LAN
+  master, so a plain `talk you@cpbee` from any shell rings you in tvchat. Join
+  calls, Enter (or Chat > Answer) answers, Leave hangs up. Two views, View >
+  Talk view (Ctrl-T): classic - talk's split screen, every keystroke sent (the
+  default, `talk_view`) - or IRC - the log, whole lines, "... is typing".
 - **Reconnect:** a connection that was up and is lost is made again after
   2, 4, 8 ... 300 s, the open channels rejoined; the account stays
   `connecting` meanwhile and Chat > Disconnect stops it. A first connection
-  that fails is not retried.
+  that fails is not retried. A quiet server is pinged after 90 s; no answer in
+  30 s more and the connection counts as lost.
 - **Flood control:** once registered, a burst of 5 lines, then one every
   0.5 s; PONG, our PING and QUIT jump the queue.
 - **Typed commands:** `/me`, `/join`, `/part`, `/msg`, `/nick`, `/topic`,
   `/quote` (`//` for a line starting with `/`); any other `/word` is
   refused and stays in the input line. The server messages take commands.
-- **talk(1)** (`protocol = talk`, milestone 6): through chat-setup's talkd on
-  the LAN master. Join calls, Enter (or Chat > Answer) answers, Leave hangs
-  up. Two views, View > Talk view (Ctrl-T): classic - talk's split screen,
-  every keystroke sent (the default, `talk_view`) - or IRC - the log, whole
-  lines, "... is typing".
 - **Server history:** with IRCv3 `chathistory` (Ergo), joining fetches the
   latest 50, and PgUp past what is kept asks the server for 50 more.
+- **The Servers pane is a table:** `Name | Proto | Conn`, faint rules between
+  the columns (tvmail's Folders pane is the same: `Folder | Total | New`).
+- **Same menus and key line as tvmail:** File > Reload (F5), Chat on Alt-C
+  (it was Alt-A), a Window menu with Zoom, Tile and Cascade, one About box.
+  Join starts on the account picked in the Servers pane.
+- **Ctrl-L** (Window > Redraw screen) repaints the screen; while tvchat runs
+  its terminal takes no messages (`mesg n`; `[ui] mesg = y` keeps taking them).
+- **Log names carry the app:** `--debug` writes `debug.tvchat.log` and the
+  backend's `debug.tvchat.backend.log` (every IRC line, SASL redacted; why a
+  connection ended); `--trace` writes `trace.tvchat.log` and
+  `trace.tvchat.backend.log`.
 
 ## 0.1.0 - October 2026
 
-The first tvchat. It was built inside tvmail as its chat add-on (milestones
-1-4 of [HANDOFF.md](HANDOFF.md), Oct 20-21, 2026), then split out into an app
+The first tvchat. It was built inside tvmail as its chat add-on (Oct 20-21, 2026), then split out into an app
 of its own.
 
 - **tvchat-backend:** one stdlib Python co-process; a `selectors` loop over
@@ -40,7 +49,7 @@ of its own.
   conversations / the chat. Unread counts everywhere, mark-read once you
   look, drafts kept per conversation, PgUp for older lines, its own status
   line and a quiet `N new`.
-- **Diagnostics:** `--debug` writes `debug.log` and the backend's
+- **Diagnostics:** `--debug` wrote `debug.log` and the backend's
   `debug.chat.log` (every IRC line, SASL redacted; why a connection ended);
   `--trace` profiles both.
 - **Bugs fixed on the way:** tvmail #44 (menus closed by the 250 ms poll) and

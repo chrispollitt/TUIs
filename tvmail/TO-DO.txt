@@ -1,39 +1,40 @@
-tvmail already covers the classic three-pane loop: folders, list, body, compose/reply, drafts, signature, dead.letter, aliases, view source, pull/spam, trash, attachments, forward, reply all, mark unread, purge, move-to-folder. The next richest features are Turbo Vision manners the app is still missing.
+What tvmail does not do yet. Defects live in BUGS.md, not here; what it does
+today is in README.md. The numbers are stable (code and notes refer to them),
+so finished items are gone and the gaps stay.
 
-Highest leverage (backend already has the plumbing) — DONE
-1 [done] Attachment browser — Message ▸ Parts... lists a message's MIME parts (type/size/filename); Enter prompts for a save path and writes it.
-2 [done] Forward — compose-template --forward IDX (Fwd: subject, quoted original + headers, To: left blank) plus Message ▸ Forward.
-3 [done] Reply All / explicit Cc and Bcc — compose-template --reply-all fills Cc from the original To/Cc; the composer has a first-class Bcc field alongside To/Cc.
-4 [done] Mark unread — Message ▸ Mark unread (mark IDX unread). Only sticks until the row is next highlighted, since loadContent() still marks read on every highlight move — see 13.
-5 [done] Purge dialog — File ▸ Purge... wraps purge --from/--subject/--to/--older-than/--seen/--unseen in a dialog with a dry-run preview before confirming.
-6 [done] Move / copy to folder — Message ▸ Move to... (any folder), reusing delete --trash DEST as the generic move primitive.
+Done: 1-10, 13, 16 and 23 - attachment browser, forward, reply all and Bcc,
+mark unread, purge, move to folder, Window list, type-to-filter, column sort,
+folder counts, mark-read only after you look, save as .eml, out of office.
 
-Classic TUI polish (fits Turbo Vision, small C++)
-7 [done] Window List (Alt-0) — Window ▸ List... — Compose, help, source, address book, signature, and now parts windows already stack; a Window 8 List is the missing Borland habit (already on the README someday list).
-8 [done] Incremental filter on the message pane — just type; Esc clears. Type-to-filter From/Subject without a full search index. Cheap, immediate, and better than threading for a small mailbox.
-9 [done] Column sort — View menu: date / from / subject / unread first, same again or Reverse order flips. Click or a key to sort by date / from / subject / unread. The list format is already flag date from subject.
-10 [done] Unread counts on folders — via the backend's new `counts`. N inbox (3) so you do not have to Tab into the list to see if anything arrived.
-11 Status-line context — When focus is in Folders vs Messages vs a compose window, swap the F-keys (e.g. Enter = Edit draft only in Drafts).
-12 Mouse — tvision already supports it; click-to-focus panes and double-click to open would make the cyan desktop feel finished.
+Classic TUI polish
+11 Status-line context - when focus is in Folders vs Messages vs a compose
+   window, swap the F-keys (e.g. Enter = Edit draft only in Drafts).
+12 Mouse - tvision already supports it; click-to-focus panes and double-click
+   to open would make the cyan desktop feel finished.
 
 Behaviour that would make it feel "done"
-13 [done] Mark-as-read only after you actually look — body pane focus or Message ▸ Mark read. Delay mark read until the body pane is focused or scrolled, not on highlight. Stops arrow-through-inbox from eating every N, and would let "mark unread" (4) actually stick.
-14 Periodic pull — Idle timer calling the existing background pull, with a quiet “N new” on the status line instead of a blocking message box every time.
-15 tvmailrc — Colours, default folder, poll-on-start, list date format, HTML-vs-plain preference. Keeps ~/.mailrc for mail(1) and puts tvmail-only knobs somewhere else.
-16 [done] (.eml) Print / save message as .eml or text — File ▸ Save message as... View source is close; “Save as…” next to it is the natural File menu item.
-17 Address-book write path — F4 is read-only aliases today. Add/edit alias lines in ~/.mailrc so the book is not a one-way dump into To:.
-18 Pipe body through $PAGER / less or an external $EDITOR — Escape hatch for huge mail and for people who still want vi for a long reply.
+14 Periodic pull - an idle timer calling the existing background pull, with a
+   quiet "N new" on the status line instead of a blocking message box every
+   time. (The folder counts are the first half of it.)
+15 tvmailrc - colours, default folder, poll-on-start, list date format,
+   HTML-vs-plain preference. Keeps ~/.mailrc for mail(1) and puts tvmail-only
+   knobs somewhere else.
+17 Address-book write path - F4 is read-only aliases today. Add/edit alias
+   lines in ~/.mailrc so the book is not a one-way dump into To:.
+18 Pipe the body through $PAGER / less or an external $EDITOR - an escape
+   hatch for huge mail and for people who still want vi for a long reply.
 
 Worth doing later (higher design cost)
-19 Threading — Useful, but it fights mbox + IMAP UID indexing and the current one-line list. Filter + sort will get you 80% of the way on a small store.
-20 HTML mail as a second view — Backend already has an HTML fallback; a “view HTML as text” toggle is enough. A real renderer is out of character.
-21 Multi-select — Space-tag then delete/move/mark, like Midnight Commander. Purge (5) and Move to... (6) already give bulk/any-message action without it; add it later if it's still missed.
-22 Resizable split — Drag or +/- on the folder width and the list/body ratio. The layout is currently a fixed 22-column / 2:5 split.
-23 [done] Out of office — File ▸ Out of office... edits a Sieve vacation script over ManageSieve (backend: vacation status|on|off|addresses). Needs mail-setup's configure-sieve.sh on the master; per-user, with a NAT-style address table.
+19 Threading - useful, but it fights mbox + IMAP UID indexing and the current
+   one-line list. Filter + sort get you 80% of the way on a small store.
+20 HTML mail as a second view - the backend already has an HTML fallback; a
+   "view HTML as text" toggle is enough. A real renderer is out of character.
+21 Multi-select - space-tag then delete/move/mark, like Midnight Commander.
+   Purge and Move to... already give bulk action without it.
+22 Resizable split - drag or +/- on the folder width and the list/body ratio.
+   The layout is a fixed 22-column / 2:5 split.
 
-Done so far from this list: 1-10, 13 and 16.  A short order for
-what is left that stays in character:
-* periodic pull / "N new" on the status line (14) - the counts (10) are the first half of it
-* tvmailrc (15), then the status-line context swap (11) and mouse manners (12)
-* address-book write path (17)
-That uses code you already have and does not turn tvmail into mutt.
+A short order for what stays in character: periodic pull (14), then tvmailrc
+(15), the status-line context swap (11) and mouse manners (12), then the
+address-book write path (17). That uses code that exists and does not turn
+tvmail into mutt.

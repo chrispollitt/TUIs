@@ -1,0 +1,110 @@
+tvchat does IRC (with IRCv3) and talk(1). What is left is below, in the order
+it is likely to be done. Defects live in BUGS.md, not here.
+
+Next
+1 Delta Chat adapter - chat carried over email, through the same adapter
+  interface as IRC and talk. Today `DeltaChatAdapter` is a placeholder whose
+  `connect` answers "not supported yet". The plan:
+  - Do not reimplement Delta Chat. Spawn the official `deltachat-rpc-server`
+    as a child of `tvchat-backend` and speak JSON-RPC 2.0 to it, one JSON
+    object per line over stdin/stdout. The core does Autocrypt/OpenPGP,
+    encryption, IMAP IDLE, SMTP and its own database.
+  - The one non-stdlib piece is that separate executable (not a Python
+    import). Find it on PATH or through `rpc_server =`; if it is missing the
+    account reports `state ... error` with an install hint and IRC keeps
+    working. Document installing it in INSTALL.md (check the current
+    recommended method: a PyPI wheel and release binaries have both existed).
+  - Verify the API names against the installed server version before coding
+    (the `deltachat-rpc-client` Python package's source is the best
+    reference). Expected: account management (`add_account`, `set_config`,
+    `configure`), `start_io`, chat list and message fetch, a text-send call,
+    mark-noticed/seen, and a long-poll `get_next_event`.
+  - Event pump: exactly one `get_next_event` outstanding at all times, read by
+    the same `selectors` loop (`Loop.watch` on the child's stdout); translate
+    incoming-message, chat-modified and connectivity events into tvchat's
+    normalized events (see DESIGN.md).
+  - Accounts directory `~/.local/share/tvchat/deltachat/` (respect
+    XDG_DATA_HOME), mode 0700. Never touch the core's database directly.
+  - Mailbox: a dedicated address on cpbee, not the main inbox - the core moves
+    chat messages into its own folder and may delete them from the server.
+    `configure` with that address and its password (same lookup as IRC).
+  - Mapping: chat id -> conversation `ACCOUNT/<chat id>`; contact email ->
+    sender-address, display name -> sender-display; encrypted -> flag `e`;
+    groups kind `group`, one-to-one kind `direct`.
+  - Out of scope for the first version: attachments (show `[attachment:
+    NAME]`), verification QR codes, multi-device setup, invite links.
+  - Tests: a fake RPC server (a stub speaking JSON-RPC lines), and a
+    real-binary test that exits 77 when `deltachat-rpc-server` is not
+    installed.
+  - Needs from Chris: which dedicated address on cpbee, and whether mail-setup
+    (chrispollitt/POSIX) creates the mailbox or it is made by hand.
+
+Smaller things
+2 Reconnect a lost talkd connection by itself (IRC's backoff is not reused
+  for talk yet).
+3 `/join` and `/msg` list the new conversation but do not switch to it.
+4 A member list view (the `members` verb exists; nothing shows it).
+5 Show a new query (a direct message from someone new) by itself: today it
+  appears in the list with its count and in "N new".
+6 Edit > Paste has no handler in tvchat.
+7 `labeled-response` is requested from the server but unused.
+8 A pasted line ending in a newline is pasted, not sent (tvision delivers a
+  fast burst of keys as a paste).
+9 Redraw of the other side's screen in a talk (Ctrl-L today redraws only ours).
+10 Retest the Libera "Connection reset by peer" right after a send (seen once
+  in an early live check, not since): send a line in a channel with
+  `tvchat --debug` and read `debug.tvchat.backend.log`; the end-of-connection
+  line says phase, error and bytes unsent.
+11 Check the native Windows (mingw) .exe on Windows: it cross-compiles and
+  links, with chat greyed out, but has not been run since the split.
+
+Open questions
+- Should IRC logs persist to disk between sessions? Not for now: the log is
+  the backend's in-memory ring (2,000 lines per conversation). Worth asking
+  again if an always-on backend ever happens - that would be an IRC bouncer.
+- Self-hosting Ergo on cpbee is done; how to keep it reachable if cpbee moves
+  to a phone-tethered connection is not.
+
+Wish list (not planned)
+- A web version (an installable PWA that looks like the terminal app). The
+  backend's protocol stays free of anything terminal-specific so a browser
+  front end can reuse it.
+  * Browsers cannot open raw sockets, so it needs a server-side WebSocket
+    gateway relaying the same verbs and sequenced events to tvchat-backend.
+  * Option A: the real app in a browser - xterm.js plus a pty over WebSocket
+    (ttyd-style). Identical look, almost no new code, but a server-side
+    session and account per visitor: a hosting and security project.
+  * Option B: a Turbo Vision look-alike - a CSS character grid with the cyan
+    desktop, menus and shadowed dialogs, talking to the gateway. More work,
+    installable as a PWA.
+  * IRC-only shortcut: a self-hosted Ergo accepts WebSocket clients directly;
+    Delta Chat still needs the gateway.
+  * Hosting: the static front end on GitHub Pages or cp1; the gateway (with
+    the backends behind it) on cpbee or a small VPS - not cp1 (below).
+  * The server needs the backends running permanently (one per logged-in user,
+    holding their connections and credentials), a small WebSocket gateway
+    (login, spawn, relay), a reverse proxy (nginx or Caddy: TLS via Let's
+    Encrypt, WebSocket upgrade, rate limiting) and service units. On cpbee
+    that also means an inbound 443 in the nftables input chain (policy drop
+    today), and a tunnel (Cloudflare Tunnel, Tailscale Funnel) or a VPS relay
+    if cpbee loses its public address. It is a public login page in front of
+    mail and chat credentials: auth, TLS only, lockout. Server-side setup
+    would be a new tool in chrispollitt/POSIX beside mail-setup.
+- "Crazy talk": a gateway to OpenVMS PHONE, e.g. on the SIMH VAX (cpvax).
+  PHONE speaks DECnet task-to-task (object 29), so it needs DECnet on both
+  sides.
+
+Why not cp1 (u-l.ca, the cPanel webhost; checked Oct 20, 2026)
+- It can serve a static front end but cannot host the gateway or the
+  backends: CloudLinux shared account; outbound IRC (irc.libera.chat 6697 /
+  6667) refused over IPv4 and unreachable over IPv6, outbound 443 to Libera
+  times out, only outbound HTTPS works; apps run under Passenger and are
+  stopped when idle, with per-account LVE limits, so a permanently connected
+  backend fights the idle shutdown, and credentials would sit on a shared
+  server.
+
+Decided: not doing
+- No WhatsApp (unofficial clients risk banning the real mobile number), no
+  Teams (the Graph chat APIs reject personal Microsoft accounts), no
+  Messenger (no personal-inbox API). No file transfer over IRC (DCC), voice or
+  video, no Matrix or XMPP backend, no threading or reactions UI.

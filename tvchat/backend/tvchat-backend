@@ -2064,7 +2064,7 @@ def _close_sock(loop, sock):
 
 
 class DeltaChatAdapter:
-    """Placeholder until milestone 6 (deltachat-rpc-server over JSON-RPC)."""
+    """Placeholder until the Delta Chat adapter is built (deltachat-rpc-server over JSON-RPC; see TO-DO.txt)."""
 
     def __init__(self, chat, account):
         self.chat, self.account = chat, account
