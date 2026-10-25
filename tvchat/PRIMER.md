@@ -68,6 +68,10 @@ mail into its own folder and may delete it from the server; it must never be
 your everyday inbox. One mailbox is one identity: two machines that should talk
 to each other need two mailboxes (`delta` and `delta2`), not one used twice.
 
+**One set of typed commands** works in all three: `/help` lists the ones an account has,
+`/status` says how it is doing, and `/me`, `/join`, `/query`, `/msg`, `/leave`, `/names`,
+`/whois`, `/clear`, `/quit` mean the same thing everywhere they apply.
+
 ---
 
 ## Part 2 - the client (on each machine that runs tvchat)

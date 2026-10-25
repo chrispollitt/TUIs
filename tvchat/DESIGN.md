@@ -189,11 +189,10 @@ Hand-written, stdlib `socket` + `ssl`, on the shared loop (`IrcAdapter`).
   skip it; registration is never paced. Lines still queued when a connection is
   lost are dropped with a note ("N lines not sent"). The tunables are class
   attributes so tests shrink them.
-- **Typed commands** (`send`): `/me`, `/join #CHAN [KEY]`, `/part [#CHAN]
-  [REASON]`, `/msg NICK TEXT` (opens the conversation), `/nick`, `/topic
-  [TEXT]`, `/quote` (alias `/raw`); `//x` sends `/x`. The whole text is checked
-  first: an unknown `/word`, a bad argument or a plain line in the server
-  window refuses it all (status 1, nothing sent).
+- **Typed commands** (`send`) - see "Typed commands, one vocabulary" below. IRC's own:
+  `/join #CHAN [KEY]`, `/leave [#CHAN] [REASON]` (alias `/part`), `/msg`, `/query`,
+  `/nick`, `/topic`, `/invite NICK [#CHAN]`, `/whois`, `/away`, `/names`, `/ping [NICK]` (a
+  CTCP PING, or the server's PONG, timed: the answer is a note in the log), `/quote`.
 - **Server history** (IRCv3 `chathistory` + `batch`): our own JOIN ->
   `CHATHISTORY LATEST #chan * 50`; `history --before` past the start of the
   in-memory ring (2,000 lines per conversation) -> `CHATHISTORY BEFORE`,
@@ -240,6 +239,34 @@ talk itself: LAN only (`--allow`: loopback + the LAN's subnet).
   account, View > Talk view (Ctrl-T) per conversation) and *IRC mode* (the log,
   whole lines on Enter, "NAME is typing..." while the other side has an
   unfinished line). IRC conversations are always the log.
+
+## Typed commands, one vocabulary
+
+A line that starts with `/` is a command, the same words in every protocol so IRC, talk and
+Delta Chat feel alike; `//text` sends a line that starts with a single `/`. The table is
+`COMMAND_TABLE` in the backend: `name -> (aliases, {protocol or "*": (usage, what it does)})`.
+`/help` is made from it (this protocol's commands; `/help CMD` explains one and lists the
+aliases), and a word that is unknown, or means nothing for this protocol, is refused with a
+pointer to `/help`. `CommandMixin.send` is the one loop: it splits the text into lines, turns
+each into a *plan* - a function and its arguments, from the adapter's `c_<name>(conv, rest)` -
+and runs the plans only once every line is known to be good, so a bad line refuses the whole
+text (status 1, nothing sent) and it can be fixed and sent again. A line that is not a command
+goes to the adapter's `speak(conv, text)`. The shared ones:
+
+| command | IRC | talk | Delta Chat |
+| --- | --- | --- | --- |
+| `/help` `/status` `/me` `/shrug` `/clear` `/quit` | yes | yes | yes |
+| `/join` `/query` | channel / nick | call | address or link / chat |
+| `/msg` | yes | - (needs a call) | yes |
+| `/leave` (`/part`, `/close`) | part | hang up | delete the chat (group: leave first) |
+| `/nick` | nick | - | display name |
+| `/invite` `/names` `/whois` | yes | - | yes |
+| `/topic` `/away` `/ping` `/quote` | yes | - | - |
+| `/name` (rename a group) | - | - | yes |
+
+`/status` is a few notes from the adapter's `status_lines()`; `/clear` empties the backend's
+in-memory log and has the UI re-read it (`history CONV latest`; Delta Chat's history stays in the
+core, so PgUp brings it back). The UI only takes `/leave` for a Delta Chat chat, to ask first.
 
 ## Delta Chat adapter
 
@@ -350,9 +377,9 @@ names were checked against `--openrpc` and the `deltachat-rpc-client` source).
   with `group-add`. The group reaches its members with the first message sent to it
   (the core's "unpromoted" group). The Chat menu greys Add / Remove / Rename unless
   a Delta Chat group is shown.
-- **Typed commands:** none yet; `/word` is refused, `//x` sends `/x`. `join`
-  takes an email address and opens (or creates) the one-to-one chat; `part` is
-  refused.
+- **Typed commands:** see below. `/me` is a line `* NAME text`; `/join` takes an email address
+  or an invite link; `/leave` deletes the chat (the UI asks first); `/nick` sets the display
+  name; `/invite`, `/name`, `/names`, `/whois` for groups and contacts.
 - **Lost core:** an exit, a broken pipe or a core error while up -> `_lost()`
   -> restart after 2, 4 ... 300 s (like IRC's reconnect), a note in the server
   window; a start that fails the first time is not retried. Disconnect asks the

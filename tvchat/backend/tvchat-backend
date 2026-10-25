@@ -86,7 +86,7 @@ from urllib.parse import unquote
 from collections import deque
 
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 # Silent unless --debug configures it (logging's last-resort handler still
 # shows ERRORs - a failed callback's traceback - on stderr, which tvchat
@@ -734,12 +734,204 @@ _PREFIX_ROLE = {"~": "owner", "&": "admin", "@": "op", "%": "halfop", "+": "voic
 
 
 # --------------------------------------------------------------------------
+# Typed /commands: one vocabulary for every protocol, so IRC, talk and Delta
+# Chat feel alike.  This table is the vocabulary: /help is made from it, and a
+# word that is not here - or not meaningful for this protocol - is refused with a
+# pointer to /help.  An adapter answers a command with a c_<name> method.  A line
+# that starts with // is sent as a line starting with a single /.
+#   name: (aliases, {protocol or "*": (usage, what it does)})
+# --------------------------------------------------------------------------
+COMMAND_ORDER = ("help", "status", "me", "shrug", "join", "query", "msg", "leave", "invite", "names",
+                 "whois", "nick", "name", "topic", "away", "ping", "clear", "quit", "quote")
+COMMAND_TABLE = {
+    "help": (("?",), {"*": ("/help [COMMAND]", "list the commands, or explain one")}),
+    "status": ((), {"*": ("/status", "state, who you are, what is open")}),
+    "me": ((), {"*": ("/me ACTION", "say it in the third person")}),
+    "shrug": ((), {"*": ("/shrug [TEXT]", "send TEXT with a shrug after it")}),
+    "join": (("j",), {
+        "irc": ("/join #CHANNEL [KEY]", "join a channel"),
+        "deltachat": ("/join ADDRESS | LINK", "chat with an address, or join a link"),
+        "talk": ("/join USER[@HOST]", "call someone")}),
+    "query": (("q",), {
+        "irc": ("/query NICK [TEXT]", "open a conversation, say TEXT"),
+        "deltachat": ("/query ADDRESS [TEXT]", "open a chat, say TEXT"),
+        "talk": ("/query USER[@HOST]", "call someone")}),
+    "msg": (("m", "dm"), {
+        "irc": ("/msg NICK TEXT", "send TEXT (opens the conversation)"),
+        "deltachat": ("/msg ADDRESS TEXT", "send TEXT (opens the chat)")}),
+    "leave": (("part", "close"), {
+        "irc": ("/leave [#CHANNEL] [REASON]", "leave a channel, close a query"),
+        "deltachat": ("/leave", "delete this chat (a group: leave first)"),
+        "talk": ("/leave", "hang up, or decline the call")}),
+    "invite": ((), {
+        "irc": ("/invite NICK [#CHANNEL]", "invite someone to a channel"),
+        "deltachat": ("/invite ADDRESS", "add to this group, or invite to chat")}),
+    "names": (("members",), {
+        "irc": ("/names", "list who is in this channel"),
+        "deltachat": ("/names", "list who is in this chat")}),
+    "whois": ((), {
+        "irc": ("/whois NICK", "ask the server about someone"),
+        "deltachat": ("/whois ADDRESS", "what is known about a contact")}),
+    "nick": ((), {
+        "irc": ("/nick NEWNICK", "change your nick"),
+        "deltachat": ("/nick NAME", "change the name people see")}),
+    "name": ((), {"deltachat": ("/name NEW NAME", "rename this group")}),
+    "topic": ((), {"irc": ("/topic [NEW TOPIC]", "show or set the topic")}),
+    "away": ((), {"irc": ("/away [REASON]", "mark yourself away (none: back)")}),
+    "ping": ((), {"irc": ("/ping [NICK]", "round-trip time to the server or NICK")}),
+    "clear": ((), {"*": ("/clear", "clear this log (PgUp brings it back)")}),
+    "quit": (("exit",), {"*": ("/quit [REASON]", "disconnect this account")}),
+    "quote": (("raw",), {"irc": ("/quote RAW LINE", "send a raw IRC line")}),
+}
+COMMAND_WORDS = {}
+for _n, (_al, _by) in COMMAND_TABLE.items():
+    COMMAND_WORDS[_n] = _n
+    for _a in _al:
+        COMMAND_WORDS[_a] = _n
+PROTO_LABEL = {"irc": "IRC", "talk": "talk", "deltachat": "Delta Chat"}
+
+
+def _variant(name, proto):
+    by = COMMAND_TABLE[name][1]
+    return by.get(proto) or by.get("*")
+
+
+def resolve_command(word, proto):
+    """The command a typed word means for this protocol; UserError when it is
+    unknown or means nothing here."""
+    name = COMMAND_WORDS.get(word.lower())
+    if name is None:
+        raise UserError("unknown command /%s - /help lists them; //text sends a line starting with /"
+                        % word)
+    if _variant(name, proto) is None:
+        raise UserError("/%s is not available for %s - /help lists what is" % (name, PROTO_LABEL.get(proto, proto)))
+    return name
+
+
+def help_lines(proto, arg=""):
+    """/help: the commands for this protocol, or one explained."""
+    arg = arg.strip().lstrip("/")
+    if arg:
+        name = COMMAND_WORDS.get(arg.lower())
+        if name is None:
+            raise UserError("no command /%s - /help lists them" % arg)
+        v = _variant(name, proto)
+        if v is None:
+            others = ", ".join(PROTO_LABEL[k] for k in sorted(COMMAND_TABLE[name][1]) if k in PROTO_LABEL)
+            raise UserError("/%s is not available for %s (it is for %s)" % (name, PROTO_LABEL.get(proto, proto), others))
+        out = [v[0], "    " + v[1]]
+        if COMMAND_TABLE[name][0]:
+            out.append("    also: " + ", ".join("/" + a for a in COMMAND_TABLE[name][0]))
+        return out
+    out = ["%s commands (//text sends a line that starts with /):" % PROTO_LABEL.get(proto, proto)]
+    aliases = []
+    for name in COMMAND_ORDER:
+        v = _variant(name, proto)
+        if v is None:
+            continue
+        out.append("  %-27s %s" % (v[0], v[1]))
+        aliases += ["/" + a for a in COMMAND_TABLE[name][0]]
+    out.append("also " + " ".join(aliases) + " - /help COMMAND explains one")
+    return out
+
+
+def _need(cond, usage):
+    if not cond:
+        raise UserError("usage: %s" % usage)
+
+
+def _dur(secs):
+    secs = int(max(0, secs))
+    d, secs = divmod(secs, 86400)
+    h, secs = divmod(secs, 3600)
+    m, secs = divmod(secs, 60)
+    return ("%dd" % d if d else "") + ("%dh" % h if h or d else "") + ("%dm" % m if m or h or d else "") + "%ds" % secs
+
+
+def account_counts(account):
+    convs = [c for c in account.convs.values() if c.kind != "server"]
+    unread = sum(c.unread for c in convs)
+    return "%d conversation%s, %d unread" % (len(convs), "" if len(convs) == 1 else "s", unread)
+
+
+class CommandMixin(object):
+    """What every adapter shares in typing: send() splits the text into lines,
+    each a /command (answered by a c_<name> method that returns a plan - a
+    function and its arguments, run once the whole text is known to be good) or
+    a message (speak()).  A bad line refuses the whole text before anything is sent,
+    so it can be fixed and sent again.  Needs: need_up(), speak(conv, text),
+    system(conv, text), status_lines(), SERVER_TEXT_REFUSAL."""
+
+    SERVER_TEXT_REFUSAL = "the server window takes no messages - only /commands (/help lists them)"
+
+    def send(self, conv, text):
+        self.need_up()
+        todo = []
+        for ln in text.split("\n"):
+            ln = ln.rstrip("\r")
+            if not ln.strip():
+                continue
+            if ln.startswith("/") and not ln.startswith("//"):
+                todo.append(self._command(conv, ln))
+            elif conv.kind == "server":
+                raise UserError(self.SERVER_TEXT_REFUSAL)
+            else:
+                todo.append((self.speak, (conv, ln[1:] if ln.startswith("//") else ln)))
+        if not todo:
+            raise UserError("nothing to send")
+        msgid = ""
+        for fn, args in todo:
+            msgid = fn(*args) or msgid
+        return msgid
+
+    def _command(self, conv, ln):
+        word, _, rest = ln[1:].partition(" ")
+        name = resolve_command(word, self.account.protocol)
+        fn = getattr(self, "c_" + name, None)
+        if fn is None:
+            raise UserError("/%s is not implemented for %s yet" % (name, PROTO_LABEL.get(self.account.protocol)))
+        return fn(conv, rest.strip())
+
+    def _notes(self, conv, lines):
+        for ln in lines:
+            self.system(conv, ln)
+
+    def _in_a_chat(self, conv, what):
+        if conv.kind == "server":
+            raise UserError("%s needs a conversation, not the server window" % what)
+
+    # -- the same everywhere ------------------------------------------------------
+    def c_help(self, conv, rest):
+        return (self._notes, (conv, help_lines(self.account.protocol, rest)))
+
+    def c_status(self, conv, rest):
+        return (self._notes, (conv, self.status_lines()))
+
+    def c_shrug(self, conv, rest):
+        self._in_a_chat(conv, "/shrug")
+        return (self.speak, (conv, (rest + " " if rest else "") + "\xaf\\_(\u30c4)_/\xaf"))
+
+    def c_clear(self, conv, rest):
+        return (self._clear_cmd, (conv,))
+
+    def _clear_cmd(self, conv):
+        """Forget the in-memory log (the UI re-reads it: empty); Delta Chat's own
+        history stays in the core and PgUp brings it back."""
+        conv.history.clear()
+        conv.history_done = False
+        self.chat.events.push("history", conv.id, "latest")
+
+    def counts(self):
+        return account_counts(self.account)
+
+
+# --------------------------------------------------------------------------
 # The IRC adapter: one non-blocking socket (TLS by default) on the shared
 # loop.  Everything server-specific is negotiated (CAP LS 302, ISUPPORT),
 # never assumed, so the same code serves Libera.Chat today and a home Ergo
 # server later.
 # --------------------------------------------------------------------------
-class IrcAdapter:
+class IrcAdapter(CommandMixin):
     # requested when the server offers them; sasl only with an account name
     # and a password to send
     WANT_CAPS = ("sasl", "server-time", "message-tags", "echo-message", "batch",
@@ -760,8 +952,8 @@ class IrcAdapter:
     BURST = 5
     RATE = 0.5
     HISTORY_FETCH = 50                   # CHATHISTORY: messages per request
-    # what may be typed in a chat pane; anything else /word is refused
-    COMMANDS = ("me", "join", "part", "msg", "nick", "topic", "quote")
+    SERVER_TEXT_REFUSAL = ("the server window takes no messages - only "
+                           "/commands (/join, /msg, /nick, /quote ... /help lists them)")
 
     def __init__(self, chat, account):
         self.chat = chat
@@ -793,6 +985,7 @@ class IrcAdapter:
         self.phase = "down"              # down, resolving, connecting, tls,
         self.rbuf = b""                  # registering, up
         self.wbuf = b""
+        self.pings = {}                  # /ping tokens -> (sent, conv id, nick)
         self.outq = deque()              # encoded lines waiting for flood control
         self.tokens = float(self.BURST)
         self.t_tok = None
@@ -1506,6 +1699,8 @@ class IrcAdapter:
         if text.startswith("\x01"):      # CTCP
             inner = text.strip("\x01")
             verb, _, rest = inner.partition(" ")
+            if verb.upper() == "PING" and notice and self._pong(rest, m.nick):
+                return
             if verb.upper() != "ACTION":
                 if verb.upper() == "VERSION" and not notice and not self.is_me(m.nick) \
                         and into is None:
@@ -1562,31 +1757,8 @@ class IrcAdapter:
             self.send_raw("PART %s" % conv.title)
         self.chat.remove_conv(conv)
 
-    def send(self, conv, text):
-        """Each line of text: a /command, or a message to conv ('//x' sends
-        '/x').  Replies with the last message's local id ('' when there was
-        only commands).  A line the server window cannot take, an unknown
-        /command or a bad argument refuses the whole text before anything
-        is sent, so it can be fixed and sent again."""
-        self.need_up()
-        todo = []
-        for ln in text.split("\n"):
-            ln = ln.rstrip("\r")
-            if not ln.strip():
-                continue
-            if ln.startswith("/") and not ln.startswith("//"):
-                todo.append(self._command(conv, ln))
-            elif conv.kind == "server":
-                raise UserError("the server window takes no messages - only "
-                                "/commands (/join, /msg, /nick, /quote ...)")
-            else:
-                todo.append((self._say, (conv, ln[1:] if ln.startswith("//") else ln)))
-        if not todo:
-            raise UserError("nothing to send")
-        msgid = ""
-        for fn, args in todo:
-            msgid = fn(*args) or msgid
-        return msgid
+    def speak(self, conv, text):
+        return self._say(conv, text)
 
     def _say(self, conv, text, action=False):
         """PRIVMSG text to conv, split to fit; ours goes in the log at once
@@ -1602,56 +1774,122 @@ class IrcAdapter:
                     "sa" if action else "s"), count=False)
         return msgid
 
-    def _command(self, conv, ln):
-        """One typed /command -> (fn, args) to run once the whole text is
-        known to be good."""
-        word, _, rest = ln[1:].partition(" ")
-        word, rest = word.lower(), rest.strip()
-        talk = conv.kind != "server"
+    # -- the typed commands (the shared table is COMMAND_TABLE) -----------------------
+    def c_me(self, conv, rest):
+        _need(rest, "/me ACTION")
+        if conv.kind == "server":
+            raise UserError("/me needs a channel or a person, not the server window")
+        return (self._say, (conv, rest, True))
 
-        def need(cond, usage):
-            if not cond:
-                raise UserError("usage: %s" % usage)
+    def c_join(self, conv, rest):
+        _need(rest and len(rest.split()) <= 2, "/join #CHANNEL [KEY]")
+        chan, _, key = rest.partition(" ")
+        if not self.is_channel(chan):
+            raise UserError("/join: %s is not a channel (to talk to a person: /query or /msg)" % chan)
+        return (self._join_cmd, (chan, key.strip()))
 
-        if word == "me":
-            need(rest, "/me ACTION")
-            if not talk:
-                raise UserError("/me needs a channel or a person, not the server window")
-            return (self._say, (conv, rest, True))
-        if word == "join":
-            need(rest and len(rest.split()) <= 2, "/join #CHANNEL [KEY]")
-            chan, _, key = rest.partition(" ")
-            if not self.is_channel(chan):
-                raise UserError("/join: %s is not a channel (to talk to a person: /msg)" % chan)
-            return (self._join_cmd, (chan, key.strip()))
-        if word == "part":
-            target = conv
-            if rest and self.is_channel(rest.split()[0]):
-                chan, _, rest = rest.partition(" ")
-                target = self.find_conv(chan)
-                if target is None:
-                    raise UserError("/part: not in %s" % chan)
-            elif not talk:
-                raise UserError("usage: /part #CHANNEL [REASON] (in the server window)")
-            return (self._part_cmd, (target, rest.strip()))
-        if word == "msg":
-            nick, _, said = rest.partition(" ")
-            need(nick and said.strip() and "," not in nick, "/msg NICK TEXT")
-            return (self._msg_cmd, (nick, said.strip()))
-        if word == "nick":
-            need(rest and " " not in rest, "/nick NEWNICK")
-            return (self.send_raw, ("NICK %s" % rest,))
-        if word == "topic":
-            if not talk or conv.kind != "channel":
-                raise UserError("/topic needs a channel")
-            if not rest:                 # just show it
-                return (self.system, (conv, "topic: %s" % (conv.topic or "(none)")))
-            return (self.send_raw, ("TOPIC %s :%s" % (conv.title, rest),))
-        if word in ("quote", "raw"):
-            need(rest, "/quote RAW IRC LINE")
-            return (self.send_raw, (rest,))
-        raise UserError("unknown command /%s - there are /%s; //text sends a line "
-                        "starting with /" % (word, ", /".join(self.COMMANDS)))
+    def c_query(self, conv, rest):
+        nick, _, said = rest.partition(" ")
+        _need(nick and "," not in nick and not self.is_channel(nick), "/query NICK [TEXT]")
+        return (self._msg_cmd, (nick, said.strip()))
+
+    def c_msg(self, conv, rest):
+        nick, _, said = rest.partition(" ")
+        _need(nick and said.strip() and "," not in nick, "/msg NICK TEXT")
+        return (self._msg_cmd, (nick, said.strip()))
+
+    def c_leave(self, conv, rest):
+        target = conv
+        if rest and self.is_channel(rest.split()[0]):
+            chan, _, rest = rest.partition(" ")
+            target = self.find_conv(chan)
+            if target is None:
+                raise UserError("/leave: not in %s" % chan)
+        elif conv.kind == "server":
+            raise UserError("usage: /leave #CHANNEL [REASON] (in the server window)")
+        return (self._part_cmd, (target, rest.strip()))
+
+    def c_nick(self, conv, rest):
+        _need(rest and " " not in rest, "/nick NEWNICK")
+        return (self.send_raw, ("NICK %s" % rest,))
+
+    def c_topic(self, conv, rest):
+        if conv.kind != "channel":
+            raise UserError("/topic needs a channel")
+        if not rest:                     # just show it
+            return (self.system, (conv, "topic: %s" % (conv.topic or "(none)")))
+        return (self.send_raw, ("TOPIC %s :%s" % (conv.title, rest),))
+
+    def c_quote(self, conv, rest):
+        _need(rest, "/quote RAW IRC LINE")
+        return (self.send_raw, (rest,))
+
+    def c_invite(self, conv, rest):
+        nick, _, chan = rest.partition(" ")
+        chan = chan.strip() or (conv.title if conv.kind == "channel" else "")
+        _need(nick and chan and self.is_channel(chan), "/invite NICK [#CHANNEL]")
+        return (self.send_raw, ("INVITE %s %s" % (nick, chan),))
+
+    def c_whois(self, conv, rest):
+        _need(rest and " " not in rest, "/whois NICK")
+        return (self._whois_cmd, (conv, rest))
+
+    def _whois_cmd(self, conv, nick):
+        self.send_raw("WHOIS %s" % nick)
+        self.system(conv, "asked the server about %s - the answer is in the server messages" % nick)
+
+    def c_away(self, conv, rest):
+        return (self.send_raw, ("AWAY :%s" % rest if rest else "AWAY",))
+
+    def c_names(self, conv, rest):
+        return (self._notes, (conv, self._names_lines(conv)))
+
+    def _names_lines(self, conv):
+        if conv.kind != "channel" or not conv.members:
+            return ["no list of names here"]
+        sym = {"owner": "~", "admin": "&", "op": "@", "halfop": "%", "voice": "+"}
+        people = sorted(conv.members.values(), key=lambda e: (ROLE_RANK.get(e[2], 9), e[0].lower()))
+        return ["%d here: %s" % (len(people), ", ".join(sym.get(r, "") + d for _a, d, r in people))]
+
+    def c_ping(self, conv, rest):
+        _need(" " not in rest, "/ping [NICK]")
+        return (self._ping_cmd, (conv, rest))
+
+    def _ping_cmd(self, conv, nick):
+        token = "%d" % int(time.time() * 1000)
+        self.pings[token] = (time.time(), conv.id, nick)
+        if nick:
+            self.send_raw("PRIVMSG %s :\x01PING %s\x01" % (nick, token), urgent=True)
+        else:
+            self.send_raw("PING :tvping%s" % token, urgent=True)
+        self.system(conv, "pinging %s..." % (nick or self.server or "the server"))
+
+    def _pong(self, token, who):
+        """A ping we sent came back: tell how long it took."""
+        sent = self.pings.pop(token, None)
+        if sent is None:
+            return False
+        conv = self.account.convs.get(sent[1]) or self.server_conv()
+        self.system(conv, "ping reply from %s: %d ms" % (who, round((time.time() - sent[0]) * 1000)))
+        return True
+
+    def on_PONG(self, m):
+        token = m.params[-1] if m.params else ""
+        if token.startswith("tvping"):
+            self._pong(token[6:], m.nick or self.server or "the server")
+
+    def c_quit(self, conv, rest):
+        return (self.disconnect, (rest or "tvchat",))
+
+    def status_lines(self):
+        a = self.account
+        lines = ["%s (irc): %s%s" % (a.display, a.state, " - " + a.detail if a.detail else "")]
+        if self.phase == "up":
+            lines.append("you are %s on %s:%d (%s), up %s" % (
+                self.nick, self.host, self.port, "TLS" if self.tls else "plain, no TLS",
+                _dur(self.loop.clock() - self.t_up) if self.t_up else "?"))
+        lines.append(self.counts())
+        return lines
 
     def _join_cmd(self, chan, key):
         self.send_raw("JOIN %s%s" % (chan, " " + key if key else ""))
@@ -1664,7 +1902,7 @@ class IrcAdapter:
 
     def _msg_cmd(self, nick, text):
         target = self.conv_for(nick, "channel" if self.is_channel(nick) else "direct")
-        return self._say(target, text)
+        return self._say(target, text) if text else None
 
 
 # --------------------------------------------------------------------------
@@ -1718,7 +1956,7 @@ class TalkCall:
         self.done = False
 
 
-class TalkAdapter:
+class TalkAdapter(CommandMixin):
     def __init__(self, chat, account):
         self.chat, self.account, self.loop = chat, account, chat.loop
         o = account.opts
@@ -2076,21 +2314,48 @@ class TalkAdapter:
                             else "%s is calling - answer first" % conv.title)
         return call
 
-    def send(self, conv, text):
-        """IRC mode: whole lines.  Each goes out with its newline, and is in
-        the log at once (talk has no echo)."""
+    SERVER_TEXT_REFUSAL = "the server window takes no messages - call someone (Chat > Join... or /join USER)"
+
+    def speak(self, conv, text):
+        """IRC mode: a whole line.  It goes out with its newline, and is in the
+        log at once (talk has no echo)."""
         call = self._session(conv)
-        msgid = ""
-        for ln in text.split("\n"):
-            ln = ln.rstrip("\r")
-            if not ln.strip():
-                continue
-            call.wbuf += (ln + "\n").encode("utf-8")
-            msgid = self._mine(conv, ln)
-        if not msgid:
-            raise UserError("nothing to send")
+        call.wbuf += (text + "\n").encode("utf-8")
+        msgid = self._mine(conv, text)
         self._rewatch_data(call)
         return msgid
+
+    # -- the typed commands (see COMMAND_TABLE): talk has calls, not channels --------
+    def c_me(self, conv, rest):
+        _need(rest, "/me ACTION")
+        self._in_a_chat(conv, "/me")
+        return (self.speak, (conv, "* %s %s" % (self.user, rest)))
+
+    def c_join(self, conv, rest):
+        _need(rest and " " not in rest, "/join USER[@HOST]")
+        return (self._call_cmd, (rest,))
+
+    c_query = c_join
+
+    def _call_cmd(self, target):
+        self.join(target)
+
+    def c_leave(self, conv, rest):
+        if conv.kind == "server":
+            raise UserError("the server window cannot be left - /quit disconnects")
+        return (self.part, (conv,))
+
+    def c_quit(self, conv, rest):
+        return (self.disconnect, ())
+
+    def status_lines(self):
+        a = self.account
+        lines = ["%s (talk): %s%s" % (a.display, a.state, " - " + a.detail if a.detail else "")]
+        if self.phase == "up":
+            lines.append("you are %s, through talkd on %s:%d" % (self.user, self.host, self.port))
+        live = [c.title + " (" + c.state + ")" for c in a.convs.values() if c.kind != "server" and c.state]
+        lines.append("calls: " + (", ".join(live) if live else "none"))
+        return lines
 
     def keys(self, conv, text):
         """Classic: keystrokes as typed - erase (DEL or ^H), kill (^U),
@@ -2296,7 +2561,7 @@ def _json_line(raw):
     return msg if isinstance(msg, dict) else None
 
 
-class DeltaChatAdapter:
+class DeltaChatAdapter(CommandMixin):
     """Delta Chat through the official core: `deltachat-rpc-server` runs as a
     child of the backend and speaks JSON-RPC 2.0, one object per line, on its
     stdin / stdout; the core does the mail, the encryption and its own
@@ -3125,14 +3390,12 @@ class DeltaChatAdapter:
         self.requests.discard(cid)
         self.chat.remove_conv(conv)
 
-    def send(self, conv, text):
+    SERVER_TEXT_REFUSAL = "the server window takes no messages - start a chat (Chat > Join... or /join ADDRESS)"
+
+    def need_up(self):
         self._need_up()
-        if conv.kind == "server":
-            raise UserError("the server window takes no messages - start a chat (Chat > Join...)")
-        if text.startswith("/") and not text.startswith("//"):
-            raise UserError("Delta Chat has no /commands here (start with // to send a /)")
-        if text.startswith("//"):
-            text = text[1:]
+
+    def speak(self, conv, text):
         if not text.strip():
             raise UserError("nothing to send")
         cid = int(conv.target)
@@ -3150,6 +3413,126 @@ class DeltaChatAdapter:
             raise UserError(str(e))
         self.chat.add_message(conv, msg, count=False)
         return msg.id
+
+    # -- the typed commands (see COMMAND_TABLE) -------------------------------------
+    def _my_name(self):
+        try:
+            name = self.call("get_config", self.acct, "displayname")
+        except RpcError:
+            name = None
+        return name or self.addr.partition("@")[0] or "me"
+
+    def c_me(self, conv, rest):
+        _need(rest, "/me ACTION")
+        self._in_a_chat(conv, "/me")
+        return (self.speak, (conv, "* %s %s" % (self._my_name(), rest)))
+
+    def c_join(self, conv, rest):
+        _need(rest and " " not in rest, "/join ADDRESS | INVITE-LINK")
+        return (self._join_cmd, (rest,))
+
+    def _join_cmd(self, target, said=""):
+        """Start (or find) the chat, and say `said` in it if a chat was opened
+        (a first chat with someone only mails them an invitation)."""
+        conv = self.join(target)
+        if said and conv.kind != "server":
+            return self.speak(conv, said)
+        if said:
+            self.system(conv, "not sent (no key for %s yet): %s" % (target, said))
+        return None
+
+    def c_query(self, conv, rest):
+        addr, _, said = rest.partition(" ")
+        _need(addr, "/query ADDRESS [TEXT]")
+        return (self._join_cmd, (addr, said.strip()))
+
+    def c_msg(self, conv, rest):
+        addr, _, said = rest.partition(" ")
+        _need(addr and said.strip(), "/msg ADDRESS TEXT")
+        return (self._join_cmd, (addr, said.strip()))
+
+    def c_leave(self, conv, rest):
+        if conv.kind == "server":
+            raise UserError("the server window cannot be left - /quit disconnects")
+        return (self.part, (conv,))
+
+    def c_nick(self, conv, rest):
+        _need(rest, "/nick NAME")
+        return (self._nick_cmd, (conv, rest))
+
+    def _nick_cmd(self, conv, name):
+        try:
+            self.call("set_config", self.acct, "displayname", name)
+        except RpcError as e:
+            raise UserError(str(e))
+        self.system(conv, "you are now %s" % name)
+
+    def c_invite(self, conv, rest):
+        _need(rest and " " not in rest, "/invite ADDRESS")
+        if conv.kind == "group":
+            return (self.group_add, (conv, rest))
+        return (self._join_cmd, (rest,))
+
+    def c_name(self, conv, rest):
+        _need(rest, "/name NEW NAME")
+        if conv.kind != "group":
+            raise UserError("/name renames a group; this is not one")
+        return (self.group_rename, (conv, rest))
+
+    def c_names(self, conv, rest):
+        return (self._notes, (conv, self._names_lines(conv)))
+
+    def _names_lines(self, conv):
+        if conv.kind == "server":
+            return ["no list of names in the server window"]
+        if conv.kind == "group":
+            people = sorted(conv.members.values(), key=lambda e: e[1].lower())
+            return ["%d here besides you: %s" % (len(people), ", ".join(
+                "%s <%s>" % (d, a) if d and d != a else a for a, d, _r in people) or "nobody")]
+        try:
+            ids = self.call("get_chat_contacts", self.acct, int(conv.target))
+            who = [self.call("get_contact", self.acct, c) for c in ids if c != self.SELF]
+        except RpcError as e:
+            raise UserError(str(e))
+        return ["you and " + ", ".join("%s <%s>" % (c["displayName"], c["address"]) for c in who)]
+
+    def c_whois(self, conv, rest):
+        _need(rest and " " not in rest, "/whois ADDRESS")
+        return (self._whois_cmd, (conv, rest))
+
+    def _whois_cmd(self, conv, addr):
+        try:
+            cid = self._key_contact(addr)
+            if cid is None:
+                lines = ["%s: no key for them yet - /join %s invites them" % (addr, addr)]
+            else:
+                c = self.call("get_contact", self.acct, cid)
+                lines = ["%s <%s>" % (c.get("displayName") or addr, c["address"]),
+                         "    end-to-end encrypted with a key we hold" if c.get("isKeyContact", True)
+                         else "    no key held"]
+                if c.get("status"):
+                    lines.append("    status: " + c["status"])
+                if c.get("lastSeen"):
+                    lines.append("    last seen " + time.strftime("%Y-%m-%d %H:%M", time.localtime(c["lastSeen"])))
+        except RpcError as e:
+            raise UserError(str(e))
+        self._notes(conv, lines)
+
+    def c_quit(self, conv, rest):
+        return (self.disconnect, ())
+
+    def status_lines(self):
+        a = self.account
+        lines = ["%s (Delta Chat): %s%s" % (a.display, a.state, " - " + a.detail if a.detail else ""),
+                 "mailbox %s" % self.addr]
+        if self.phase == "up":
+            host, login = self._login()
+            lines.append("mail server %s (login %s), up %s" % (
+                host, login, _dur(self.loop.clock() - self.t_up) if self.t_up else "?"))
+        lines.append(self.counts())
+        if self.invites:
+            lines.append("invitations waiting: " + ", ".join(i["from"] for i in self.invites.values()))
+        return lines
 
     # -- groups -------------------------------------------------------------------
     ADDRESS = re.compile(r"^[^@\s,]+@[^@\s,]+\.[^@\s,]+$")

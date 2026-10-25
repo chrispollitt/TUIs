@@ -302,7 +302,7 @@ class TestCli(Base):
         help_out = self.be("--help")
         self.assertEqual(help_out.returncode, 0)
         self.assertIn(b"--trace", help_out.stdout)
-        self.assertEqual(self.be("--version").stdout.strip(), b"tvmail-backend 1.2.0")
+        self.assertEqual(self.be("--version").stdout.strip(), b"tvmail-backend " + be.__version__.encode())
         debug = self.tmp / "debug.log"
         trace = self.tmp / "trace.log"
         p = self.be("--debug", str(debug), "--trace", str(trace), "ping")
@@ -1483,7 +1483,7 @@ class TestOriginHeaders(Base):
 
     def test_plain_text_gets_tool_user_and_host(self):
         m = self._sent(b"hello\n")
-        self.assertEqual(m["X-Mailer"], "tvmail-backend 1.2.0")
+        self.assertEqual(m["X-Mailer"], "tvmail-backend " + be.__version__)
         self.assertEqual(m["X-Origin-User"], "tester")
         self.assertEqual(m["X-Origin-Host"], socket.gethostname().replace(" ", "_"))
 

@@ -3,7 +3,17 @@
 What changed, release by release. (Why tvmail exists is in [WHY.md](WHY.md).)
 Releases are tagged `tvmail-vX.Y.Z`; `git log` has the rest.
 
-## Unreleased
+## 1.3.0 - October 2026
+
+tvmail and tvchat now share one version (`../VERSION`, set with `../version.sh`).
+
+- **File > Edit configuration...** opens tvmail.conf in a window: F9 verifies it (nothing is
+  connected), F8 verifies, saves and has the backend start afresh on it.
+- **Toasts instead of pop-ups** (tvcommon): "Message sent", "Saved to ..." and errors are a note
+  at the bottom right that goes away by itself; Window > Notification history keeps them.
+  Questions (delete? save changes?) are still boxes.
+- **An optional link to tvchat:** Message > Chat with sender, and Message > Open chat invite for a
+  Delta Chat invite link in a message. Neither app needs the other.
 
 - **Chat moved out.** tvmail is mail only again: the chat client is its own
   app, [tvchat](../tvchat/README.md), and what both share is in

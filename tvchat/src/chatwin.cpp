@@ -667,6 +667,8 @@ public:
     }
 };
 
+void leaveShown(); // Chat > Leave (below): it asks first when a chat's history would go
+
 class TChatMainWindow;
 TChatMainWindow *gChatWin = nullptr; // the one chat window, once made
 
@@ -960,6 +962,22 @@ class TChatMainWindow : public TWindow
             flashStatus("Pick a channel or a person to talk to - this is " + name +
                         " (it takes /commands)");
             return;
+        }
+        // Delta Chat: a typed /leave (or /part, /close) is Chat > Leave, which asks before the chat
+        // and its messages are deleted from this device; the other protocols just run it
+        if (!isServer())
+        {
+            std::string w = lowered(trimmed(text));
+            w = w.substr(0, w.find_first_of(" 	"));
+            if (w == "/leave" || w == "/part" || w == "/close")
+                for (const ChatAccount &a : chat().accounts())
+                    if (a.id == accountIdOf(conv) && a.protocol == "deltachat")
+                    {
+                        setInput(std::string());
+                        drafts.erase(conv);
+                        leaveShown();
+                        return;
+                    }
         }
         std::string body, err;
         if (!ask("send " + shq(conv) + " " + shq(text), body, err))

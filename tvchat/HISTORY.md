@@ -1,6 +1,22 @@
 # tvchat history
 
-## Unreleased (October 2026)
+## 1.3.0 - October 2026
+
+tvmail and tvchat now share one version (`../VERSION`, set with `../version.sh`; a test fails if
+any place that records it drifts), so tvchat jumps from 0.1.0 to 1.3.0 to meet tvmail.
+
+- **Typed /commands are one vocabulary** for IRC, talk and Delta Chat: `/help` (made from one
+  table, per protocol), `/status`, `/me`, `/shrug`, `/join`, `/query`, `/msg`, `/leave`
+  (`/part`, `/close`), `/invite`, `/names`, `/whois`, `/nick`, `/name`, `/topic`, `/away`,
+  `/ping`, `/clear`, `/quit`, `/quote`. One that means nothing for the protocol is refused
+  with a pointer to `/help`.
+- **Toasts instead of pop-ups** (tvcommon): a note that needs no answer sits at the bottom right
+  and goes away by itself; Window > Notification history keeps them.
+- **File > Edit configuration...** (F9 verify, F8 save + apply): `reload-config` keeps the
+  accounts you did not touch connected.
+- **Delta Chat groups** (New group, Add / Remove member, Rename) and **Leave**; invitations
+  by mail (Join an address, the other side is asked); an optional link with tvmail (Invite can
+  mail the link through tvmail; tvmail's Message > Chat with sender / Open chat invite).
 
 - **Delta Chat adapter** (`protocol = deltachat`), first step: the official
   `deltachat-rpc-server` runs as a child of the backend and `DeltaChatAdapter`

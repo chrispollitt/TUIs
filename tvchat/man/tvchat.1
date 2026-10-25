@@ -98,36 +98,80 @@ chat invite): one-line files in
 .IR ~/.local/state/tvchat/requests/ .
 .SH COMMANDS
 A line typed in the input line may be a command; the server messages take
-nothing else.
-.TP
-.BI /me " ACTION"
-an action, shown as
-.IR "* nick ACTION" .
-.TP
-.BI /join " #CHANNEL" " \fR[\fPKEY\fR]"
-join a channel.
-.TP
-.BR /part " [\fI#CHANNEL\fP] [\fIREASON\fP]"
-leave this channel, or the one named.
-.TP
-.BI /msg " NICK TEXT"
-talk to someone; their conversation opens in the list.
-.TP
-.BI /nick " NEWNICK"
-change your nick.
-.TP
-.BR /topic " [\fITEXT\fP]"
-set this channel's topic, or show it.
-.TP
-.BI /quote " LINE"
-send a raw IRC line.
-.PP
-Any other
-.BI / word
-is refused and stays in the input line;
+nothing else.  The words are the same for IRC, talk and Delta Chat, so the
+three feel alike; one that means nothing for the protocol of the conversation
+is refused, and stays in the input line.
 .B //text
 sends a line that starts with
 .BR / .
+.B /help
+lists the commands this account has and
+.BI "/help " NAME
+explains one (and lists its aliases).
+.TP
+.B /help \fR[\fICOMMAND\fR]
+.TQ
+.B /status
+this account: its state, who you are, what is open.
+.TP
+.BI /me " ACTION"
+say it in the third person (IRC: a CTCP action; the others send
+.IR "* NAME ACTION" ).
+.TP
+.BR /shrug " [\fITEXT\fP]"
+send TEXT followed by a shrug.
+.TP
+.BR /join " TARGET"
+IRC: join a channel (\fI#CHANNEL [KEY]\fR).  Delta Chat: chat with an address (a
+first chat mails them an invitation) or join an invite link.  talk: call
+someone (\fIUSER[@HOST]\fR).  Alias /j.
+.TP
+.BR /query " TARGET [\fITEXT\fP]"
+open a conversation with someone, and say TEXT (talk: call them).  Alias /q.
+.TP
+.BI /msg " TARGET TEXT"
+send TEXT to someone, opening the conversation (IRC, Delta Chat).  Aliases
+/m, /dm.
+.TP
+.BR /leave " [\fI#CHANNEL\fP] [\fIREASON\fP]"
+IRC: leave a channel or close a query; talk: hang up or decline; Delta Chat:
+delete this chat from this device (a group is left first; the window asks
+before it does).  Aliases /part, /close.
+.TP
+.BI /invite " TARGET"
+IRC: invite a nick to a channel (\fINICK [#CHANNEL]\fR).  Delta Chat: add an
+address to this group, or invite it to chat.
+.TP
+.B /names
+list who is in this channel or chat.  Alias /members.
+.TP
+.BI /whois " TARGET"
+IRC: ask the server about someone (the answer is in the server messages).
+Delta Chat: what is known about a contact.
+.TP
+.BI /nick " NAME"
+IRC: change your nick.  Delta Chat: change the name people see.
+.TP
+.BI /name " NEW NAME"
+Delta Chat: rename this group.
+.TP
+.BR /topic " [\fITEXT\fP]"
+IRC: set this channel's topic, or show it.
+.TP
+.BR /away " [\fIREASON\fP]"
+IRC: mark yourself away; without a reason, back.
+.TP
+.BR /ping " [\fINICK\fP]"
+IRC: the round-trip time to the server, or to NICK (a CTCP PING).
+.TP
+.B /clear
+clear this conversation's log on screen (PgUp brings older lines back).
+.TP
+.BR /quit " [\fIREASON\fP]"
+disconnect this account.  Alias /exit.
+.TP
+.BI /quote " LINE"
+IRC: send a raw IRC line.  Alias /raw.
 .SH OPTIONS
 .TP
 .BI "--debug " [FILE]

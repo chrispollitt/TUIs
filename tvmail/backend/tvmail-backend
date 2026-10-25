@@ -87,7 +87,7 @@ from mailbox import mbox
 from email.header import decode_header, make_header
 
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 _log = logging.getLogger("tvmail-backend")
 
 

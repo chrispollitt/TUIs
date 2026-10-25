@@ -352,8 +352,15 @@ def delta_group_rename_and_leave(opts):
             "Leave did not ask before deleting")
     tv.send("n", settle=0.6)
     c.check(chat_heading(tv, "Pirates — Delta") is not None, "No still left the group")
-    tv.send(alt("c"), "l", settle=0.8)
-    c.check(tv.wait("Leave the group", 4), "Leave did not ask the second time")
+    # typed commands: /help lists this protocol's, and a typed /leave asks just like Chat > Leave
+    tv.send("/help", "Enter", settle=1.0)
+    c.check(tv.wait("/quit [REASON]", 5) and tv.has("/name NEW NAME") and tv.has("also /? /j"),
+            "/help did not list the Delta Chat commands")
+    tv.send("/topic x", "Enter", settle=0.8)
+    c.check(tv.wait("not available for Delta Chat", 4), "an IRC-only command was not refused for Delta Chat")
+    tv.send(*["\x7f"] * 8, settle=0.3)                     # the refused text stays in the input: erase it
+    tv.send("/leave", "Enter", settle=1.0)
+    c.check(tv.wait("Leave the group", 4), "a typed /leave did not ask the second time")
     tv.send("y", settle=1.2)
     c.check(tv.wait(lambda: chat_heading(tv, "Pirates — Delta") is None and "Pirates" not in tv.text(), 6),
             "the group is still shown after leaving")

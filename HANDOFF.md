@@ -69,6 +69,14 @@ attachments, a member picker for groups, tvchat sending an invite through tvmail
 After that: tvchat/TO-DO.txt (small things), tvmail/TO-DO.txt (periodic pull
 first), and the open bugs in tvmail/BUGS.md.
 
+## Versions
+
+tvmail and tvchat share one version: `VERSION` at the top, set with `./version.sh X.Y.Z` (it shows
+every place that records it, and fails if they disagree; tvchat's `chat_unit` checks it too).
+Release by bumping with that script, a HISTORY entry in each app, the tests, then tags
+`tvmail-vX.Y.Z` and `tvchat-vX.Y.Z` at that commit (annotated; `git push --tags` after the
+live test). Oct 25: both are 1.3.0 (tvchat was 0.1.0).
+
 ## Where things are
 
 | file | holds |

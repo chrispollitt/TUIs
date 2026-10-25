@@ -201,6 +201,8 @@ def handle(rid, method, p):
         if method in ("set_config", "start_io", "stop_io", "stop_io_for_all_accounts",
                       "accept_chat", "marknoticed_chat", "markseen_msgs"):
             return reply(rid, None)
+        if method == "get_config":
+            return reply(rid, WORLD.get("config", {}).get(p[1], ""))
         if method == "get_connectivity":
             return reply(rid, WORLD.get("connectivity", 4000))
         if method == "get_next_event":

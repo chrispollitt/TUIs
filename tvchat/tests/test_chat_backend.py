@@ -1040,6 +1040,73 @@ class TestIrcHardening(IrcBase):
         self.assertFalse(any("fine line" in g or "bogus" in g for g in self.srv.got))
         self.chat.close()
 
+    def test_shared_commands_on_irc(self):
+        stage = {}
+
+        def script(srv):
+            welcome(srv)
+            srv.expect("JOIN #Test")
+            srv.send(":tester!u@h JOIN #Test")
+            srv.expect("PRIVMSG Eve :hello eve")
+            srv.expect("INVITE Dave #Test")
+            srv.expect("INVITE Dave #other")
+            srv.expect("WHOIS Dave")
+            srv.expect("AWAY :gone fishing")
+            srv.expect("AWAY")
+            ln = srv.expect("PING :tvping")                      # /ping: the server's PONG
+            srv.send(":srv PONG srv :tvping" + ln.split(":tvping")[1])
+            ln = srv.expect("PRIVMSG Dave :\x01PING ")            # /ping NICK: his CTCP reply
+            srv.send(":Dave!u@h NOTICE tester :\x01PING %s\x01" % ln.split("PING ")[1].strip("\x01"))
+            srv.expect("PART #Test")
+            srv.expect("QUIT :bye now")
+            stage["done"] = True
+
+        self.setup_irc(script)
+        self.adapter(BURST=50)
+        self.verb("connect", "libera")
+        self.turn(lambda: "libera/#test" in self.acct.convs)
+        say = lambda conv, text: self.verb("send", conv, text)
+        notes = lambda conv: [m.text for m in self.acct.convs[conv].history if "n" in m.flags]
+        # /help: this protocol's commands
+        self.assertEqual(say("libera/#test", "/help")[0], 0)
+        listed = "\n".join(notes("libera/#test"))
+        self.assertIn("IRC commands", listed)
+        for want in ("/join #CHANNEL [KEY]", "/ping [NICK]", "/whois NICK", "/quote RAW LINE", "/away [REASON]"):
+            self.assertIn(want, listed)
+        self.assertNotIn("/name NEW NAME", listed)                # a Delta Chat command
+        self.assertEqual(say("libera/#test", "/help leave")[0], 0)
+        self.assertIn("    also: /part, /close", notes("libera/#test"))
+        st, body = say("libera/#test", "/name x")
+        self.assertEqual((st, b"/name is not available for IRC" in body), (1, True))
+        # /status
+        say("libera/*", "/status")
+        text = "\n".join(notes("libera/*"))
+        self.assertIn("(irc): connected", text)
+        self.assertIn("you are tester on 127.0.0.1:", text)
+        # a query opened with and without text
+        self.assertEqual(say("libera/#test", "/query Eve hello eve")[0], 0)
+        self.assertEqual(say("libera/#test", "/q Frank")[0], 0)
+        self.assertIn("libera/frank", self.acct.convs)
+        self.assertEqual(say("libera/#test", "/invite Dave")[0], 0)              # to the channel shown
+        self.assertEqual(say("libera/#test", "/invite Dave #other")[0], 0)
+        self.assertEqual(say("libera/*", "/invite Dave")[0], 1)                   # which channel?
+        self.assertEqual(say("libera/#test", "/whois Dave")[0], 0)
+        self.assertEqual(say("libera/#test", "/away gone fishing")[0], 0)
+        self.assertEqual(say("libera/#test", "/away")[0], 0)
+        self.assertEqual(say("libera/#test", "/names")[0], 0)
+        self.assertEqual(say("libera/#test", "/ping")[0], 0)
+        self.turn(lambda: any(n.startswith("ping reply from") for n in notes("libera/#test")))
+        self.assertEqual(say("libera/#test", "/ping Dave")[0], 0)
+        self.turn(lambda: any(n.startswith("ping reply from Dave:") for n in notes("libera/#test")))
+        # /leave is /part; /clear; /quit
+        self.assertEqual(say("libera/#test", "/clear")[0], 0)
+        self.assertEqual(len(self.acct.convs["libera/#test"].history), 0)
+        self.assertEqual(say("libera/#test", "/close")[0], 0)
+        self.assertNotIn("libera/#test", self.acct.convs)
+        self.assertEqual(say("libera/*", "/quit bye now")[0], 0)
+        self.turn(lambda: "done" in stage)
+        self.assertEqual(self.acct.state, "disconnected")
+
     def test_chathistory_on_join_and_before(self):
         stage = {}
 
@@ -1344,6 +1411,41 @@ class TestTalk(TalkBase):
         self.assertNotIn("talk/miche", self.acct.convs)
         self.assertEqual(self.verb("answer", "talk/alice@cmlaptop")[0], 1)
         self.chat.close()
+
+    def test_the_shared_commands_in_talk(self):
+        stage = {}
+
+        def script(srv):
+            self.hello(srv)
+            while "done" not in stage:
+                time.sleep(0.05)
+
+        self.setup_talk(script)
+        self.verb("connect", "talk")
+        self.turn(lambda: self.acct.state == "connected")
+        say = lambda text: self.verb("send", "talk/*", text)
+        notes = lambda: [m.text for m in self.acct.convs["talk/*"].history if "n" in m.flags]
+        self.assertEqual(say("/help")[0], 0)
+        listed = "\n".join(notes())
+        self.assertIn("talk commands", listed)
+        self.assertIn("/join USER[@HOST]", listed)
+        self.assertIn("/leave", listed)
+        self.assertNotIn("/topic", listed)
+        self.assertNotIn("/msg", listed)                         # talk has no messages out of a call
+        st, body = say("/topic hi")
+        self.assertEqual((st, b"/topic is not available for talk" in body), (1, True))
+        st, body = say("/msg bob hi")
+        self.assertEqual((st, b"/msg is not available for talk" in body), (1, True))
+        self.assertEqual(say("/status")[0], 0)
+        text = "\n".join(notes())
+        self.assertIn("(talk): connected", text)
+        self.assertIn("you are chris, through talkd on 127.0.0.1:", text)
+        self.assertIn("calls: none", text)
+        self.assertEqual(say("/me waves")[0], 1)                  # needs a conversation
+        self.assertEqual(say("/leave")[0], 1)
+        self.assertEqual(say("/quit")[0], 0)
+        self.assertEqual(self.acct.state, "disconnected")
+        stage["done"] = True
 
     def test_refusals(self):
         def script(srv):
@@ -1769,7 +1871,9 @@ class TestDeltaChat(DeltaBase):
         self.assertEqual([(m.id, m.flags) for m in mine], [(mid, "ser")])
         self.assertEqual(alice.unread, 1)                         # our own line is not unread
         # typed commands: refused whole, // escapes
-        self.assertEqual(self.verb("send", "delta/10", "/me waves")[0], 1)
+        self.assertEqual(self.verb("send", "delta/10", "/me waves")[0], 0)
+        self.assertEqual(self.requests("misc_send_text_message")[-1]["params"][2], "* me waves")
+        self.assertEqual(self.verb("send", "delta/10", "/bogus")[0], 1)
         self.assertEqual(self.verb("send", "delta/10", "//shrug")[0], 0)
         self.assertEqual(self.requests("misc_send_text_message")[-1]["params"][2], "/shrug")
         self.assertEqual(self.verb("send", "delta/*", "x")[0], 1)
@@ -1860,6 +1964,70 @@ class TestDeltaChat(DeltaBase):
         self.assertEqual(self.verb("group-rename", team, "  ")[0], 1)
         self.assertEqual(self.verb("new-group", "delta", " ")[0], 1)
         self.assertEqual(self.verb("new-group", "delta", "X", "bad address")[0], 1)
+
+    def test_the_shared_commands_on_delta_chat(self):
+        self.setup_dc()
+        self.up()
+        say = lambda conv, text: self.verb("send", conv, text)
+        notes = lambda conv: [m.text for m in self.acct.convs[conv].history if "n" in m.flags]
+        sent = lambda: self.requests("misc_send_text_message")[-1]["params"]
+        # /help lists what this protocol has - and only that
+        self.assertEqual(say("delta/10", "/help")[0], 0)
+        listed = "\n".join(notes("delta/10"))
+        self.assertIn("Delta Chat commands", listed)
+        self.assertIn("/join ADDRESS | LINK", listed)
+        self.assertIn("/leave", listed)
+        self.assertIn("/help [COMMAND]", listed)
+        self.assertNotIn("/topic", listed)
+        self.assertNotIn("/quote", listed)
+        say("delta/10", "/? join")
+        self.assertIn("    also: /j", notes("delta/10"))
+        st, body = say("delta/10", "/help topic")
+        self.assertEqual(st, 1)
+        self.assertIn("/topic is not available for Delta Chat", body.decode())
+        st, body = say("delta/10", "/topic x")
+        self.assertEqual((st, b"/topic is not available for Delta Chat" in body), (1, True))
+        st, body = say("delta/10", "/bogus")
+        self.assertEqual((st, b"unknown command /bogus" in body), (1, True))
+        # /status
+        say("delta/*", "/status")
+        text = "\n".join(notes("delta/*"))
+        self.assertIn("(Delta Chat): connected", text)
+        self.assertIn("mailbox me@example.org", text)
+        self.assertIn("2 conversations, 1 unread", text)
+        # a few that say something
+        say("delta/10", "/shrug well")
+        self.assertEqual(sent()[2], "well \xaf\\_(\u30c4)_/\xaf")
+        say("delta/10", "/query bob@example.org hello bob")
+        self.assertEqual(sent(), [1, 12, "hello bob"])
+        say("delta/10", "/nick Robin")
+        self.assertEqual(self.requests("set_config")[-1]["params"], [1, "displayname", "Robin"])
+        # who is here
+        say("delta/11", "/names")
+        self.assertIn("2 here besides you: Alice <alice@example.org>, Bob <bob@example.org>", notes("delta/11"))
+        say("delta/10", "/names")
+        self.assertIn("you and Alice <alice@example.org>", notes("delta/10"))
+        say("delta/10", "/whois alice@example.org")
+        self.assertIn("Alice <alice@example.org>", notes("delta/10"))
+        say("delta/10", "/whois nobody@example.org")
+        self.assertTrue(any("no key for them yet" in n for n in notes("delta/10")))
+        # a group: invite adds (they are known), name renames
+        self.verb("group-remove", "delta/11", "bob@example.org")
+        self.assertEqual(say("delta/11", "/invite bob@example.org"), (0, b"\n"))
+        self.assertIn("bob@example.org", self.acct.convs["delta/11"].members)
+        self.assertEqual(say("delta/11", "/name Crew")[0], 0)
+        self.assertEqual(self.acct.convs["delta/11"].title, "Crew")
+        self.assertEqual(say("delta/10", "/name Nope")[0], 1)                # not a group
+        # /clear empties the ring and has the UI re-read the log
+        self.assertEqual(say("delta/10", "/clear")[0], 0)
+        self.assertEqual(len(self.acct.convs["delta/10"].history), 0)
+        self.assertIn(("history", "delta/10", "latest"), self.events("history"))
+        # /leave, /quit
+        self.assertEqual(say("delta/10", "/leave")[0], 0)
+        self.assertNotIn("delta/10", self.acct.convs)
+        self.assertEqual(say("delta/*", "/leave")[0], 1)
+        self.assertEqual(say("delta/*", "/quit")[0], 0)
+        self.assertEqual(self.acct.state, "disconnected")
 
     def test_not_connected_refuses(self):
         self.setup_dc()
@@ -2297,6 +2465,29 @@ class TestConfigEditing(Base):
             chat.reload_config()
         self.assertEqual([x.id for x in chat.accounts], ["a", "c", "d"])
         self.assertEqual(cb.dispatch(cb.build_parser(), ["reload-config"])[0], 1)
+
+
+class TestVersions(unittest.TestCase):
+    """tvmail and tvchat share one version (../VERSION, set by ../version.sh)."""
+
+    def test_every_place_that_records_it_agrees(self):
+        top = HERE.parent.parent
+        if not (top / "VERSION").exists() or not (top / "tvmail").exists():
+            self.skipTest("not a checkout of both apps (a source tarball)")
+        want = (top / "VERSION").read_text().strip()
+        places = [("tvchat/CMakeLists.txt", r"^project\(tvchat VERSION ([0-9.]+)"),
+                  ("tvmail/CMakeLists.txt", r"^project\(tvmail VERSION ([0-9.]+)"),
+                  ("tvchat/src/tvchat.h", r'^#define TVCHAT_VERSION "([0-9.]+)"'),
+                  ("tvmail/src/tvmail.h", r'^#define TVMAIL_VERSION "([0-9.]+)"'),
+                  ("tvchat/backend/tvchat-backend", r'^__version__ = "([0-9.]+)"'),
+                  ("tvmail/backend/tvmail-backend", r'^__version__ = "([0-9.]+)"')]
+        import re
+        for rel, pat in places:
+            m = re.search(pat, (top / rel).read_text(encoding="utf-8"), re.M)
+            self.assertIsNotNone(m, rel)
+            self.assertEqual(m.group(1), want, "%s says %s, VERSION says %s - run ./version.sh %s"
+                             % (rel, m.group(1), want, want))
+        self.assertEqual(cb.__version__, want)
 
 
 class TestDeltaChatRealCore(DeltaBase):

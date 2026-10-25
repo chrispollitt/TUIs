@@ -27,6 +27,10 @@ running as a co-process. The two apps share their common C++ in
   Ergo does). A line can be a command: `/me`, `/join`, `/part`, `/msg`,
   `/nick`, `/topic`, `/quote`; the server messages take commands only.
 
+Typed **/commands** are the same words for IRC, talk and Delta Chat - `/help` lists them,
+`/status`, `/me`, `/join`, `/query`, `/msg`, `/leave`, `/names`, `/whois`, `/ping`, `/clear`,
+`/quit` and more - so the three feel alike; `//text` sends a line that starts with `/`.
+
 **talk(1)** too (`protocol = talk`): through the one talkd on the LAN master
 (chrispollitt/POSIX `chat-setup`), so a plain `talk you@cpbee` from any shell
 rings you in tvchat. Chat > Join... calls, Enter answers, Chat > Leave hangs
