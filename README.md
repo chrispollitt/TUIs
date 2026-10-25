@@ -9,8 +9,9 @@ My handcrafted Text User Interface apps
 ## Versions
 
 tvmail and tvchat share one version, in [VERSION](VERSION); `./version.sh` shows it and every place
-that records it, `./version.sh X.Y.Z` sets them all. Releases are tagged `tvmail-vX.Y.Z` and
-`tvchat-vX.Y.Z`.
+that records it, `./version.sh X.Y.Z` sets them all. A release is a git tag, nothing built: `vX.Y.Z` for the
+whole repo (plus `tvmail-vX.Y.Z` and `tvchat-vX.Y.Z`), fetched with
+`git clone --branch vX.Y.Z --depth 1 <repo>`.
 
 ## Project files
 

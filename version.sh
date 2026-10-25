@@ -7,8 +7,8 @@
 # The places: each app's CMakeLists.txt (project VERSION - what dist.sh and the
 # package names use), the #define default in each app's header, and each backend's
 # __version__ (what `tvmail-backend --version` and the X-Mailer header say).  A test
-# (tvchat's chat_unit) fails if they drift apart.  Releases are tagged tvmail-vX.Y.Z and
-# tvchat-vX.Y.Z at the same commit.
+# (tvchat's chat_unit) fails if they drift apart.  A release is three git tags at one commit
+# (vX.Y.Z, tvmail-vX.Y.Z, tvchat-vX.Y.Z) - tags only, no binaries.
 set -eu
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 cd "$here"

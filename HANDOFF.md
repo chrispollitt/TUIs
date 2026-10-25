@@ -73,9 +73,10 @@ first), and the open bugs in tvmail/BUGS.md.
 
 tvmail and tvchat share one version: `VERSION` at the top, set with `./version.sh X.Y.Z` (it shows
 every place that records it, and fails if they disagree; tvchat's `chat_unit` checks it too).
-Release by bumping with that script, a HISTORY entry in each app, the tests, then tags
-`tvmail-vX.Y.Z` and `tvchat-vX.Y.Z` at that commit (annotated; `git push --tags` after the
-live test). Oct 25: both are 1.3.0 (tvchat was 0.1.0).
+Release by bumping with that script, a HISTORY entry in each app, the tests, then three annotated
+tags at that commit - `vX.Y.Z` (the whole repo), `tvmail-vX.Y.Z`, `tvchat-vX.Y.Z` - and
+`git push --tags` after the live test. Tags only: no binary releases; a tag is just a stable
+name to fetch (`git clone --branch v1.3.0 --depth 1 <repo>`). Oct 25: both are 1.3.0 (tvchat was 0.1.0).
 
 ## Where things are
 
