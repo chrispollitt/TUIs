@@ -78,6 +78,13 @@ address and its password, from the same places as IRC's: `$TVCHAT_PASS_<ACCOUNT>
 that the core remembers it in `~/.local/share/tvchat/deltachat/<ACCOUNT>/`
 (`$XDG_DATA_HOME` is respected), which belongs to the core: do not edit it.
 
+Two people (or two accounts) must exchange keys before the core will send:
+one runs `tvchat-backend invite ACCOUNT` and gives the link to the other, who
+joins it (`join`). Against a plain mail server (Dovecot + Postfix) the account
+usually needs `imap_user` / `smtp_user` (the login name, often not the full
+address) and `smtp_port = 587`; the server needs an authenticated submission
+port.
+
 ```ini
 [account:delta]
 protocol = deltachat

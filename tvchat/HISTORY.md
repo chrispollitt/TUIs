@@ -6,8 +6,9 @@
   `deltachat-rpc-server` runs as a child of the backend and `DeltaChatAdapter`
   speaks JSON-RPC to it - setting up the mailbox, the chats with their last 50
   messages and unread counts, incoming and sent messages, contact requests,
-  read marks, older history from the core, and a restart if the core dies. Not
-  yet tried against a real mailbox or in the UI (the UI still says "Delta Chat
+  read marks, older history from the core, and a restart if the core dies. Invite
+  links (`invite` verb; `join` takes a link) exchange the keys the core needs.
+  Tried against two real mailboxes on cpbee; not yet in the UI (the UI still says "Delta Chat
   to come").
 
 - **talk(1)** (`protocol = talk`): through chat-setup's talkd on the LAN

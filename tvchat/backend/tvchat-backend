@@ -2682,10 +2682,33 @@ class DeltaChatAdapter:
         if self.phase != "up":
             raise UserError("%s is not connected - Chat > Connect first" % self.account.display)
 
+    INVITE = re.compile(r"^(https://i\.delta\.chat/|OPENPGP4FPR:)", re.I)
+
+    def invite(self):
+        """Our invite link (SecureJoin): whoever opens it with `join` gets
+        a key exchange with us, after which both can write."""
+        self._need_up()
+        try:
+            return self.call("get_chat_securejoin_qr_code", self.acct, None)
+        except RpcError as e:
+            raise UserError(str(e))
+
     def join(self, target):
-        """Start (or find) the chat with an email address."""
+        """Start (or find) the chat with an email address, or join someone's
+        invite link (the key exchange runs in the background; its progress
+        shows in the chat)."""
         self._need_up()
         addr = target.strip()
+        if self.INVITE.match(addr):
+            try:
+                chat_id = self.call("secure_join", self.acct, addr)
+                info = self.call("get_basic_chat_info", self.acct, chat_id)
+                conv = self._conv(chat_id, info["name"], "direct" if info["chatType"] == "Single"
+                                  else "group")
+                self.chat.merge_history(conv, self._messages(conv, self._last_ids(chat_id)))
+            except RpcError as e:
+                raise UserError(str(e))
+            return conv
         if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", addr):
             raise UserError("a Delta Chat chat is started with an email address (%r is not one)"
                             % target)
@@ -2722,6 +2745,10 @@ class DeltaChatAdapter:
             mid = self.call("misc_send_text_message", self.acct, cid, text)
             msg = self._to_message(conv, self.call("get_message", self.acct, mid))
         except RpcError as e:
+            if "e2e encryption unavailable" in str(e):
+                raise UserError("no encryption key for %s yet: exchange an invite first "
+                                "(one side runs `tvchat-backend invite %s`, the other joins "
+                                "that link)" % (conv.title, self.account.id))
             raise UserError(str(e))
         self.chat.add_message(conv, msg, count=False)
         return msg.id
@@ -2921,6 +2948,18 @@ def cmd_convs(a):
     for acct in accts:
         for conv in acct.convs.values():
             sys.stdout.write(conv.wire())
+    return 0
+
+
+def cmd_invite(a):
+    """invite ACCOUNT: the Delta Chat invite link that lets someone start an
+    encrypted chat with this account (they join it; the core needs a key
+    exchange before it will send anything)."""
+    chat = _chat()
+    ad = chat.adapter(chat.account(a.account))
+    if not hasattr(ad, "invite"):
+        raise UserError("%s has no invite links" % a.account)
+    sys.stdout.write(ad.invite() + "\n")
     return 0
 
 
@@ -3231,6 +3270,7 @@ def build_parser():
     p = sub.add_parser("disconnect"); p.add_argument("account"); p.set_defaults(fn=cmd_disconnect)
     p = sub.add_parser("convs"); p.add_argument("account", nargs="?"); p.set_defaults(fn=cmd_convs)
     p = sub.add_parser("join"); p.add_argument("account"); p.add_argument("target"); p.set_defaults(fn=cmd_join)
+    p = sub.add_parser("invite"); p.add_argument("account"); p.set_defaults(fn=cmd_invite)
     p = sub.add_parser("part"); p.add_argument("conv"); p.set_defaults(fn=cmd_part)
     p = sub.add_parser("send"); p.add_argument("conv"); p.add_argument("text"); p.set_defaults(fn=cmd_send)
     p = sub.add_parser("answer"); p.add_argument("conv"); p.set_defaults(fn=cmd_answer)

@@ -84,6 +84,13 @@ sends whole lines,
 .B keys
 .I CONV TEXT
 keystrokes as typed (TEXT escaped as reply fields are).
+.PP
+.B invite
+.I ACCOUNT
+prints a Delta Chat invite link; the other side passes it to
+.B join
+(which otherwise takes an email address), and the two exchange the keys the
+core needs before it will send.
 Events:
 .B talk
 .I CONV STATE DETAIL

@@ -295,6 +295,14 @@ names were checked against `--openrpc` and the `deltachat-rpc-client` source).
 - **History:** the last 50 messages of each chat at connect; `history --before`
   past the ring loads 50 more from the core (the `history CONV before` event),
   so, unlike IRC's, Delta Chat's history persists.
+- **Invites (SecureJoin):** the core refuses to send to an address it has no
+  key for ("e2e encryption unavailable"), and a plain `join ADDRESS` makes no
+  key. Keys are exchanged by an invite link: `tvchat-backend invite ACCOUNT`
+  (`get_chat_securejoin_qr_code`) prints one, and `join ACCOUNT LINK`
+  (`https://i.delta.chat/#...` or `OPENPGP4FPR:...`) runs `secure_join`, which
+  opens the chat and finishes the handshake in the background (its progress
+  arrives as info lines). After that both sides can write; a `send` that is
+  refused for want of a key says so.
 - **Typed commands:** none yet; `/word` is refused, `//x` sends `/x`. `join`
   takes an email address and opens (or creates) the one-to-one chat; `part` is
   refused.

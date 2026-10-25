@@ -219,7 +219,15 @@ def handle(rid, method, p):
             WORLD["chats"][str(cid)] = {"id": cid, "name": ct["displayName"],
                                         "chatType": "Single", "contacts": [p[1]]}
             return reply(rid, cid)
+        if method == "get_chat_securejoin_qr_code":
+            return reply(rid, "https://i.delta.chat/#FAKEINVITE")
+        if method == "secure_join":
+            cid = max([int(k) for k in WORLD["chats"]] + [9]) + 1
+            WORLD["chats"][str(cid)] = {"id": cid, "name": "Inviter", "chatType": "Single"}
+            return reply(rid, cid)
         if method == "misc_send_text_message":
+            if WORLD.get("no_keys"):
+                return reply(rid, error="Failed to create send jobs: e2e encryption unavailable Msg#1")
             mid = max([int(k) for k in WORLD["messages"]] + [99]) + 1
             WORLD["messages"][str(mid)] = {
                 "chatId": p[1], "fromId": 1, "text": p[2], "state": 26,

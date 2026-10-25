@@ -1637,6 +1637,22 @@ class TestDeltaChat(DeltaBase):
         self.assertIn("email address", body.decode())
         self.assertEqual(self.verb("part", "delta/10")[0], 1)
 
+    def test_invites_give_the_keys_to_write(self):
+        self.setup_dc(world=dict(DC_WORLD, no_keys=True))
+        self.up()
+        st, body = self.verb("invite", "delta")
+        self.assertEqual((st, body), (0, b"https://i.delta.chat/#FAKEINVITE\n"))
+        # without a key the core refuses; the user is told what to do
+        st, body = self.verb("send", "delta/10", "hi")
+        self.assertEqual(st, 1)
+        self.assertIn("exchange an invite", body.decode())
+        # joining a link starts the key exchange and opens the chat
+        st, body = self.verb("join", "delta", "https://i.delta.chat/#FAKEINVITE")
+        self.assertEqual(st, 0)
+        self.assertEqual(self.requests("secure_join")[0]["params"],
+                         [1, "https://i.delta.chat/#FAKEINVITE"])
+        self.assertEqual(self.acct.convs[body.decode().strip()].title, "Inviter")
+
     def test_not_connected_refuses(self):
         self.setup_dc()
         st, body = self.verb("join", "delta", "bob@example.org")

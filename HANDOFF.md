@@ -25,24 +25,29 @@ is next, what was decided, and the live setup.
   mail-setup checkout, everything in it already rebased into POSIX) is safe to
   delete.
 
-## Next: Delta Chat, step 2 (a real mailbox)
+## Next: Delta Chat, step 3 (the UI)
 
-Step 1 is built on branch `claude/delta-chat-c713de` (not merged; stopped for
-Chris's review): `DeltaChatAdapter` in `tvchat/backend/tvchat-backend` runs
-the official `deltachat-rpc-server` (2.65.0 checked) and speaks JSON-RPC to it;
-how it works is in [tvchat/DESIGN.md](tvchat/DESIGN.md) "Delta Chat adapter",
-what is left in [tvchat/TO-DO.txt](tvchat/TO-DO.txt) item 1. `chat_unit` passes
-(92 tests: the adapter against a stub core, and the real core up to "needs a
-password"). The C++ side is unchanged and untried with it.
+Steps 1-2 are on branch `claude/delta-chat-c713de` (not merged; for Chris's
+review): `DeltaChatAdapter` in `tvchat/backend/tvchat-backend` runs the
+official `deltachat-rpc-server` (2.65.0) and speaks JSON-RPC to it; how it
+works is in [tvchat/DESIGN.md](tvchat/DESIGN.md) "Delta Chat adapter", what is
+left in [tvchat/TO-DO.txt](tvchat/TO-DO.txt) item 1. `chat_unit` passes (93
+tests, stub core plus the real one). **Live on cpbee, Oct 24:** two test
+mailboxes `delta@` / `delta2@cpbee.cmnet` (Unix users; passwords in
+`/root/delta-passwords` on cpbee) set up, invite exchanged, encrypted messages
+both ways, read marks. The C++ side is unchanged and untried with it.
 
-- **Needed from Chris:** which dedicated address on cpbee, and whether
-  chrispollitt/POSIX's mail-setup creates the mailbox or it is made by hand.
-  Then: install the core on cmlaptop (`pip install deltachat-rpc-server`, see
-  INSTALL.md), put the password in `~/.netrc`, and try `tvchat-backend` with a
-  `[account:delta]` for real (two addresses to talk to each other, or Delta
-  Chat on a phone).
-- Step 3: the UI (Join asks for an address, "Delta Chat to come" texts go,
-  `e2e_regress` case with the stub core).
+- cpbee was changed by a temporary script (`/tmp/delta-mailboxes.sh`, not in
+  git): users, `cpbee.cmnet` in Postfix `mydestination`, a Dovecot auth
+  socket (`conf.d/96-delta-submission.conf`), Postfix submission on 587 (STARTTLS
+  + login), 587 in `lan0-tcp-ports`. This belongs in chrispollitt/POSIX
+  mail-setup (TO-DO item 1). Lesson: the script's `umask 077` leaked and
+  made the drop-in unreadable, which broke all local delivery for a few
+  minutes - fixed by `chmod 644`; check file modes after `sudo` scripts.
+- Account settings that were needed: `imap_user` / `smtp_user` = the Unix
+  name, `smtp_port = 587`, `verify = false` (self-signed).
+- Step 3: the UI (Join asks for an address or an invite link, Chat > Invite,
+  the "Delta Chat to come" texts go, an `e2e_regress` case with the stub core).
 
 After that: tvchat/TO-DO.txt (small things), tvmail/TO-DO.txt (periodic pull
 first), and the open bugs in tvmail/BUGS.md.
