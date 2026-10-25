@@ -1701,6 +1701,17 @@ class TestDeltaChat(DeltaBase):
         self.addCleanup(os.environ.pop, "TVCHAT_PASS_DELTA", None)
         self.assertEqual(find("delta", "me@example.org", "box", "me")[0], "from-env")
 
+    def test_netrc_with_two_logins_on_one_machine(self):
+        # Python's netrc module keeps only the last entry per machine
+        rc = self.home / ".netrc"
+        rc.write_text('# mailboxes\nmachine mail.example.org login one@example.org password p-one\nmachine mail.example.org\n  login two@example.org\n  password "p two"\ndefault login anon password nope\n')
+        rc.chmod(0o600)
+        w = cb.find_password_where
+        self.assertEqual(w("a", "mail.example.org", "one@example.org", "imap"), ("p-one", "~/.netrc"))
+        self.assertEqual(w("a", "MAIL.example.org", "two@example.org", "imap"), ("p two", "~/.netrc"))
+        self.assertEqual(w("a", "mail.example.org", "three@example.org", "imap"), (None, None))
+        self.assertEqual(w("a", "other.example.org", "one@example.org", "imap"), (None, None))
+
     def test_the_first_run_sets_the_mailbox_up(self):
         os.environ["TVCHAT_PASS_DELTA"] = "s3cret"
         self.addCleanup(os.environ.pop, "TVCHAT_PASS_DELTA", None)
@@ -1799,6 +1810,13 @@ class TestDeltaChatRealCore(DeltaBase):
         self.core = os.environ.get("TVCHAT_TEST_DC_RPC") or shutil.which("deltachat-rpc-server")
         if not self.core:
             self.skipTest("deltachat-rpc-server is not installed")
+        try:                             # a pip wrapper that cannot exec its binary (Cygwin) is no core
+            ok = subprocess.run([self.core, "--version"], stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, timeout=20).returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            ok = False
+        if not ok:
+            self.skipTest("%s does not run" % self.core)
 
     def test_it_starts_and_wants_a_password(self):
         self.dir.mkdir(parents=True)

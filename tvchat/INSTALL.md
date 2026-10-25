@@ -78,9 +78,11 @@ Windows path for its data directory).
 the mailbox users and the authenticated submission port Delta Chat needs (it is
 a step of the `mail-setup.sh` wizard); then on each client, once tvchat is
 installed, `chrispollitt/POSIX`'s `chat-setup/scripts/configure-tvchat-delta.sh
---addr delta@your.domain --host mailhost --self-signed --autoconnect` installs
-the core, writes the account into `tvchat.conf`, stores the password in
-`~/.netrc` and connects once to prove it. What follows is what those do.
+--addr delta@your.domain --autoconnect` installs
+the core, works out the mail server (the address's domain, or its first label
+if that is not a host name) and whether its certificate is self-signed, writes
+the account into `tvchat.conf`, finds the password in `~/.netrc` (or asks for it)
+and connects once to prove it. `--host` and `--self-signed` override its guesses. What follows is what those do.
 
 Use a **dedicated** mailbox: the core moves chat mail into its own folder and
 may delete it from the server. The first connect sets the account up (the

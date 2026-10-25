@@ -538,14 +538,52 @@ def find_password_where(account_id, host, login, scheme):
         pw = None
     if pw:
         return pw, "~/.mu-tickets"
-    try:
-        import netrc
-        auth = netrc.netrc(os.path.expanduser("~/.netrc")).authenticators(host)
-        if auth and auth[2] and auth[0] == login:
-            return auth[2], "~/.netrc"
-    except (OSError, netrc.NetrcParseError):
-        pass
+    pw = _netrc_password(os.path.expanduser("~/.netrc"), host, login)
+    if pw:
+        return pw, "~/.netrc"
     return None, None
+
+
+def _netrc_password(path, host, login):
+    """The password of `machine HOST login LOGIN` in a netrc file, or None.
+    Python's netrc module keeps one entry per machine - the last - so two
+    logins on one host (a mail server with two mailboxes) lose the first;
+    this reads every entry."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return None
+    toks = []
+    for ln in text.splitlines():
+        if ln.lstrip().startswith("#"):
+            continue
+        try:
+            toks += shlex.split(ln, comments=True, posix=True)
+        except ValueError:
+            continue
+    entry, i = {}, 0
+    entries = [entry]
+    while i < len(toks):
+        t = toks[i]
+        if t == "machine" and i + 1 < len(toks):
+            entry = {"machine": toks[i + 1]}
+            entries.append(entry)
+            i += 2
+        elif t == "default":
+            entry = {"machine": None}
+            entries.append(entry)
+            i += 1
+        elif t in ("login", "account", "password", "port") and i + 1 < len(toks):
+            entry[t] = toks[i + 1]
+            i += 2
+        else:
+            i += 1
+    for e in entries:
+        m = e.get("machine")
+        if m and m.lower() == host.lower() and e.get("login") == login and e.get("password"):
+            return e["password"]
+    return None
 
 
 def find_delta_password(account_id, addr, host, login):
