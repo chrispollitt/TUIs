@@ -1,60 +1,59 @@
 # Handoff
 
 Where the work stands, for whoever picks it up next (Claude or Chris). Updated
-Oct 23, 2026. Facts about the code live in the code and in the files listed
+Oct 24, 2026. Facts about the code live in the code and in the files listed
 under "Where things are"; this file is what they do not say: the state, what
 is next, what was decided, and the live setup.
 
 ## State
 
-- **`main`** holds everything built so far: tvmail, tvchat (IRC, talk(1)),
-  `tvcommon/`, the table-style Servers and Folders panes, the aligned menus and
-  key lines, the app-named `--debug` / `--trace` logs, and the fix for the
-  flaky e2e case (tvmail BUGS #47). **Not pushed** (`main` is ahead of
-  `origin/main`; Chris pushes after his own manual testing).
-- **Installed on cmlaptop** (`/usr/local/bin`): the current `main` (Oct 23, after
-  the UI alignment and the docs tidy-up). Reinstall with `./build.sh &&
-  ./install.sh` in `tvchat/` and `tvmail/`.
-- **Tests:** tvchat 5/5 and tvmail 7/7 layers pass on Cygwin (tvchat's
-  `e2e_regress` ~2 min, tvmail's ~3 min). Both full suites passed on this `main` before the install.
-- **Branches** merged into `main` and safe to delete: `claude/tvchat-servers-
-  table-83c863`, `claude/ui-align-2d1c4d`, `menu-order`, `log-names`,
-  `tvmail-dead-count`, `flaky-e2e`, `docs-tidy`. The old `tvmail-v1.2.0` tag
-  marks the last state before chat.
+- **`main`** holds everything built so far: tvmail, tvchat (IRC, talk(1),
+  Delta Chat), `tvcommon/`, the table-style panes, the aligned menus and key
+  lines, the app-named `--debug` / `--trace` logs. **Pushed** (Oct 24), as is
+  chrispollitt/POSIX with `mail-setup/scripts/configure-delta.sh` and
+  `chat-setup/scripts/configure-tvchat-delta.sh`.
+- **Installed on cmlaptop** (`/usr/local/bin`): `main` of Oct 23, **without**
+  Delta Chat. Reinstall with `./build.sh && ./install.sh` in `tvchat/` and
+  `tvmail/` (and add the Delta Chat account: see below).
+- **Tests:** tvchat 5/5 layers pass on Cygwin (Oct 24, with the real core in
+  `$TVCHAT_TEST_DC_RPC`), mail-setup shell tests 232, chat-setup 110. tvmail's
+  7/7 last ran Oct 23, before this work (it was not touched).
+- **Branches** merged into `main` and safe to delete: `claude/delta-chat-c713de`
+  and the older `claude/tvchat-servers-table-83c863`, `claude/ui-align-2d1c4d`,
+  `menu-order`, `log-names`, `tvmail-dead-count`, `flaky-e2e`, `docs-tidy`. The
+  old `tvmail-v1.2.0` tag marks the last state before chat.
 - Chris's untracked `tvcommon/third_party/POSIX.stale-20261021` (an old
   mail-setup checkout, everything in it already rebased into POSIX) is safe to
   delete.
 
-## Next: the clean install on cmdesktop, then merge
-
-Delta Chat is built and tried live, on branch `claude/delta-chat-c713de` (not
-merged; for Chris's review): the adapter (tvchat/DESIGN.md "Delta Chat
-adapter"), invite links, and the UI (Chat > Invite..., Join takes an address or
-a link, `delta_invite_join_and_send` in e2e_regress). Live on cpbee, Oct 24:
-two mailboxes `delta@` / `delta2@cpbee.cmnet` swapped an invite and wrote to
-each other, and the client script connected a fresh account in one command.
+## Next: the clean install on cmdesktop (client side only)
 
 Chris's rule (Oct 24): **these apps need a lot of setup, so everything should be
-automated and painless**; Chris will do a clean install on cmdesktop to test the
-whole path. The pieces, all in chrispollitt/POSIX (committed on `main`, not
-pushed):
+automated and painless.** Chris does a clean install on cmdesktop to test the
+whole path, client side only: the master (cpbee) already has the Delta Chat
+mailboxes `delta@` and `delta2@cpbee.cmnet` (Unix users; passwords in
+`/root/delta-passwords` on cpbee). On cmdesktop that means: get the TUIs and
+POSIX repos, `./build.sh && ./install.sh` in `tvchat/`, then
+`chat-setup/scripts/configure-tvchat-delta.sh --addr delta@cpbee.cmnet --host cpbee --self-signed --autoconnect` (installs the core, writes
+`tvchat.conf`, asks for the password, connects once). Then Chat > Invite... on
+one side and Chat > Join... on the other (the keys are swapped once).
 
-- master: `mail-setup/scripts/configure-delta.sh` (mailbox users, `cpbee.cmnet`
-  local in Postfix, the Dovecot auth socket, Postfix submission on 587, the
-  router's port list) - also a wizard step of `mail-setup.sh`. Replaces the
-  temporary `/tmp/delta-mailboxes.sh` run on cpbee (which did the same by hand;
-  re-running the script there is safe and swaps `96-delta-submission.conf` for
-  `96-mail-setup-submission.conf`).
-- client: `chat-setup/scripts/configure-tvchat-delta.sh --addr ... --host ...`
-  (core via pip --user, `tvchat.conf`, `~/.netrc`, a real connect).
-- tvchat's `~/.netrc` lookup for Delta Chat accepts the mail host or the
-  address's domain, and the bare login or the full address.
-- To check on the clean install: pip installing the core where `pip --user`
-  puts scripts off `PATH` (the script then writes `rpc_server =` with the path),
-  Cygwin (no PyPI wheel for the core: needs the Windows release binary), a
-  firewall that drops 587.
-- Left: tvchat's man page for the UI, the Proto column shows "delta" for
-  deltachat, Chat > Leave for Delta Chat, attachments (tvchat/TO-DO.txt item 1).
+Every manual step Chris has to take there is a bug in a script: fix the script,
+not the notes. Things the live runs could not show: `pip install --user` putting
+the core off `PATH` on Linux (the script then writes `rpc_server =` with the
+path), the OS cmdesktop runs, a firewall that drops 587 on the master (cpbee:
+`setup-router.sh fw` reads `/etc/router-setup/lan0-tcp-ports`).
+
+How Delta Chat works: tvchat/DESIGN.md "Delta Chat adapter"; the server side
+is mail-setup's `configure-delta.sh` (also a step of the `mail-setup.sh`
+wizard) - cpbee still runs the temporary script's setup, re-running
+`configure-delta.sh` there is safe. Lesson from that script: a `umask` that
+leaks made a root-owned Dovecot file unreadable and stopped all local delivery
+for minutes - check file modes after `sudo` scripts.
+
+Left of Delta Chat (tvchat/TO-DO.txt item 1): Chat > Leave (refused today),
+attachments, creating groups, the man page for Invite / Join. The Proto column
+saying "delta" stays (Chris likes it short).
 
 After that: tvchat/TO-DO.txt (small things), tvmail/TO-DO.txt (periodic pull
 first), and the open bugs in tvmail/BUGS.md.

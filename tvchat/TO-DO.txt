@@ -13,7 +13,7 @@ Next
   - UI for invites (Chat > Invite, Join takes a link).
   - Done (step 3): Chat > Invite..., Join takes an address or a link, the
     "to come" texts are gone, `delta_invite_join_and_send` in e2e_regress. Still to
-    do: README / man page for tvchat itself, the Proto column shows "delta".
+    do: the man page (tvchat.1) for Invite / Join.
   - Chat > Leave (`part`) is refused: leave a group / delete a chat.
   - Not in the first version: attachments (shown as `[attachment: NAME]`),
     verification QR codes and invite links, multi-device setup, reactions,
