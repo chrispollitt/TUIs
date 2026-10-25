@@ -131,7 +131,10 @@ chat with whoever wrote the message you are reading (it opens the chat, or
 mails them an invitation), and when a message holds a Delta Chat invite link,
 **Message > Open chat invite** hands it to tvchat, which asks "Accept?". The two
 programs only leave one-line files in `~/.local/state/tvchat/requests`; neither
-needs the other.
+needs the other. The other way round, **Chat > Invite...** has a field "Also mail it
+to (through tvmail)": the invitation goes out from your ordinary mail account, to
+the person's ordinary address, which is how to reach someone whose Delta Chat
+address you do not know.
 
 ---
 

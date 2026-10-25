@@ -273,6 +273,10 @@ def delta_invite_join_and_send(opts):
                         "display = Delta\naddr = me@example.org\nrpc_server = %s\n" % core)
         t.env["TVCHAT_CONF"] = str(conf)
         t.core = d
+        t.tvmail_log = t.tmp / "tvmail.log"
+        stub = t.bindir / "tvmail-backend"
+        stub.write_text("#!/bin/sh\necho \"$@\" >> %s\ncat >> %s\nexit 0\n" % (t.tvmail_log, t.tvmail_log))
+        stub.chmod(0o755)
     tv = Tv(opts, setup=setup)
     c = Case(tv)
     started(tv, c)
@@ -281,7 +285,17 @@ def delta_invite_join_and_send(opts):
     tv.send(alt("c"), "i", settle=0.8)
     c.check(tv.wait("https://i.delta.chat/#FAKEINVITE", 5),
             "Chat > Invite... did not show the invite link")
-    tv.send("Enter", settle=0.5)
+    # the optional link to tvmail: the same dialog can mail the link through it
+    c.check(tv.has("mail it to"), "the Invite dialog has no 'mail it' field although tvmail is there")
+    tv.send("friend@example.net", "Enter", settle=1.0)
+
+    def mailed():
+        try:
+            return "send --to friend@example.net" in tv.tvmail_log.read_text()
+        except OSError:
+            return False
+    c.check(tv.wait(mailed, 6), "the invitation was not handed to tvmail-backend send")
+    c.check("FAKEINVITE" in tv.tvmail_log.read_text(), "the mail sent through tvmail does not hold the link")
     tv.send(alt("c"), "v", settle=0.8)
     c.check(tv.wait("No chat invitations are waiting.", 4), "Chat > Accept invite... did not say there are none")
     tv.send("Enter", settle=0.5)

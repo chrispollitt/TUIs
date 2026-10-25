@@ -46,5 +46,6 @@ Setup and integration
    the running backend. Passwords stay out of the file. tvchat wants the same
    (tvchat/TO-DO.txt 13): share it in tvcommon.
 25 tvmail and tvchat talking to each other - OPTIONAL (tvchat/TO-DO.txt 12).
-   Done (Oct 25): Message > Chat with sender and Open chat invite. Still to do:
-   tvchat sending an invite link through tvmail's account.
+   Done (Oct 25): Message > Chat with sender and Open chat invite, and tvchat's
+   Invite mailing the link through tvmail's account. Still to do: tvmail starting
+   a compose window when tvchat asks to "write an email to this contact".

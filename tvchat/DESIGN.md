@@ -332,6 +332,14 @@ names were checked against `--openrpc` and the `deltachat-rpc-client` source).
   deletes the file and tells the UI with a `notice TEXT` event (the status
   line). With no connected Delta Chat account a request waits. A bad or odd
   request is reported and dropped. Neither program needs the other.
+- **Mailing the invitation through tvmail** (the other direction, also optional):
+  `invite-mail ACCOUNT ADDRESS` runs `tvmail-backend send --to ADDRESS --subject
+  ...` (found on PATH, else /usr/local/bin, ~/bin, ~/.local/bin; a `run_in_thread`
+  job) with the link in the body, so the mail goes out through the user's
+  ordinary mail account and lands in the recipient's ordinary inbox, where their
+  tvmail offers Message > Open chat invite. `has-tvmail` says whether it can be
+  used; the Invite dialog shows its "mail it to" field only then. The result is
+  told in the server window.
 - **Leave:** `part` on a Delta Chat conversation leaves a group (`leave_group`; the
   others are told) and then `delete_chat`s it, and removes the conversation. The
   UI asks first (Yes / No), since the history goes.

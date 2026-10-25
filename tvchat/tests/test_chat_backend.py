@@ -19,6 +19,7 @@ import textwrap
 import threading
 import time
 import unittest
+import unittest.mock
 import base64
 import io
 import logging
@@ -2013,6 +2014,7 @@ class TestDeltaInvitations(DeltaBase):
 
     def setUp(self):
         super().setUp()
+        self._path = os.environ["PATH"]
         self.mail = FakeMail()
         self.addCleanup(self.mail.close)
         os.environ["TVCHAT_PASS_DELTA"] = "pw"
@@ -2132,6 +2134,52 @@ class TestDeltaInvitations(DeltaBase):
         st, body = self.verb("accept-invite", "delta", "carol@example.org")
         self.assertEqual(st, 0)
         self.assertEqual(self.requests("secure_join")[0]["params"], [1, link])
+
+    def stub_tvmail(self):
+        """A tvmail-backend on PATH that records its arguments and stdin, and fails
+        while the file `fail` exists."""
+        d = self.tmp / "tvmailbin"
+        d.mkdir()
+        self.log = self.tmp / "tvmail.log"
+        self.fail = self.tmp / "fail"
+        stub = d / "tvmail-backend"
+        stub.write_text("#!/bin/sh\necho \"$@\" >> %s\ncat >> %s\n"
+                        "[ -e %s ] && { echo 'SMTP server said no'; exit 1; }\nexit 0\n"
+                        % (self.log, self.log, self.fail))
+        stub.chmod(0o755)
+        os.environ["PATH"] = str(d) + os.pathsep + os.environ["PATH"]
+        self.addCleanup(os.environ.__setitem__, "PATH", os.environ["PATH"].split(os.pathsep, 1)[1])
+
+    def test_the_invitation_can_be_mailed_through_tvmail(self):
+        self.setup_inv()
+        self.up()
+        self.assertEqual(self.verb("has-tvmail")[0], 0)
+        self.stub_tvmail()
+        self.assertEqual(self.verb("has-tvmail"), (0, b"yes\n"))
+        self.assertEqual(self.verb("invite-mail", "delta", "friend@example.net"), (0, b""))
+        self.turn(lambda: any("invitation mailed to friend@example.net through tvmail" in m.text
+                              for m in self.acct.convs["delta/*"].history))
+        text = self.log.read_text()
+        self.assertIn("send --to friend@example.net --subject Chat invitation from me@example.org", text)
+        self.assertIn("https://i.delta.chat/#FAKEINVITE", text)
+        # tvmail refuses: the reason is told
+        self.fail.write_text("")
+        self.verb("invite-mail", "delta", "other@example.net")
+        self.turn(lambda: any("tvmail could not send the invitation to other@example.net: SMTP server said no"
+                              in m.text for m in self.acct.convs["delta/*"].history))
+        # a bad address is refused up front
+        self.assertEqual(self.verb("invite-mail", "delta", "nobody")[0], 1)
+
+    def test_without_tvmail_the_option_is_off_and_says_so(self):
+        self.setup_inv()
+        self.up()
+        os.environ["PATH"] = "/nonexistent-dir"                      # no tvmail-backend anywhere on PATH
+        self.addCleanup(os.environ.__setitem__, "PATH", self._path)
+        with unittest.mock.patch.object(cb.os.path, "isfile", return_value=False):
+            self.assertEqual(self.verb("has-tvmail"), (0, b"no\n"))
+            st, body = self.verb("invite-mail", "delta", "friend@example.net")
+        self.assertEqual(st, 1)
+        self.assertIn("tvmail is not installed", body.decode())
 
     def test_invite_helpers(self):
         self.assertEqual(cb.invite_names("https://i.delta.chat/#X&v=3&a=a%2Bb%40ex.org&n="), "a+b@ex.org")

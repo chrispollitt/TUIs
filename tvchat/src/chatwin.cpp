@@ -1606,10 +1606,32 @@ void inviteDialog()
         messageBox(mfError | mfOKButton, "%s", err.c_str());
         return;
     }
-    messageBox(mfInformation | mfOKButton,
-               "Give this link to the person you want to write to; they use Chat > Join...\n\n%s\n\n"
-               "It is also in %s's server window (select it, Ctrl-Ins copies).",
-               trimmed(body).c_str(), as[i].display.c_str());
+    // The link, and - if tvmail is installed - a box to mail it through tvmail's account.
+    std::string link = trimmed(body), yes;
+    bool tvmail = ask("has-tvmail", yes, err) && trimmed(yes) == "yes";
+    TDialog *d = new TDialog(TRect(0, 0, 70, tvmail ? 17 : 13), "Invite");
+    d->options |= ofCentered;
+    d->insert(new TStaticText(TRect(3, 2, 67, 4), "Give this link to the person you want to write to;\nthey use Chat > Join..."));
+    d->insert(new TStaticText(TRect(3, 5, 67, 8), link.c_str()));
+    TInputLine *il = nullptr;
+    int by = 9;
+    if (tvmail)
+    {
+        il = new TInputLine(TRect(3, 11, 67, 12), 200);
+        d->insert(il);
+        d->insert(new TLabel(TRect(2, 10, 67, 11), "Also ~m~ail it to (through tvmail; blank = no)", il));
+        by = 13;
+    }
+    d->insert(new TStaticText(TRect(3, by - 1, 67, by), ""));
+    d->insert(new TButton(TRect(29, by, 41, by + 2), "O~K~", cmOK, bfDefault));
+    d->selectNext(False);
+    if (il)
+        il->select();
+    TProgram::deskTop->execView(d);
+    std::string to = il && il->data ? trimmed(il->data) : std::string();
+    TObject::destroy(d);
+    if (!to.empty() && !ask("invite-mail " + shq(as[i].id) + " " + shq(to), body, err))
+        messageBox(mfError | mfOKButton, "%s", err.c_str());
     pollNow();
 }
 

@@ -2256,6 +2256,31 @@ def send_invite_mail(p, to, link):
             pass
 
 
+def find_tvmail_backend():
+    """tvmail's helper, if tvmail is installed (the link between the two is optional)."""
+    found = shutil.which("tvmail-backend")
+    if found:
+        return found
+    for d in ("/usr/local/bin", "~/bin", "~/.local/bin"):
+        path = os.path.join(os.path.expanduser(d), "tvmail-backend")
+        if os.path.isfile(path) and os.access(path, os.X_OK):
+            return path
+    return None
+
+
+def mail_through_tvmail(tvmail, to, sender, link):
+    """Send the invitation as an ordinary mail through tvmail's own account (a
+    thread); the reason in the exception if tvmail refuses."""
+    body = ("%s invites you to chat, end-to-end encrypted, with Delta Chat.\n\n"
+            "In tvchat: Chat > Join... and paste this link (or, in tvmail, Message > Open\n"
+            "chat invite).  In another Delta Chat app, open it:\n\n%s\n" % (sender, link))
+    p = subprocess.run([tvmail, "send", "--to", to, "--subject", "Chat invitation from %s" % sender],
+                       input=body.encode("utf-8"), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                       timeout=90)
+    if p.returncode != 0:
+        raise RuntimeError((p.stdout.decode("utf-8", "replace").strip() or "tvmail-backend send failed")[:300])
+
+
 class RpcError(Exception):
     """The Delta Chat core answered a request with an error, or not at all."""
 
@@ -2977,6 +3002,31 @@ class DeltaChatAdapter:
         self.loop.run_in_thread(lambda: send_invite_mail(p, addr, link), done)
         return conv
 
+    def invite_mail(self, addr):
+        """Mail our invitation link to addr through tvmail (its account, its SMTP) -
+        optional: only when tvmail is installed.  The result is told in the server
+        window."""
+        self._need_up()
+        addr = addr.strip()
+        if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", addr):
+            raise UserError("%r is not an email address" % addr)
+        tvmail = find_tvmail_backend()
+        if tvmail is None:
+            raise UserError("tvmail is not installed (it would send the mail)")
+        link = self.invite()
+        conv = self.server_conv()
+        self.system(conv, "mailing the invitation to %s through tvmail..." % addr)
+        gen = self.gen
+
+        def done(res, err):
+            if gen != self.gen:
+                return
+            if err is not None:
+                self.system(conv, "tvmail could not send the invitation to %s: %s" % (addr, err))
+            else:
+                self.system(conv, "invitation mailed to %s through tvmail" % addr)
+        self.loop.run_in_thread(lambda: mail_through_tvmail(tvmail, addr, self.addr, link), done)
+
     def _watch_invites(self):
         gen = self.gen
         if self.phase != "up":
@@ -3549,6 +3599,19 @@ def cmd_group_rename(a):
     return 0
 
 
+def cmd_invite_mail(a):
+    """invite-mail ACCOUNT ADDRESS: mail the invite link through tvmail (optional)."""
+    chat = _chat()
+    _delta(chat, a.account).invite_mail(a.address)
+    return 0
+
+
+def cmd_has_tvmail(a):
+    """has-tvmail: 'yes' or 'no' - whether the optional link to tvmail can be used."""
+    sys.stdout.write("yes\n" if find_tvmail_backend() else "no\n")
+    return 0
+
+
 def cmd_join(a):
     chat = _chat()
     acct = chat.account(a.account)
@@ -3858,6 +3921,8 @@ def build_parser():
     p = sub.add_parser("join"); p.add_argument("account"); p.add_argument("target"); p.set_defaults(fn=cmd_join)
     p = sub.add_parser("invite"); p.add_argument("account"); p.set_defaults(fn=cmd_invite)
     p = sub.add_parser("invites"); p.set_defaults(fn=cmd_invites)
+    p = sub.add_parser("invite-mail"); p.add_argument("account"); p.add_argument("address"); p.set_defaults(fn=cmd_invite_mail)
+    p = sub.add_parser("has-tvmail"); p.set_defaults(fn=cmd_has_tvmail)
     p = sub.add_parser("new-group"); p.add_argument("account"); p.add_argument("name"); p.add_argument("addrs", nargs="*"); p.set_defaults(fn=cmd_new_group)
     p = sub.add_parser("group-add"); p.add_argument("conv"); p.add_argument("addr"); p.set_defaults(fn=cmd_group_add)
     p = sub.add_parser("group-remove"); p.add_argument("conv"); p.add_argument("addr"); p.set_defaults(fn=cmd_group_remove)

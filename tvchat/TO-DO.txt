@@ -39,10 +39,10 @@ Smaller things
 
 12 tvmail and tvchat talking to each other - OPTIONAL. Done (Oct 25): tvmail's
    Message > Chat with sender and Open chat invite hand a request to tvchat
-   through a directory (DESIGN.md "The optional tvmail link"). Still to do the
-   other way: tvchat's Invite could mail the link through tvmail's account to
-   someone's ordinary address, and a tvchat conversation could "write an email
-   to this contact" in tvmail. Never required, never the Delta Chat mailbox
+   through a directory (DESIGN.md "The optional tvmail link"), and tvchat's
+   Invite can mail the link through tvmail's account. Not done: a tvchat
+   conversation could "write an email to this contact" in tvmail (a request
+   directory the other way). Never required, never the Delta Chat mailbox
    itself (that stays dedicated).
 13 Edit the config in the app - a window for tvchat.conf (accounts, their
    servers and options) with a Verify (parse it, then try each account's login
