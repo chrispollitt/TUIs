@@ -50,6 +50,8 @@ const ushort cmSortUnread = 2038;   //             unread first
 const ushort cmSortReverse = 2039;  // flip the current order
 const ushort cmClearFilter = 2040;  // drop the type-to-filter text
 const ushort cmFilterChanged = 2041; // broadcast: list view rebuilt (title refresh)
+const ushort cmChatWith = 2050;     // Message > Chat with sender (asks tvchat, if installed)
+const ushort cmChatInvite = 2051;   // Message > Open chat invite (hands a Delta Chat link to tvchat)
 const ushort cmOutOfOffice = 2042;  // File > Out of office... (Sieve vacation reply)
 
 // ------------------------------------------------------ tvmail-backend ---

@@ -4,11 +4,12 @@ it is likely to be done. Defects live in BUGS.md, not here.
 Next
 1 Delta Chat, what is left (tvchat/DESIGN.md "Delta Chat adapter"; tried live on
   cpbee with two mailboxes, and on cmlaptop and cmdesktop):
-  - Chat > Leave (`part`) is refused: leave a group / delete a chat.
   - Attachments (shown as `[attachment: NAME]`), reactions, multi-device setup,
     a chat renamed on another device (the title is refreshed but no event tells the
-    UI), a new group or "add member" (Join takes an address or a link only).
-  - The man page (tvchat.1) for Invite / Accept invite / Join.
+    UI), a group's picture and description, broadcast channels.
+  - Groups: the member picker could list the people you already hold keys for
+    (Add member asks for an address today); Leave deletes the chat but does not
+    block the sender, so a new message may come back as a request.
   - Invitations by mail need the account's mail servers (imap_server /
     smtp_server, or the address's domain): ask the core for its transport when
     they are not in tvchat.conf.
@@ -36,13 +37,13 @@ Smaller things
 11 Check the native Windows (mingw) .exe on Windows: it cross-compiles and
   links, with chat greyed out, but has not been run since the split.
 
-12 tvmail and tvchat talking to each other - OPTIONAL, used only when both are
-   installed, there to make Delta Chat setup easier. Ideas: tvchat's Invite
-   could mail the link to someone's ordinary address through tvmail's account; a
-   tvmail message holding an invite link could offer "Open in tvchat" (via a
-   drop file the tvchat backend watches, so the two never share a Delta Chat
-   core); "chat with the sender" / "write to this contact" between the two.
-   Never required, never the Delta Chat mailbox itself (that stays dedicated).
+12 tvmail and tvchat talking to each other - OPTIONAL. Done (Oct 25): tvmail's
+   Message > Chat with sender and Open chat invite hand a request to tvchat
+   through a directory (DESIGN.md "The optional tvmail link"). Still to do the
+   other way: tvchat's Invite could mail the link through tvmail's account to
+   someone's ordinary address, and a tvchat conversation could "write an email
+   to this contact" in tvmail. Never required, never the Delta Chat mailbox
+   itself (that stays dedicated).
 13 Edit the config in the app - a window for tvchat.conf (accounts, their
    servers and options) with a Verify (parse it, then try each account's login
    without connecting for real) and a Reload that applies it to the running

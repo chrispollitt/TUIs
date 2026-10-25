@@ -3014,6 +3014,19 @@ class DeltaChatAdapter:
                 inv["uids"].append(uid)
         self.scan_timer = self.loop.call_later(self.INVITE_POLL, self._watch_invites)
 
+    def add_invite(self, link):
+        """An invitation that came another way (tvmail found the link in a mail
+        and dropped it in the requests directory): it is offered like the
+        others, from the address the link names."""
+        sender = invite_names(link)
+        if not sender:
+            raise UserError("that invite link names no address")
+        inv = self.invites.get(sender.lower())
+        if inv is None or inv["link"] != link:
+            self.invites[sender.lower()] = {"from": sender, "link": link, "uids": []}
+            self.system(self.server_conv(), "%s invites you to chat - Chat > Accept invite..." % sender)
+            self.chat.events.push("invite", self.account.id, sender)
+
     def pending_invites(self):
         return [inv["from"] for inv in self.invites.values()]
 
@@ -3044,7 +3057,23 @@ class DeltaChatAdapter:
                                     "%s: removing the invitation mail failed: %s", self.account.id, err))
 
     def part(self, conv):
-        raise UserError("tvchat cannot leave or delete a Delta Chat chat yet")
+        """Chat > Leave: a group is left (the others are told), then the chat
+        and its messages are deleted from this device.  The UI has asked first."""
+        self._need_up()
+        if conv.kind == "server":
+            raise UserError("the server window cannot be left")
+        cid = int(conv.target)
+        try:
+            if conv.kind == "group":
+                try:
+                    self.call("leave_group", self.acct, cid)
+                except RpcError as e:        # already out of it: carry on and delete
+                    _log.debug("%s: leave_group: %s", self.account.id, e)
+            self.call("delete_chat", self.acct, cid)
+        except RpcError as e:
+            raise UserError(str(e))
+        self.requests.discard(cid)
+        self.chat.remove_conv(conv)
 
     def send(self, conv, text):
         self._need_up()
@@ -3071,6 +3100,111 @@ class DeltaChatAdapter:
             raise UserError(str(e))
         self.chat.add_message(conv, msg, count=False)
         return msg.id
+
+    # -- groups -------------------------------------------------------------------
+    ADDRESS = re.compile(r"^[^@\s,]+@[^@\s,]+\.[^@\s,]+$")
+
+    def _key_contact(self, addr):
+        """The core's id for the key-contact with this address, or None: only a
+        person we hold a key for can be put in an encrypted group."""
+        for c in self.call("get_contacts", self.acct, 0, addr):
+            if (c.get("address") or "").lower() == addr.lower():
+                return c["id"]
+        return None
+
+    def _members_for(self, chat_id, addrs):
+        """Add each address to the group; those with no key yet are invited by
+        mail instead.  Returns (added, invited)."""
+        added, invited = [], []
+        for addr in addrs:
+            cid = self._key_contact(addr)
+            if cid is None:
+                invited.append(addr)
+                continue
+            self.call("add_contact_to_chat", self.acct, chat_id, cid)
+            added.append(addr)
+        return added, invited
+
+    def _check_addresses(self, addrs):
+        for a in addrs:
+            if not self.ADDRESS.match(a):
+                raise UserError("%r is not an email address" % a)
+
+    def new_group(self, name, addrs):
+        """A new encrypted group.  It reaches the other members with the first
+        message sent to it; people we hold no key for are invited by mail and can
+        be added once they have accepted."""
+        self._need_up()
+        name = (name or "").strip()
+        if not name:
+            raise UserError("a group needs a name")
+        addrs = [a.strip() for a in addrs if a.strip()]
+        self._check_addresses(addrs)
+        try:
+            chat_id = self.call("create_group_chat", self.acct, name, False)
+            added, invited = self._members_for(chat_id, addrs)
+            conv = self._conv(chat_id, name, "group")
+            self._members(conv)
+        except RpcError as e:
+            raise UserError(str(e))
+        self.system(conv, "group created: it reaches the members with the first message you send"
+                          + ("" if not added else " (%s)" % ", ".join(added)))
+        for addr in invited:
+            try:
+                self._invite_by_mail(addr)
+            except UserError as e:           # the group stays; say what could not be done
+                self.system(conv, "%s has no key yet and could not be invited: %s" % (addr, e))
+                continue
+            self.system(conv, "%s has no key yet: invited by mail - add them (Chat > Add member) "
+                              "once they have accepted" % addr)
+        return conv
+
+    def _group(self, conv):
+        self._need_up()
+        if conv.kind != "group":
+            raise UserError("%s is not a group" % conv.title)
+        return int(conv.target)
+
+    def group_add(self, conv, addr):
+        chat_id = self._group(conv)
+        addr = addr.strip()
+        self._check_addresses([addr])
+        try:
+            added, invited = self._members_for(chat_id, [addr])
+            self._members(conv)
+        except RpcError as e:
+            raise UserError(str(e))
+        if invited:
+            try:
+                self._invite_by_mail(addr)
+            except UserError as e:
+                raise UserError("%s has no key yet and could not be invited: %s" % (addr, e))
+            raise UserError("%s has no key yet: invited by mail - add them once they have accepted" % addr)
+        self.system(conv, "added %s" % addr)
+
+    def group_remove(self, conv, addr):
+        chat_id = self._group(conv)
+        try:
+            cid = self._key_contact(addr.strip())
+            if cid is None or addr.strip().lower() not in conv.members:
+                raise UserError("%s is not in this group" % addr)
+            self.call("remove_contact_from_chat", self.acct, chat_id, cid)
+            self._members(conv)
+        except RpcError as e:
+            raise UserError(str(e))
+        self.system(conv, "removed %s" % addr)
+
+    def group_rename(self, conv, name):
+        chat_id = self._group(conv)
+        name = (name or "").strip()
+        if not name:
+            raise UserError("a group needs a name")
+        try:
+            self.call("set_chat_name", self.acct, chat_id, name)
+        except RpcError as e:
+            raise UserError(str(e))
+        conv.title = name
+        self.chat.events.push("conv-new", *conv.fields())    # the lists re-read the title
 
     def marked_read(self, conv, msgid):
         """The chat was read here: tell the core (it sends read receipts, if
@@ -3215,8 +3349,71 @@ class Chat:
             self.set_state(account, "error", str(e))
             raise
 
+    REQUEST_POLL = 2
+
+    @staticmethod
+    def requests_dir():
+        """Where other programs (tvmail) leave one-line requests for us."""
+        d = os.environ.get("TVCHAT_REQUESTS")
+        if d:
+            return d
+        base = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+        return os.path.join(base, "tvchat", "requests")
+
+    def requests_tick(self):
+        """Act on the requests waiting in the directory, then look again:
+          chat ADDRESS   open the chat with ADDRESS (or invite them by mail)
+          invite LINK    offer a Delta Chat invitation found in a mail
+        They need a connected Delta Chat account; without one a request waits."""
+        try:
+            self._requests_once()
+        except Exception:
+            _log.exception("looking at the requests directory failed")
+        self.loop.call_later(self.REQUEST_POLL, self.requests_tick)
+
+    def _requests_once(self):
+        d = self.requests_dir()
+        try:
+            names = sorted(n for n in os.listdir(d) if n.endswith(".req"))
+        except OSError:
+            return
+        ad = next((a for a in self.adapters.values()
+                   if isinstance(a, DeltaChatAdapter) and a.phase == "up"), None)
+        for n in names[:20]:
+            path = os.path.join(d, n)
+            try:
+                with open(path, encoding="utf-8", errors="replace") as fh:
+                    text = fh.readline().strip()
+            except OSError:
+                continue
+            kind, _, arg = text.partition(" ")
+            arg = arg.strip()
+            if kind not in ("chat", "invite") or not arg or len(arg) > 2000:
+                note = "ignored a request I do not understand"
+            elif ad is None:
+                continue                 # no Delta Chat account is up yet: it waits
+            else:
+                try:
+                    if kind == "chat":
+                        conv = ad.join(arg)
+                        note = "chat with %s: %s" % (arg, conv.title)
+                    elif not DeltaChatAdapter.INVITE.match(arg):
+                        raise UserError("not a Delta Chat invite link")
+                    else:
+                        ad.add_invite(arg)
+                        note = "a chat invitation from %s is waiting" % invite_names(arg)
+                except UserError as e:
+                    note = "request '%s %s' failed: %s" % (kind, arg[:40], e)
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+            self.events.push("notice", note)
+
     def start(self):
         """Connect the [chat] autoconnect accounts; a failure is an event."""
+        if any(a.protocol == "deltachat" for a in self.accounts):
+            self.loop.call_later(self.REQUEST_POLL, self.requests_tick)
         for ident in self.autoconnect:
             try:
                 self.connect(self.by_id[ident])
@@ -3311,6 +3508,44 @@ def cmd_accept_invite(a):
 def cmd_decline_invite(a):
     chat = _chat()
     _delta(chat, a.account).decline_invite(a.sender)
+    return 0
+
+
+def _group_ad(chat, conv):
+    ad = chat.adapter(conv.account)
+    if not hasattr(ad, "group_add"):
+        raise UserError("%s has no groups" % conv.account.id)
+    return ad
+
+
+def cmd_new_group(a):
+    """new-group ACCOUNT NAME [ADDRESS...]: prints the new group's conversation."""
+    chat = _chat()
+    ad = chat.adapter(chat.account(a.account))
+    if not hasattr(ad, "new_group"):
+        raise UserError("%s has no groups" % a.account)
+    sys.stdout.write(ad.new_group(a.name, a.addrs).id + "\n")
+    return 0
+
+
+def cmd_group_add(a):
+    chat = _chat()
+    conv = chat.conv(a.conv)
+    _group_ad(chat, conv).group_add(conv, a.addr)
+    return 0
+
+
+def cmd_group_remove(a):
+    chat = _chat()
+    conv = chat.conv(a.conv)
+    _group_ad(chat, conv).group_remove(conv, a.addr)
+    return 0
+
+
+def cmd_group_rename(a):
+    chat = _chat()
+    conv = chat.conv(a.conv)
+    _group_ad(chat, conv).group_rename(conv, a.name)
     return 0
 
 
@@ -3623,6 +3858,10 @@ def build_parser():
     p = sub.add_parser("join"); p.add_argument("account"); p.add_argument("target"); p.set_defaults(fn=cmd_join)
     p = sub.add_parser("invite"); p.add_argument("account"); p.set_defaults(fn=cmd_invite)
     p = sub.add_parser("invites"); p.set_defaults(fn=cmd_invites)
+    p = sub.add_parser("new-group"); p.add_argument("account"); p.add_argument("name"); p.add_argument("addrs", nargs="*"); p.set_defaults(fn=cmd_new_group)
+    p = sub.add_parser("group-add"); p.add_argument("conv"); p.add_argument("addr"); p.set_defaults(fn=cmd_group_add)
+    p = sub.add_parser("group-remove"); p.add_argument("conv"); p.add_argument("addr"); p.set_defaults(fn=cmd_group_remove)
+    p = sub.add_parser("group-rename"); p.add_argument("conv"); p.add_argument("name"); p.set_defaults(fn=cmd_group_rename)
     p = sub.add_parser("accept-invite"); p.add_argument("account"); p.add_argument("sender"); p.set_defaults(fn=cmd_accept_invite)
     p = sub.add_parser("decline-invite"); p.add_argument("account"); p.add_argument("sender"); p.set_defaults(fn=cmd_decline_invite)
     p = sub.add_parser("part"); p.add_argument("conv"); p.set_defaults(fn=cmd_part)

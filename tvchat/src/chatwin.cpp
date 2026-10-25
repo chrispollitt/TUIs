@@ -1669,6 +1669,177 @@ void acceptInviteDialog()
     pollNow();
 }
 
+// ---- Delta Chat groups -------------------------------------------------------
+// The conversation shown, when it is a Delta Chat group (else empty).
+std::string deltaGroupShown()
+{
+    if (!chatInFront() || gChatWin->showingServer())
+        return std::string();
+    const std::string &cv = gChatWin->convId();
+    auto it = chat().convs().find(cv);
+    if (it == chat().convs().end() || it->second.kind != "group")
+        return std::string();
+    for (const ChatAccount &a : chat().accounts())
+        if (a.id == accountIdOf(cv) && a.protocol == "deltachat")
+            return cv;
+    return std::string();
+}
+
+// New group...: a name and the members' addresses.  Those we hold no key for are
+// invited by mail instead (the backend says so in the group); the group reaches
+// its members with the first message.
+void newGroupDialog()
+{
+    std::vector<int> cand;
+    const auto &as = chat().accounts();
+    for (int i : accountsWhere(true))
+        if (as[i].protocol == "deltachat")
+            cand.push_back(i);
+    if (cand.empty())
+    {
+        messageBox("Connect a Delta Chat account first (Chat > Connect...).", mfInformation | mfOKButton);
+        return;
+    }
+    int i = pickAccount("New group", cand);
+    if (i < 0)
+        return;
+    TDialog *d = new TDialog(TRect(0, 0, 60, 13), "New group");
+    d->options |= ofCentered;
+    TInputLine *name = new TInputLine(TRect(3, 3, 57, 4), 100);
+    d->insert(name);
+    d->insert(new TLabel(TRect(2, 2, 57, 3), "Group ~n~ame", name));
+    TInputLine *who = new TInputLine(TRect(3, 6, 57, 7), 800);
+    d->insert(who);
+    d->insert(new TLabel(TRect(2, 5, 57, 6), "~M~embers: addresses, separated by spaces", who));
+    d->insert(new TStaticText(TRect(3, 8, 57, 10),
+                              "People you hold no key for are invited by mail;\nadd them once they have accepted."));
+    d->insert(new TButton(TRect(16, 10, 28, 12), "~C~reate", cmOK, bfDefault));
+    d->insert(new TButton(TRect(32, 10, 44, 12), "Cancel", cmCancel, bfNormal));
+    d->selectNext(False);
+    name->select();
+    ushort r = TProgram::deskTop->execView(d);
+    std::string nm = trimmed(name->data ? name->data : "");
+    std::string members = trimmed(who->data ? who->data : "");
+    TObject::destroy(d);
+    if (r == cmCancel || nm.empty())
+        return;
+    std::string req = "new-group " + shq(as[i].id) + " " + shq(nm);
+    for (size_t at = 0; at < members.size();)
+    {
+        size_t e = members.find_first_of(" ,;\t", at);
+        if (e == std::string::npos)
+            e = members.size();
+        if (e > at)
+            req += " " + shq(members.substr(at, e - at));
+        at = e + 1;
+    }
+    std::string body, err;
+    if (!ask(req, body, err))
+    {
+        messageBox(mfError | mfOKButton, "%s", err.c_str());
+        return;
+    }
+    pollNow();
+    std::string conv = trimmed(body);
+    if (!conv.empty())
+        showChatWindow(std::string(), conv);
+}
+
+void groupAddDialog()
+{
+    std::string cv = deltaGroupShown();
+    if (cv.empty())
+    {
+        flashStatus("Add member: show a Delta Chat group first");
+        return;
+    }
+    char buf[256] = "";
+    if (inputBox("Add member", "~A~ddress", buf, sizeof(buf) - 1) != cmOK || trimmed(buf).empty())
+        return;
+    std::string body, err;
+    if (!ask("group-add " + shq(cv) + " " + shq(trimmed(buf)), body, err))
+        messageBox(mfInformation | mfOKButton, "%s", err.c_str()); // e.g. "no key yet - invited by mail"
+    pollNow();
+}
+
+void groupRemoveDialog()
+{
+    std::string cv = deltaGroupShown();
+    if (cv.empty())
+    {
+        flashStatus("Remove member: show a Delta Chat group first");
+        return;
+    }
+    std::string body, err;
+    if (!ask("members " + shq(cv), body, err))
+    {
+        messageBox(mfError | mfOKButton, "%s", err.c_str());
+        return;
+    }
+    std::vector<std::vector<std::string>> who;
+    for (size_t at = 0; at < body.size();)
+    {
+        size_t nl = body.find('\n', at);
+        if (nl == std::string::npos)
+            nl = body.size();
+        if (nl > at)
+        {
+            std::vector<std::string> f = chatFields(body.substr(at, nl - at));
+            if (!f.empty())
+                who.push_back(f);
+        }
+        at = nl + 1;
+    }
+    if (who.empty())
+    {
+        messageBox("This group has no other members.", mfInformation | mfOKButton);
+        return;
+    }
+    TSItem *items = nullptr;
+    for (auto it = who.rbegin(); it != who.rend(); ++it)
+        items = new TSItem(menuSafe(fitCols((*it).size() > 1 && !(*it)[1].empty() ? (*it)[1] + " <" + (*it)[0] + ">"
+                                                                                  : (*it)[0], 50)),
+                           items);
+    int n = (int)who.size() > 12 ? 12 : (int)who.size();
+    TDialog *d = new TDialog(TRect(0, 0, 60, 7 + n), "Remove member");
+    d->options |= ofCentered;
+    TRadioButtons *rb = new TRadioButtons(TRect(3, 2, 57, 2 + n), items);
+    d->insert(rb);
+    d->insert(new TButton(TRect(16, 3 + n, 28, 5 + n), "~R~emove", cmOK, bfDefault));
+    d->insert(new TButton(TRect(32, 3 + n, 44, 5 + n), "Cancel", cmCancel, bfNormal));
+    d->selectNext(False);
+    ushort r = TProgram::deskTop->execView(d);
+    ushort sel = 0;
+    if (r != cmCancel)
+        rb->getData(&sel);
+    TObject::destroy(d);
+    if (r == cmCancel || sel >= who.size())
+        return;
+    if (!ask("group-remove " + shq(cv) + " " + shq(who[sel][0]), body, err))
+        messageBox(mfError | mfOKButton, "%s", err.c_str());
+    pollNow();
+}
+
+void groupRenameDialog()
+{
+    std::string cv = deltaGroupShown();
+    if (cv.empty())
+    {
+        flashStatus("Rename group: show a Delta Chat group first");
+        return;
+    }
+    char buf[256] = "";
+    auto it = chat().convs().find(cv);
+    if (it != chat().convs().end())
+        strncpy(buf, it->second.title.c_str(), sizeof(buf) - 1);
+    if (inputBox("Rename group", "~N~ame", buf, sizeof(buf) - 1) != cmOK || trimmed(buf).empty())
+        return;
+    std::string body, err;
+    if (!ask("group-rename " + shq(cv) + " " + shq(trimmed(buf)), body, err))
+        messageBox(mfError | mfOKButton, "%s", err.c_str());
+    pollNow();
+}
+
 // Leave: part the conversation the chat window shows; its conv-gone takes
 // it out of the list.
 void leaveShown()
@@ -1678,6 +1849,21 @@ void leaveShown()
         flashStatus("Leave: close Help first - it is the chat window's");
         return;
     }
+    // Delta Chat: Leave deletes the chat and its messages from this device (a group
+    // is left first, and the others are told): not something to do by a stray key
+    for (const ChatAccount &a : chat().accounts())
+        if (a.id == accountIdOf(gChatWin->convId()) && a.protocol == "deltachat")
+        {
+            const std::string &cv = gChatWin->convId();
+            auto it = chat().convs().find(cv);
+            bool group = it != chat().convs().end() && it->second.kind == "group";
+            std::string title = it != chat().convs().end() ? it->second.title : cv;
+            if (messageBox(mfConfirmation | mfYesButton | mfNoButton,
+                           group ? "Leave the group \"%s\" and delete it, with its messages, from this device?\n\nThis cannot be undone."
+                                 : "Delete the chat with \"%s\", with its messages, from this device?\n\nThis cannot be undone.",
+                           title.c_str()) != cmYes)
+                return;
+        }
     std::string body, err;
     if (!ask("part " + shq(gChatWin->convId()), body, err))
     {
@@ -1729,6 +1915,11 @@ TMenu *buildChatMenu()
     add(new TMenuItem("Accept in~v~ite...", cmChatAcceptInvite, kbNoKey, hcNoContext));
     add(new TMenuItem("~A~nswer", cmChatAnswer, kbNoKey, hcNoContext));
     add(new TMenuItem("~L~eave", cmChatLeave, kbNoKey, hcNoContext));
+    add(&newLine());
+    add(new TMenuItem("New ~g~roup...", cmChatNewGroup, kbNoKey, hcNoContext));
+    add(new TMenuItem("Add m~e~mber...", cmChatGroupAdd, kbNoKey, hcNoContext));
+    add(new TMenuItem("~R~emove member...", cmChatGroupRemove, kbNoKey, hcNoContext));
+    add(new TMenuItem("Re~n~ame group...", cmChatGroupRename, kbNoKey, hcNoContext));
     add(&newLine());
     const auto &as = chat().accounts();
     if (!chatOn() || as.empty())
@@ -1782,12 +1973,14 @@ void chatMenuGrey()
         if (p->name && p->command)
             p->disabled = Boolean(!on || p->command == cmChatOff ||
                                   (p->command == cmChatLeave && !inChat) ||
-                                  (p->command == cmChatAnswer && !call));
+                                  (p->command == cmChatAnswer && !call) ||
+                                  ((p->command == cmChatGroupAdd || p->command == cmChatGroupRemove ||
+                                    p->command == cmChatGroupRename) && deltaGroupShown().empty()));
 }
 
 bool chatCommand(ushort command)
 {
-    if (command != cmChatInvite && command != cmChatAcceptInvite &&
+    if (!(command >= cmChatInvite && command <= cmChatGroupRename) &&
         (command < cmChatConnect || command >= cmChatAccount + kChatMaxAccounts))
         return false;
     if (command == cmChatOff)
@@ -1813,6 +2006,18 @@ bool chatCommand(ushort command)
         break;
     case cmChatAcceptInvite:
         acceptInviteDialog();
+        break;
+    case cmChatNewGroup:
+        newGroupDialog();
+        break;
+    case cmChatGroupAdd:
+        groupAddDialog();
+        break;
+    case cmChatGroupRemove:
+        groupRemoveDialog();
+        break;
+    case cmChatGroupRename:
+        groupRenameDialog();
         break;
     case cmChatLeave:
         leaveShown();

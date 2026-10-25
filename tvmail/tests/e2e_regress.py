@@ -187,6 +187,67 @@ def esc_closes_windows(opts):
     return tv
 
 
+INVITE_FIXTURE = "".join([
+    _msg("Carol <carol@example.org>", "Mon, 01 Sep 2026 09:00:00 -0700", "Chat invitation",
+         "Carol invites you to chat.\n\nhttps://i.delta.chat/#ABC123&v=3&a=carol%40example.org&n=\n"),
+    _msg("Bob <bob@example.com>", "Mon, 01 Sep 2026 11:00:00 -0700", "SUBJ2 plain", "hello")])
+
+
+def chat_link_tv(opts, fixture=FIXTURE):
+    """A tvmail with a stand-in tvchat-backend on PATH (the link is optional: it only
+    needs the program to exist) and its request directory in the temp HOME."""
+    def setup(t):
+        stub = t.bindir / "tvchat-backend"
+        stub.write_text("#!/bin/sh\nexit 0\n")
+        stub.chmod(0o755)
+        t.requests = t.tmp / "chat-requests"
+        t.env["TVCHAT_REQUESTS"] = str(t.requests)
+    return Tv(opts, fixture=fixture, setup=setup)
+
+
+def requests_of(tv):
+    d = tv.requests
+    return sorted(f.read_text().strip() for f in d.glob("*.req")) if d.exists() else []
+
+
+@case()
+def chat_with_sender_leaves_a_request(opts):
+    # the optional tvmail -> tvchat link: Message > Chat with sender writes one
+    # line into the directory tvchat's backend watches
+    tv = chat_link_tv(opts)
+    c = Case(tv)
+    started(tv, c)
+    tv.send(alt("m"), "t", settle=0.8)
+    c.check(tv.wait("Asked tvchat to chat with", 5) and tv.has("bob@example.com."),
+            "Message > Chat with sender did not say it asked tvchat")
+    tv.send("Enter", settle=0.4)
+    c.check(requests_of(tv) == ["chat bob@example.com"],
+            "the request file is wrong: %r" % requests_of(tv))
+    return tv
+
+
+@case()
+def chat_invite_in_a_message_goes_to_tvchat(opts):
+    tv = chat_link_tv(opts, INVITE_FIXTURE)
+    c = Case(tv)
+    started(tv, c)
+    tv.send("Tab", "Up", settle=0.8)               # the invitation (the older one)
+    c.check(tv.wait("Chat invitation", 4), "could not select the invitation")
+    tv.send(alt("m"), "i", settle=0.8)
+    c.check(tv.wait("Handed the invitation to tvchat.", 6),
+            "Message > Open chat invite did not hand the link over")
+    tv.send("Enter", settle=0.4)
+    c.check(requests_of(tv) == ["invite https://i.delta.chat/#ABC123&v=3&a=carol%40example.org&n="],
+            "the request file is wrong: %r" % requests_of(tv))
+    # a message without a link says so and leaves nothing
+    tv.send("Down", settle=0.6)
+    tv.send(alt("m"), "i", settle=0.8)
+    c.check(tv.wait("holds no Delta Chat", 5), "a message without a link was not refused")
+    tv.send("Enter", settle=0.4)
+    c.check(len(requests_of(tv)) == 1, "a request was written for a message without a link")
+    return tv
+
+
 @case(22)
 def delete_prompt_names_subject(opts):
     tv = Tv(opts)

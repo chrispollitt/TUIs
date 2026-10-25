@@ -40,8 +40,9 @@ scroll the log from the input line; PgUp at the top fetches older messages
 (asking the server, when it keeps history).
 .TP
 .B Alt\-C
-the Chat menu: Connect..., Disconnect..., Join... (a channel or a nick),
-Leave, and one item per account.
+the Chat menu: Connect..., Disconnect..., Join... (a channel, a nick, an address
+or an invite link), Invite..., Accept invite..., Leave, the Delta Chat group
+items, and one item per account.
 .B F5
 reload
 .RB ( "File \(-> Reload" ):
@@ -77,6 +78,23 @@ View > Talk view (Ctrl-T) switches the conversation shown; an account starts
 in its
 .B talk_view
 (classic unless it says irc).
+.SH "DELTA CHAT"
+Encrypted chat over a mailbox of its own (\fBprotocol = deltachat\fR; needs the
+official \fBdeltachat-rpc-server\fR core, see INSTALL.md and PRIMER.md).  Two
+people swap keys once: Chat > Join... with an email address mails them an
+invitation, and their tvchat asks \(lqAccept?\(rq (Chat > Accept invite...
+asks again); Chat > Invite... shows an invite link to pass on by other means,
+and Join also takes such a link.  A message from someone new waits as a
+request; the first reply accepts it.
+.PP
+Chat > New group... makes an encrypted group (people you hold no key for are
+invited by mail); Add member..., Remove member... and Rename group... work on
+the group shown.  Chat > Leave asks first, then deletes the chat and its
+messages from this device (a group is left first, and the others are told).
+.PP
+tvmail can hand tvchat a request (Message > Chat with sender, Message > Open
+chat invite): one-line files in
+.IR ~/.local/state/tvchat/requests/ .
 .SH COMMANDS
 A line typed in the input line may be a command; the server messages take
 nothing else.

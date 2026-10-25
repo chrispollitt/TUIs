@@ -29,6 +29,10 @@ const ushort cmChatAccount = 2110;    // + i: Chat > <account i> shows it in the
 const int kChatMaxAccounts = 30;      // so 2110-2139
 const ushort cmChatInvite = 2142;     // Chat > Invite...: a Delta Chat invite link for an account
 const ushort cmChatAcceptInvite = 2143; // Chat > Accept invite...: answer the Delta Chat invitations that came by mail
+const ushort cmChatNewGroup = 2144;    // Chat > New group...: a Delta Chat group
+const ushort cmChatGroupAdd = 2145;    // Chat > Add member...: to the Delta Chat group shown
+const ushort cmChatGroupRemove = 2146; // Chat > Remove member...
+const ushort cmChatGroupRename = 2147; // Chat > Rename group...
 const ushort cmChatAcctPicked = 2140; // broadcast: the chat window's server pane moved
 const ushort cmChatConvPicked = 2141; // broadcast: its conversation pane moved
 

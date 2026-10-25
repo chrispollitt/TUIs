@@ -45,7 +45,6 @@ Setup and integration
    IMAP and SMTP servers without touching mail) and a Reload that applies it to
    the running backend. Passwords stay out of the file. tvchat wants the same
    (tvchat/TO-DO.txt 13): share it in tvcommon.
-25 tvmail and tvchat talking to each other - OPTIONAL, only when both are
-   installed, to make Delta Chat setup easier (tvchat/TO-DO.txt 12): a message
-   holding a Delta Chat invite link offers "Open in tvchat"; tvchat's Invite can
-   send the link through tvmail to someone's ordinary address.
+25 tvmail and tvchat talking to each other - OPTIONAL (tvchat/TO-DO.txt 12).
+   Done (Oct 25): Message > Chat with sender and Open chat invite. Still to do:
+   tvchat sending an invite link through tvmail's account.

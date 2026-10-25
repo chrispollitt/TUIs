@@ -125,6 +125,14 @@ key for, so the two people swap keys once:
    invitation you put off; **Chat > Invite...** shows a link to hand over by
    other means (any Delta Chat app can use it).
 
+**With tvmail (optional).** If tvmail is installed too, an invitation can travel
+through ordinary mail: in tvmail, **Message > Chat with sender** asks tvchat to
+chat with whoever wrote the message you are reading (it opens the chat, or
+mails them an invitation), and when a message holds a Delta Chat invite link,
+**Message > Open chat invite** hands it to tvchat, which asks "Accept?". The two
+programs only leave one-line files in `~/.local/state/tvchat/requests`; neither
+needs the other.
+
 ---
 
 ## When something does not work

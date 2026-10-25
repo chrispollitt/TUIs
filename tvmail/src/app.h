@@ -38,6 +38,8 @@ private:
     void markUnread(int row);
     void markRead(int row);
     void saveMsg(int row);
+    void chatWithSender(int row);
+    void openChatInvite(int row);
     void outOfOffice();
     void moveMsg(int row);
     void viewParts(int row);

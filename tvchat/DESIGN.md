@@ -321,6 +321,27 @@ names were checked against `--openrpc` and the `deltachat-rpc-client` source).
   the mail servers in tvchat.conf (or the address's domain, which usually is
   the IMAP / SMTP host). The core's own copy of that mail is ignored: it shows
   no classic emails.
+- **The optional tvmail link** (the two apps share nothing but a directory):
+  tvmail's Message > Chat with sender / Open chat invite write a one-line
+  `*.req` file into `$TVCHAT_REQUESTS`, else `$XDG_STATE_HOME/tvchat/requests`
+  (`~/.local/state/tvchat/requests`), written under a temp name and renamed.
+  `Chat.requests_tick` (every `REQUEST_POLL` = 2 s while a Delta Chat account
+  is configured) acts on `chat ADDRESS` (the adapter's `join`: a chat, or an
+  invitation by mail when there is no key) and `invite LINK` (`add_invite`:
+  offered for acceptance like a mailed one, from the address the link names),
+  deletes the file and tells the UI with a `notice TEXT` event (the status
+  line). With no connected Delta Chat account a request waits. A bad or odd
+  request is reported and dropped. Neither program needs the other.
+- **Leave:** `part` on a Delta Chat conversation leaves a group (`leave_group`; the
+  others are told) and then `delete_chat`s it, and removes the conversation. The
+  UI asks first (Yes / No), since the history goes.
+- **Groups** (encrypted, key-contacts only): `new-group ACCOUNT NAME [ADDRESS...]`
+  (`create_group_chat`), `group-add`, `group-remove`, `group-rename CONV ...`. Only a
+  person we hold a key for (`get_contacts`, which lists key-contacts) can be put in
+  a group; an address with no key yet is invited by mail instead, and is added later
+  with `group-add`. The group reaches its members with the first message sent to it
+  (the core's "unpromoted" group). The Chat menu greys Add / Remove / Rename unless
+  a Delta Chat group is shown.
 - **Typed commands:** none yet; `/word` is refused, `//x` sends `/x`. `join`
   takes an email address and opens (or creates) the one-to-one chat; `part` is
   refused.

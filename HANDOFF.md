@@ -51,9 +51,13 @@ wizard) - cpbee still runs the temporary script's setup, re-running
 leaks made a root-owned Dovecot file unreadable and stopped all local delivery
 for minutes - check file modes after `sudo` scripts.
 
-Left of Delta Chat (tvchat/TO-DO.txt item 1): Chat > Leave (refused today),
-attachments, creating groups, the man page for Invite / Join. The Proto column
-saying "delta" stays (Chris likes it short).
+Done Oct 25 (all on main): joining an address mails the invitation and the other
+tvchat asks to accept; the optional tvmail link (Message > Chat with sender / Open
+chat invite, via `~/.local/state/tvchat/requests`); Chat > Leave for Delta Chat
+(confirmed first); groups (New group, Add / Remove member, Rename). tvchat/PRIMER.md
+is the how-to for the three protocols. Left of Delta Chat (tvchat/TO-DO.txt item 1):
+attachments, a member picker for groups, tvchat sending an invite through tvmail
+(item 12), and the in-app config editor for both apps (tvchat 13, tvmail 24).
 
 After that: tvchat/TO-DO.txt (small things), tvmail/TO-DO.txt (periodic pull
 first), and the open bugs in tvmail/BUGS.md.

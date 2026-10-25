@@ -138,6 +138,8 @@ void TVChatApp::chatEvents()
     {
         accounts = accounts || ev.fields[0] == "state";
         invited = invited || ev.fields[0] == "invite";
+        if (ev.fields[0] == "notice" && ev.fields.size() > 1) // e.g. tvmail asked for a chat
+            flashStatus(ev.fields[1]);
         message(deskTop, evBroadcast, cmChatEvent, (void *)&ev);
     }
     if (accounts)

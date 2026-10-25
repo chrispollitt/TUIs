@@ -168,6 +168,36 @@ def handle(rid, method, p):
             STATE["configured"] = True
             save_state()
             return reply(rid, None)
+        if method == "create_group_chat":
+            cid = max([int(k) for k in WORLD["chats"]] + [9]) + 1
+            WORLD["chats"][str(cid)] = {"id": cid, "name": p[1], "chatType": "Group", "contacts": [1]}
+            return reply(rid, cid)
+        if method == "get_contacts":
+            q = (p[2] or "").lower()
+            return reply(rid, [dict(c, id=int(k)) for k, c in WORLD["contacts"].items()
+                               if c.get("isKeyContact", True) and q in c["address"].lower()])
+        if method == "add_contact_to_chat":
+            ch = WORLD["chats"][str(p[1])]
+            if p[2] not in ch.setdefault("contacts", []):
+                ch["contacts"].append(p[2])
+            return reply(rid, None)
+        if method == "remove_contact_from_chat":
+            ch = WORLD["chats"][str(p[1])]
+            ch["contacts"] = [c for c in ch.get("contacts", []) if c != p[2]]
+            return reply(rid, None)
+        if method == "set_chat_name":
+            WORLD["chats"][str(p[1])]["name"] = p[2]
+            return reply(rid, None)
+        if method == "leave_group":
+            if WORLD["chats"].get(str(p[1]), {}).get("left"):
+                return reply(rid, error="You are not a member of this group")
+            WORLD["chats"].setdefault(str(p[1]), {})["left"] = True
+            return reply(rid, None)
+        if method == "delete_chat":
+            WORLD["chats"].pop(str(p[1]), None)
+            for k in [k for k, m in WORLD["messages"].items() if m["chatId"] == p[1]]:
+                del WORLD["messages"][k]
+            return reply(rid, None)
         if method in ("set_config", "start_io", "stop_io", "stop_io_for_all_accounts",
                       "accept_chat", "marknoticed_chat", "markseen_msgs"):
             return reply(rid, None)

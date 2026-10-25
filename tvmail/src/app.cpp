@@ -3,6 +3,9 @@
 // Purge, Empty trash, background pull).  The desktop, the palette and the
 // Window list are TTvApp's (tvcommon).
 #include "app.h"
+#include <fstream>
+#include <cstdio>
+#include <unistd.h>
 #include "views.h"
 #include "coprocess.h"
 
@@ -41,6 +44,9 @@ TMenuBar *TVMailApp::initMenuBar(TRect r)
                             *new TMenuItem("Mark ~u~nread", cmMarkUnread, kbNoKey, hcNoContext) +
                             *new TMenuItem("M~o~ve to...", cmMoveMsg, kbNoKey, hcNoContext) +
                             *new TMenuItem("~D~elete", cmDeleteMsg, kbCtrlD, hcNoContext, "Ctrl-D") +
+                            newLine() +
+                            *new TMenuItem("Cha~t~ with sender", cmChatWith, kbNoKey, hcNoContext) +
+                            *new TMenuItem("Open chat ~i~nvite", cmChatInvite, kbNoKey, hcNoContext) +
                             *new TSubMenu("~E~dit", kbAltE) +
                             *new TMenuItem("~U~ndo", cmUndo, kbNoKey, hcNoContext) +
                             newLine() +
@@ -184,6 +190,195 @@ void TVMailApp::markRead(int row)
 {
     if (row >= 0)
         mailMarkFocused(true);
+}
+
+// ---- the optional link to tvchat -------------------------------------------
+// tvmail and tvchat are separate programs and this is all they share: a one-line
+// request file in a directory that tvchat's backend looks at every couple of
+// seconds, whether or not tvchat was running when it was written:
+//   chat ADDRESS     open the chat with ADDRESS (or invite them by mail)
+//   invite LINK      offer a Delta Chat invitation found in a mail
+// Nothing here needs tvchat: without it the two menu items say so.
+namespace
+{
+std::string chatRequestDir()
+{
+    if (const char *d = getenv("TVCHAT_REQUESTS"))
+        if (*d)
+            return d;
+    std::string base;
+    if (const char *x = getenv("XDG_STATE_HOME"))
+        base = x;
+    if (base.empty())
+        if (const char *h = getenv("HOME"))
+            base = std::string(h) + "/.local/state";
+    return base + "/tvchat/requests";
+}
+
+std::string stripped(std::string s)
+{
+    while (!s.empty() && isspace((unsigned char)s.back()))
+        s.pop_back();
+    size_t i = 0;
+    while (i < s.size() && isspace((unsigned char)s[i]))
+        ++i;
+    return s.substr(i);
+}
+
+bool tvchatInstalled()
+{
+    return !stripped(shCapture("command -v tvchat-backend || ls /usr/local/bin/tvchat-backend "
+                               "\"$HOME/bin/tvchat-backend\" \"$HOME/.local/bin/tvchat-backend\" 2>/dev/null | head -1"))
+                .empty();
+}
+
+// One request, written whole (a temp name, then renamed) so tvchat never reads half of it.
+bool writeChatRequest(const std::string &line, std::string &err)
+{
+    std::string dir = chatRequestDir();
+    std::string out = stripped(shCapture("mkdir -p " + shq(dir) + " 2>&1"));
+    if (!out.empty())
+    {
+        err = out;
+        return false;
+    }
+    static int n = 0;
+    std::string base = dir + "/" + std::to_string((long)time(nullptr)) + "-" + std::to_string((long)getpid()) +
+                       "-" + std::to_string(++n);
+    {
+        std::ofstream f(base + ".tmp");
+        f << line << "\n";
+        if (!f)
+        {
+            err = "cannot write " + base + ".tmp";
+            return false;
+        }
+    }
+    if (rename((base + ".tmp").c_str(), (base + ".req").c_str()) != 0)
+    {
+        err = "cannot rename the request file in " + dir;
+        return false;
+    }
+    return true;
+}
+
+// "Name <a@b.c>", "a@b.c" -> a@b.c
+std::string addressOf(const std::string &from)
+{
+    size_t lt = from.find('<'), gt = from.find('>', lt == std::string::npos ? 0 : lt);
+    std::string a = (lt != std::string::npos && gt != std::string::npos && gt > lt) ? from.substr(lt + 1, gt - lt - 1)
+                                                                                    : from;
+    a = stripped(a);
+    return a.find('@') == std::string::npos || a.find(' ') != std::string::npos ? std::string() : a;
+}
+
+// the address in the first From: header of a raw message
+std::string senderOf(const std::string &raw)
+{
+    size_t end = raw.find("\n\n");
+    std::string head = raw.substr(0, end == std::string::npos ? raw.size() : end);
+    size_t at = head.rfind("\nFrom:") == std::string::npos ? std::string::npos : head.find("\nFrom:");
+    if (at == std::string::npos && head.rfind("From:", 0) == 0)
+        at = 0;
+    else if (at != std::string::npos)
+        at += 1;
+    if (at == std::string::npos)
+        return std::string();
+    size_t eol = head.find('\n', at);
+    std::string line = head.substr(at + 5, eol == std::string::npos ? std::string::npos : eol - at - 5);
+    // a folded header carries on in the next lines
+    while (eol != std::string::npos && eol + 1 < head.size() && (head[eol + 1] == ' ' || head[eol + 1] == '\t'))
+    {
+        size_t e2 = head.find('\n', eol + 1);
+        line += head.substr(eol + 1, e2 == std::string::npos ? std::string::npos : e2 - eol - 1);
+        eol = e2;
+    }
+    return addressOf(line);
+}
+
+// the first Delta Chat invite link in a raw message (quoted-printable soft breaks and =3D undone first)
+std::string inviteLinkIn(std::string raw)
+{
+    std::string low = raw;
+    for (char &ch : low)
+        ch = (char)tolower((unsigned char)ch);
+    if (low.find("content-transfer-encoding: quoted-printable") != std::string::npos)
+    {
+        // soft line breaks and =3D, but only here: in plain text a line may end in "="
+        for (size_t p; (p = raw.find("=\r\n")) != std::string::npos;)
+            raw.erase(p, 3);
+        for (size_t p; (p = raw.find("=\n")) != std::string::npos;)
+            raw.erase(p, 2);
+        for (size_t p = 0; (p = raw.find("=3D", p)) != std::string::npos;)
+            raw.replace(p, 3, "=");
+    }
+    size_t at = std::string::npos;
+    for (const char *key : {"https://i.delta.chat/#", "OPENPGP4FPR:"})
+    {
+        size_t k = raw.find(key);
+        if (k != std::string::npos && (at == std::string::npos || k < at))
+            at = k;
+    }
+    if (at == std::string::npos)
+        return std::string();
+    size_t e = at;
+    while (e < raw.size() && !isspace((unsigned char)raw[e]) && raw[e] != '<' && raw[e] != '>' && raw[e] != '"')
+        ++e;
+    return raw.substr(at, e - at);
+}
+
+bool needTvchat()
+{
+    if (tvchatInstalled())
+        return true;
+    messageBox("tvchat is not installed here.\n\nThis only hands the request to it; install tvchat\n"
+               "(and a Delta Chat account) to use it.",
+               mfInformation | mfOKButton);
+    return false;
+}
+} // namespace
+
+// Message > Chat with sender: tvchat opens the chat with whoever wrote this
+// (a Delta Chat account is used; with no key for them yet it mails them an invitation).
+void TVMailApp::chatWithSender(int row)
+{
+    if (row < 0 || !needTvchat())
+        return;
+    std::string addr = senderOf(shCapture(backendCommand("raw " + std::to_string(gRows[row].idx) + " " + gMbox)));
+    if (addr.empty())
+    {
+        messageBox("This message has no sender address to chat with.", mfInformation | mfOKButton);
+        return;
+    }
+    std::string err;
+    if (!writeChatRequest("chat " + addr, err))
+        messageBox(err.c_str(), mfError | mfOKButton);
+    else
+        messageBox(("Asked tvchat to chat with " + addr + ".\n\nIt picks that up within a couple of seconds\n"
+                    "if it is running, or when you next start it.")
+                       .c_str(),
+                   mfInformation | mfOKButton);
+}
+
+// Message > Open chat invite: this message holds a Delta Chat invite link;
+// tvchat offers it (Accept? Yes / No) - tvmail does not have to be told what to do next.
+void TVMailApp::openChatInvite(int row)
+{
+    if (row < 0 || !needTvchat())
+        return;
+    std::string link = inviteLinkIn(shCapture(backendCommand("raw " + std::to_string(gRows[row].idx) + " " + gMbox)));
+    if (link.empty())
+    {
+        messageBox("This message holds no Delta Chat invite link.", mfInformation | mfOKButton);
+        return;
+    }
+    std::string err;
+    if (!writeChatRequest("invite " + link, err))
+        messageBox(err.c_str(), mfError | mfOKButton);
+    else
+        messageBox("Handed the invitation to tvchat.\n\nIt asks whether to accept - in tvchat, if it is running,\n"
+                   "or when you next start it.",
+                   mfInformation | mfOKButton);
 }
 
 // File > Save message as...: the raw RFC822 message (headers, attachments and
@@ -762,6 +957,12 @@ void TVMailApp::handleEvent(TEvent &e)
         break;
     case cmSaveMsg:
         saveMsg(currentRow());
+        break;
+    case cmChatWith:
+        chatWithSender(currentRow());
+        break;
+    case cmChatInvite:
+        openChatInvite(currentRow());
         break;
     case cmOutOfOffice:
         outOfOffice();

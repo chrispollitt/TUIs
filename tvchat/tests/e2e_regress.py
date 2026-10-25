@@ -304,6 +304,58 @@ def delta_invite_join_and_send(opts):
     return tv
 
 
+@case()
+def delta_group_rename_and_leave(opts):
+    # Chat > New group..., Rename group... and Leave (which asks first) against
+    # tests/fake_deltachat_rpc.py
+    import json
+    core = HERE / "fake_deltachat_rpc.py"
+
+    def setup(t):
+        d = t.tmp / "xdg" / "tvchat" / "deltachat" / "delta"
+        d.mkdir(parents=True)
+        (d / "world.json").write_text(json.dumps({"contacts": {}, "chats": {}, "messages": {}}))
+        (d / "state.json").write_text(json.dumps({"accounts": [1], "configured": True}))
+        conf = t.tmp / "tvchat.conf"
+        conf.write_text("[chat]\nautoconnect = delta\n\n[account:delta]\nprotocol = deltachat\n"
+                        "display = Delta\naddr = me@example.org\nrpc_server = %s\n" % core)
+        t.env["TVCHAT_CONF"] = str(conf)
+        t.core = d
+    tv = Tv(opts, setup=setup)
+    c = Case(tv)
+    started(tv, c)
+    c.check(tv.wait(lambda: re.search(r"Delta\b.*\bYes\b", tv.text()), 15),
+            "the Delta Chat account did not connect")
+    tv.send(alt("c"), "g", settle=0.8)
+    c.check(tv.wait("Group name", 4), "Chat > New group... did not ask for a name")
+    tv.send("Crew", "Enter", settle=1.0)
+    c.check(tv.wait(lambda: chat_heading(tv, "Crew — Delta") is not None, 6), "the new group did not open")
+    tv.send(alt("c"), "n", settle=0.8)
+    c.check(tv.wait("Rename group", 4), "Chat > Rename group... did not ask")
+    tv.send("\x15", "Pirates", "Enter", settle=1.0)       # Ctrl-U clears the old name first
+    c.check(tv.wait(lambda: chat_heading(tv, "Pirates — Delta") is not None, 6), "the group was not renamed")
+    tv.send(alt("c"), "l", settle=0.8)
+    c.check(tv.wait("Leave the group", 4) and tv.has("This cannot be undone."),
+            "Leave did not ask before deleting")
+    tv.send("n", settle=0.6)
+    c.check(chat_heading(tv, "Pirates — Delta") is not None, "No still left the group")
+    tv.send(alt("c"), "l", settle=0.8)
+    c.check(tv.wait("Leave the group", 4), "Leave did not ask the second time")
+    tv.send("y", settle=1.2)
+    c.check(tv.wait(lambda: chat_heading(tv, "Pirates — Delta") is None and "Pirates" not in tv.text(), 6),
+            "the group is still shown after leaving")
+
+    def called(name):
+        try:
+            return name in (tv.core / "requests.jsonl").read_text()
+        except OSError:
+            return False
+    c.check(tv.wait(lambda: called("delete_chat") and called("leave_group"), 4),
+            "the core was not told to leave and delete the group")
+    c.check(tv.alive(), "tvchat exited")
+    return tv
+
+
 def talk_tv(opts, view=None):
     from fake_talkd import FakeTalkd
     srv = FakeTalkd()

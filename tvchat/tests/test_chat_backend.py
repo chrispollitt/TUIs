@@ -1785,7 +1785,7 @@ class TestDeltaChat(DeltaBase):
         st, body = self.verb("join", "delta", "not an address")
         self.assertEqual(st, 1)
         self.assertIn("email address", body.decode())
-        self.assertEqual(self.verb("part", "delta/10")[0], 1)
+        self.assertEqual(self.verb("part", "delta/*")[0], 1)            # the server window stays
 
     def test_invites_give_the_keys_to_write(self):
         self.setup_dc(world=dict(DC_WORLD, no_keys=True))
@@ -1802,6 +1802,63 @@ class TestDeltaChat(DeltaBase):
         self.assertEqual(self.requests("secure_join")[0]["params"],
                          [1, "https://i.delta.chat/#FAKEINVITE"])
         self.assertEqual(self.acct.convs[body.decode().strip()].title, "Inviter")
+
+    def test_leave_deletes_a_chat_and_leaves_a_group_first(self):
+        self.setup_dc()
+        self.up()
+        self.assertEqual(self.verb("part", "delta/10"), (0, b""))
+        self.assertNotIn("delta/10", self.acct.convs)
+        self.assertEqual([r["method"] for r in self.requests() if r["method"] in ("leave_group", "delete_chat")],
+                         ["delete_chat"])                       # a one-to-one chat is just deleted
+        self.assertEqual(self.requests("delete_chat")[0]["params"], [1, 10])
+        self.assertEqual(self.verb("part", "delta/11"), (0, b""))
+        self.assertNotIn("delta/11", self.acct.convs)
+        self.assertEqual([r["method"] for r in self.requests() if r["method"] in ("leave_group", "delete_chat")],
+                         ["delete_chat", "leave_group", "delete_chat"])   # a group: left, then deleted
+        self.assertEqual(self.verb("part", "delta/10")[0], 1)    # already gone
+        self.assertEqual(self.events("conv-gone")[0][1], "delta/10")
+
+    def test_a_new_group_with_members_we_hold_keys_for(self):
+        self.setup_dc()
+        self.up()
+        st, body = self.verb("new-group", "delta", "Book club", "alice@example.org", "bob@example.org")
+        self.assertEqual(st, 0)
+        conv = self.acct.convs[body.decode().strip()]
+        self.assertEqual((conv.kind, conv.title), ("group", "Book club"))
+        self.assertEqual(self.requests("create_group_chat")[0]["params"], [1, "Book club", False])
+        self.assertEqual([r["params"][2] for r in self.requests("add_contact_to_chat")], [20, 21])
+        self.assertEqual(self.verb("members", conv.id)[1].decode().splitlines(),
+                         ["alice@example.org\tAlice\tmember", "bob@example.org\tBob\tmember"])
+        self.assertTrue(any("group created" in m.text for m in conv.history))
+
+    def test_a_member_with_no_key_is_invited_by_mail_not_added(self):
+        self.setup_dc()
+        self.up()
+        st, body = self.verb("new-group", "delta", "Mixed", "alice@example.org", "stranger@example.org")
+        self.assertEqual(st, 0)
+        conv = self.acct.convs[body.decode().strip()]
+        self.assertEqual([r["params"][2] for r in self.requests("add_contact_to_chat")], [20])
+        self.assertTrue(any("stranger@example.org has no key yet" in m.text for m in conv.history))
+
+    def test_group_members_come_and_go_and_the_group_is_renamed(self):
+        self.setup_dc()
+        self.up()
+        team = "delta/11"                                        # Team: me, Alice, Bob
+        self.assertEqual(self.verb("group-remove", team, "bob@example.org"), (0, b""))
+        self.assertEqual(self.requests("remove_contact_from_chat")[0]["params"], [1, 11, 21])
+        self.assertEqual(list(self.acct.convs[team].members), ["alice@example.org"])
+        self.assertEqual(self.verb("group-add", team, "bob@example.org"), (0, b""))
+        self.assertEqual(sorted(self.acct.convs[team].members), ["alice@example.org", "bob@example.org"])
+        self.assertEqual(self.verb("group-rename", team, "Crew"), (0, b""))
+        self.assertEqual(self.acct.convs[team].title, "Crew")
+        self.assertEqual(self.requests("set_chat_name")[0]["params"], [1, 11, "Crew"])
+        # refusals
+        self.assertEqual(self.verb("group-add", "delta/10", "bob@example.org")[0], 1)      # not a group
+        self.assertEqual(self.verb("group-add", team, "not an address")[0], 1)
+        self.assertEqual(self.verb("group-remove", team, "nobody@example.org")[0], 1)
+        self.assertEqual(self.verb("group-rename", team, "  ")[0], 1)
+        self.assertEqual(self.verb("new-group", "delta", " ")[0], 1)
+        self.assertEqual(self.verb("new-group", "delta", "X", "bad address")[0], 1)
 
     def test_not_connected_refuses(self):
         self.setup_dc()
@@ -2025,6 +2082,56 @@ class TestDeltaInvitations(DeltaBase):
         self.turn(lambda: uid not in [m["uid"] for m in self.mail.live()])
         self.assertEqual(self.requests("secure_join"), [])
         self.assertEqual(self.verb("invites"), (0, b""))
+
+    def request(self, name, text):
+        d = self.tmp / "requests"
+        d.mkdir(exist_ok=True)
+        os.environ["TVCHAT_REQUESTS"] = str(d)
+        self.addCleanup(os.environ.pop, "TVCHAT_REQUESTS", None)
+        (d / name).write_text(text + "\n")
+        return d / name
+
+    def notices(self):
+        return [f[1] for f in self.events("notice")]
+
+    def test_a_request_from_tvmail_opens_a_chat_or_mails_an_invitation(self):
+        self.setup_inv()
+        # nothing connected yet: the request waits
+        req = self.request("1.req", "chat bob@example.org")
+        self.chat._requests_once()
+        self.assertTrue(req.exists())
+        self.up()
+        self.chat._requests_once()
+        self.assertFalse(req.exists())
+        self.assertTrue(any(n.startswith("chat with bob@example.org") for n in self.notices()))
+        self.assertIn("delta/12", self.acct.convs)                # Bob has a key: a chat, no mail
+        self.assertEqual(self.mail.sent, [])
+        # an address without a key: they are invited by mail
+        self.request("2.req", "chat new@example.org")
+        self.chat._requests_once()
+        self.turn(lambda: self.mail.sent)
+        import email
+        self.assertEqual(email.message_from_bytes(self.mail.sent[0])["To"], "new@example.org")
+
+    def test_a_request_with_an_invite_link_is_offered_for_acceptance(self):
+        self.setup_inv()
+        self.up()
+        link = "https://i.delta.chat/#ABC&v=3&a=carol%40example.org&n="
+        self.request("1.req", "invite " + link)
+        self.request("2.req", "invite https://i.delta.chat/#NONAME")      # names nobody
+        self.request("3.req", "do something odd")
+        self.request("4.req", "invite not-a-link")
+        self.chat._requests_once()
+        self.assertEqual(self.events("invite"), [("invite", "delta", "carol@example.org")])
+        self.assertEqual(self.verb("invites"), (0, b"delta\tcarol@example.org\n"))
+        n = self.notices()
+        self.assertEqual(len(n), 4)
+        self.assertIn("a chat invitation from carol@example.org is waiting", n[0])
+        self.assertTrue(all("failed" in x or "ignored" in x for x in n[1:]))
+        self.assertEqual(os.listdir(str(self.tmp / "requests")), [])
+        st, body = self.verb("accept-invite", "delta", "carol@example.org")
+        self.assertEqual(st, 0)
+        self.assertEqual(self.requests("secure_join")[0]["params"], [1, link])
 
     def test_invite_helpers(self):
         self.assertEqual(cb.invite_names("https://i.delta.chat/#X&v=3&a=a%2Bb%40ex.org&n="), "a+b@ex.org")
