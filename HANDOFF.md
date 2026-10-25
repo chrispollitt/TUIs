@@ -123,6 +123,16 @@ first), and the open bugs in tvmail/BUGS.md.
 - **The web app is a wish, not a plan** (tvchat/TO-DO.txt); the backend's
   protocol stays free of anything terminal-specific.
 
+- **Installs go to /usr/local by default, never ~/.local** (Chris, Oct 25) - but
+  `--prefix ~/.local` (tvchat/tvmail install, tvmail `setup.sh`,
+  `configure-tvchat-delta.sh`) still works, and `MAIL_SETUP_BINDIR` moves
+  mail-pull. **PATH:** `/etc/profile.d/path.sh` on every LAN machine (cmlaptop,
+  cmdesktop, cpbee; not cppi) keeps `$HOME/.local/bin` in the directories it
+  appends - other programs put things there - and on Cygwin its `PATH=` line
+  has `/usr/bin`, not `/bin` (cmake 4.x needs it). The build / install / test
+  scripts and `mail-setup/lib/common.sh` also put `/usr/bin` first on Cygwin,
+  because a bare ssh login has neither it nor `/usr/local/bin`.
+
 ## How to work here
 
 - **Builds and tests run under Cygwin** (`D:\cygwin\bin\bash.exe -lc 'cd
