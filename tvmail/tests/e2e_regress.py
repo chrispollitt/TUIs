@@ -248,6 +248,39 @@ def chat_invite_in_a_message_goes_to_tvchat(opts):
     return tv
 
 
+@case()
+def config_editor_verify_and_apply(opts):
+    # File > Edit configuration...: a new file opens as the sample, F9 checks the text, F8
+    # saves it and has the backend start afresh on it; a bad edit is reported, not saved
+    def setup(t):
+        t.conf = t.tmp / "conf" / "tvmail.conf"
+        t.env["TVMAIL_CONF"] = str(t.conf)
+        sample = t.tmp / "sample.conf"
+        sample.write_text("# sample\n[service]\nmode = local\n")
+        t.env["TVMAIL_CONFIG_SAMPLE"] = str(sample)
+    tv = Tv(opts, setup=setup)
+    c = Case(tv)
+    started(tv, c)
+    tv.send(alt("f"), "c", settle=1.0)
+    c.check(tv.wait("[service]", 5) and tv.has("F9 verify"), "File > Edit configuration... did not open the sample")
+    tv.send("F9", settle=1.2)
+    c.check(tv.wait("checks out", 6), "Verify did not pass the sample")
+    c.check(not tv.conf.exists(), "Verify saved the file")
+    tv.send("F8", settle=1.5)
+    c.check(tv.wait("Applied: local", 8), "Save + apply did not say it applied")
+    c.check(tv.conf.exists() and "mode = local" in tv.conf.read_text(), "the file was not written")
+    tv.send("CtrlEnd", "Enter", "[imap]", "Enter", "port = 99999", "Enter", settle=0.6)
+    tv.send("F8", settle=1.5)
+    c.check(tv.wait("must be a port", 6), "a bad port was not reported")
+    c.check("99999" not in tv.conf.read_text(), "a file with an error was saved")
+    tv.send("Enter", settle=0.5)
+    tv.send("AltF3", settle=0.6)
+    c.check(tv.wait("Save changes to", 4), "closing the edited window did not ask")
+    tv.send("n", settle=0.6)
+    c.check(tv.alive(), "tvmail exited")
+    return tv
+
+
 @case(22)
 def delete_prompt_names_subject(opts):
     tv = Tv(opts)

@@ -47,6 +47,7 @@
 #define Uses_TFindDialogRec
 #include <tvision/tv.h>
 
+#include <functional>
 #include <string>
 #include <vector>
 #include <sstream>
@@ -92,6 +93,7 @@ const ushort cmPaneFocused = 2024;  // broadcast: a 3-pane pane took focus
 const ushort cmWindowList = 2034;   // Window > List... (Alt-0)
 const ushort cmToggleWrap = 2043;   // View > Wrap long lines (body pane / focused text window)
 const ushort cmRedrawScreen = 2044; // Window > Redraw screen (Ctrl-L)
+const ushort cmEditConfig = 2045;   // File > Edit configuration... (the app opens configwin.cpp's window)
 
 // -------------------------------------------------------- classic colors ----
 // The Turbo Vision DOS look, in exact RGB.  BIOS colour numbers are not
@@ -189,6 +191,24 @@ std::string expandTabs(const std::string &s);
 extern TTimerId gFlashTimer;
 void flashStatus(const std::string &msg);
 void systemClipboard(const std::string &text);
+
+// ---------------------------------------------------- the config editor ---
+// configwin.cpp: an editor window for the app's configuration file, with Verify
+// (F9) and Save + apply (F8).  The app says which file it is, what to check it with
+// and how to make itself use it.
+struct ConfigSpec
+{
+    std::string title;  // "tvchat.conf"
+    std::string path;   // the file; if it does not exist the window opens with `sample`
+    std::string sample; // text for a new file (the shipped example), may be empty
+    // Check the TEXT in `file` (a copy of the window's buffer, not the real file);
+    // false = it has errors.  `report` is what to tell the user (warnings too).
+    std::function<bool(const std::string &file, std::string &report)> verify;
+    // After the file is saved: make the running app use it.  false = it could not,
+    // and `msg` says why; on success `msg` may be a note for the status line.
+    std::function<bool(std::string &msg)> apply;
+};
+void openConfigWindow(TDeskTop *desk, const ConfigSpec &spec);
 
 // ------------------------------------------------------------- windows ---
 // textwin.cpp: a read-only text window in the cyan style (an app's Help)

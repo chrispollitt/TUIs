@@ -50,7 +50,8 @@ set(TVCOMMON_SOURCES
     ${TVCOMMON_DIR}/src/cli.cpp
     ${TVCOMMON_DIR}/src/tvapp.cpp
     ${TVCOMMON_DIR}/src/tty.cpp
-    ${TVCOMMON_DIR}/src/textwin.cpp)
+    ${TVCOMMON_DIR}/src/textwin.cpp
+    ${TVCOMMON_DIR}/src/configwin.cpp)
 
 function(tvcommon_setup target)
     target_link_libraries(${target} PRIVATE tvision)

@@ -3279,6 +3279,68 @@ ADAPTERS = {"irc": IrcAdapter, "deltachat": DeltaChatAdapter, "talk": TalkAdapte
 
 
 # --------------------------------------------------------------------------
+# Checking a tvchat.conf (the in-app editor's Verify, and `check-config FILE`):
+# the file parses, every account has what its protocol needs, and the things it
+# points at are there.  Nothing is connected; what cannot be known without a
+# login is not claimed.  Errors stop the file being applied; warnings do not.
+# --------------------------------------------------------------------------
+def _port_problem(opts, key, ident):
+    v = (opts.get(key) or "").strip()
+    if v and not (v.isdigit() and 0 < int(v) < 65536):
+        return "[account:%s] %s must be a port number (1-65535), not %r" % (ident, key, v)
+    return None
+
+
+def check_config(path):
+    """(errors, warnings, summary) for the config file at `path`."""
+    errors, warnings = [], []
+    try:
+        accounts, auto = load_config(path)
+    except UserError as e:
+        return [str(e)], [], ""
+    for a in accounts:
+        o, i = a.opts, a.id
+        if a.protocol in ("irc", "talk") and not (o.get("host") or "").strip():
+            errors.append("[account:%s] host= is missing" % i)
+        for key in ("port", "imap_port", "smtp_port"):
+            bad = _port_problem(o, key, i)
+            if bad:
+                errors.append(bad)
+        if a.protocol == "irc":
+            host = (o.get("host") or "").strip()
+            ca = (o.get("cafile") or "").strip()
+            if ca and not os.path.isfile(ca):
+                warnings.append("[account:%s] cafile %s is not a file (a full path: no ~ expansion)" % (i, ca))
+            sasl = (o.get("sasl") or "").strip()
+            if sasl and host and not find_password_where(i, host, sasl, "irc")[0]:
+                warnings.append("[account:%s] no password found for %s on %s: $%s, ~/.mu-tickets or "
+                                "~/.netrc (machine %s login %s)" % (i, sasl, host, _env_name(i), host, sasl))
+        elif a.protocol == "deltachat":
+            addr = (o.get("addr") or "").strip()
+            if not DeltaChatAdapter.ADDRESS.match(addr):
+                errors.append("[account:%s] addr= must be the mailbox's email address" % i)
+                continue
+            rpc = (o.get("rpc_server") or "deltachat-rpc-server").strip()
+            if os.sep in rpc:
+                found = os.path.isfile(os.path.expanduser(rpc))
+            else:
+                found = bool(shutil.which(rpc))
+            if not found:
+                warnings.append("[account:%s] the Delta Chat core %s was not found (see PRIMER.md)" % (i, rpc))
+            ad = DeltaChatAdapter.__new__(DeltaChatAdapter)
+            ad.account, ad.addr = a, addr
+            host, login = ad._login()
+            data = os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share"),
+                                "tvchat", "deltachat", i)
+            if not os.path.exists(os.path.join(data, "accounts.toml")) and \
+                    not find_delta_password(i, addr, host, login)[0]:
+                warnings.append("[account:%s] the first connect needs a password for %s: $%s or ~/.netrc "
+                                "(machine %s login %s)" % (i, login, _env_name(i), host, login))
+    ids = ", ".join("%s (%s)" % (a.id, a.protocol) for a in accounts) or "none"
+    return errors, warnings, "%d account%s: %s" % (len(accounts), "" if len(accounts) == 1 else "s", ids)
+
+
+# --------------------------------------------------------------------------
 # The chat service: the accounts, the event queue and the protocol adapters,
 # behind the verbs the UI calls.  One instance per process.
 # --------------------------------------------------------------------------
@@ -3398,6 +3460,46 @@ class Chat:
         except UserError as e:
             self.set_state(account, "error", str(e))
             raise
+
+    def reload_config(self):
+        """Re-read tvchat.conf and make the accounts match it.  Untouched accounts
+        keep their connections and conversations; one that was removed or changed
+        is disconnected (and one that was live is connected again, changed); new ones
+        are added (and connected if [chat] autoconnect names them).  A file that does
+        not load changes nothing.  Returns a one-line summary."""
+        accounts, auto = load_config()                  # a UserError leaves everything as it was
+        self.conf_error = None
+        old = dict((a.id, a) for a in self.accounts)
+        new = dict((a.id, a) for a in accounts)
+        removed = [i for i in old if i not in new]
+        changed = [i for i in old if i in new and
+                   (old[i].protocol != new[i].protocol or old[i].opts != new[i].opts)]
+        added = [i for i in new if i not in old]
+        was_live = set()
+        for ident in removed + changed:
+            ad = self.adapters.pop(ident, None)
+            if old[ident].state in ("connecting", "connected"):
+                was_live.add(ident)
+            if ad is not None:
+                try:
+                    ad.disconnect()
+                except Exception:
+                    _log.exception("disconnecting %s failed", ident)
+        keep = set(old) - set(removed) - set(changed)
+        self.accounts = [old[a.id] if a.id in keep else a for a in accounts]
+        self.by_id = dict((a.id, a) for a in self.accounts)
+        self.autoconnect = auto
+        for ident in changed + [i for i in added if i in auto]:
+            if ident in was_live or ident in auto:
+                try:
+                    self.connect(self.by_id[ident])
+                except UserError:
+                    pass                                 # reported as the account's state
+        parts = []
+        for what, names in (("added", added), ("removed", removed), ("changed", changed)):
+            if names:
+                parts.append("%s %s" % (what, ", ".join(names)))
+        return "; ".join(parts) or "no change"
 
     REQUEST_POLL = 2
 
@@ -3609,6 +3711,25 @@ def cmd_invite_mail(a):
 def cmd_has_tvmail(a):
     """has-tvmail: 'yes' or 'no' - whether the optional link to tvmail can be used."""
     sys.stdout.write("yes\n" if find_tvmail_backend() else "no\n")
+    return 0
+
+
+def cmd_check_config(a):
+    """check-config FILE: what is wrong with (or worth knowing about) a tvchat.conf;
+    status 1 when there are errors."""
+    errors, warnings, summary = check_config(a.file)
+    for e in errors:
+        sys.stdout.write("error: %s\n" % e)
+    for w in warnings:
+        sys.stdout.write("warning: %s\n" % w)
+    if not errors:
+        sys.stdout.write("ok: %s\n" % summary)
+    return 1 if errors else 0
+
+
+def cmd_reload_config(a):
+    """reload-config: make the running backend use tvchat.conf as it is now."""
+    sys.stdout.write(_chat().reload_config() + "\n")
     return 0
 
 
@@ -3921,6 +4042,8 @@ def build_parser():
     p = sub.add_parser("join"); p.add_argument("account"); p.add_argument("target"); p.set_defaults(fn=cmd_join)
     p = sub.add_parser("invite"); p.add_argument("account"); p.set_defaults(fn=cmd_invite)
     p = sub.add_parser("invites"); p.set_defaults(fn=cmd_invites)
+    p = sub.add_parser("check-config"); p.add_argument("file"); p.set_defaults(fn=cmd_check_config)
+    p = sub.add_parser("reload-config"); p.set_defaults(fn=cmd_reload_config)
     p = sub.add_parser("invite-mail"); p.add_argument("account"); p.add_argument("address"); p.set_defaults(fn=cmd_invite_mail)
     p = sub.add_parser("has-tvmail"); p.set_defaults(fn=cmd_has_tvmail)
     p = sub.add_parser("new-group"); p.add_argument("account"); p.add_argument("name"); p.add_argument("addrs", nargs="*"); p.set_defaults(fn=cmd_new_group)

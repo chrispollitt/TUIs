@@ -38,6 +38,7 @@ private:
     void markUnread(int row);
     void markRead(int row);
     void saveMsg(int row);
+    void editConfig(); // File > Edit configuration...
     void chatWithSender(int row);
     void openChatInvite(int row);
     void outOfOffice();

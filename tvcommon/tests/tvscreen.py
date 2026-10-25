@@ -141,7 +141,8 @@ def cell_colours(c):
 # ------------------------------------------------------------------- keys ---
 K = dict(
     F1="\x1bOP", F2="\x1bOQ", F3="\x1bOR", F4="\x1b[14~", F5="\x1b[15~",
-    F6="\x1b[17~", End="\x1b[F", PgUp="\x1b[5~",
+    F6="\x1b[17~", F8="\x1b[19~", F9="\x1b[20~", End="\x1b[F", PgUp="\x1b[5~",
+    CtrlEnd="\x1b[1;5F",
     AltF3="\x1b[1;3R", Up="\x1b[A", Down="\x1b[B", PgDn="\x1b[6~",
     Home="\x1b[H", ShiftTab="\x1b[Z", ShiftDown="\x1b[1;2B",
     CtrlIns="\x1b[2;5~", ShiftIns="\x1b[2;2~", Tab="\t", Enter="\r",

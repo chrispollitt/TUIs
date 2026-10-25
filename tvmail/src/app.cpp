@@ -23,6 +23,7 @@ TMenuBar *TVMailApp::initMenuBar(TRect r)
                             *new TMenuItem("Empty ~t~rash...", cmEmptyTrash, kbNoKey, hcNoContext) +
                             newLine() +
                             *new TMenuItem("Edit si~g~nature", cmEditSig, kbNoKey, hcNoContext) +
+                            tvConfigItem() +
                             *new TMenuItem("Resume dead.~l~etter", cmResumeDead, kbNoKey, hcNoContext) +
                             tvExitItem() +
                             *new TSubMenu("~M~essage", kbAltM) +
@@ -190,6 +191,56 @@ void TVMailApp::markRead(int row)
 {
     if (row >= 0)
         mailMarkFocused(true);
+}
+
+// File > Edit configuration...: tvmail.conf in an editor window.  F9 checks the text with
+// `tvmail-backend check-config` (nothing is connected); F8 checks, saves, and has the
+// backend start afresh on it (it reads the file on every request; its IMAP connection is
+// dropped with it), then re-reads the folders.
+void TVMailApp::editConfig()
+{
+    ConfigSpec spec;
+    spec.title = "tvmail.conf";
+    const char *env = getenv("TVMAIL_CONF");
+    spec.path = env && *env ? std::string(env) : homePath(".config/tvmail/tvmail.conf");
+    const char *own = getenv("TVMAIL_CONFIG_SAMPLE"); // tests name their own
+    for (const char *p : {own ? own : "", "/usr/local/share/doc/tvmail/tvmail.conf.example",
+                          "/usr/share/doc/tvmail/tvmail.conf.example"})
+    {
+        if (!*p)
+            continue;
+        spec.sample = slurp(p);
+        if (!spec.sample.empty())
+            break;
+    }
+    if (spec.sample.empty())
+        spec.sample = "# tvmail configuration. NO PASSWORDS HERE: ~/.mu-tickets, ~/.netrc or\n"
+                      "# $TVMAIL_IMAP_PASS.  See man tvmail-backend.\n\n[service]\nmode = local\n";
+    spec.verify = [](const std::string &file, std::string &report)
+    {
+        std::string out = shCapture(backendCommand("check-config " + shq(file)) + " 2>&1; echo \"rc=$?\"");
+        size_t at = out.rfind("rc=");
+        int rc = at == std::string::npos ? 1 : atoi(out.c_str() + at + 3);
+        report = at == std::string::npos ? out : out.substr(0, at);
+        return rc == 0;
+    };
+    spec.apply = [this](std::string &msg)
+    {
+        mailBackend().stop(); // the next call starts a backend that reads the new file
+        std::string mode = backendRun("mode");
+        if (mode.rfind("local", 0) != 0 && mode.rfind("remote", 0) != 0)
+        {
+            msg = mode;
+            return false;
+        }
+        gRemote = mode.rfind("remote", 0) == 0;
+        std::vector<std::string> h = splitLines(backendRun("host"));
+        gHost = h.empty() ? std::string() : h.front();
+        reload();
+        msg = std::string("Applied: ") + (gRemote ? "remote, " : "local, ") + gHost;
+        return true;
+    };
+    openConfigWindow(deskTop, spec);
 }
 
 // ---- the optional link to tvchat -------------------------------------------
@@ -957,6 +1008,9 @@ void TVMailApp::handleEvent(TEvent &e)
         break;
     case cmSaveMsg:
         saveMsg(currentRow());
+        break;
+    case cmEditConfig:
+        editConfig();
         break;
     case cmChatWith:
         chatWithSender(currentRow());

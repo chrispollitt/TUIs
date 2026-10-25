@@ -44,6 +44,8 @@ public:
     // Start tvchat-backend and read the accounts and conversations.
     bool start();
     bool started() const { return isStarted; }
+    // Read the accounts and conversations again (after `reload-config` changed them).
+    void resync() { if (isStarted) sync(); }
     void stop();
 
     // One request; false if the co-process is gone (status/body as framed).

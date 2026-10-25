@@ -44,12 +44,11 @@ Smaller things
    conversation could "write an email to this contact" in tvmail (a request
    directory the other way). Never required, never the Delta Chat mailbox
    itself (that stays dedicated).
-13 Edit the config in the app - a window for tvchat.conf (accounts, their
-   servers and options) with a Verify (parse it, then try each account's login
-   without connecting for real) and a Reload that applies it to the running
-   backend, so no one edits the INI by hand. The passwords stay out of the file.
-   tvmail wants the same for tvmail.conf; share the window and the verify / reload
-   plumbing in tvcommon.
+13 The config editor (File > Edit configuration..., F9 verify, F8 save + apply) is a
+   plain text editor over the INI. To do: forms - an account list with a dialog per
+   protocol so nobody has to know the keys - and a Verify that tries each account's
+   login (IMAP / SMTP / SASL) without joining anything. The window and plumbing are
+   tvcommon's (configwin.cpp); tvmail has the same (tvmail/TO-DO.txt 24).
 
 Open questions
 - Should IRC logs persist to disk between sessions? Not for now: the log is

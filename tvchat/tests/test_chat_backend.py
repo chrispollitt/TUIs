@@ -2188,6 +2188,117 @@ class TestDeltaInvitations(DeltaBase):
         self.assertFalse(cb.invite_ok("a@ex.org", "https://i.delta.chat/#X"))     # names nobody
 
 
+class TestConfigEditing(Base):
+    """What the in-app config editor leans on: check-config (Verify) and
+    reload-config (apply)."""
+
+    def check(self, text):
+        f = self.tmp / "check.conf"
+        f.write_text(textwrap.dedent(text))
+        return cb.check_config(str(f))
+
+    def test_a_good_file_has_no_errors_and_says_what_it_holds(self):
+        errors, warnings, summary = self.check("""\
+            [chat]
+            autoconnect = a
+            [account:a]
+            protocol = irc
+            host = irc.example.org
+            [account:b]
+            protocol = talk
+            host = cpbee
+            """)
+        self.assertEqual((errors, summary), ([], "2 accounts: a (irc), b (talk)"))
+
+    def test_what_is_wrong_is_an_error(self):
+        errors, _, _ = self.check("[account:a]\nprotocol = irc\n")
+        self.assertEqual(errors, ["[account:a] host= is missing"])
+        errors, _, _ = self.check("[account:a]\nprotocol = irc\nhost = x\nport = 99999\n")
+        self.assertIn("port must be a port number", errors[0])
+        errors, _, _ = self.check("[account:a]\nprotocol = carrier-pigeon\n")
+        self.assertIn("protocol must be one of", errors[0])
+        errors, _, _ = self.check("[chat]\nautoconnect = ghost\n")
+        self.assertIn("no [account:ghost] section", errors[0])
+        errors, _, _ = self.check("[account:d]\nprotocol = deltachat\naddr = not an address\n")
+        self.assertIn("addr= must be the mailbox's email address", errors[0])
+        errors, _, _ = self.check("this is not an ini file\n")
+        self.assertTrue(errors)
+
+    def test_what_may_be_wrong_is_a_warning(self):
+        errors, warnings, _ = self.check("""\
+            [account:a]
+            protocol = irc
+            host = irc.example.org
+            sasl = me
+            cafile = /nonexistent/ca.pem
+            [account:d]
+            protocol = deltachat
+            addr = d@example.org
+            rpc_server = /nonexistent/core
+            """)
+        self.assertEqual(errors, [])
+        joined = "\n".join(warnings)
+        self.assertIn("no password found for me on irc.example.org", joined)
+        self.assertIn("cafile /nonexistent/ca.pem is not a file", joined)
+        self.assertIn("core /nonexistent/core was not found", joined)
+        self.assertIn("the first connect needs a password for d@example.org", joined)
+        os.environ["TVCHAT_PASS_A"] = "pw"
+        self.addCleanup(os.environ.pop, "TVCHAT_PASS_A", None)
+        _, warnings, _ = self.check("[account:a]\nprotocol = irc\nhost = x\nsasl = me\n")
+        self.assertEqual(warnings, [])
+
+    def test_the_verb_prints_and_exits_1_on_errors(self):
+        f = self.tmp / "v.conf"
+        f.write_text("[account:a]\nprotocol = irc\n")
+        st, body = cb.dispatch(cb.build_parser(), ["check-config", str(f)])
+        self.assertEqual(st, 1)
+        self.assertIn("error: [account:a] host= is missing", body.decode())
+        f.write_text("[account:a]\nprotocol = irc\nhost = x\n")
+        st, body = cb.dispatch(cb.build_parser(), ["check-config", str(f)])
+        self.assertEqual((st, body), (0, b"ok: 1 account: a (irc)\n"))
+
+    def test_reload_keeps_what_is_unchanged_and_follows_the_file(self):
+        p = self.conf("""\
+            [account:a]
+            protocol = irc
+            host = one.example.org
+            [account:b]
+            protocol = talk
+            host = cpbee
+            [account:c]
+            protocol = irc
+            host = three.example.org
+            """)
+        chat = cb._chat()
+        a0, c0 = chat.by_id["a"], chat.by_id["c"]
+        chat.adapter(chat.by_id["b"])
+        self.assertIn("b", chat.adapters)
+        p.write_text(textwrap.dedent("""\
+            [account:a]
+            protocol = irc
+            host = one.example.org
+            [account:c]
+            protocol = irc
+            host = changed.example.org
+            [account:d]
+            protocol = talk
+            host = new
+            """))
+        self.assertEqual(chat.reload_config(), "added d; removed b; changed c")
+        self.assertEqual([x.id for x in chat.accounts], ["a", "c", "d"])
+        self.assertIs(chat.by_id["a"], a0)                       # untouched: the same object
+        self.assertIsNot(chat.by_id["c"], c0)                    # changed: a fresh one
+        self.assertEqual(chat.by_id["c"].opts["host"], "changed.example.org")
+        self.assertNotIn("b", chat.adapters)
+        self.assertEqual(chat.reload_config(), "no change")
+        # a file that does not load changes nothing and says why
+        p.write_text("[account:a]\nprotocol = nonsense\n")
+        with self.assertRaises(cb.UserError):
+            chat.reload_config()
+        self.assertEqual([x.id for x in chat.accounts], ["a", "c", "d"])
+        self.assertEqual(cb.dispatch(cb.build_parser(), ["reload-config"])[0], 1)
+
+
 class TestDeltaChatRealCore(DeltaBase):
     """The real deltachat-rpc-server (on PATH, or $TVCHAT_TEST_DC_RPC), as far
     as it can go with no mailbox: it starts, answers, creates the account and

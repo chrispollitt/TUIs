@@ -240,6 +240,11 @@ TMenuItem &tvReloadItem()
     return *new TMenuItem("~R~eload", cmReload, kbF5, hcNoContext, "F5");
 }
 
+TMenuItem &tvConfigItem()
+{
+    return *new TMenuItem("Edit ~c~onfiguration...", cmEditConfig, kbNoKey, hcNoContext);
+}
+
 TMenuItem &tvFindItems(bool withReplace)
 {
     TMenuItem &m = *new TMenuItem("~F~ind...", cmFind, kbNoKey, hcNoContext);

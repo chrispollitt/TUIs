@@ -41,6 +41,10 @@ swap keys once: one runs Chat > Invite... and gives the link to the other,
 who pastes it into Chat > Join...; after that, Join with an address opens a
 chat. Unlike IRC, the history is kept by the core, so PgUp reads all of it.
 
+**Configuration** can be edited in the app: File > Edit configuration... opens
+`tvchat.conf` in a window; F9 verifies it (nothing is connected), F8 verifies, saves and
+applies it to the running backend - accounts you did not touch keep their connections.
+
 A lost connection comes back by itself: tvchat pings a quiet server, and
 reconnects after 2 s, 4 s, 8 s ... up to 5 minutes, rejoining its channels.
 What you send is paced (a burst of 5 lines, then 2 a second), so a long

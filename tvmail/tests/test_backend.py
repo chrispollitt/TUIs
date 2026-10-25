@@ -1999,5 +1999,60 @@ class TestVacation(Base):
         self.assertEqual(self.sieve.active, "")
 
 
+class TestCheckConfig(unittest.TestCase):
+    """tvmail-backend check-config: the in-app config editor's Verify."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="tvmail-cc-"))
+        self.addCleanup(shutil.rmtree, str(self.tmp), True)
+        self._env = dict(os.environ)
+        os.environ["HOME"] = str(self.tmp)
+        os.environ["TVMAIL_MU_TICKETS"] = str(self.tmp / "no-tickets")
+        os.environ.pop("TVMAIL_IMAP_PASS", None)
+        self.addCleanup(lambda: (os.environ.clear(), os.environ.update(self._env)))
+
+    def check(self, text):
+        f = self.tmp / "t.conf"
+        f.write_text(textwrap.dedent(text))
+        return be.check_config(str(f))
+
+    def test_local_is_fine(self):
+        errors, warnings, summary = self.check("[service]\nmode = local\n")
+        self.assertEqual((errors, summary), ([], "mode local"))
+
+    def test_errors(self):
+        self.assertIn("mode must be", self.check("[service]\nmode = hybrid\n")[0][0])
+        self.assertIn("port must be a port number", self.check("[imap]\nport = 99999\n")[0][0])
+        self.assertIn("ssl must be true or false", self.check("[imap]\nssl = maybe\n")[0][0])
+        self.assertIn("remote mode needs an IMAP host", self.check("[service]\nmode = remote\n")[0][0])
+        self.assertTrue(self.check("no section header here\n")[0])
+
+    def test_remote_warns_about_what_a_login_would_need(self):
+        errors, warnings, summary = self.check("""\
+            [service]
+            mode = remote
+            [imap]
+            host = mail.example.org
+            user = me
+            """)
+        self.assertEqual(errors, [])
+        self.assertTrue(any("no password found for mail.example.org" in w for w in warnings))
+        self.assertTrue(any("no SMTP host" in w for w in warnings))
+        self.assertEqual(summary, "mode remote, IMAP me@mail.example.org")
+        os.environ["TVMAIL_IMAP_PASS"] = "x"
+        _, warnings, _ = self.check("[service]\nmode = remote\n[imap]\nhost = h\n[smtp]\nhost = h\n")
+        self.assertEqual(warnings, [])
+
+    def test_the_verb(self):
+        f = self.tmp / "v.conf"
+        f.write_text("[service]\nmode = hybrid\n")
+        p = subprocess.run([sys.executable, str(BACKEND), "check-config", str(f)], capture_output=True, text=True)
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("error: [service] mode must be", p.stdout)
+        f.write_text("[service]\nmode = local\n")
+        p = subprocess.run([sys.executable, str(BACKEND), "check-config", str(f)], capture_output=True, text=True)
+        self.assertEqual((p.returncode, p.stdout), (0, "ok: mode local\n"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -370,6 +370,33 @@ def delta_group_rename_and_leave(opts):
     return tv
 
 
+@case()
+def config_editor_verify_and_apply(opts):
+    # File > Edit configuration...: F9 checks the text (nothing is saved), F8 checks,
+    # saves and has the running backend use it - a new account appears without a restart
+    tv, srv = chat_tv(opts)
+    c = Case(tv)
+    started(tv, c)
+    c.check(srv.wait_joined("#e2e"), "the chat backend never joined #e2e")
+    tv.send(alt("f"), "c", settle=1.0)
+    c.check(tv.wait("account:fake", 5) and tv.has("F9 verify"), "File > Edit configuration... did not open the file")
+    tv.send("CtrlEnd", "Enter", "[account:bad]", "Enter", "protocol = irc", "Enter", settle=0.6)
+    tv.send("F9", settle=1.2)
+    c.check(tv.wait("missing", 6) and tv.has("account:bad"), "Verify did not report the missing host")
+    tv.send("Enter", settle=0.5)
+    tv.send("host = 127.0.0.1", "Enter", settle=0.5)
+    tv.send("F9", settle=1.2)
+    c.check(tv.wait("checks out", 6), "Verify did not pass the corrected text")
+    tv.send("F8", settle=1.5)
+    c.check(tv.wait("Applied: added bad", 8), "Save + apply did not report the new account")
+    tv.send("AltF3", settle=0.8)                           # close the editor: nothing is unsaved
+    c.check(tv.wait(lambda: re.search(r"bad\s+.IRC", tv.text()), 6),
+            "the new account is not in the Servers pane after applying")
+    c.check(re.search(r"Fake\b.*\bYes\b", tv.text()), "the untouched account lost its connection")
+    c.check(tv.alive(), "tvchat exited")
+    return tv
+
+
 def talk_tv(opts, view=None):
     from fake_talkd import FakeTalkd
     srv = FakeTalkd()

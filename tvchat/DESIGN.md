@@ -358,6 +358,21 @@ names were checked against `--openrpc` and the `deltachat-rpc-client` source).
   window; a start that fails the first time is not retried. Disconnect asks the
   core to stop its I/O, then closes its stdin, which ends it.
 
+## The config editor
+
+File > Edit configuration... opens tvchat.conf in an editor window (tvcommon's
+`configwin.cpp`, shared with tvmail; a file that does not exist yet opens as the shipped
+example). **F9** verifies the text in the window: it is written to a temp file and checked
+with `tvchat-backend check-config FILE` - the file parses, every account has what its protocol
+needs, ports are numbers, and the things pointed at exist (a cafile, the Delta Chat core, a
+password for the login); `error:` lines stop an apply, `warning:` lines do not, nothing is
+connected. **F8** verifies, saves (the old file kept as `tvchat.conf.bak.DATE-TIME`) and
+applies: `reload-config` makes the running backend match the file - accounts the edit did
+not touch keep their connections and conversations, removed or changed ones are
+disconnected (a changed one that was live is connected again), new ones are added - and the
+UI re-reads the accounts; with no backend running (no config before) it is started.
+**Ctrl-S** only saves. Closing an edited window asks.
+
 ## Configuration
 
 `~/.config/tvchat/tvchat.conf` (INI; `$TVCHAT_CONF` overrides; no file = no

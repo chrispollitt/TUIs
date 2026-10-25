@@ -18,6 +18,7 @@ public:
 private:
     void chatEvents(); // cmChatEvents handler
     void aboutBox();
+    void editConfig(); // File > Edit configuration...
     // Periodic work.  idle() only decides that one is due and posts its
     // command; handleEvent() does the work, outside idle().  The chat
     // event poll is one.

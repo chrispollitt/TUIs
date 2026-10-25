@@ -62,6 +62,9 @@ INBOX/Archive/Trash/Drafts/Sent/Junk):
                             the master) postfix's generic map.  'addresses'
                             prints that table.  --force replaces whatever
                             other Sieve script is active
+  check-config FILE         check a tvmail.conf without connecting: 'error:' / 'warning:'
+                            lines and an 'ok:' summary; exit 1 on errors (the in-app
+                            config editor's Verify)
   ping                      print 'pong' - a liveness check
   mode                      print 'local' or 'remote'
   host                      print the IMAP host (remote) or this machine's
@@ -537,6 +540,63 @@ def _cred(host, user, envvar, scheme=None):
              "(%s://%s:PASS@%s), ~/.netrc (machine %s login %s password "
              "...), or set $%s"
              % (host, scheme or "*", user, host, host, user, envvar))
+
+
+def check_config(path):
+    """(errors, warnings, summary) for a tvmail.conf at `path` (the in-app editor's
+    Verify, and `check-config FILE`).  Nothing is connected to; what only a login
+    could tell is not claimed.  Errors stop a file being applied; warnings do not."""
+    errors, warnings = [], []
+    c = configparser.ConfigParser()
+    try:
+        with open(path, encoding="utf-8") as fh:
+            c.read_file(fh)
+    except (OSError, UnicodeDecodeError) as e:
+        return ["cannot read %s: %s" % (path, e)], [], ""
+    except configparser.Error as e:
+        return [str(e).splitlines()[0]], [], ""
+    mode = c.get("service", "mode", fallback="local").strip().lower()
+    if mode not in ("local", "remote"):
+        errors.append("[service] mode must be 'local' or 'remote' (got %r)" % mode)
+    for sect, key in (("imap", "port"), ("smtp", "port")):
+        v = c.get(sect, key, fallback="").strip()
+        if v and not (v.isdigit() and 0 < int(v) < 65536):
+            errors.append("[%s] port must be a port number (1-65535), not %r" % (sect, v))
+    for sect, key in (("imap", "ssl"), ("imap", "verify"), ("smtp", "starttls")):
+        try:
+            c.getboolean(sect, key, fallback=None)
+        except ValueError:
+            errors.append("[%s] %s must be true or false (got %r)" % (sect, key, c.get(sect, key)))
+    cafile = c.get("imap", "cafile", fallback="").strip()
+    if cafile and not os.path.isfile(os.path.expanduser(cafile)):
+        warnings.append("[imap] cafile %s is not a file" % cafile)
+    where = ""
+    if mode == "remote" and not errors:
+        mu_in, mu_out = _mu_mailbox() or {}, _mu_mailer() or {}
+        host = c.get("imap", "host", fallback="").strip() or mu_in.get("host")
+        if not host:
+            errors.append("remote mode needs an IMAP host: [imap] host= (or a mailbox in ~/.mail)")
+        else:
+            user = c.get("imap", "user", fallback="").strip() or mu_in.get("user") or _me()
+            where = "IMAP %s@%s" % (user, host)
+            have = bool(os.environ.get("TVMAIL_IMAP_PASS")) or \
+                _mu_ticket_pass(mu_in.get("scheme") or "imaps", host, user) is not None
+            if not have:
+                try:
+                    import netrc
+                    a = netrc.netrc(os.path.expanduser("~/.netrc")).authenticators(host)
+                    have = bool(a and a[2])
+                except (OSError, netrc.NetrcParseError):
+                    pass
+            if not have:
+                warnings.append("no password found for %s: ~/.mu-tickets, ~/.netrc (machine %s login %s) "
+                                "or $TVMAIL_IMAP_PASS" % (host, host, user))
+        if not (c.get("smtp", "host", fallback="").strip() or mu_out.get("host")):
+            warnings.append("no SMTP host ([smtp] host= or ~/.mail): sending will not work")
+    pull = c.get("local", "pull", fallback="").strip()
+    if mode == "local" and pull and not shutil.which(pull.split()[0]):
+        warnings.append("[local] pull: %s was not found on PATH" % pull.split()[0])
+    return errors, warnings, "mode %s%s" % (mode, ", " + where if where else "")
 
 
 _IMAP = None
@@ -1421,6 +1481,19 @@ def cmd_compose_template(a):
     return 0
 
 
+def cmd_check_config(a):
+    """check-config FILE: what is wrong with (or worth knowing about) a tvmail.conf;
+    exit 1 when there are errors."""
+    errors, warnings, summary = check_config(a.file)
+    for e in errors:
+        sys.stdout.write("error: %s\n" % e)
+    for w in warnings:
+        sys.stdout.write("warning: %s\n" % w)
+    if not errors:
+        sys.stdout.write("ok: %s\n" % summary)
+    return 1 if errors else 0
+
+
 def cmd_send(a):
     data = sys.stdin.buffer.read()
     looks_rfc822 = data[:200].lstrip().lower().startswith((
@@ -2191,6 +2264,7 @@ def build_parser():
     p.add_argument("--forward", type=int); p.add_argument("--reply-all", action="store_true")
     p.add_argument("mbox", nargs="?")
     p.set_defaults(fn=cmd_compose_template)
+    p = sub.add_parser("check-config"); p.add_argument("file"); p.set_defaults(fn=cmd_check_config)
     p = sub.add_parser("send")
     p.add_argument("--from", dest="getfrom"); p.add_argument("--to", action="append", default=[])
     p.add_argument("--subject"); p.set_defaults(fn=cmd_send)

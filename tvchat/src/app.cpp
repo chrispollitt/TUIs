@@ -64,6 +64,7 @@ TMenuBar *TVChatApp::initMenuBar(TRect r)
     r.b.y = r.a.y + 1;
     return new TVChatMenuBar(r,
                         *new TSubMenu("~F~ile", kbAltF) +
+                            tvConfigItem() +
                             tvReloadItem() +
                             tvExitItem() +
                             chatSubMenu() +
@@ -150,6 +151,68 @@ void TVChatApp::chatEvents()
         statusLine->drawView(); // "N new"
 }
 
+// File > Edit configuration...: tvchat.conf in an editor window.  F9 checks the text with
+// `tvchat-backend check-config` (nothing is connected); F8 checks, saves and tells the
+// running backend to use it (`reload-config`: accounts untouched by the edit keep their
+// connections), or starts it if there was no config before.
+void TVChatApp::editConfig()
+{
+    ConfigSpec spec;
+    spec.title = "tvchat.conf";
+    spec.path = ChatClient::confPath();
+    for (const char *p : {"/usr/local/share/doc/tvchat/tvchat.conf.example", "/usr/share/doc/tvchat/tvchat.conf.example"})
+    {
+        spec.sample = slurp(p);
+        if (!spec.sample.empty())
+            break;
+    }
+    if (spec.sample.empty())
+        spec.sample = "# tvchat configuration (read by tvchat-backend). NO PASSWORDS HERE:\n"
+                      "# ~/.netrc or $TVCHAT_PASS_<ACCOUNT>.  See man tvchat-backend.\n\n"
+                      "[chat]\n#autoconnect = libera\n\n[account:libera]\nprotocol = irc\nhost = irc.libera.chat\n"
+                      "nick = yournick\n";
+    spec.verify = [](const std::string &file, std::string &report)
+    {
+        std::string out = shCapture("tvchat-backend check-config " + shq(file) + " 2>&1; echo \"rc=$?\"");
+        size_t at = out.rfind("rc=");
+        int rc = at == std::string::npos ? 1 : atoi(out.c_str() + at + 3);
+        report = at == std::string::npos ? out : out.substr(0, at);
+        return rc == 0;
+    };
+    spec.apply = [this](std::string &msg)
+    {
+        ChatClient &cc = ChatClient::instance();
+        if (cc.started())
+        {
+            std::string body;
+            int st = -1;
+            if (!cc.request("reload-config", body, st))
+            {
+                msg = "tvchat-backend is not answering.";
+                return false;
+            }
+            if (st != 0)
+            {
+                msg = body;
+                return false;
+            }
+            msg = "Applied: " + body.substr(0, body.find('\n'));
+        }
+        else if (!cc.start())
+        {
+            msg = "tvchat-backend would not start with this file.";
+            return false;
+        }
+        else
+            msg = "Applied: tvchat-backend started";
+        cc.resync();
+        message(deskTop, evBroadcast, cmChatReset, nullptr);
+        chatMenuRebuild();
+        return true;
+    };
+    openConfigWindow(deskTop, spec);
+}
+
 void TVChatApp::aboutBox()
 {
     tvAboutBox(deskTop, "tvchat", TVCHAT_VERSION,
@@ -188,6 +251,9 @@ void TVChatApp::handleEvent(TEvent &e)
     }
     case cmAboutBox:
         aboutBox();
+        break;
+    case cmEditConfig:
+        editConfig();
         break;
     default:
         return;
