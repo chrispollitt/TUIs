@@ -116,6 +116,12 @@ void TTvApp::handleEvent(TEvent &e)
         clearEvent(e);
         return;
     }
+    if (e.what == evCommand && e.message.command == cmNotifications)
+    {
+        notifyHistoryWindow(deskTop);
+        clearEvent(e);
+        return;
+    }
     if (e.what == evCommand && e.message.command == cmWindowList)
     {
         windowList();
@@ -254,6 +260,12 @@ TMenuItem &tvFindItems(bool withReplace)
     return m + *new TMenuItem("Find a~g~ain", cmSearchAgain, kbNoKey, hcNoContext);
 }
 
+void TTvApp::idle()
+{
+    TApplication::idle();
+    notifyTick();
+}
+
 TSubMenu &tvWindowMenu()
 {
     return *new TSubMenu("~W~indow", kbAltW) +
@@ -263,6 +275,7 @@ TSubMenu &tvWindowMenu()
            *new TMenuItem("~T~ile", cmTile, kbNoKey, hcNoContext) +
            *new TMenuItem("C~a~scade", cmCascade, kbNoKey, hcNoContext) +
            *new TMenuItem("~L~ist...", cmWindowList, kbAlt0, hcNoContext, "Alt-0") +
+           *new TMenuItem("Notification ~h~istory...", cmNotifications, kbNoKey, hcNoContext) +
            *new TMenuItem("~R~edraw screen", cmRedrawScreen, kbCtrlL, hcNoContext, "Ctrl-L") +
            newLine() +
            *new TMenuItem("~C~lose", cmClose, kbAltF3, hcNoContext, "Alt-F3");

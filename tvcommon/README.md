@@ -4,6 +4,18 @@ What [tvmail](../tvmail/README.md) and [tvchat](../tvchat/README.md) share.
 It is not an app: each app's `CMakeLists.txt` includes `tvcommon.cmake` and
 compiles `src/` into its own executable. Nothing here knows about mail or chat.
 
+## Toasts instead of pop-ups
+
+A message that needs no answer is `notify(text, level)` (notify.cpp), not an OK box: a small
+note at the bottom right of the desktop that takes no focus and no key and goes away by
+itself (info 4 s, warnings 7 s, errors 10 s; a click removes it; at most four show, newest
+at the bottom). Every one - and every status-line flash - is kept in the history, **Window >
+Notification history** (newest first, 500 kept, in memory). Boxes stay for questions (Yes /
+No, "save changes?"). The toasts are views of the application group, so they sit over windows
+and dialogs, and expire from `idle()` (`TTvApp::idle` calls `notifyTick`), not from a timer,
+so one raised while a dialog is open still goes away on time. An app's own `idle()` must call
+`TTvApp::idle()`.
+
 ## What is in it
 
 | path | what |
@@ -15,6 +27,8 @@ compiles `src/` into its own executable. Nothing here knows about mail or chat.
 | `src/shell.cpp`, `util.cpp` | the sh plumbing (`shCapture`, `shInteractive`), `--debug` / `--trace` and the helper's log names; quoting, UTF-8 column fitting, the clipboard |
 | `src/cli.cpp` | the command line both apps take (`--help`, `--version`, `--selftest`, `--debug [FILE]`, `--trace [FILE]`) and the `ESCDELAY` setting |
 | `src/tty.cpp` | `mesg n` while the app runs (`[ui] mesg` in the app's .conf): the terminal's group-write bit is cleared so `talk` and `wall` do not write over the windows, and put back on exit, around a helper, on stop and on a signal |
+| `src/notify.cpp` | `notify()`: toasts and their history (below) |
+| `src/configwin.cpp` | the config editor window both apps open from File > Edit configuration...: F9 verify, F8 save + apply, driven by a `ConfigSpec` (the file, the checker, the apply step) |
 | `src/dialogs.cpp`, `textwin.cpp` | the Find / Replace dialogs; the read-only text window (Help) |
 | `tvcommon.cmake` | locates Turbo Vision, sets the Cygwin defines and the shell the helper scripts run through |
 | `third_party.sh` | fetches Turbo Vision (patched by `patches/`) and chrispollitt/POSIX's `mail-setup` + `chat-setup` once into `third_party/`, for both apps |

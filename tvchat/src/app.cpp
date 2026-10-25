@@ -103,7 +103,7 @@ void TVChatApp::post(ushort command)
 
 void TVChatApp::idle()
 {
-    TApplication::idle();
+    TTvApp::idle();
     // Nothing is posted while a menu or a dialog is up (tvmail bug #44):
     // any command ends a tvision menu, so the 250 ms poll shut every menu at
     // once, and a dialog swallows what it does not know.  Events wait in
@@ -140,7 +140,7 @@ void TVChatApp::chatEvents()
         accounts = accounts || ev.fields[0] == "state";
         invited = invited || ev.fields[0] == "invite";
         if (ev.fields[0] == "notice" && ev.fields.size() > 1) // e.g. tvmail asked for a chat
-            flashStatus(ev.fields[1]);
+            notify(ev.fields[1]);
         message(deskTop, evBroadcast, cmChatEvent, (void *)&ev);
     }
     if (accounts)

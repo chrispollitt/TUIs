@@ -795,7 +795,7 @@ class TChatMainWindow : public TWindow
     {
         std::string body, err;
         if (!ask("answer " + shq(conv), body, err))
-            flashStatus(err);
+            notify(err, noteError);
         pollNow();
     }
     bool isServer() const
@@ -888,7 +888,7 @@ class TChatMainWindow : public TWindow
         std::string body, err;
         if (!ask("history " + shq(conv) + " --before " + shq(oldest), body, err))
         {
-            flashStatus(err);
+            notify(err, noteError);
             return;
         }
         std::vector<ChatLine> older;
@@ -1097,7 +1097,7 @@ class TChatMainWindow : public TWindow
         else if (t == "talk" && f.size() >= 3)
         {
             if (f[2] == "incoming" && (f[1] != conv || !front()))
-                flashStatus(convName(f[1]) + " is calling (talk) - pick them in the chat window, Enter answers");
+                notify(convName(f[1]) + " is calling (talk) - pick them in the chat window, Enter answers");
             if (f[2] == "ended" && f[1] == conv)
                 talk->cur.clear();
             convs->drawView();
@@ -1164,7 +1164,7 @@ public:
                      : ch == '\\' ? "\\\\" : std::string(1, ch);
             std::string body, err;
             if (!ask("keys " + shq(conv) + " " + shq(esc), body, err))
-                flashStatus(err);
+                notify(err, noteError);
             else if (k == "\n")
                 pollNow(); // our finished line, from the backend, at once
         };
@@ -1487,7 +1487,7 @@ void connectAccount(const ChatAccount &a)
 {
     std::string body, err;
     if (!ask("connect " + shq(a.id), body, err))
-        messageBox(mfError | mfOKButton, "%s", err.c_str());
+        notify(err, noteError);
     pollNow(); // `connecting` into the model: the fast poll starts
 }
 
@@ -1496,7 +1496,7 @@ void connectDialog()
     std::vector<int> cand = accountsWhere(false);
     if (cand.empty())
     {
-        messageBox("Every chat account is connected already.", mfInformation | mfOKButton);
+        notify("Every chat account is connected already.", noteInfo);
         return;
     }
     int i = pickAccount("Connect", cand);
@@ -1509,7 +1509,7 @@ void disconnectDialog()
     std::vector<int> cand = accountsWhere(true);
     if (cand.empty())
     {
-        messageBox("No chat account is connected.", mfInformation | mfOKButton);
+        notify("No chat account is connected.", noteInfo);
         return;
     }
     int i = pickAccount("Disconnect", cand);
@@ -1517,7 +1517,7 @@ void disconnectDialog()
         return;
     std::string body, err;
     if (!ask("disconnect " + shq(chat().accounts()[i].id), body, err))
-        messageBox(mfError | mfOKButton, "%s", err.c_str());
+        notify(err, noteError);
     pollNow();
 }
 
@@ -1528,7 +1528,7 @@ void joinDialog()
     std::vector<int> cand = accountsWhere(true);
     if (cand.empty())
     {
-        messageBox("Connect a chat account first (Chat > Connect...).", mfInformation | mfOKButton);
+        notify("Connect a chat account first (Chat > Connect...).", noteInfo);
         return;
     }
     const auto &as = chat().accounts();
@@ -1572,7 +1572,7 @@ void joinDialog()
     std::string body, err;
     if (!ask("join " + shq(as[cand[sel]].id) + " " + shq(target), body, err))
     {
-        messageBox(mfError | mfOKButton, "%s", err.c_str());
+        notify(err, noteError);
         return;
     }
     pollNow(); // conv-new: the list shows it with its name
@@ -1594,7 +1594,7 @@ void inviteDialog()
             cand.push_back(i);
     if (cand.empty())
     {
-        messageBox("Connect a Delta Chat account first (Chat > Connect...).", mfInformation | mfOKButton);
+        notify("Connect a Delta Chat account first (Chat > Connect...).", noteInfo);
         return;
     }
     int i = pickAccount("Invite", cand);
@@ -1603,7 +1603,7 @@ void inviteDialog()
     std::string body, err;
     if (!ask("invite " + shq(as[i].id), body, err))
     {
-        messageBox(mfError | mfOKButton, "%s", err.c_str());
+        notify(err, noteError);
         return;
     }
     // The link, and - if tvmail is installed - a box to mail it through tvmail's account.
@@ -1631,7 +1631,7 @@ void inviteDialog()
     std::string to = il && il->data ? trimmed(il->data) : std::string();
     TObject::destroy(d);
     if (!to.empty() && !ask("invite-mail " + shq(as[i].id) + " " + shq(to), body, err))
-        messageBox(mfError | mfOKButton, "%s", err.c_str());
+        notify(err, noteError);
     pollNow();
 }
 
@@ -1644,7 +1644,7 @@ void acceptInviteDialog()
     std::string body, err;
     if (!ask("invites", body, err))
     {
-        messageBox(mfError | mfOKButton, "%s", err.c_str());
+        notify(err, noteError);
         return;
     }
     std::vector<std::string> lines;
@@ -1659,7 +1659,7 @@ void acceptInviteDialog()
     }
     if (lines.empty())
     {
-        messageBox("No chat invitations are waiting.", mfInformation | mfOKButton);
+        notify("No chat invitations are waiting.", noteInfo);
         return;
     }
     for (const std::string &l : lines)
@@ -1676,7 +1676,7 @@ void acceptInviteDialog()
         {
             std::string conv;
             if (!ask("accept-invite " + shq(f[0]) + " " + shq(f[1]), conv, err))
-                messageBox(mfError | mfOKButton, "%s", err.c_str());
+                notify(err, noteError);
             else
             {
                 pollNow();
@@ -1686,7 +1686,7 @@ void acceptInviteDialog()
             }
         }
         else if (!ask("decline-invite " + shq(f[0]) + " " + shq(f[1]), body, err))
-            messageBox(mfError | mfOKButton, "%s", err.c_str());
+            notify(err, noteError);
     }
     pollNow();
 }
@@ -1719,7 +1719,7 @@ void newGroupDialog()
             cand.push_back(i);
     if (cand.empty())
     {
-        messageBox("Connect a Delta Chat account first (Chat > Connect...).", mfInformation | mfOKButton);
+        notify("Connect a Delta Chat account first (Chat > Connect...).", noteInfo);
         return;
     }
     int i = pickAccount("New group", cand);
@@ -1758,7 +1758,7 @@ void newGroupDialog()
     std::string body, err;
     if (!ask(req, body, err))
     {
-        messageBox(mfError | mfOKButton, "%s", err.c_str());
+        notify(err, noteError);
         return;
     }
     pollNow();
@@ -1780,7 +1780,7 @@ void groupAddDialog()
         return;
     std::string body, err;
     if (!ask("group-add " + shq(cv) + " " + shq(trimmed(buf)), body, err))
-        messageBox(mfInformation | mfOKButton, "%s", err.c_str()); // e.g. "no key yet - invited by mail"
+        notify(err, noteWarn); // e.g. "no key yet - invited by mail"
     pollNow();
 }
 
@@ -1795,7 +1795,7 @@ void groupRemoveDialog()
     std::string body, err;
     if (!ask("members " + shq(cv), body, err))
     {
-        messageBox(mfError | mfOKButton, "%s", err.c_str());
+        notify(err, noteError);
         return;
     }
     std::vector<std::vector<std::string>> who;
@@ -1814,7 +1814,7 @@ void groupRemoveDialog()
     }
     if (who.empty())
     {
-        messageBox("This group has no other members.", mfInformation | mfOKButton);
+        notify("This group has no other members.", noteInfo);
         return;
     }
     TSItem *items = nullptr;
@@ -1838,7 +1838,7 @@ void groupRemoveDialog()
     if (r == cmCancel || sel >= who.size())
         return;
     if (!ask("group-remove " + shq(cv) + " " + shq(who[sel][0]), body, err))
-        messageBox(mfError | mfOKButton, "%s", err.c_str());
+        notify(err, noteError);
     pollNow();
 }
 
@@ -1858,7 +1858,7 @@ void groupRenameDialog()
         return;
     std::string body, err;
     if (!ask("group-rename " + shq(cv) + " " + shq(trimmed(buf)), body, err))
-        messageBox(mfError | mfOKButton, "%s", err.c_str());
+        notify(err, noteError);
     pollNow();
 }
 
@@ -1889,7 +1889,7 @@ void leaveShown()
     std::string body, err;
     if (!ask("part " + shq(gChatWin->convId()), body, err))
     {
-        messageBox(mfError | mfOKButton, "%s", err.c_str());
+        notify(err, noteError);
         return;
     }
     pollNow();

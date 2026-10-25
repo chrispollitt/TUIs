@@ -146,7 +146,7 @@ void TVMailApp::resumeDeadLetter()
     std::string raw = readDeadLetter();
     if (raw.empty())
     {
-        messageBox("~/dead.letter is empty.", mfInformation | mfOKButton);
+        notify("~/dead.letter is empty.", noteInfo);
         return;
     }
     openCompose(raw, "", -1, /*addSig=*/false);
@@ -175,7 +175,7 @@ void TVMailApp::deleteMsg(int row)
     std::string out = shCapture(cmd + " 2>&1");
     reload();
     if (!out.empty() && out.rfind("deleted", 0) != 0)
-        messageBox(out.c_str(), mfInformation | mfOKButton);
+        notify(out, noteInfo);
 }
 
 // Mark read / unread.  The window does the work (backend call, flag, folder
@@ -382,9 +382,9 @@ bool needTvchat()
 {
     if (tvchatInstalled())
         return true;
-    messageBox("tvchat is not installed here.\n\nThis only hands the request to it; install tvchat\n"
-               "(and a Delta Chat account) to use it.",
-               mfInformation | mfOKButton);
+    notify("tvchat is not installed here. This only hands the request to it: install tvchat "
+           "(and a Delta Chat account) to use it.",
+           noteWarn);
     return false;
 }
 } // namespace
@@ -398,17 +398,15 @@ void TVMailApp::chatWithSender(int row)
     std::string addr = senderOf(shCapture(backendCommand("raw " + std::to_string(gRows[row].idx) + " " + gMbox)));
     if (addr.empty())
     {
-        messageBox("This message has no sender address to chat with.", mfInformation | mfOKButton);
+        notify("This message has no sender address to chat with.", noteInfo);
         return;
     }
     std::string err;
     if (!writeChatRequest("chat " + addr, err))
-        messageBox(err.c_str(), mfError | mfOKButton);
+        notify(err, noteError);
     else
-        messageBox(("Asked tvchat to chat with " + addr + ".\n\nIt picks that up within a couple of seconds\n"
-                    "if it is running, or when you next start it.")
-                       .c_str(),
-                   mfInformation | mfOKButton);
+        notify("Asked tvchat to chat with " + addr + ". It picks that up within a couple of seconds "
+               "if it is running, or when you next start it.");
 }
 
 // Message > Open chat invite: this message holds a Delta Chat invite link;
@@ -420,16 +418,15 @@ void TVMailApp::openChatInvite(int row)
     std::string link = inviteLinkIn(shCapture(backendCommand("raw " + std::to_string(gRows[row].idx) + " " + gMbox)));
     if (link.empty())
     {
-        messageBox("This message holds no Delta Chat invite link.", mfInformation | mfOKButton);
+        notify("This message holds no Delta Chat invite link.", noteInfo);
         return;
     }
     std::string err;
     if (!writeChatRequest("invite " + link, err))
-        messageBox(err.c_str(), mfError | mfOKButton);
+        notify(err, noteError);
     else
-        messageBox("Handed the invitation to tvchat.\n\nIt asks whether to accept - in tvchat, if it is running,\n"
-                   "or when you next start it.",
-                   mfInformation | mfOKButton);
+        notify("Handed the invitation to tvchat. It asks whether to accept - in tvchat, if it is "
+               "running, or when you next start it.");
 }
 
 // File > Save message as...: the raw RFC822 message (headers, attachments and
@@ -447,9 +444,9 @@ void TVMailApp::saveMsg(int row)
     while (!out.empty() && (out.back() == '\n' || out.back() == ' '))
         out.pop_back();
     if (out.empty())
-        messageBox(("Saved to " + dest).c_str(), mfInformation | mfOKButton);
+        notify(("Saved to " + dest), noteInfo);
     else
-        messageBox(out.c_str(), mfError | mfOKButton);
+        notify(out, noteError);
 }
 
 // File > Out of office...: an auto-reply has to run where the mail arrives, so
@@ -463,9 +460,9 @@ void TVMailApp::outOfOffice()
     {
         while (!st.empty() && (st.back() == '\n' || st.back() == ' '))
             st.pop_back();
-        messageBox(st.empty() ? "Could not read the out-of-office settings\n(is tvmail-backend up to date?)."
-                              : st.c_str(),
-                   mfError | mfOKButton);
+        notify(st.empty() ? std::string("Could not read the out-of-office settings (is tvmail-backend up to date?).")
+                          : st,
+               noteError);
         return;
     }
     std::string state, otherActive, subject = "Out of office", days = "7", start, end, addresses;
@@ -661,13 +658,11 @@ void TVMailApp::outOfOffice()
             out.pop_back();
         if (ok)
         {
-            messageBox((on & 1) ? "Out-of-office reply is ON.\n\nThe server answers for you from now on, even with tvmail closed."
-                                : "Out-of-office reply is OFF.",
-                       mfInformation | mfOKButton);
+            notify((on & 1) ? "Out-of-office reply is ON. The server answers for you from now on, even with tvmail closed."
+                            : "Out-of-office reply is OFF.");
             return;
         }
-        messageBox(out.empty() ? "The server did not accept the change." : out.c_str(),
-                   mfError | mfOKButton);
+        notify(out.empty() ? std::string("The server did not accept the change.") : out, noteError);
         // and round again, with the entries as typed
     }
 }
@@ -710,7 +705,7 @@ void TVMailApp::moveMsg(int row)
     std::string out = shCapture(cmd + " 2>&1");
     reload();
     if (!out.empty() && out.rfind("deleted", 0) != 0)
-        messageBox(out.c_str(), mfInformation | mfOKButton);
+        notify(out, noteInfo);
 }
 
 void TVMailApp::purgeDialog()
@@ -779,7 +774,7 @@ void TVMailApp::purgeDialog()
 
     if (from.empty() && subj.empty() && to.empty() && days.empty() && seenSel == 0)
     {
-        messageBox("Enter at least one filter.", mfError | mfOKButton);
+        notify("Enter at least one filter.", noteError);
         return;
     }
 
@@ -818,8 +813,7 @@ void TVMailApp::purgeDialog()
     }
     if (n <= 0)
     {
-        messageBox(n == 0 ? "Nothing matches that filter." : preview.c_str(),
-                   (n == 0 ? mfInformation : mfError) | mfOKButton);
+        notify(n == 0 ? std::string("Nothing matches that filter.") : preview, n == 0 ? noteInfo : noteError);
         return;
     }
     if (messageBox(mfConfirmation | mfYesNoCancel, "Purge %d message(s)?", n) != cmYes)
@@ -827,7 +821,7 @@ void TVMailApp::purgeDialog()
     std::string out = shCapture(cmd + " 2>&1");
     reload();
     if (!out.empty() && out.rfind("purged", 0) != 0)
-        messageBox(out.c_str(), mfInformation | mfOKButton);
+        notify(out, noteInfo);
 }
 
 void TVMailApp::emptyTrash()
@@ -848,12 +842,12 @@ void TVMailApp::emptyTrash()
     }
     if (n < 0)
     {
-        messageBox(preview.c_str(), mfError | mfOKButton);
+        notify(preview, noteError);
         return;
     }
     if (n == 0)
     {
-        messageBox("The trash is already empty.", mfInformation | mfOKButton);
+        notify("The trash is already empty.", noteInfo);
         return;
     }
     if (messageBox(mfConfirmation | mfYesNoCancel,
@@ -862,7 +856,7 @@ void TVMailApp::emptyTrash()
     std::string out = shCapture(cmd + " 2>&1");
     reload();
     if (!out.empty() && out.rfind("purged", 0) != 0)
-        messageBox(out.c_str(), mfInformation | mfOKButton);
+        notify(out, noteInfo);
 }
 
 void TVMailApp::pullMail()
@@ -900,7 +894,7 @@ void TVMailApp::post(ushort command)
 
 void TVMailApp::idle()
 {
-    TApplication::idle();
+    TTvApp::idle();
     // Nothing is posted while a menu or a dialog is up (bug #44, found
     // when chat was part of tvmail): any command ends a tvision menu, and a
     // dialog swallows what it does not know.  A finished pull is reaped
@@ -956,8 +950,7 @@ void TVMailApp::pullFinished()
     }
     if (tail.empty())
         tail = "Pull finished (no output).";
-    messageBox(tail.c_str(),
-               (pullExit >= 2 ? mfError : mfInformation) | mfOKButton);
+    notify(tail, pullExit >= 2 ? noteError : noteInfo);
 #endif
 }
 

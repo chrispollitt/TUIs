@@ -29,7 +29,7 @@ class TSigWindow : public TWindow
                 return true;
             }
         }
-        messageBox("Cannot write the signature file.", mfError | mfOKButton);
+        notify("Cannot write the signature file.", noteError);
         return false;
     }
 

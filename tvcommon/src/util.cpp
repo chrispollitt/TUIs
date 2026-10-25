@@ -117,6 +117,7 @@ void flashStatus(const std::string &msg)
 {
     if (!TProgram::statusLine || !TProgram::application)
         return;
+    notifyRecordFlash(msg);
     TColorAttr c = vga(0x1F);
     TDrawBuffer b;
     short w = TProgram::statusLine->size.x; // whole line, as in showBusy()

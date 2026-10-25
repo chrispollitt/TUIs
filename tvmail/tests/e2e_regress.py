@@ -220,9 +220,29 @@ def chat_with_sender_leaves_a_request(opts):
     tv.send(alt("m"), "t", settle=0.8)
     c.check(tv.wait("Asked tvchat to chat with", 5) and tv.has("bob@example.com."),
             "Message > Chat with sender did not say it asked tvchat")
-    tv.send("Enter", settle=0.4)
     c.check(requests_of(tv) == ["chat bob@example.com"],
             "the request file is wrong: %r" % requests_of(tv))
+    return tv
+
+
+@case()
+def toast_appears_goes_away_and_is_kept(opts):
+    # a message that needs no answer is a toast at the bottom right, not a box: it takes no
+    # key, goes away by itself, and stays in Window > Notification history
+    tv = chat_link_tv(opts)
+    c = Case(tv)
+    started(tv, c)
+    tv.send(alt("m"), "i", settle=0.8)
+    c.check(tv.wait("holds no Delta Chat", 5), "no toast for a message without a link")
+    p = tv.find("holds no Delta Chat")
+    c.check(p and p[1] > 40 and p[0] > 18, "the toast is not at the bottom right: %r" % (p,))
+    # nothing modal: a key goes to the window behind it (Tab moves to the message pane)
+    tv.send("Tab", settle=0.5)
+    c.check(tv.has("[ Messages ]") or tv.has("Messages"), "the toast took the key")
+    c.check(tv.wait(lambda: not tv.has("holds no Delta Chat"), 9), "the toast did not go away by itself")
+    tv.send(alt("w"), "h", settle=1.0)
+    c.check(tv.wait("Notification history", 4) and tv.has("holds no Delta Chat invite link"),
+            "the history does not hold the toast")
     return tv
 
 
@@ -236,14 +256,12 @@ def chat_invite_in_a_message_goes_to_tvchat(opts):
     tv.send(alt("m"), "i", settle=0.8)
     c.check(tv.wait("Handed the invitation to tvchat.", 6),
             "Message > Open chat invite did not hand the link over")
-    tv.send("Enter", settle=0.4)
     c.check(requests_of(tv) == ["invite https://i.delta.chat/#ABC123&v=3&a=carol%40example.org&n="],
             "the request file is wrong: %r" % requests_of(tv))
     # a message without a link says so and leaves nothing
     tv.send("Down", settle=0.6)
     tv.send(alt("m"), "i", settle=0.8)
     c.check(tv.wait("holds no Delta Chat", 5), "a message without a link was not refused")
-    tv.send("Enter", settle=0.4)
     c.check(len(requests_of(tv)) == 1, "a request was written for a message without a link")
     return tv
 
@@ -273,7 +291,6 @@ def config_editor_verify_and_apply(opts):
     tv.send("F8", settle=1.5)
     c.check(tv.wait("must be a port", 6), "a bad port was not reported")
     c.check("99999" not in tv.conf.read_text(), "a file with an error was saved")
-    tv.send("Enter", settle=0.5)
     tv.send("AltF3", settle=0.6)
     c.check(tv.wait("Save changes to", 4), "closing the edited window did not ask")
     tv.send("n", settle=0.6)

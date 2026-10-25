@@ -75,6 +75,12 @@ are remote clients.
   instead (`./configure.sh --role client`).
 - No credentials live anywhere in this project.
 
+## Notifications
+
+Messages that need no answer ("Message sent", "Saved to ...", errors) are **toasts** - a note at
+the bottom right that takes no key and goes away by itself. Window > Notification history keeps
+them. Questions (delete? save changes?) are still boxes.
+
 ## Configuration
 
 File > Edit configuration... opens `tvmail.conf` in a window (a new file starts as the shipped

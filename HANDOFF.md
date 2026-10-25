@@ -51,6 +51,13 @@ wizard) - cpbee still runs the temporary script's setup, re-running
 leaks made a root-owned Dovecot file unreadable and stopped all local delivery
 for minutes - check file modes after `sudo` scripts.
 
+Also Oct 25: tvchat's Invite can mail the link through tvmail (the reverse link);
+**File > Edit configuration...** in both apps (F9 verify, F8 save + apply: tvcommon's
+configwin.cpp, `check-config` in both backends, `reload-config` in tvchat's); and
+**toasts** (tvcommon/notify.cpp: `notify()` instead of an OK box for anything that needs no
+answer; Window > Notification history). Left there: forms for the config editor and a Verify
+that tries the logins (TO-DO tvchat 13 / tvmail 24); history is in memory only.
+
 Done Oct 25 (all on main): joining an address mails the invitation and the other
 tvchat asks to accept; the optional tvmail link (Message > Chat with sender / Open
 chat invite, via `~/.local/state/tvchat/requests`); Chat > Leave for Delta Chat

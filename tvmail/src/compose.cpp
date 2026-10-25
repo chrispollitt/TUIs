@@ -209,7 +209,7 @@ public:
     {
         if (strip(toLine->data ? toLine->data : "").empty())
         {
-            messageBox("Enter at least one To: address.", mfError | mfOKButton);
+            notify("Enter at least one To: address.", noteError);
             return;
         }
         std::string path = writeTemp(buildMessage(), ".eml");
@@ -221,7 +221,7 @@ public:
         {
             sent = True;
             dropSourceDraft(); // if this was a saved draft
-            messageBox("Message sent.", mfInformation | mfOKButton);
+            notify("Message sent.", noteInfo);
             TEvent ev; // close after this event unwinds
             ev.what = evCommand;
             ev.message.command = cmClose;
@@ -230,7 +230,7 @@ public:
         }
         else
         {
-            messageBox(("Send failed:\n" + out).c_str(), mfError | mfOKButton);
+            notify(("Send failed:\n" + out), noteError);
         }
     }
 
@@ -283,8 +283,8 @@ public:
                 if (out.size() < 11 || out.compare(out.size() - 11, 11, "draft saved") != 0)
                 {
                     // keep the window (and the text) - the draft is not saved
-                    messageBox(("Draft not saved:\n" + (out.empty() ? std::string("no reply from tvmail-backend") : out)).c_str(),
-                               mfError | mfOKButton);
+                    notify("Draft not saved: " + (out.empty() ? std::string("no reply from tvmail-backend") : out),
+                           noteError);
                     return False;
                 }
                 dropSourceDraft();

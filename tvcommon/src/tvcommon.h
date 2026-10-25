@@ -93,6 +93,7 @@ const ushort cmPaneFocused = 2024;  // broadcast: a 3-pane pane took focus
 const ushort cmWindowList = 2034;   // Window > List... (Alt-0)
 const ushort cmToggleWrap = 2043;   // View > Wrap long lines (body pane / focused text window)
 const ushort cmRedrawScreen = 2044; // Window > Redraw screen (Ctrl-L)
+const ushort cmNotifications = 2046; // Window > Notification history
 const ushort cmEditConfig = 2045;   // File > Edit configuration... (the app opens configwin.cpp's window)
 
 // -------------------------------------------------------- classic colors ----
@@ -190,6 +191,22 @@ void putText(char *dest, const std::string &s, short maxLen);
 std::string expandTabs(const std::string &s);
 extern TTimerId gFlashTimer;
 void flashStatus(const std::string &msg);
+
+// ---------------------------------------------------- toasts + history ---
+// notify.cpp: a message that needs no answer.  A small note at the bottom right
+// of the desktop (no focus, no key; gone in a few seconds, errors later; a click
+// removes it) and a line in the history, Window > Notification history.  Use it
+// instead of an OK box; boxes are for questions.
+enum NoteLevel
+{
+    noteInfo,
+    noteWarn,
+    noteError
+};
+void notify(const std::string &text, NoteLevel level = noteInfo);
+void notifyTick();                          // from idle(): expire the toasts
+void notifyHistoryWindow(TDeskTop *desk);
+void notifyRecordFlash(const std::string &msg); // flashStatus() keeps its line in the history too
 void systemClipboard(const std::string &text);
 
 // ---------------------------------------------------- the config editor ---

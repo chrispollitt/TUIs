@@ -36,7 +36,7 @@ public:
         if (i < 0 || i >= (short)rows.size())
             return;
         if (!composeAddRecipient(rows[i].second))
-            messageBox("Open a compose window first.", mfInformation | mfOKButton);
+            notify("Open a compose window first.", noteInfo);
     }
     void handleEvent(TEvent &e) override
     {

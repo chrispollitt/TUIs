@@ -16,6 +16,8 @@ public:
     // The flash note's timer, Window > List (cmWindowList) and Redraw.  The derived
     // app calls this first; a cleared event was handled here.
     void handleEvent(TEvent &e) override;
+    // The toasts expire here; the derived app calls this first.
+    void idle() override;
     void windowList();
     // Ctrl-L, anywhere - in a dialog or an editor too - is the full redraw.
     void getEvent(TEvent &e) override;

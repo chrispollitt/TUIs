@@ -66,8 +66,7 @@ public:
         std::string out = shCapture(cmd + " 2>&1");
         while (!out.empty() && (out.back() == '\n' || out.back() == ' '))
             out.pop_back();
-        messageBox(out.c_str(),
-                   (out.rfind("wrote", 0) == 0 ? mfInformation : mfError) | mfOKButton);
+        notify(out, out.rfind("wrote", 0) == 0 ? noteInfo : noteError);
     }
     void handleEvent(TEvent &e) override
     {

@@ -68,8 +68,7 @@ class TConfigWindow : public TWindow
             std::string old = slurp(spec.path);
             if (!writeWhole(spec.path + ".bak." + stamp(), old, mode))
             {
-                messageBox(("Cannot keep a backup of " + spec.path + "; nothing was saved.").c_str(),
-                           mfError | mfOKButton);
+                notify("Cannot keep a backup of " + spec.path + "; nothing was saved.", noteError);
                 return false;
             }
         }
@@ -79,7 +78,7 @@ class TConfigWindow : public TWindow
         if (!writeWhole(tmp, s, mode) || rename(tmp.c_str(), spec.path.c_str()) != 0)
         {
             unlink(tmp.c_str());
-            messageBox(("Cannot write " + spec.path + ".").c_str(), mfError | mfOKButton);
+            notify(("Cannot write " + spec.path + "."), noteError);
             return false;
         }
         editor->modified = False;
@@ -94,7 +93,7 @@ class TConfigWindow : public TWindow
                           std::to_string((long)getpid()) + ".conf";
         if (!writeWhole(tmp, text(), 0600))
         {
-            messageBox("Cannot write a temporary copy to check.", mfError | mfOKButton);
+            notify("Cannot write a temporary copy to check.", noteError);
             return false;
         }
         std::string report;
@@ -108,9 +107,9 @@ class TConfigWindow : public TWindow
             if (!l.empty() && l.compare(0, 3, "ok:") != 0)
                 onlyOk = false;
         if (ok && report.empty())
-            flashStatus(spec.title + " checks out");
+            notify(spec.title + " checks out");
         else if (onlyOk)
-            flashStatus(spec.title + " checks out - " + report.substr(report.find(' ') + 1));
+            notify(spec.title + " checks out - " + report.substr(report.find(' ') + 1));
         else
             show(ok ? "Warnings" : "Problems", report, ok);
         return ok;
@@ -121,8 +120,8 @@ class TConfigWindow : public TWindow
         size_t lines = 1;
         for (char c : report)
             lines += c == '\n';
-        if (lines <= 8 && report.size() < 600)
-            messageBox((ok ? mfInformation : mfError) | mfOKButton, "%s", report.c_str());
+        if (lines <= 4 && report.size() < 400)
+            notify(report, ok ? noteWarn : noteError);
         else
         {
             TRect r = TProgram::deskTop->getExtent();
@@ -135,7 +134,7 @@ class TConfigWindow : public TWindow
     {
         if (!verify())
         {
-            flashStatus("Not saved: fix the problems first");
+            notify("Not saved: fix the problems first", noteWarn);
             return;
         }
         if (!save())
@@ -143,10 +142,10 @@ class TConfigWindow : public TWindow
         std::string msg;
         if (spec.apply && !spec.apply(msg))
         {
-            messageBox(mfError | mfOKButton, "Saved, but not applied:\n\n%s", msg.c_str());
+            notify("Saved, but not applied: " + msg, noteError);
             return;
         }
-        flashStatus(msg.empty() ? "Saved and applied: " + spec.title : msg);
+        notify(msg.empty() ? "Saved and applied: " + spec.title : msg);
     }
 
 public:
@@ -189,7 +188,7 @@ public:
             {
             case kbCtrlS:
                 if (save())
-                    flashStatus("Saved " + spec.path + " (not applied: F8 does that)");
+                    notify("Saved " + spec.path + " (not applied: F8 does that)");
                 clearEvent(e);
                 return;
             case kbF9:
