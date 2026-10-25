@@ -303,6 +303,24 @@ names were checked against `--openrpc` and the `deltachat-rpc-client` source).
   opens the chat and finishes the handshake in the background (its progress
   arrives as info lines). After that both sides can write; a `send` that is
   refused for want of a key says so.
+- **Invitations by mail** (so nobody carries a link between terminals): `join
+  ADDRESS` for an address the core holds no key for (`isKeyContact` false) mails
+  the invite link - a plain mail from the account over its own SMTP (port from
+  `smtp_port`; `smtp_security` ssl | starttls | plain, by default from the port),
+  header `X-Tvchat-Invite: 1` - and answers with the server conversation, where
+  the progress is told; their chat appears by itself once they accept. The
+  other side's adapter looks in its own INBOX every 30 s (`INVITE_POLL`; its own
+  IMAP login, `imap_security` likewise, in a `run_in_thread` job: imaplib
+  blocks) for that header. A mail counts only if the link's `a=` names the
+  `From:` address; anything else is reported and ignored. Each new one is an
+  `invite ACCOUNT SENDER` event and a note in the server window; `invites` lists
+  those waiting, `accept-invite ACCOUNT SENDER` runs `secure_join` and removes
+  the mail, `decline-invite` just removes it. The UI asks at once (Yes / No /
+  Cancel = later) and Chat > Accept invite... asks again. Mails answered are
+  remembered by UID so a scan already in flight cannot list them again. Needs
+  the mail servers in tvchat.conf (or the address's domain, which usually is
+  the IMAP / SMTP host). The core's own copy of that mail is ignored: it shows
+  no classic emails.
 - **Typed commands:** none yet; `/word` is refused, `//x` sends `/x`. `join`
   takes an email address and opens (or creates) the one-to-one chat; `part` is
   refused.

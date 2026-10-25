@@ -60,6 +60,8 @@ the SASL login counts:
 
 ## Delta Chat
 
+(The whole picture - the three protocols, server then client - is in [PRIMER.md](PRIMER.md).)
+
 A Delta Chat account needs the official core, `deltachat-rpc-server`, a
 separate program (tvchat does not reimplement Delta Chat). Without it only the
 Delta Chat account reports an error; IRC and talk work as before. Either:

@@ -28,6 +28,7 @@ const ushort cmChatTalkView = 2109;   // View > Talk view: classic <-> IRC, for 
 const ushort cmChatAccount = 2110;    // + i: Chat > <account i> shows it in the chat window
 const int kChatMaxAccounts = 30;      // so 2110-2139
 const ushort cmChatInvite = 2142;     // Chat > Invite...: a Delta Chat invite link for an account
+const ushort cmChatAcceptInvite = 2143; // Chat > Accept invite...: answer the Delta Chat invitations that came by mail
 const ushort cmChatAcctPicked = 2140; // broadcast: the chat window's server pane moved
 const ushort cmChatConvPicked = 2141; // broadcast: its conversation pane moved
 

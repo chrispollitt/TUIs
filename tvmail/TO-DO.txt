@@ -38,3 +38,14 @@ A short order for what stays in character: periodic pull (14), then tvmailrc
 (15), the status-line context swap (11) and mouse manners (12), then the
 address-book write path (17). That uses code that exists and does not turn
 tvmail into mutt.
+
+Setup and integration
+24 Edit the config in the app - a window for tvmail.conf (mode, IMAP / SMTP
+   hosts, folders, signatures) with a Verify (parse it, then log in to the
+   IMAP and SMTP servers without touching mail) and a Reload that applies it to
+   the running backend. Passwords stay out of the file. tvchat wants the same
+   (tvchat/TO-DO.txt 13): share it in tvcommon.
+25 tvmail and tvchat talking to each other - OPTIONAL, only when both are
+   installed, to make Delta Chat setup easier (tvchat/TO-DO.txt 12): a message
+   holding a Delta Chat invite link offers "Open in tvchat"; tvchat's Invite can
+   send the link through tvmail to someone's ordinary address.

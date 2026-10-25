@@ -208,7 +208,8 @@ def handle(rid, method, p):
             return reply(rid, None)
         if method == "create_contact":
             cid = max([int(k) for k in WORLD["contacts"]] + [99]) + 1
-            WORLD["contacts"][str(cid)] = {"address": p[1], "displayName": p[2] or p[1]}
+            WORLD["contacts"][str(cid)] = {"address": p[1], "displayName": p[2] or p[1],
+                                           "isKeyContact": False}
             return reply(rid, cid)
         if method == "create_chat_by_contact_id":
             for k, c in WORLD["chats"].items():

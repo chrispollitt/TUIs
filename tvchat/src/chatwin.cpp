@@ -1613,6 +1613,62 @@ void inviteDialog()
     pollNow();
 }
 
+// Accept invite...: the Delta Chat invitations that came by mail (the backend
+// finds them in the mailbox and says `invite` once each), one question per
+// sender.  Yes joins the link - the chat opens here - No removes the mail,
+// Cancel leaves the rest for later.  Also posted when a new one arrives.
+void acceptInviteDialog()
+{
+    std::string body, err;
+    if (!ask("invites", body, err))
+    {
+        messageBox(mfError | mfOKButton, "%s", err.c_str());
+        return;
+    }
+    std::vector<std::string> lines;
+    for (size_t at = 0; at < body.size();)
+    {
+        size_t nl = body.find('\n', at);
+        if (nl == std::string::npos)
+            nl = body.size();
+        if (nl > at)
+            lines.push_back(body.substr(at, nl - at));
+        at = nl + 1;
+    }
+    if (lines.empty())
+    {
+        messageBox("No chat invitations are waiting.", mfInformation | mfOKButton);
+        return;
+    }
+    for (const std::string &l : lines)
+    {
+        std::vector<std::string> f = chatFields(l);
+        if (f.size() < 2)
+            continue;
+        ushort r = messageBox(mfConfirmation | mfYesButton | mfNoButton | mfCancelButton,
+                              "%s invites you to chat (Delta Chat, end-to-end encrypted).\n\nAccept?",
+                              f[1].c_str());
+        if (r == cmCancel)
+            break;
+        if (r == cmYes)
+        {
+            std::string conv;
+            if (!ask("accept-invite " + shq(f[0]) + " " + shq(f[1]), conv, err))
+                messageBox(mfError | mfOKButton, "%s", err.c_str());
+            else
+            {
+                pollNow();
+                conv = trimmed(conv);
+                if (!conv.empty())
+                    showChatWindow(std::string(), conv);
+            }
+        }
+        else if (!ask("decline-invite " + shq(f[0]) + " " + shq(f[1]), body, err))
+            messageBox(mfError | mfOKButton, "%s", err.c_str());
+    }
+    pollNow();
+}
+
 // Leave: part the conversation the chat window shows; its conv-gone takes
 // it out of the list.
 void leaveShown()
@@ -1670,6 +1726,7 @@ TMenu *buildChatMenu()
     add(new TMenuItem("~D~isconnect...", cmChatDisconnect, kbNoKey, hcNoContext));
     add(new TMenuItem("~J~oin...", cmChatJoin, kbNoKey, hcNoContext));
     add(new TMenuItem("~I~nvite...", cmChatInvite, kbNoKey, hcNoContext));
+    add(new TMenuItem("Accept in~v~ite...", cmChatAcceptInvite, kbNoKey, hcNoContext));
     add(new TMenuItem("~A~nswer", cmChatAnswer, kbNoKey, hcNoContext));
     add(new TMenuItem("~L~eave", cmChatLeave, kbNoKey, hcNoContext));
     add(&newLine());
@@ -1730,7 +1787,8 @@ void chatMenuGrey()
 
 bool chatCommand(ushort command)
 {
-    if (command != cmChatInvite && (command < cmChatConnect || command >= cmChatAccount + kChatMaxAccounts))
+    if (command != cmChatInvite && command != cmChatAcceptInvite &&
+        (command < cmChatConnect || command >= cmChatAccount + kChatMaxAccounts))
         return false;
     if (command == cmChatOff)
         return true;
@@ -1752,6 +1810,9 @@ bool chatCommand(ushort command)
         break;
     case cmChatInvite:
         inviteDialog();
+        break;
+    case cmChatAcceptInvite:
+        acceptInviteDialog();
         break;
     case cmChatLeave:
         leaveShown();

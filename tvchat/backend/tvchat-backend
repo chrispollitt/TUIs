@@ -79,7 +79,10 @@ the user), 2 internal error (bad request, bug).
 """
 
 import sys, os, io, argparse, base64, configparser, heapq, re, selectors, shlex, socket
-import codecs, errno, json, logging, select, shutil, ssl, subprocess, threading, time
+import codecs, email, email.utils, imaplib, errno, json, logging, select, shutil, smtplib, ssl
+import subprocess, threading, time
+from email.message import EmailMessage
+from urllib.parse import unquote
 from collections import deque
 
 
@@ -2118,6 +2121,141 @@ def _close_sock(loop, sock):
         pass
 
 
+# --------------------------------------------------------------------------
+# Delta Chat invitations by mail.  The core will not write to an address it has
+# no key for, and the key comes with an invite link; carrying that link from
+# one terminal to another by hand is the painful part.  So `join ADDRESS` mails
+# the link (a plain mail with an X-Tvchat-Invite header, over the account's own
+# SMTP), and the other tvchat finds it in its INBOX (its own IMAP login, a
+# thread: imaplib blocks) and asks the user.  Nothing is accepted by itself: the
+# link must name the address it was sent from, and the user says yes.
+# --------------------------------------------------------------------------
+INVITE_LINK = re.compile(r"(https://i\.delta\.chat/#[^\s<>\"]+|OPENPGP4FPR:[^\s<>\"]+)", re.I)
+INVITE_HEADER = "X-Tvchat-Invite"
+
+
+def invite_names(link):
+    """The address a Delta Chat invite link is for (its a= parameter), or ''."""
+    m = re.search(r"[&#?]a=([^&\s]*)", link)
+    return unquote(m.group(1)) if m else ""
+
+
+def invite_ok(sender, link):
+    """An invitation counts only from the address it names."""
+    named = invite_names(link)
+    return bool(named) and named.lower() == (sender or "").strip().lower()
+
+
+def _tls_context(verify):
+    ctx = ssl.create_default_context()
+    if not verify:
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+
+def _imap_open(p):
+    """A logged-in imaplib connection from the mail parameters p (a dict)."""
+    ctx = _tls_context(p["verify"])
+    host, port = p["imap_host"], p["imap_port"]
+    for kw in ({"timeout": 20}, {}):                 # timeout= needs Python 3.9
+        try:
+            if p["imap_security"] == "ssl":
+                m = imaplib.IMAP4_SSL(host, port, ssl_context=ctx, **kw)
+            else:
+                m = imaplib.IMAP4(host, port, **kw)
+                if p["imap_security"] == "starttls":
+                    m.starttls(ctx)
+            break
+        except TypeError:
+            continue
+    m.login(p["imap_user"], p["password"])
+    return m
+
+
+def _text_of(msg):
+    if msg.is_multipart():
+        return "\n".join(_text_of(part) for part in msg.get_payload())
+    payload = msg.get_payload(decode=True)
+    return payload.decode(msg.get_content_charset() or "utf-8", "replace") if payload else ""
+
+
+def scan_invites(p):
+    """[(uid, sender, link)] for the invitation mails in the INBOX (a thread)."""
+    m = _imap_open(p)
+    out = []
+    try:
+        m.select("INBOX")
+        typ, data = m.uid("SEARCH", None, "UNDELETED", "HEADER", INVITE_HEADER, "1")
+        for uid in (data[0] or b"").split()[:20]:
+            typ, d = m.uid("FETCH", uid, "(BODY.PEEK[])")
+            if typ != "OK" or not d or not isinstance(d[0], tuple):
+                continue
+            msg = email.message_from_bytes(d[0][1])
+            sender = email.utils.parseaddr(msg.get("From", ""))[1]
+            found = INVITE_LINK.search(_text_of(msg))
+            out.append((uid.decode(), sender, found.group(1) if found else ""))
+    finally:
+        try:
+            m.logout()
+        except Exception:
+            pass
+    return out
+
+
+def delete_mails(p, uids):
+    """Remove those mails from the INBOX (a thread)."""
+    m = _imap_open(p)
+    try:
+        m.select("INBOX")
+        for uid in uids:
+            m.uid("STORE", uid, "+FLAGS", "(\\Deleted)")
+        m.expunge()
+    finally:
+        try:
+            m.logout()
+        except Exception:
+            pass
+
+
+def send_invite_mail(p, to, link):
+    """Mail the invitation (a thread); the reason in the exception if it fails."""
+    msg = EmailMessage()
+    msg["From"] = p["addr"]
+    msg["To"] = to
+    msg["Subject"] = "Chat invitation from %s" % p["addr"]
+    msg["Date"] = email.utils.formatdate(localtime=True)
+    msg["Message-ID"] = email.utils.make_msgid(domain=p["addr"].rpartition("@")[2] or "localhost")
+    msg[INVITE_HEADER] = "1"
+    msg.set_content(
+        "%s invites you to chat, end-to-end encrypted, with Delta Chat.\n\n"
+        "In tvchat this shows up as a question (or choose Chat > Accept invite...).\n"
+        "In another Delta Chat app, open this link:\n\n%s\n" % (p["addr"], link))
+    ctx = _tls_context(p["verify"])
+    host, port = p["smtp_host"], p["smtp_port"]
+    for kw in ({"timeout": 20}, {}):
+        try:
+            if p["smtp_security"] == "ssl":
+                s_ = smtplib.SMTP_SSL(host, port, context=ctx, **kw)
+            else:
+                s_ = smtplib.SMTP(host, port, **kw)
+            break
+        except TypeError:
+            continue
+    try:
+        s_.ehlo()
+        if p["smtp_security"] == "starttls":
+            s_.starttls(context=ctx)
+            s_.ehlo()
+        s_.login(p["smtp_user"], p["password"])
+        s_.send_message(msg)
+    finally:
+        try:
+            s_.quit()
+        except Exception:
+            pass
+
+
 class RpcError(Exception):
     """The Delta Chat core answered a request with an error, or not at all."""
 
@@ -2171,6 +2309,10 @@ class DeltaChatAdapter:
         self.auto = False
         self.retry_timer = None
         self.logf = None
+        self.scan_timer = None
+        self.invites = {}                # lower-case sender -> {"from", "link", "uids"}
+        self.bad_uids = set()            # invitation mails already complained about
+        self.done_uids = set()           # ... and the ones answered (a scan in flight may still list them)
         self._reset()
 
     def _reset(self):
@@ -2283,6 +2425,7 @@ class DeltaChatAdapter:
     def _close(self):
         self.gen += 1
         self.loop.cancel(self.timer)
+        self.loop.cancel(self.scan_timer)
         for fd in (self.rfd, self.wfd):
             if fd is not None:
                 try:
@@ -2557,6 +2700,7 @@ class DeltaChatAdapter:
         self.t_up = self.loop.clock()
         self._load_chats()
         self._connectivity()
+        self._watch_invites()
 
     def _connectivity(self):
         v = self.call("get_connectivity", self.acct)
@@ -2772,6 +2916,8 @@ class DeltaChatAdapter:
             cid = self.call("lookup_contact_id_by_addr", self.acct, addr)
             if cid is None:
                 cid = self.call("create_contact", self.acct, addr, None)
+            if not self.call("get_contact", self.acct, cid).get("isKeyContact", True):
+                return self._invite_by_mail(addr)    # no key yet: ask them by mail
             chat_id = self.call("create_chat_by_contact_id", self.acct, cid)
             info = self.call("get_basic_chat_info", self.acct, chat_id)
             conv = self._conv(chat_id, info["name"], "direct")
@@ -2779,6 +2925,123 @@ class DeltaChatAdapter:
         except RpcError as e:
             raise UserError(str(e))
         return conv
+
+    # -- invitations by mail ------------------------------------------------------
+    def _mail_params(self):
+        """What the mail threads need, from the account's settings: the IMAP and
+        SMTP server, port, security and login, and the password."""
+        o = self.account.opts
+
+        def num(key, default):
+            try:
+                return int(o.get(key) or default)
+            except ValueError:
+                raise UserError("[account:%s] %s must be a number" % (self.account.id, key))
+        host, login = self._login()
+        pw = find_delta_password(self.account.id, self.addr, host, login)[0]
+        if not pw:
+            raise UserError("no password for %s (see the error when connecting)" % self.addr)
+        imap_port = num("imap_port", 993)
+        smtp_port = num("smtp_port", 587)
+        smtp_user = (o.get("smtp_user") or login).strip()
+        return {
+            "addr": self.addr, "password": pw, "verify": _bool(o.get("verify"), True),
+            "imap_host": host, "imap_port": imap_port, "imap_user": login,
+            "imap_security": (o.get("imap_security") or ("ssl" if imap_port == 993 else "starttls")).strip(),
+            "smtp_host": (o.get("smtp_server") or host).strip(), "smtp_port": smtp_port,
+            "smtp_user": smtp_user,
+            "smtp_security": (o.get("smtp_security") or ("ssl" if smtp_port == 465 else "starttls")).strip(),
+        }
+
+    def _invite_by_mail(self, addr):
+        """No key for addr yet: mail them our invite link.  Returns the server
+        conversation, where the progress is told; their chat appears by itself
+        once they accept."""
+        conv = self.server_conv()
+        link = self.invite()
+        try:
+            p = self._mail_params()
+        except UserError as e:
+            raise UserError("%s - or give them this link: %s" % (e, link))
+        self.system(conv, "inviting %s by mail..." % addr)
+        gen = self.gen
+
+        def done(res, err):
+            if gen != self.gen:
+                return
+            if err is not None:
+                self.system(conv, "could not mail the invitation to %s: %s - give them this link "
+                                  "instead (they use Chat > Join...): %s" % (addr, err, link))
+            else:
+                self.system(conv, "invitation mailed to %s - the chat opens here when they accept" % addr)
+        self.loop.run_in_thread(lambda: send_invite_mail(p, addr, link), done)
+        return conv
+
+    def _watch_invites(self):
+        gen = self.gen
+        if self.phase != "up":
+            return
+        try:
+            p = self._mail_params()
+        except UserError as e:
+            _log.debug("%s: not looking for invitations: %s", self.account.id, e)
+            self.scan_timer = self.loop.call_later(self.INVITE_POLL * 10, self._watch_invites)
+            return
+        self.loop.run_in_thread(lambda: scan_invites(p),
+                                lambda res, err: gen == self.gen and self._scanned(res, err))
+
+    INVITE_POLL = 30
+
+    def _scanned(self, res, err):
+        if err is not None:
+            _log.debug("%s: looking for invitations failed: %s", self.account.id, err)
+        for uid, sender, link in res or []:
+            if uid in self.done_uids:
+                continue
+            key = sender.lower()
+            if not link or not invite_ok(sender, link):
+                if uid not in self.bad_uids:
+                    self.bad_uids.add(uid)
+                    self.system(self.server_conv(), "ignored a chat invitation from %s: its link is "
+                                "not for that address" % (sender or "?"))
+                continue
+            inv = self.invites.get(key)
+            if inv is None or inv["link"] != link:
+                self.invites[key] = inv = {"from": sender, "link": link, "uids": []}
+                self.system(self.server_conv(), "%s invites you to chat - Chat > Accept invite..." % sender)
+                self.chat.events.push("invite", self.account.id, sender)
+            if uid not in inv["uids"]:
+                inv["uids"].append(uid)
+        self.scan_timer = self.loop.call_later(self.INVITE_POLL, self._watch_invites)
+
+    def pending_invites(self):
+        return [inv["from"] for inv in self.invites.values()]
+
+    def _invite_of(self, sender):
+        inv = self.invites.get((sender or "").strip().lower())
+        if inv is None:
+            raise UserError("no invitation from %s" % sender)
+        return inv
+
+    def accept_invite(self, sender):
+        inv = self._invite_of(sender)
+        conv = self.join(inv["link"])
+        self._drop_invite(inv)
+        return conv
+
+    def decline_invite(self, sender):
+        self._drop_invite(self._invite_of(sender))
+
+    def _drop_invite(self, inv):
+        self.invites.pop(inv["from"].lower(), None)
+        self.done_uids.update(inv["uids"])
+        try:
+            p = self._mail_params()
+        except UserError:
+            return
+        self.loop.run_in_thread(lambda: delete_mails(p, list(inv["uids"])),
+                                lambda res, err: err is None or _log.debug(
+                                    "%s: removing the invitation mail failed: %s", self.account.id, err))
 
     def part(self, conv):
         raise UserError("tvchat cannot leave or delete a Delta Chat chat yet")
@@ -3018,6 +3281,36 @@ def cmd_invite(a):
     link = ad.invite()
     ad.system(ad.server_conv(), "invite link: " + link)   # to copy from the log
     sys.stdout.write(link + "\n")
+    return 0
+
+
+def _delta(chat, ident):
+    ad = chat.adapter(chat.account(ident))
+    if not hasattr(ad, "accept_invite"):
+        raise UserError("%s has no invitations" % ident)
+    return ad
+
+
+def cmd_invites(a):
+    """invites: the invitations waiting for an answer, `account<TAB>sender` lines."""
+    chat = _chat()
+    chat.check_config()
+    for acct in chat.accounts:
+        ad = chat.adapters.get(acct.id)
+        for sender in (ad.pending_invites() if hasattr(ad, "pending_invites") else []):
+            sys.stdout.write(line(acct.id, sender))
+    return 0
+
+
+def cmd_accept_invite(a):
+    chat = _chat()
+    sys.stdout.write(_delta(chat, a.account).accept_invite(a.sender).id + "\n")
+    return 0
+
+
+def cmd_decline_invite(a):
+    chat = _chat()
+    _delta(chat, a.account).decline_invite(a.sender)
     return 0
 
 
@@ -3329,6 +3622,9 @@ def build_parser():
     p = sub.add_parser("convs"); p.add_argument("account", nargs="?"); p.set_defaults(fn=cmd_convs)
     p = sub.add_parser("join"); p.add_argument("account"); p.add_argument("target"); p.set_defaults(fn=cmd_join)
     p = sub.add_parser("invite"); p.add_argument("account"); p.set_defaults(fn=cmd_invite)
+    p = sub.add_parser("invites"); p.set_defaults(fn=cmd_invites)
+    p = sub.add_parser("accept-invite"); p.add_argument("account"); p.add_argument("sender"); p.set_defaults(fn=cmd_accept_invite)
+    p = sub.add_parser("decline-invite"); p.add_argument("account"); p.add_argument("sender"); p.set_defaults(fn=cmd_decline_invite)
     p = sub.add_parser("part"); p.add_argument("conv"); p.set_defaults(fn=cmd_part)
     p = sub.add_parser("send"); p.add_argument("conv"); p.add_argument("text"); p.set_defaults(fn=cmd_send)
     p = sub.add_parser("answer"); p.add_argument("conv"); p.set_defaults(fn=cmd_answer)

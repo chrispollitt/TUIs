@@ -64,6 +64,7 @@ first), and the open bugs in tvmail/BUGS.md.
 | --- | --- |
 | `README.md` (root, and each app's) | what it is and how to use it - nothing about the work's history |
 | `tvmail/INSTALL.md`, `tvchat/INSTALL.md` | building and installing |
+| `tvchat/PRIMER.md` | the chat protocols (IRC, talk, Delta Chat) and the steps to get each running: server, then client |
 | `tvchat/DESIGN.md` | how tvchat is built: backend, protocol, IRC and talk adapters, the window |
 | `tvcommon/README.md` | the shared code, and the conventions both apps rely on |
 | `*/BUGS.md` | defects, open and squashed (next free number: the highest in tvmail's and tvchat's tables plus one) |

@@ -133,13 +133,17 @@ void TVChatApp::chatEvents()
     bool accounts = reset; // the Chat menu lists the accounts and their states
     if (reset)
         message(deskTop, evBroadcast, cmChatReset, nullptr);
+    bool invited = false;
     for (const ChatEvent &ev : evs)
     {
         accounts = accounts || ev.fields[0] == "state";
+        invited = invited || ev.fields[0] == "invite";
         message(deskTop, evBroadcast, cmChatEvent, (void *)&ev);
     }
     if (accounts)
         chatMenuRebuild();
+    if (invited)
+        message(this, evCommand, cmChatAcceptInvite, nullptr); // asks; the Chat menu has it too
     if (cc.unreadTotal() != unread && statusLine && !gFlashTimer)
         statusLine->drawView(); // "N new"
 }

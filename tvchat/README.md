@@ -87,6 +87,7 @@ the LAN, `chrispollitt/POSIX`'s `chat-setup` installs Ergo
 | `backend/tvchat-backend` | the Python helper (`man tvchat-backend`) |
 | `configure/tvchat.conf.example` | a commented configuration |
 | `tests/` | `./test.sh` runs them all (see [tests/README.md](tests/README.md)) |
+| `PRIMER.md` | the three chat protocols and how to bring each up: the server side once, the client side per machine |
 | `DESIGN.md` | how it is built: the backend, the protocol, the IRC and talk adapters, the window |
 | `TO-DO.txt` | what is not done yet |
 | `BUGS.md` | the bug list |

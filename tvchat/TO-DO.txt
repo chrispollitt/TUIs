@@ -2,26 +2,20 @@ tvchat does IRC (with IRCv3) and talk(1). What is left is below, in the order
 it is likely to be done. Defects live in BUGS.md, not here.
 
 Next
-1 Delta Chat, what is left after the adapter (tvchat/DESIGN.md "Delta Chat
-  adapter"; built and tested against a stub core and against the real
-  deltachat-rpc-server 2.65.0 as far as an unconfigured account goes):
-  - Done on cpbee (two test mailboxes, Oct 24): setup, invite, encrypted
-    messages both ways. mail-setup does not make mailboxes or an authenticated
-    submission port (587 + Dovecot SASL): add both to chrispollitt/POSIX
-    mail-setup. Set imap_user / smtp_user (the Unix name) and smtp_port = 587
-    there, else the core tries 465 first and waits for the timeout.
-  - UI for invites (Chat > Invite, Join takes a link).
-  - Done (step 3): Chat > Invite..., Join takes an address or a link, the
-    "to come" texts are gone, `delta_invite_join_and_send` in e2e_regress. Still to
-    do: the man page (tvchat.1) for Invite / Join.
+1 Delta Chat, what is left (tvchat/DESIGN.md "Delta Chat adapter"; tried live on
+  cpbee with two mailboxes, and on cmlaptop and cmdesktop):
   - Chat > Leave (`part`) is refused: leave a group / delete a chat.
-  - Not in the first version: attachments (shown as `[attachment: NAME]`),
-    verification QR codes and invite links, multi-device setup, reactions,
-    a chat renamed on another device (the title is refreshed, but no event
-    tells the UI), a new group or "add member" (Join takes an address only).
-  - Tests: `TestDeltaChat` (a stub core, `tests/fake_deltachat_rpc.py`) and
-    `TestDeltaChatRealCore` (skipped without `deltachat-rpc-server`; point
-    `$TVCHAT_TEST_DC_RPC` at it). A pty case in `e2e_regress` with the stub core.
+  - Attachments (shown as `[attachment: NAME]`), reactions, multi-device setup,
+    a chat renamed on another device (the title is refreshed but no event tells the
+    UI), a new group or "add member" (Join takes an address or a link only).
+  - The man page (tvchat.1) for Invite / Accept invite / Join.
+  - Invitations by mail need the account's mail servers (imap_server /
+    smtp_server, or the address's domain): ask the core for its transport when
+    they are not in tvchat.conf.
+  - An invitation could also arrive from tvmail (see 12).
+  - Tests: `TestDeltaChat`, `TestDeltaInvitations` (a stub core and a fake mail
+    server) and `TestDeltaChatRealCore` (skipped without a core that runs;
+    `$TVCHAT_TEST_DC_RPC`); `delta_invite_join_and_send` in e2e_regress.
 
 Smaller things
 2 Reconnect a lost talkd connection by itself (IRC's backoff is not reused
@@ -41,6 +35,20 @@ Smaller things
   line says phase, error and bytes unsent.
 11 Check the native Windows (mingw) .exe on Windows: it cross-compiles and
   links, with chat greyed out, but has not been run since the split.
+
+12 tvmail and tvchat talking to each other - OPTIONAL, used only when both are
+   installed, there to make Delta Chat setup easier. Ideas: tvchat's Invite
+   could mail the link to someone's ordinary address through tvmail's account; a
+   tvmail message holding an invite link could offer "Open in tvchat" (via a
+   drop file the tvchat backend watches, so the two never share a Delta Chat
+   core); "chat with the sender" / "write to this contact" between the two.
+   Never required, never the Delta Chat mailbox itself (that stays dedicated).
+13 Edit the config in the app - a window for tvchat.conf (accounts, their
+   servers and options) with a Verify (parse it, then try each account's login
+   without connecting for real) and a Reload that applies it to the running
+   backend, so no one edits the INI by hand. The passwords stay out of the file.
+   tvmail wants the same for tvmail.conf; share the window and the verify / reload
+   plumbing in tvcommon.
 
 Open questions
 - Should IRC logs persist to disk between sessions? Not for now: the log is

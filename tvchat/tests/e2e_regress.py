@@ -282,6 +282,9 @@ def delta_invite_join_and_send(opts):
     c.check(tv.wait("https://i.delta.chat/#FAKEINVITE", 5),
             "Chat > Invite... did not show the invite link")
     tv.send("Enter", settle=0.5)
+    tv.send(alt("c"), "v", settle=0.8)
+    c.check(tv.wait("No chat invitations are waiting.", 4), "Chat > Accept invite... did not say there are none")
+    tv.send("Enter", settle=0.5)
     tv.send(alt("c"), "j")
     c.check(tv.wait("invite link", 3), "Chat > Join... does not mention an invite link")
     tv.send("https://i.delta.chat/#FAKEINVITE", "Enter", settle=1.0)

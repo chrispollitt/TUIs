@@ -1435,6 +1435,156 @@ class TestTalkWithTheRealTalkd(TalkBase):
         self.chat.close()
 
 
+class FakeMail:
+    """A mail server on 127.0.0.1 for the invitation tests: plain SMTP (any
+    login) that keeps what it is sent in .sent, and a minimal IMAP over .inbox
+    - [{"uid", "raw", "deleted"}] - enough for imaplib's login, select, uid
+    search / fetch / store and expunge."""
+
+    def __init__(self):
+        self.sent = []
+        self.inbox = []
+        self.lock = threading.Lock()
+        self.socks = []
+        self.threads = []
+        self.stopped = False
+        self.smtp_port = self._serve(self._smtp)
+        self.imap_port = self._serve(self._imap)
+
+    def _serve(self, handler):
+        srv = socket.socket()
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(5)
+        srv.settimeout(0.1)              # closing a listening socket does not wake accept()
+        self.socks.append(srv)           # (Cygwin), and a thread left blocked there can hang a
+                                         # later fork - so the loops end by themselves
+
+        def loop():
+            while not self.stopped:
+                try:
+                    c, _ = srv.accept()
+                except socket.timeout:
+                    continue
+                except OSError:
+                    return
+                c.settimeout(None)
+                threading.Thread(target=handler, args=(c,), daemon=True).start()
+        t = threading.Thread(target=loop, daemon=True)
+        t.start()
+        self.threads.append(t)
+        return srv.getsockname()[1]
+
+    def close(self):
+        self.stopped = True
+        for t in self.threads:
+            t.join(2)
+        for s in self.socks:
+            s.close()
+
+    def add(self, sender, link, header=True):
+        with self.lock:
+            uid = len(self.inbox) + 1 + 100
+            raw = ("From: %s\r\nTo: me@example.org\r\nSubject: Chat invitation\r\n%s"
+                   "\r\ninvites you:\r\n\r\n%s\r\n" % (sender, "X-Tvchat-Invite: 1\r\n" if header else "",
+                                                       link)).encode()
+            self.inbox.append({"uid": uid, "raw": raw, "deleted": False})
+        return uid
+
+    def live(self):
+        with self.lock:
+            return [m for m in self.inbox if not m["deleted"]]
+
+    def _smtp(self, c):
+        f = c.makefile("rwb")
+
+        def say(t):
+            f.write((t + "\r\n").encode())
+            f.flush()
+        say("220 fake")
+        try:
+            while True:
+                ln = f.readline().decode().rstrip("\r\n")
+                cmd = ln.split(" ", 1)[0].upper()
+                if not ln and not cmd:
+                    return
+                if cmd in ("EHLO", "HELO"):
+                    f.write(b"250-fake\r\n250 AUTH PLAIN LOGIN\r\n")
+                    f.flush()
+                elif cmd == "AUTH":
+                    say("235 ok")
+                elif cmd in ("MAIL", "RCPT"):
+                    say("250 ok")
+                elif cmd == "DATA":
+                    say("354 go")
+                    data = b""
+                    while not data.endswith(b"\r\n.\r\n"):
+                        data += f.readline()
+                    with self.lock:
+                        self.sent.append(data[:-5])
+                    say("250 queued")
+                elif cmd == "QUIT":
+                    say("221 bye")
+                    return
+                else:
+                    say("250 ok")
+        except OSError:
+            pass
+        finally:
+            c.close()
+
+    def _imap(self, c):
+        f = c.makefile("rwb")
+
+        def w(t):
+            f.write(t if isinstance(t, bytes) else t.encode())
+            f.flush()
+        w("* OK fake imap\r\n")
+        try:
+            while True:
+                ln = f.readline().decode().rstrip("\r\n")
+                if not ln:
+                    return
+                tag, _, rest = ln.partition(" ")
+                cmd, _, args = rest.partition(" ")
+                cmd = cmd.upper()
+                if cmd == "CAPABILITY":
+                    w("* CAPABILITY IMAP4rev1\r\n%s OK done\r\n" % tag)
+                elif cmd == "SELECT":
+                    w("* %d EXISTS\r\n%s OK [READ-WRITE] done\r\n" % (len(self.live()), tag))
+                elif cmd == "UID":
+                    sub, _, a2 = args.partition(" ")
+                    sub = sub.upper()
+                    if sub == "SEARCH":
+                        hits = [str(m["uid"]) for m in self.live() if b"X-Tvchat-Invite" in m["raw"]]
+                        w("* SEARCH %s\r\n%s OK done\r\n" % (" ".join(hits), tag))
+                    elif sub == "FETCH":
+                        uid = int(a2.split(" ")[0])
+                        for m in self.live():
+                            if m["uid"] == uid:
+                                w(b"* 1 FETCH (UID %d BODY[] {%d}\r\n" % (uid, len(m["raw"])) + m["raw"] + b")\r\n")
+                        w("%s OK done\r\n" % tag)
+                    elif sub == "STORE":
+                        uid = int(a2.split(" ")[0])
+                        with self.lock:
+                            for m in self.inbox:
+                                if m["uid"] == uid:
+                                    m["deleted"] = True
+                        w("%s OK done\r\n" % tag)
+                    else:
+                        w("%s BAD\r\n" % tag)
+                elif cmd == "EXPUNGE":
+                    w("%s OK done\r\n" % tag)
+                elif cmd == "LOGOUT":
+                    w("* BYE\r\n%s OK done\r\n" % tag)
+                    return
+                else:                    # LOGIN and anything else
+                    w("%s OK done\r\n" % tag)
+        except OSError:
+            pass
+        finally:
+            c.close()
+
+
 FAKE_DC = HERE / "fake_deltachat_rpc.py"
 
 DC_WORLD = {
@@ -1798,6 +1948,89 @@ class TestDeltaChat(DeltaBase):
         self.up()
         self.assertEqual(oct(os.stat(str(self.dir)).st_mode & 0o777), oct(0o700))
         self.assertEqual(oct(os.stat(str(self.dir.parent)).st_mode & 0o777), oct(0o700))
+
+
+class TestDeltaInvitations(DeltaBase):
+    """Joining an address you hold no key for mails an invitation; one found in
+    the INBOX is offered, accepted or declined."""
+
+    def setUp(self):
+        super().setUp()
+        self.mail = FakeMail()
+        self.addCleanup(self.mail.close)
+        os.environ["TVCHAT_PASS_DELTA"] = "pw"
+        self.addCleanup(os.environ.pop, "TVCHAT_PASS_DELTA", None)
+
+    def setup_inv(self):
+        self.setup_dc(extra=("imap_server = 127.0.0.1\nimap_port = %d\nimap_security = plain\n"
+                             "imap_user = me\nsmtp_server = 127.0.0.1\nsmtp_port = %d\n"
+                             "smtp_security = plain\nsmtp_user = me\n")
+                      % (self.mail.imap_port, self.mail.smtp_port))
+        self.ad.INVITE_POLL = 0.2
+
+    def test_join_without_a_key_mails_the_invitation(self):
+        self.setup_inv()
+        self.up()
+        st, body = self.verb("join", "delta", "new@example.org")
+        self.assertEqual((st, body), (0, b"delta/*\n"))               # the server window tells the news
+        self.turn(lambda: self.mail.sent)
+        import email
+        msg = email.message_from_bytes(self.mail.sent[0])
+        self.assertEqual((msg["To"], msg["From"], msg["X-Tvchat-Invite"]),
+                         ("new@example.org", "me@example.org", "1"))
+        self.assertIn("https://i.delta.chat/#FAKEINVITE", msg.get_payload())
+        self.turn(lambda: any("invitation mailed to new@example.org" in m.text
+                              for m in self.acct.convs["delta/*"].history))
+        self.assertEqual(self.requests("create_chat_by_contact_id"), [])  # no chat until they accept
+
+    def test_a_failed_mail_gives_the_link_to_pass_on(self):
+        self.setup_inv()
+        self.up()
+        self.mail.close()
+        self.verb("join", "delta", "new@example.org")
+        self.turn(lambda: any("could not mail the invitation" in m.text and "FAKEINVITE" in m.text
+                              for m in self.acct.convs["delta/*"].history))
+
+    def test_an_invitation_in_the_inbox_is_offered_and_accepted(self):
+        link = "https://i.delta.chat/#ABC&v=3&a=alice%40example.org&n="
+        uid = self.mail.add("Alice <alice@example.org>", link)
+        self.mail.add("Mallory <mallory@example.org>", link)             # a link for someone else: ignored
+        self.mail.add("Bob <bob@example.org>", "no link here", header=True)
+        self.setup_inv()
+        self.up()
+        self.turn(lambda: self.events("invite"))
+        self.assertEqual(self.events("invite"), [("invite", "delta", "alice@example.org")])
+        self.assertEqual(self.verb("invites"), (0, b"delta\talice@example.org\n"))
+        self.turn(lambda: any("ignored a chat invitation from mallory@example.org" in m.text
+                              for m in self.acct.convs["delta/*"].history))
+        # not offered twice, however often the mailbox is looked at
+        time.sleep(0.5)
+        self.chat.loop.run_once(0.3)
+        self.assertEqual(len(self.events("invite")), 1)
+        st, body = self.verb("accept-invite", "delta", "alice@example.org")
+        self.assertEqual(st, 0)
+        self.assertEqual(self.requests("secure_join")[0]["params"], [1, link])
+        self.assertEqual(self.acct.convs[body.decode().strip()].title, "Inviter")
+        self.turn(lambda: uid not in [m["uid"] for m in self.mail.live()])   # the mail is gone
+        self.assertEqual(self.verb("invites"), (0, b""))
+        self.assertEqual(self.verb("accept-invite", "delta", "alice@example.org")[0], 1)
+
+    def test_declining_removes_the_mail_and_joins_nothing(self):
+        link = "https://i.delta.chat/#ABC&a=alice%40example.org"
+        uid = self.mail.add("alice@example.org", link)
+        self.setup_inv()
+        self.up()
+        self.turn(lambda: self.events("invite"))
+        self.assertEqual(self.verb("decline-invite", "delta", "alice@example.org"), (0, b""))
+        self.turn(lambda: uid not in [m["uid"] for m in self.mail.live()])
+        self.assertEqual(self.requests("secure_join"), [])
+        self.assertEqual(self.verb("invites"), (0, b""))
+
+    def test_invite_helpers(self):
+        self.assertEqual(cb.invite_names("https://i.delta.chat/#X&v=3&a=a%2Bb%40ex.org&n="), "a+b@ex.org")
+        self.assertTrue(cb.invite_ok("A@EX.org", "https://i.delta.chat/#X&a=a%40ex.org"))
+        self.assertFalse(cb.invite_ok("b@ex.org", "https://i.delta.chat/#X&a=a%40ex.org"))
+        self.assertFalse(cb.invite_ok("a@ex.org", "https://i.delta.chat/#X"))     # names nobody
 
 
 class TestDeltaChatRealCore(DeltaBase):
