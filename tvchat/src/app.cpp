@@ -147,7 +147,7 @@ void TVChatApp::chatEvents()
 void TVChatApp::aboutBox()
 {
     tvAboutBox(deskTop, "tvchat", TVCHAT_VERSION,
-               "A Turbo Vision chat client:\nIRC (with IRCv3) and talk(1), Delta Chat to come.",
+               "A Turbo Vision chat client:\nIRC (with IRCv3), talk(1) and Delta Chat.",
                "Plumbing: tvchat-backend.");
 }
 

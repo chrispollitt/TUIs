@@ -1684,6 +1684,23 @@ class TestDeltaChat(DeltaBase):
         self.turn(lambda: any("not delivered" in m.text for m in self.acct.convs["delta/10"].history))
         self.assertIn("recipient refused", self.acct.convs["delta/10"].history[-1].text)
 
+    def test_the_netrc_may_name_the_address_or_the_domain(self):
+        rc = self.home / ".netrc"
+        rc.write_text("machine mail.example.org login me@example.org password by-address\n"
+                      "machine other login someone password not-ours\n")
+        rc.chmod(0o600)
+        find = cb.find_delta_password
+        # the login the server wants is "me", the entry is for the address on the domain
+        self.assertEqual(find("delta", "me@example.org", "box", "me")[0], None)
+        self.assertEqual(find("delta", "me@example.org", "mail.example.org", "me")[0], "by-address")
+        rc.write_text("machine example.org login me password by-user\n")
+        self.assertEqual(find("delta", "me@example.org", "box", "me")[0], "by-user")
+        rc.write_text("machine other login someone password not-ours\n")
+        self.assertEqual(find("delta", "me@example.org", "box", "me"), (None, None))
+        os.environ["TVCHAT_PASS_DELTA"] = "from-env"
+        self.addCleanup(os.environ.pop, "TVCHAT_PASS_DELTA", None)
+        self.assertEqual(find("delta", "me@example.org", "box", "me")[0], "from-env")
+
     def test_the_first_run_sets_the_mailbox_up(self):
         os.environ["TVCHAT_PASS_DELTA"] = "s3cret"
         self.addCleanup(os.environ.pop, "TVCHAT_PASS_DELTA", None)

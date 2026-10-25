@@ -27,6 +27,7 @@ const ushort cmChatOff = 2108;        // a note in a menu or the status line: ne
 const ushort cmChatTalkView = 2109;   // View > Talk view: classic <-> IRC, for the talk conversation shown
 const ushort cmChatAccount = 2110;    // + i: Chat > <account i> shows it in the chat window
 const int kChatMaxAccounts = 30;      // so 2110-2139
+const ushort cmChatInvite = 2142;     // Chat > Invite...: a Delta Chat invite link for an account
 const ushort cmChatAcctPicked = 2140; // broadcast: the chat window's server pane moved
 const ushort cmChatConvPicked = 2141; // broadcast: its conversation pane moved
 

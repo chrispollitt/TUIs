@@ -2,7 +2,8 @@
 
 A chat client for the text terminal, wearing the face of Borland's Turbo
 Vision: drop-down menus, shadowed dialogs, the cyan desktop, F10 for the menu
-bar. IRC (with the IRCv3 extensions a modern server offers) and talk(1).
+bar. IRC (with the IRCv3 extensions a modern server offers), talk(1) and
+Delta Chat.
 
 It is tvmail's sibling: the same look and the same split. The C++ front end
 draws windows. Everything protocol-specific (sockets, TLS, SASL, parsing)
@@ -32,6 +33,13 @@ rings you in tvchat. Chat > Join... calls, Enter answers, Chat > Leave hangs
 up. A talk conversation has two views, View > Talk view (Ctrl-T): *classic*,
 talk's own split screen in the chat pane with every keystroke sent (the
 default), or *IRC*, the log with whole lines and "... is typing".
+
+**Delta Chat** too (`protocol = deltachat`): encrypted chat over a mailbox of
+its own, through the official `deltachat-rpc-server` core (INSTALL.md says
+how to get it, and how to set the account up with one command). Two people
+swap keys once: one runs Chat > Invite... and gives the link to the other,
+who pastes it into Chat > Join...; after that, Join with an address opens a
+chat. Unlike IRC, the history is kept by the core, so PgUp reads all of it.
 
 A lost connection comes back by itself: tvchat pings a quiet server, and
 reconnects after 2 s, 4 s, 8 s ... up to 5 minutes, rejoining its channels.

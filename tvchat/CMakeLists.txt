@@ -94,7 +94,7 @@ set(CPACK_GENERATOR "TGZ")
 set(CPACK_PACKAGE_NAME "tvchat")
 set(CPACK_PACKAGE_VENDOR "Chris Pollitt")
 set(CPACK_PACKAGE_CONTACT "Chris Pollitt <chris.pollitt@gmail.com>")
-set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Turbo Vision chat client (IRC; Delta Chat to come)")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Turbo Vision chat client (IRC, talk, Delta Chat)")
 set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
 set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
 set(CPACK_PACKAGE_FILE_NAME

@@ -1535,9 +1535,9 @@ void joinDialog()
     int n = cand.size() > 1 ? (int)cand.size() : 0;
     TDialog *d = new TDialog(TRect(0, 0, 50, 9 + n + (n ? 1 : 0)), "Join");
     d->options |= ofCentered;
-    TInputLine *il = new TInputLine(TRect(3, 3, 47, 4), 200);
+    TInputLine *il = new TInputLine(TRect(3, 3, 47, 4), 400);
     d->insert(il);
-    d->insert(new TLabel(TRect(2, 2, 47, 3), "~C~hannel, or a nick / address to talk to", il));
+    d->insert(new TLabel(TRect(2, 2, 47, 3), "~C~hannel, nick, address or invite link", il));
     TRadioButtons *rb = nullptr;
     if (n)
     {
@@ -1579,6 +1579,38 @@ void joinDialog()
     std::string conv = trimmed(body);
     if (!conv.empty())
         showChatWindow(std::string(), conv);
+}
+
+// Invite...: the invite link of a connected Delta Chat account.  Whoever
+// joins it (Chat > Join... on their side) swaps keys with us, which the
+// Delta Chat core needs before anyone can write.  The backend also puts the
+// link in the account's server window, where it can be selected and copied.
+void inviteDialog()
+{
+    std::vector<int> cand;
+    const auto &as = chat().accounts();
+    for (int i : accountsWhere(true))
+        if (as[i].protocol == "deltachat")
+            cand.push_back(i);
+    if (cand.empty())
+    {
+        messageBox("Connect a Delta Chat account first (Chat > Connect...).", mfInformation | mfOKButton);
+        return;
+    }
+    int i = pickAccount("Invite", cand);
+    if (i < 0)
+        return;
+    std::string body, err;
+    if (!ask("invite " + shq(as[i].id), body, err))
+    {
+        messageBox(mfError | mfOKButton, "%s", err.c_str());
+        return;
+    }
+    messageBox(mfInformation | mfOKButton,
+               "Give this link to the person you want to write to; they use Chat > Join...\n\n%s\n\n"
+               "It is also in %s's server window (select it, Ctrl-Ins copies).",
+               trimmed(body).c_str(), as[i].display.c_str());
+    pollNow();
 }
 
 // Leave: part the conversation the chat window shows; its conv-gone takes
@@ -1637,6 +1669,7 @@ TMenu *buildChatMenu()
     add(new TMenuItem("~C~onnect...", cmChatConnect, kbNoKey, hcNoContext));
     add(new TMenuItem("~D~isconnect...", cmChatDisconnect, kbNoKey, hcNoContext));
     add(new TMenuItem("~J~oin...", cmChatJoin, kbNoKey, hcNoContext));
+    add(new TMenuItem("~I~nvite...", cmChatInvite, kbNoKey, hcNoContext));
     add(new TMenuItem("~A~nswer", cmChatAnswer, kbNoKey, hcNoContext));
     add(new TMenuItem("~L~eave", cmChatLeave, kbNoKey, hcNoContext));
     add(&newLine());
@@ -1697,7 +1730,7 @@ void chatMenuGrey()
 
 bool chatCommand(ushort command)
 {
-    if (command < cmChatConnect || command >= cmChatAccount + kChatMaxAccounts)
+    if (command != cmChatInvite && (command < cmChatConnect || command >= cmChatAccount + kChatMaxAccounts))
         return false;
     if (command == cmChatOff)
         return true;
@@ -1716,6 +1749,9 @@ bool chatCommand(ushort command)
         break;
     case cmChatJoin:
         joinDialog();
+        break;
+    case cmChatInvite:
+        inviteDialog();
         break;
     case cmChatLeave:
         leaveShown();

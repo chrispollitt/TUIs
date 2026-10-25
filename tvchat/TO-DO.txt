@@ -11,9 +11,9 @@ Next
     mail-setup. Set imap_user / smtp_user (the Unix name) and smtp_port = 587
     there, else the core tries 465 first and waits for the timeout.
   - UI for invites (Chat > Invite, Join takes a link).
-  - The UI still says "Delta Chat to come" (About, Help, the README, the
-    package description) and the Join dialog asks for a channel or nick: it
-    should ask for an email address on a Delta Chat account.
+  - Done (step 3): Chat > Invite..., Join takes an address or a link, the
+    "to come" texts are gone, `delta_invite_join_and_send` in e2e_regress. Still to
+    do: README / man page for tvchat itself, the Proto column shows "delta".
   - Chat > Leave (`part`) is refused: leave a group / delete a chat.
   - Not in the first version: attachments (shown as `[attachment: NAME]`),
     verification QR codes and invite links, multi-device setup, reactions,

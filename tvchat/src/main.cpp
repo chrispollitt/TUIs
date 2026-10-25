@@ -1,6 +1,6 @@
 // main.cpp - command line, --selftest, and the run of the app.
 // tvchat - a Turbo Vision chat client: IRC (with IRCv3) through the
-// tvchat-backend helper, Delta Chat to come.
+// tvchat-backend helper, Delta Chat.
 //
 // POSIX only (Linux incl. Raspberry Pi / WSL, macOS, the BSDs, Cygwin): the
 // backend is a co-process, and a native Windows build has no fork().

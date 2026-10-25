@@ -8,8 +8,10 @@
   messages and unread counts, incoming and sent messages, contact requests,
   read marks, older history from the core, and a restart if the core dies. Invite
   links (`invite` verb; `join` takes a link) exchange the keys the core needs.
-  Tried against two real mailboxes on cpbee; not yet in the UI (the UI still says "Delta Chat
-  to come").
+  Chat > Invite... shows the link (also in the server window), Chat > Join... takes an
+  address or a link. Tried against two real mailboxes on cpbee. Set-up scripts:
+  mail-setup's `configure-delta.sh` (the mailboxes) and chat-setup's
+  `configure-tvchat-delta.sh` (a tvchat account, in one command).
 
 - **talk(1)** (`protocol = talk`): through chat-setup's talkd on the LAN
   master, so a plain `talk you@cpbee` from any shell rings you in tvchat. Join

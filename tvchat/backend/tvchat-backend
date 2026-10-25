@@ -548,6 +548,23 @@ def find_password_where(account_id, host, login, scheme):
     return None, None
 
 
+def find_delta_password(account_id, addr, host, login):
+    """(password, where) for a Delta Chat mailbox.  The login the server wants
+    is often the bare user name, while a ~/.netrc entry is as likely to be
+    written for the address, under the mail host or the address's domain: try
+    every such pairing, the account's own settings first."""
+    domain = addr.rpartition("@")[2]
+    seen = []
+    for h, l in ((host, login), (domain, addr), (domain, login), (host, addr)):
+        if (h, l) in seen or not h or not l:
+            continue
+        seen.append((h, l))
+        pw, where = find_password_where(account_id, h, l, "imap")
+        if pw:
+            return pw, where
+    return None, None
+
+
 def find_password(account_id, host, login, scheme):
     """The password, or None."""
     return find_password_where(account_id, host, login, scheme)[0]
@@ -2454,10 +2471,11 @@ class DeltaChatAdapter:
 
     def _configure(self):
         host, login = self._login()
-        pw = find_password(self.account.id, host, login, "imap")
+        pw = find_delta_password(self.account.id, self.addr, host, login)[0]
         if not pw:
             raise UserError("no password for %s: put it in $%s or ~/.netrc (machine %s login %s "
-                            "password ...)" % (self.addr, _env_name(self.account.id), host, login))
+                            "password ..., or login %s)" % (self.addr, _env_name(self.account.id),
+                                                           host, login, self.addr))
         o = self.account.opts
         p = {"addr": self.addr, "password": pw}
         for key, name in (("imap_server", "imapServer"), ("smtp_server", "smtpServer"),
@@ -2959,7 +2977,9 @@ def cmd_invite(a):
     ad = chat.adapter(chat.account(a.account))
     if not hasattr(ad, "invite"):
         raise UserError("%s has no invite links" % a.account)
-    sys.stdout.write(ad.invite() + "\n")
+    link = ad.invite()
+    ad.system(ad.server_conv(), "invite link: " + link)   # to copy from the log
+    sys.stdout.write(link + "\n")
     return 0
 
 

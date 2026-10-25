@@ -71,12 +71,22 @@ Delta Chat account reports an error; IRC and talk work as before. Either:
 Tested with 2.65.0. On Cygwin the Windows build works too (tvchat hands it a
 Windows path for its data directory).
 
+**The short way:** on the mail master, `mail-setup`'s `configure-delta.sh` makes
+the mailbox users and the authenticated submission port Delta Chat needs (it is
+a step of the `mail-setup.sh` wizard); then on each client, once tvchat is
+installed, `chrispollitt/POSIX`'s `chat-setup/scripts/configure-tvchat-delta.sh
+--addr delta@your.domain --host mailhost --self-signed --autoconnect` installs
+the core, writes the account into `tvchat.conf`, stores the password in
+`~/.netrc` and connects once to prove it. What follows is what those do.
+
 Use a **dedicated** mailbox: the core moves chat mail into its own folder and
 may delete it from the server. The first connect sets the account up (the
 address and its password, from the same places as IRC's: `$TVCHAT_PASS_<ACCOUNT>`,
 `~/.mu-tickets`, or `~/.netrc` with `machine <mail host> login <address>`); after
 that the core remembers it in `~/.local/share/tvchat/deltachat/<ACCOUNT>/`
 (`$XDG_DATA_HOME` is respected), which belongs to the core: do not edit it.
+The ~/.netrc entry may name the mail host or the address's domain, and the bare
+login or the full address.
 
 Two people (or two accounts) must exchange keys before the core will send:
 one runs `tvchat-backend invite ACCOUNT` and gives the link to the other, who

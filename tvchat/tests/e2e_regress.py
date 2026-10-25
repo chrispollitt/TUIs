@@ -207,7 +207,7 @@ def chat_join_and_leave(opts):
     started(tv, c)
     c.check(srv.wait_joined("#e2e"), "the chat backend never joined #e2e")
     tv.send(alt("c"), "j")
-    c.check(tv.wait("nick / address to talk to", 3), "Chat > Join... did not ask")
+    c.check(tv.wait("invite link", 3), "Chat > Join... did not ask")
     tv.send("#Other", "Enter", settle=0.8)
     c.check(srv.wait_joined("#other") and srv.sent("JOIN #Other"),
             "Join did not join the channel")
@@ -251,6 +251,52 @@ def chat_typed_commands(opts):
             "/join in the server messages did not join")
     c.check(tv.wait(lambda: re.search(r"│ ?#cmds\b", tv.text()), 3),
             "the channel /joined is not in the conversation list")
+    c.check(tv.alive(), "tvchat exited")
+    return tv
+
+
+@case()
+def delta_invite_join_and_send(opts):
+    # Delta Chat against tests/fake_deltachat_rpc.py: Chat > Invite shows the
+    # link, Chat > Join takes one (the key exchange opens the chat), a line
+    # typed there reaches the core
+    import json
+    core = HERE / "fake_deltachat_rpc.py"
+
+    def setup(t):
+        d = t.tmp / "xdg" / "tvchat" / "deltachat" / "delta"
+        d.mkdir(parents=True)
+        (d / "world.json").write_text(json.dumps({"contacts": {}, "chats": {}, "messages": {}}))
+        (d / "state.json").write_text(json.dumps({"accounts": [1], "configured": True}))
+        conf = t.tmp / "tvchat.conf"
+        conf.write_text("[chat]\nautoconnect = delta\n\n[account:delta]\nprotocol = deltachat\n"
+                        "display = Delta\naddr = me@example.org\nrpc_server = %s\n" % core)
+        t.env["TVCHAT_CONF"] = str(conf)
+        t.core = d
+    tv = Tv(opts, setup=setup)
+    c = Case(tv)
+    started(tv, c)
+    c.check(tv.wait(lambda: re.search(r"Delta\b.*\bYes\b", tv.text()), 15),
+            "the Delta Chat account did not connect (Yes in the server pane)")
+    tv.send(alt("c"), "i", settle=0.8)
+    c.check(tv.wait("https://i.delta.chat/#FAKEINVITE", 5),
+            "Chat > Invite... did not show the invite link")
+    tv.send("Enter", settle=0.5)
+    tv.send(alt("c"), "j")
+    c.check(tv.wait("invite link", 3), "Chat > Join... does not mention an invite link")
+    tv.send("https://i.delta.chat/#FAKEINVITE", "Enter", settle=1.0)
+    c.check(tv.wait(lambda: chat_heading(tv, "Inviter") is not None, 6),
+            "joining the invite did not open the chat")
+    tv.send("hello over delta", "Enter", settle=1.0)
+    c.check(tv.wait("hello over delta", 4), "the sent line is not in the log")
+
+    def sent():
+        try:
+            return "hello over delta" in (t_core / "requests.jsonl").read_text()
+        except OSError:
+            return False
+    t_core = tv.core
+    c.check(tv.wait(sent, 4), "the line did not reach the Delta Chat core")
     c.check(tv.alive(), "tvchat exited")
     return tv
 
@@ -335,7 +381,7 @@ def talk_irc_mode_call_out_and_toggle(opts):
     c.check(tv.wait(lambda: re.search(r"Talk\b.*\bYes\b", tv.text()), 5),
             "the server pane does not show Talk as connected (Yes)")
     tv.send(alt("c"), "j")
-    c.check(tv.wait("nick / address to talk to", 3), "Chat > Join... did not ask")
+    c.check(tv.wait("invite link", 3), "Chat > Join... did not ask")
     tv.send("miche", "Enter", settle=0.8)
     c.check(srv.wait(lambda: srv.sent("CALL ")), "Join did not CALL")
     cid = srv.sent("CALL ")[0].split()[1]

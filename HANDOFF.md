@@ -25,29 +25,36 @@ is next, what was decided, and the live setup.
   mail-setup checkout, everything in it already rebased into POSIX) is safe to
   delete.
 
-## Next: Delta Chat, step 3 (the UI)
+## Next: the clean install on cmdesktop, then merge
 
-Steps 1-2 are on branch `claude/delta-chat-c713de` (not merged; for Chris's
-review): `DeltaChatAdapter` in `tvchat/backend/tvchat-backend` runs the
-official `deltachat-rpc-server` (2.65.0) and speaks JSON-RPC to it; how it
-works is in [tvchat/DESIGN.md](tvchat/DESIGN.md) "Delta Chat adapter", what is
-left in [tvchat/TO-DO.txt](tvchat/TO-DO.txt) item 1. `chat_unit` passes (93
-tests, stub core plus the real one). **Live on cpbee, Oct 24:** two test
-mailboxes `delta@` / `delta2@cpbee.cmnet` (Unix users; passwords in
-`/root/delta-passwords` on cpbee) set up, invite exchanged, encrypted messages
-both ways, read marks. The C++ side is unchanged and untried with it.
+Delta Chat is built and tried live, on branch `claude/delta-chat-c713de` (not
+merged; for Chris's review): the adapter (tvchat/DESIGN.md "Delta Chat
+adapter"), invite links, and the UI (Chat > Invite..., Join takes an address or
+a link, `delta_invite_join_and_send` in e2e_regress). Live on cpbee, Oct 24:
+two mailboxes `delta@` / `delta2@cpbee.cmnet` swapped an invite and wrote to
+each other, and the client script connected a fresh account in one command.
 
-- cpbee was changed by a temporary script (`/tmp/delta-mailboxes.sh`, not in
-  git): users, `cpbee.cmnet` in Postfix `mydestination`, a Dovecot auth
-  socket (`conf.d/96-delta-submission.conf`), Postfix submission on 587 (STARTTLS
-  + login), 587 in `lan0-tcp-ports`. This belongs in chrispollitt/POSIX
-  mail-setup (TO-DO item 1). Lesson: the script's `umask 077` leaked and
-  made the drop-in unreadable, which broke all local delivery for a few
-  minutes - fixed by `chmod 644`; check file modes after `sudo` scripts.
-- Account settings that were needed: `imap_user` / `smtp_user` = the Unix
-  name, `smtp_port = 587`, `verify = false` (self-signed).
-- Step 3: the UI (Join asks for an address or an invite link, Chat > Invite,
-  the "Delta Chat to come" texts go, an `e2e_regress` case with the stub core).
+Chris's rule (Oct 24): **these apps need a lot of setup, so everything should be
+automated and painless**; Chris will do a clean install on cmdesktop to test the
+whole path. The pieces, all in chrispollitt/POSIX (committed on `main`, not
+pushed):
+
+- master: `mail-setup/scripts/configure-delta.sh` (mailbox users, `cpbee.cmnet`
+  local in Postfix, the Dovecot auth socket, Postfix submission on 587, the
+  router's port list) - also a wizard step of `mail-setup.sh`. Replaces the
+  temporary `/tmp/delta-mailboxes.sh` run on cpbee (which did the same by hand;
+  re-running the script there is safe and swaps `96-delta-submission.conf` for
+  `96-mail-setup-submission.conf`).
+- client: `chat-setup/scripts/configure-tvchat-delta.sh --addr ... --host ...`
+  (core via pip --user, `tvchat.conf`, `~/.netrc`, a real connect).
+- tvchat's `~/.netrc` lookup for Delta Chat accepts the mail host or the
+  address's domain, and the bare login or the full address.
+- To check on the clean install: pip installing the core where `pip --user`
+  puts scripts off `PATH` (the script then writes `rpc_server =` with the path),
+  Cygwin (no PyPI wheel for the core: needs the Windows release binary), a
+  firewall that drops 587.
+- Left: tvchat's man page for the UI, the Proto column shows "delta" for
+  deltachat, Chat > Leave for Delta Chat, attachments (tvchat/TO-DO.txt item 1).
 
 After that: tvchat/TO-DO.txt (small things), tvmail/TO-DO.txt (periodic pull
 first), and the open bugs in tvmail/BUGS.md.
