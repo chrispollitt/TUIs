@@ -115,8 +115,8 @@ then builds `build/tvmail`.
 **3. `./test.sh`.** Runs the ctest layers; see `tests/README.md`.
 `./test.sh -LE mail_setup` skips mail-setup's suites.
 
-**4. `./setup.sh`.** Asks where to install: `~/.local` (just you) or
-`/usr/local` (everyone). Then it writes `~/.config/tvmail/tvmail.conf`.
+**4. `./setup.sh`.** Asks where to install: `/usr/local` (everyone, the default)
+or `~/.local` (just you). Then it writes `~/.config/tvmail/tvmail.conf`.
 On a box with Dovecot it knows it's the master and offers **`master`** (the
 default). That writes a config that reads through this box's own Dovecot and
 sends through its own Postfix:

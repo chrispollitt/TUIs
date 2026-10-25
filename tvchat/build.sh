@@ -40,4 +40,4 @@ bin="$here/build/tvchat"; [ -e "$bin.exe" ] && bin="$bin.exe"
 echo
 echo ">> built: $bin"
 echo ">> try:      PATH=\"$here/backend:\$PATH\"  \"$bin\""
-echo ">> install:  ./install.sh   (or: cmake --install \"$here/build\" --prefix ~/.local)"
+echo ">> install:  ./install.sh   (or: cmake --install \"$here/build\" --prefix DIR)"

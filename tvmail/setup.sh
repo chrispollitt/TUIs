@@ -3,8 +3,8 @@
 # setup.sh - post-build install + first-run configuration wizard for tvmail.
 #
 # Run this after ./build.sh.  It:
-#   * asks whether to install for just you (~/.local) or system-wide
-#     (/usr/local), then runs  cmake --install
+#   * asks whether to install system-wide (/usr/local, the default) or for
+#     just you (~/.local), then runs  cmake --install
 #   * offers to write ~/.config/tvmail/tvmail.conf:
 #       master - Dovecot is installed here: remote mode against this box's own
 #                Dovecot (IMAP 993) + Postfix (localhost:25), never local mode
@@ -97,9 +97,9 @@ SUDO=""
 # --------------------------------------------------------------------------
 step "Install location"
 if [ -z "$PREFIX" ]; then
-  echo "Install tvmail for just you (~/.local) or system-wide (/usr/local)?"
-  choice=$(readval "local or system" "local")
-  case "$choice" in s|S|system|sys|Sys*) PREFIX=/usr/local ;; *) PREFIX="$HOME/.local" ;; esac
+  echo "Install tvmail system-wide (/usr/local) or for just you (~/.local)?"
+  choice=$(readval "system or local" "system")
+  case "$choice" in l|L|local|Local) PREFIX="$HOME/.local" ;; *) PREFIX=/usr/local ;; esac
 fi
 log "prefix: $PREFIX"
 

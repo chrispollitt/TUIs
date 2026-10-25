@@ -89,7 +89,7 @@ runs the same everywhere.
 ```bash
 ./configure.sh      # a wizard: build tools, then the mail system (mail-setup)
 ./build.sh          # fetches and patches Turbo Vision, builds
-./setup.sh          # installs (~/.local or /usr/local), writes tvmail.conf
+./setup.sh          # installs (/usr/local, or ~/.local if you say so), writes tvmail.conf
 ```
 
 You need `cmake`, a C++17 compiler, ncurses(w) headers, `git` and a Python 3

@@ -65,4 +65,4 @@ bin="$here/build/tvmail"; [ -e "$bin.exe" ] && bin="$bin.exe"
 echo
 echo ">> built: $bin"
 echo ">> try:      PATH=\"$here/backend:\$PATH\"  \"$bin\""
-echo ">> install:  cmake --install \"$here/build\" --prefix ~/.local"
+echo ">> install:  ./setup.sh   (or: cmake --install \"$here/build\" --prefix DIR)"

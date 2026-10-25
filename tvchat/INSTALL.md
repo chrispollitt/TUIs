@@ -22,7 +22,8 @@ needs `fork()`. Use Cygwin or WSL there.
 
 `./build.sh` needs `../tvcommon` beside it (a source tarball from `./dist.sh`
 carries it as `./tvcommon`). For another prefix,
-`cmake --install build --prefix ~/.local`. `./uninstall.sh` removes what was
+`cmake --install build --prefix DIR` (`~/.local` if you want it: it installs
+there only when you say so). `./uninstall.sh` removes what was
 installed; `--purge` also offers to remove `~/.config/tvchat/`.
 
 ## Configure
@@ -63,8 +64,10 @@ A Delta Chat account needs the official core, `deltachat-rpc-server`, a
 separate program (tvchat does not reimplement Delta Chat). Without it only the
 Delta Chat account reports an error; IRC and talk work as before. Either:
 
-- `pip install deltachat-rpc-server` (PyPI wheels for Linux, macOS and
-  Windows; the program lands in a `bin` directory on your `PATH`), or
+- let `configure-tvchat-delta.sh` do it (below): it takes the program out of the PyPI
+  wheel (Linux, macOS, and the Windows build on Cygwin) into `/usr/local/bin`, using
+  sudo if that needs it; `--prefix DIR` picks another place (`--prefix ~/.local` if
+  you want it there), or
 - download a release binary from <https://github.com/chatmail/core/releases>
   and put it on your `PATH`, or name it with `rpc_server =` in the account.
 
