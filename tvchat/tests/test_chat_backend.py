@@ -1435,6 +1435,351 @@ class TestTalkWithTheRealTalkd(TalkBase):
         self.chat.close()
 
 
+FAKE_DC = HERE / "fake_deltachat_rpc.py"
+
+DC_WORLD = {
+    "contacts": {"20": {"address": "alice@example.org", "displayName": "Alice"},
+                 "21": {"address": "bob@example.org", "displayName": "Bob"}},
+    "chats": {"10": {"id": 10, "name": "Alice", "chatType": "Single", "contacts": [20],
+                     "fresh": 1},
+              "11": {"id": 11, "name": "Team", "chatType": "Group", "contacts": [1, 20, 21]}},
+    "messages": {"100": {"chatId": 10, "fromId": 20, "text": "hello", "state": 10,
+                         "sortTimestamp": 1700000000},
+                 "101": {"chatId": 10, "fromId": 1, "text": "hi back", "state": 26,
+                         "sortTimestamp": 1700000060,
+                         "sender": {"address": "me@example.org", "displayName": "Me"}},
+                 "102": {"chatId": 11, "fromId": 21, "text": "meeting at 3", "state": 16,
+                         "showPadlock": False, "sortTimestamp": 1700000100}},
+}
+
+
+class DeltaBase(Base):
+    """The Delta Chat adapter against fake_deltachat_rpc.py, a stand-in for
+    deltachat-rpc-server that answers from a small world and takes its
+    orders (events, messages arriving, a crash) through files in its
+    directory."""
+
+    def setUp(self):
+        super().setUp()
+        if not os.access(str(FAKE_DC), os.X_OK):
+            self.skipTest("fake_deltachat_rpc.py is not executable")
+        self.data = self.tmp / "data"
+        os.environ["XDG_DATA_HOME"] = str(self.data)
+        self.addCleanup(os.environ.pop, "XDG_DATA_HOME", None)
+        self.dir = self.data / "tvchat" / "deltachat" / "delta"
+
+    def tearDown(self):
+        if getattr(self, "chat", None) is not None:
+            self.chat.close()
+        super().tearDown()
+
+    def setup_dc(self, world=DC_WORLD, configured=True, extra="", server=None):
+        import json
+        self.dir.mkdir(parents=True)
+        (self.dir / "world.json").write_text(json.dumps(world))
+        if configured:
+            (self.dir / "state.json").write_text(json.dumps({"accounts": [1], "configured": True}))
+        self.conf("""\
+            [account:delta]
+            protocol   = deltachat
+            display    = Delta
+            addr       = me@example.org
+            rpc_server = %s
+            %s
+            """ % (server or FAKE_DC, extra.replace("\n", "\n            ")))
+        self.chat = cb._chat()
+        self.acct = self.chat.by_id["delta"]
+        self.ad = self.chat.adapter(self.acct)
+
+    def turn(self, pred, timeout=8):
+        loop = self.chat.loop
+        loop.running = True
+        deadline = time.time() + timeout
+        while not pred():
+            if time.time() > deadline:
+                self.fail("timed out; events: %r\nthe core got: %r"
+                          % (self.chat.events.items[-8:], self.requests()))
+            loop.run_once(0.05)
+
+    def up(self):
+        self.chat.connect(self.acct)
+        self.turn(lambda: self.acct.state == "connected")
+
+    def event(self, **ev):
+        import json
+        with open(str(self.dir / "events.jsonl"), "a") as fh:
+            fh.write(json.dumps({"contextId": 1, "event": ev}) + "\n")
+
+    def order(self, **obj):
+        import json
+        with open(str(self.dir / "events.jsonl"), "a") as fh:
+            fh.write(json.dumps(obj) + "\n")
+
+    def requests(self, method=None):
+        import json
+        try:
+            lines = (self.dir / "requests.jsonl").read_text().splitlines()
+        except OSError:
+            return []
+        reqs = [json.loads(ln) for ln in lines]
+        return [r for r in reqs if method is None or r["method"] == method]
+
+    def events(self, etype=None):
+        return [f for _, f in self.chat.events.items if etype is None or f[0] == etype]
+
+    def verb(self, *argv):
+        return cb.dispatch(cb.build_parser(), list(argv))
+
+
+class TestDeltaChat(DeltaBase):
+    def test_a_missing_core_says_how_to_get_it(self):
+        self.setup_dc(server="/nonexistent/deltachat-rpc-server")
+        with self.assertRaises(cb.UserError) as e:
+            self.chat.connect(self.acct)
+        self.assertIn("not found", str(e.exception))
+        self.assertIn("pip install deltachat-rpc-server", str(e.exception))
+        self.assertEqual(self.acct.state, "error")
+        self.assertEqual(self.verb("connect", "delta")[0], 1)
+
+    def test_no_addr_is_a_user_error(self):
+        self.conf("[account:delta]\nprotocol = deltachat\nrpc_server = %s\n" % FAKE_DC)
+        chat = cb._chat()
+        self.chat = chat
+        with self.assertRaises(cb.UserError) as e:
+            chat.connect(chat.by_id["delta"])
+        self.assertIn("addr=", str(e.exception))
+
+    def test_chats_history_unread_and_members(self):
+        self.setup_dc()
+        self.up()
+        self.assertEqual(self.acct.state, "connected")
+        self.assertEqual(sorted(self.acct.convs), ["delta/*", "delta/10", "delta/11"])
+        alice, team = self.acct.convs["delta/10"], self.acct.convs["delta/11"]
+        self.assertEqual((alice.kind, alice.title, alice.unread), ("direct", "Alice", 1))
+        self.assertEqual((team.kind, team.title, team.unread), ("group", "Team", 0))
+        got = [(m.id, m.sender.address, m.sender.display, m.flags, m.text) for m in alice.history]
+        self.assertEqual(got, [
+            ("delta:100", "alice@example.org", "Alice", "e", "hello"),
+            ("delta:101", "me@example.org", "Me", "ser", "hi back")])
+        self.assertEqual(team.history[0].flags, "r")             # seen, not encrypted
+        self.assertEqual(self.verb("members", "delta/11")[1].decode().splitlines(),
+                         ["alice@example.org\tAlice\tmember", "bob@example.org\tBob\tmember"])
+        # the same lines the UI gets
+        st, body = self.verb("history", "delta/10")
+        self.assertEqual(body.decode().splitlines()[0].split("\t")[:2], ["delta:100", "delta/10"])
+        self.assertEqual(self.verb("accounts")[1].decode().strip(),
+                         "delta\tdeltachat\tconnected\tDelta")
+
+    def test_an_incoming_message_is_unread_once(self):
+        self.setup_dc()
+        self.up()
+        n = len(self.requests("get_next_event"))
+        self.order(set_msg={"id": 103, "chatId": 10, "fromId": 20, "text": "ping",
+                            "state": 10, "sortTimestamp": 1700000200})
+        self.event(kind="IncomingMsg", chatId=10, msgId=103)
+        self.event(kind="MsgsChanged", chatId=10, msgId=103)    # the core says it twice
+        self.turn(lambda: len(self.requests("get_next_event")) >= n + 2)
+        alice = self.acct.convs["delta/10"]
+        self.assertEqual([m.text for m in alice.history], ["hello", "hi back", "ping"])
+        self.assertEqual(alice.unread, 2)
+        self.assertEqual(self.events("unread")[-1], ("unread", "delta/10", 2))
+
+    def test_a_message_from_a_stranger_makes_a_chat(self):
+        self.setup_dc()
+        self.up()
+        self.order(set_chat={"id": 12, "name": "Carol", "chatType": "Single",
+                             "contacts": [22], "isContactRequest": True})
+        self.order(set={"contacts": {"22": {"address": "carol@example.org",
+                                            "displayName": "Carol"}}})
+        self.order(set_msg={"id": 110, "chatId": 12, "fromId": 22, "text": "hi, it's Carol",
+                            "state": 10, "sortTimestamp": 1700000300,
+                            "sender": {"address": "carol@example.org", "displayName": "Carol"}})
+        self.event(kind="IncomingMsg", chatId=12, msgId=110)
+        self.turn(lambda: "delta/12" in self.acct.convs and self.acct.convs["delta/12"].unread == 1)
+        conv = self.acct.convs["delta/12"]
+        self.assertEqual((conv.kind, conv.title), ("direct", "Carol"))
+        self.assertIn("a reply accepts the chat", [m.text for m in conv.history][0])
+        self.verb("send", "delta/12", "hello Carol")
+        self.assertEqual(len(self.requests("accept_chat")), 1)    # replying accepts it
+
+    def test_send_answers_with_the_real_id_and_shows_once(self):
+        self.setup_dc()
+        self.up()
+        st, body = self.verb("send", "delta/10", "on my way")
+        self.assertEqual(st, 0)
+        mid = body.decode().strip()
+        self.assertRegex(mid, r"^delta:\d+$")
+        self.assertEqual(self.requests("misc_send_text_message")[0]["params"],
+                         [1, 10, "on my way"])
+        n = len(self.requests("get_next_event"))
+        self.turn(lambda: len(self.requests("get_next_event")) > n)   # its MsgsChanged came by
+        alice = self.acct.convs["delta/10"]
+        mine = [m for m in alice.history if m.text == "on my way"]
+        self.assertEqual([(m.id, m.flags) for m in mine], [(mid, "ser")])
+        self.assertEqual(alice.unread, 1)                         # our own line is not unread
+        # typed commands: refused whole, // escapes
+        self.assertEqual(self.verb("send", "delta/10", "/me waves")[0], 1)
+        self.assertEqual(self.verb("send", "delta/10", "//shrug")[0], 0)
+        self.assertEqual(self.requests("misc_send_text_message")[-1]["params"][2], "/shrug")
+        self.assertEqual(self.verb("send", "delta/*", "x")[0], 1)
+        self.assertEqual(self.verb("send", "delta/10", "   ")[0], 1)
+
+    def test_join_starts_a_chat_with_an_address(self):
+        self.setup_dc()
+        self.up()
+        st, body = self.verb("join", "delta", "bob@example.org")
+        self.assertEqual(st, 0)
+        conv = self.acct.convs[body.decode().strip()]
+        self.assertEqual((conv.kind, conv.title), ("direct", "Bob"))
+        self.assertEqual(self.verb("join", "delta", "bob@example.org")[1], body)   # again: same chat
+        st, body = self.verb("join", "delta", "not an address")
+        self.assertEqual(st, 1)
+        self.assertIn("email address", body.decode())
+        self.assertEqual(self.verb("part", "delta/10")[0], 1)
+
+    def test_not_connected_refuses(self):
+        self.setup_dc()
+        st, body = self.verb("join", "delta", "bob@example.org")
+        self.assertEqual(st, 1)
+        self.assertIn("not connected", body.decode())
+
+    def test_reading_a_chat_tells_the_core(self):
+        self.setup_dc()
+        self.up()
+        self.assertEqual(self.verb("mark-read", "delta/10"), (0, b""))
+        self.assertEqual(self.requests("marknoticed_chat")[0]["params"], [1, 10])
+        self.assertEqual(self.requests("markseen_msgs")[0]["params"], [1, [100]])
+        self.assertEqual(self.acct.convs["delta/10"].unread, 0)
+        # read on another device: the unread count goes
+        self.order(set_msg={"id": 104, "chatId": 10, "fromId": 20, "text": "x", "state": 10,
+                            "sortTimestamp": 1700000400})
+        self.event(kind="IncomingMsg", chatId=10, msgId=104)
+        self.turn(lambda: self.acct.convs["delta/10"].unread == 1)
+        self.event(kind="MsgsNoticed", chatId=10)
+        self.turn(lambda: self.acct.convs["delta/10"].unread == 0)
+        self.assertEqual(len(self.requests("marknoticed_chat")), 1)   # not echoed back
+
+    def test_a_failed_send_is_said_in_the_chat(self):
+        self.setup_dc()
+        self.up()
+        self.order(set_msg={"id": 105, "chatId": 10, "fromId": 1, "text": "lost", "state": 24,
+                            "error": "recipient refused", "sortTimestamp": 1700000500})
+        self.event(kind="MsgFailed", chatId=10, msgId=105)
+        self.turn(lambda: any("not delivered" in m.text for m in self.acct.convs["delta/10"].history))
+        self.assertIn("recipient refused", self.acct.convs["delta/10"].history[-1].text)
+
+    def test_the_first_run_sets_the_mailbox_up(self):
+        os.environ["TVCHAT_PASS_DELTA"] = "s3cret"
+        self.addCleanup(os.environ.pop, "TVCHAT_PASS_DELTA", None)
+        self.setup_dc(configured=False, extra="imap_server = mail.example.org\n"
+                                              "smtp_port = 587\nverify = false\nname = Me Myself")
+        self.up()
+        (req,) = self.requests("add_or_update_transport")
+        self.assertEqual(req["params"][1], {
+            "addr": "me@example.org", "password": "s3cret", "imapServer": "mail.example.org",
+            "smtpPort": 587, "certificateChecks": "acceptInvalidCertificates"})
+        self.assertEqual(self.requests("set_config")[0]["params"], [1, "displayname", "Me Myself"])
+        self.assertEqual(len(self.requests("start_io")), 1)
+        self.chat.close()
+        self.chat.adapter(self.acct)
+        self.chat.connect(self.acct)                    # configured now: no second setup
+        self.turn(lambda: len(self.requests("start_io")) == 2)
+        self.assertEqual(len(self.requests("add_or_update_transport")), 1)
+
+    def test_a_missing_or_wrong_password_is_reported(self):
+        self.setup_dc(configured=False)
+        self.chat.connect(self.acct)
+        self.turn(lambda: self.acct.state == "error")
+        self.assertIn("no password for me@example.org", self.acct.detail)
+        self.assertIn("$TVCHAT_PASS_DELTA", self.acct.detail)
+        os.environ["TVCHAT_PASS_DELTA"] = "wrong"
+        self.addCleanup(os.environ.pop, "TVCHAT_PASS_DELTA", None)
+        self.chat.connect(self.acct)
+        self.turn(lambda: self.acct.state == "error" and "wrong password" in self.acct.detail)
+        self.assertIn("setting up me@example.org failed", self.acct.detail)
+
+    def test_the_mail_server_being_away_is_connecting_not_connected(self):
+        w = dict(DC_WORLD, connectivity=1000)
+        self.setup_dc(world=w)
+        self.chat.connect(self.acct)
+        self.turn(lambda: "delta/10" in self.acct.convs)        # chats show from the database
+        self.assertEqual(self.acct.state, "connecting")
+        self.assertIn("waiting for the mail server", self.acct.detail)
+        self.order(set={"connectivity": 4000})
+        self.event(kind="ConnectivityChanged")
+        self.turn(lambda: self.acct.state == "connected")
+
+    def test_a_dead_core_is_restarted_with_backoff(self):
+        self.setup_dc()
+        self.ad.RETRY_FIRST = 0.1
+        self.up()
+        self.order(exit=3)
+        self.turn(lambda: self.acct.state == "connecting")
+        self.assertIn("the Delta Chat core exited (status 3)", self.acct.detail)
+        self.assertIn("restarting in 0.1 s", self.acct.detail)
+        self.turn(lambda: self.acct.state == "connected")
+        alice = self.acct.convs["delta/10"]
+        self.assertEqual([m.id for m in alice.history], ["delta:100", "delta:101"])   # no doubles
+        self.assertEqual(alice.unread, 1)
+        # Disconnect stops the retrying for good
+        self.verb("disconnect", "delta")
+        self.assertEqual(self.acct.state, "disconnected")
+        self.assertIsNone(self.ad.proc)
+
+    def test_older_history_comes_from_the_core(self):
+        w = {"contacts": DC_WORLD["contacts"],
+             "chats": {"10": DC_WORLD["chats"]["10"]},
+             "messages": dict(("%d" % i, {"chatId": 10, "fromId": 20, "text": "m%d" % i,
+                                          "state": 16, "sortTimestamp": 1700000000 + i})
+                              for i in range(200, 330))}      # 130 messages
+        self.setup_dc(world=w)
+        self.up()
+        alice = self.acct.convs["delta/10"]
+        self.assertEqual([m.text for m in alice.history][0], "m280")      # the last 50
+        self.assertEqual(len(alice.history), 50)
+        st, body = self.verb("history", "delta/10", "--before", "delta:280")
+        self.assertEqual(st, 1)
+        self.assertIn("asking the server", body.decode())
+        self.assertEqual(self.events("history")[-1], ("history", "delta/10", "before"))
+        st, body = self.verb("history", "delta/10", "--before", "delta:280", "--limit", "100")
+        self.assertEqual(len(body.decode().splitlines()), 50)
+        self.assertEqual(body.decode().splitlines()[0].split("\t")[0], "delta:230")
+        self.verb("history", "delta/10", "--before", "delta:230")
+        self.verb("history", "delta/10", "--before", "delta:200")   # the very first: nothing older
+        self.assertEqual(self.verb("history", "delta/10", "--before", "delta:200"), (0, b""))
+        self.assertTrue(alice.history_done)
+
+    def test_the_core_is_given_a_private_accounts_directory(self):
+        self.setup_dc()
+        self.up()
+        self.assertEqual(oct(os.stat(str(self.dir)).st_mode & 0o777), oct(0o700))
+        self.assertEqual(oct(os.stat(str(self.dir.parent)).st_mode & 0o777), oct(0o700))
+
+
+class TestDeltaChatRealCore(DeltaBase):
+    """The real deltachat-rpc-server (on PATH, or $TVCHAT_TEST_DC_RPC), as far
+    as it can go with no mailbox: it starts, answers, creates the account and
+    knows it is not configured.  Skipped when it is not installed."""
+
+    def setUp(self):
+        super().setUp()
+        self.core = os.environ.get("TVCHAT_TEST_DC_RPC") or shutil.which("deltachat-rpc-server")
+        if not self.core:
+            self.skipTest("deltachat-rpc-server is not installed")
+
+    def test_it_starts_and_wants_a_password(self):
+        self.dir.mkdir(parents=True)
+        self.conf("[account:delta]\nprotocol = deltachat\naddr = me@example.org\n"
+                  "rpc_server = %s\n" % self.core)
+        self.chat = cb._chat()
+        acct = self.chat.by_id["delta"]
+        self.chat.connect(acct)
+        self.turn(lambda: acct.state == "error", timeout=30)
+        self.assertIn("no password for me@example.org", acct.detail)
+        self.assertTrue((self.dir / "accounts.toml").exists())    # the core made its own files
+        self.assertIsNone(self.chat.adapter(acct).proc)           # and it was shut down
+
+
 class TestIrcTls(IrcBase):
     """TLS with certificate verification against a throwaway self-signed
     cert - the cafile= path a LAN server needs.  openssl makes the cert."""

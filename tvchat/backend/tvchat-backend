@@ -79,7 +79,7 @@ the user), 2 internal error (bad request, bug).
 """
 
 import sys, os, io, argparse, base64, configparser, heapq, re, selectors, shlex, socket
-import codecs, errno, logging, ssl, threading, time
+import codecs, errno, json, logging, select, shutil, ssl, subprocess, threading, time
 from collections import deque
 
 
@@ -2063,19 +2063,686 @@ def _close_sock(loop, sock):
         pass
 
 
+class RpcError(Exception):
+    """The Delta Chat core answered a request with an error, or not at all."""
+
+
+_SYNC = object()                         # a pending request someone is waiting on
+
+
+def _json_line(raw):
+    try:
+        msg = json.loads(raw.decode("utf-8", "replace"))
+    except ValueError:
+        return None
+    return msg if isinstance(msg, dict) else None
+
+
 class DeltaChatAdapter:
-    """Placeholder until the Delta Chat adapter is built (deltachat-rpc-server over JSON-RPC; see TO-DO.txt)."""
+    """Delta Chat through the official core: `deltachat-rpc-server` runs as a
+    child of the backend and speaks JSON-RPC 2.0, one object per line, on its
+    stdin / stdout; the core does the mail, the encryption and its own
+    database.  One child (and one accounts directory) per tvchat account.
+
+    Two ways of asking.  The slow calls - the core's first answer, setting up
+    the mailbox, and the one long-poll `get_next_event`, which is outstanding
+    at all times - are asynchronous, on the shared loop.  Everything the user
+    triggers (send, join, history, mark-read) is a local database call that
+    takes milliseconds, so it simply waits for its answer in `call()`, with
+    other lines held back for the loop; that lets `send` answer the verb with
+    the real message id."""
+
+    RETRY_FIRST = 2
+    RETRY_MAX = 300
+    RETRY_STABLE = 60
+    START_TIMEOUT = 30                   # the core's first answer
+    SETUP_TIMEOUT = 180                  # autoconfiguration against the mail server
+    CALL_TIMEOUT = 10                    # a blocking call to the core
+    HISTORY_LOAD = 50                    # messages shown when a chat is opened
+    SELF = 1                             # the core's contact id for "me"
+    CONNECTED = 3000                     # get_connectivity: working or connected
+    INSTALL_HINT = ("install it with `pip install deltachat-rpc-server` or from "
+                    "https://github.com/chatmail/core/releases (see INSTALL.md), "
+                    "or set rpc_server= in the account")
 
     def __init__(self, chat, account):
-        self.chat, self.account = chat, account
+        self.chat, self.account, self.loop = chat, account, chat.loop
+        o = account.opts
+        self.addr = (o.get("addr") or "").strip()
+        self.rpc_server = (o.get("rpc_server") or "deltachat-rpc-server").strip()
+        self.gen = 0
+        self._ids = 0
+        self.attempt = 0
+        self.auto = False
+        self.retry_timer = None
+        self.logf = None
+        self._reset()
+
+    def _reset(self):
+        self.proc = None
+        self.rfd = self.wfd = None
+        self.phase = "down"              # down, starting, setup, up
+        self.rbuf = b""
+        self.wbuf = b""
+        self.pending = {}                # request id -> callback(result, error) or _SYNC
+        self.acct = None                 # the core's id for our account
+        self.timer = None
+        self.t_up = None
+        self.link = None                 # last (state, detail) told for the connectivity
+        self.requests = set()            # chat ids that are contact requests
+
+    def local_id(self):
+        self._ids += 1
+        return "%s:local%d" % (self.account.id, self._ids)
+
+    def server_conv(self):
+        return self.chat.ensure_conv(self.account, "*", "server", self.account.display)
+
+    def system(self, conv, text):
+        self.chat.add_message(conv, Message(self.local_id(), conv.id, time.time(),
+                                            Contact(""), text, "n"), count=False)
+
+    # -- starting and stopping the core ---------------------------------------
+    def _find_server(self):
+        name = self.rpc_server
+        if os.sep in name or (os.altsep and os.altsep in name):
+            path = os.path.expanduser(name)
+            ok = os.path.isfile(path) and os.access(path, os.X_OK)
+        else:
+            path = shutil.which(name)
+            ok = bool(path)
+        if not ok:
+            raise UserError("%s not found - %s" % (name, self.INSTALL_HINT))
+        return path
+
+    def _dir(self):
+        base = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+        base = os.path.join(base, "tvchat", "deltachat")
+        d = os.path.join(base, self.account.id)
+        try:
+            os.makedirs(d, mode=0o700, exist_ok=True)
+            os.chmod(base, 0o700)
+            os.chmod(d, 0o700)
+        except OSError as e:
+            raise UserError("cannot use %s: %s" % (d, e.strerror or e))
+        return d
 
     def connect(self):
-        raise UserError("Delta Chat is not supported yet")
+        if self.phase != "down":
+            return
+        if not self.addr:
+            raise UserError("[account:%s] has no addr= (the address Delta Chat uses)"
+                            % self.account.id)
+        path = self._find_server()
+        d = self._dir()
+        self.server_conv()
+        env = dict(os.environ)
+        env["DC_ACCOUNTS_PATH"] = d
+        if sys.platform == "cygwin" and path.lower().endswith(".exe"):
+            try:                         # the Windows build of the core reads Windows paths
+                env["DC_ACCOUNTS_PATH"] = subprocess.check_output(
+                    ["cygpath", "-w", d]).decode("utf-8", "replace").strip()
+            except (OSError, subprocess.CalledProcessError):
+                pass
+        try:
+            self.logf = open(d + ".log", "wb")        # the core's stderr, for a failed start
+            self.proc = subprocess.Popen([path], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                         stderr=self.logf, env=env, bufsize=0,
+                                         close_fds=True, start_new_session=True)
+        except OSError as e:
+            self._close()
+            raise UserError("cannot start %s: %s" % (path, e.strerror or e))
+        self.rfd, self.wfd = self.proc.stdout.fileno(), self.proc.stdin.fileno()
+        os.set_blocking(self.rfd, False)
+        os.set_blocking(self.wfd, False)
+        self.phase = "starting"
+        gen = self.gen
+        self.loop.watch(self.rfd, on_read=self._on_read)
+        self.timer = self.loop.call_later(
+            self.START_TIMEOUT,
+            lambda: gen == self.gen and self._fail("the Delta Chat core did not answer"))
+        self.chat.set_state(self.account, "connecting", "starting the Delta Chat core")
+        self._request("get_system_info", [], self._started)
 
     def disconnect(self):
-        pass
+        was = self.phase
+        retrying = self.retry_timer is not None or self.auto
+        self._stop_retrying()
+        if was == "up" and self.proc is not None:
+            try:                         # let the core finish what it is doing
+                self._write({"jsonrpc": "2.0", "method": "stop_io_for_all_accounts",
+                             "params": [], "id": 0})
+                self._flush_blocking(time.monotonic() + 2)
+            except (OSError, RpcError):
+                pass
+        self._close()
+        if was != "down" or retrying:
+            self.chat.set_state(self.account, "disconnected", "")
 
-    join = part = send = lambda self, *a: self.connect()
+    def _stop_retrying(self):
+        self.loop.cancel(self.retry_timer)
+        self.retry_timer = None
+        self.auto = False
+        self.attempt = 0
+
+    def _close(self):
+        self.gen += 1
+        self.loop.cancel(self.timer)
+        for fd in (self.rfd, self.wfd):
+            if fd is not None:
+                try:
+                    self.loop.watch(fd)
+                except (OSError, ValueError, KeyError):
+                    pass
+        if self.proc is not None:
+            for f in (self.proc.stdin, self.proc.stdout):
+                try:
+                    f.close()
+                except OSError:
+                    pass
+            try:                         # EOF on stdin is how the core is told to go
+                self.proc.wait(2)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+                self.proc.wait()
+        if self.logf is not None:
+            self.logf.close()
+            self.logf = None
+        self._reset()
+
+    def _core_log(self):
+        """What the core last said on stderr (why it would not start)."""
+        try:
+            with open(self._dir() + ".log", "rb") as fh:
+                lines = fh.read().decode("utf-8", "replace").strip().splitlines()
+            return lines[-1][:200] if lines else ""
+        except (OSError, UserError):
+            return ""
+
+    def _exit_reason(self):
+        rc = None
+        if self.proc is not None:
+            try:
+                rc = self.proc.wait(1)
+            except subprocess.TimeoutExpired:
+                pass
+        why = "the Delta Chat core exited" + (" (status %s)" % rc if rc is not None else "")
+        tail = self._core_log()
+        return why + (": " + tail if tail else "")
+
+    def _fail(self, why):
+        """A start that did not get through."""
+        _log.debug("%s: failed in phase %s: %s", self.account.id, self.phase, why)
+        self._close()
+        if self.auto:
+            self._retry(why)
+        else:
+            self.chat.set_state(self.account, "error", why)
+
+    def _lost(self, why):
+        """The core is gone, or we cannot reach it.  One that was up (or is a
+        reconnect) is started again, with backoff; a first start that fell
+        over is for the user to retry."""
+        _log.debug("%s: lost in phase %s: %s", self.account.id, self.phase, why)
+        again = self.phase == "up" or self.auto
+        if self.t_up is not None and self.loop.clock() - self.t_up >= self.RETRY_STABLE:
+            self.attempt = 0
+        self._close()
+        if again:
+            self._retry(why)
+        else:
+            self.chat.set_state(self.account, "disconnected", why)
+
+    def _retry(self, why):
+        delay = min(self.RETRY_MAX, self.RETRY_FIRST * 2 ** min(self.attempt, 16))
+        self.attempt += 1
+        self.auto = True
+        what = "%s - restarting in %s s" % (why, ("%g" % delay))
+        self.system(self.server_conv(), what)
+        self.chat.set_state(self.account, "connecting", what)
+        self.retry_timer = self.loop.call_later(delay, self._reconnect)
+
+    def _reconnect(self):
+        self.retry_timer = None
+        if not self.auto or self.phase != "down":
+            return
+        try:
+            self.connect()
+        except UserError as e:
+            self._stop_retrying()
+            self.chat.set_state(self.account, "error", str(e))
+
+    # -- JSON-RPC over the pipes ----------------------------------------------
+    def _write(self, obj):
+        method = obj.get("method", "")
+        _log.debug("%s >> %s%s", self.account.id, method,
+                   "" if method == "add_or_update_transport" else " " + json.dumps(obj["params"]))
+        self.wbuf += json.dumps(obj).encode("utf-8") + b"\n"
+        self._flush()
+
+    def _request(self, method, params, cb):
+        self._ids += 1
+        rid = self._ids
+        self.pending[rid] = cb
+        self._write({"jsonrpc": "2.0", "method": method, "params": list(params), "id": rid})
+        return rid
+
+    def _flush(self):
+        gen = self.gen
+        while self.wbuf and self.wfd is not None:
+            try:
+                n = os.write(self.wfd, self.wbuf)
+            except BlockingIOError:
+                break
+            except OSError:
+                self._lost(self._exit_reason())
+                return
+            self.wbuf = self.wbuf[n:]
+        if gen == self.gen and self.wfd is not None:
+            self.loop.watch(self.wfd, on_write=self._flush if self.wbuf else None)
+
+    def _flush_blocking(self, deadline):
+        gen = self.gen
+        while self.wbuf and self.wfd is not None and gen == self.gen:
+            self._flush()
+            if self.wbuf and gen == self.gen:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    raise RpcError("the Delta Chat core does not read its input")
+                select.select([], [self.wfd], [], left)
+
+    def _on_read(self):
+        try:
+            data = os.read(self.rfd, 65536)
+        except BlockingIOError:
+            return
+        except OSError:
+            data = b""
+        if not data:
+            self._lost(self._exit_reason())
+            return
+        self.rbuf += data
+        self._process()
+
+    def _process(self):
+        gen = self.gen
+        while gen == self.gen and b"\n" in self.rbuf:
+            raw, _, self.rbuf = self.rbuf.partition(b"\n")
+            msg = _json_line(raw)
+            if msg is None or "id" not in msg:
+                continue
+            cb = self.pending.pop(msg["id"], None)
+            if cb is None or cb is _SYNC:
+                continue                 # not asked for, or the waiter gave up
+            err = None
+            if msg.get("error"):
+                err = RpcError(str((msg["error"] or {}).get("message", msg["error"])))
+            try:
+                cb(msg.get("result"), err)
+            except Exception:
+                _log.exception("%s: handler for a core answer failed", self.account.id)
+
+    def call(self, method, *params):
+        """Ask the core and wait for the answer (a local call: milliseconds).
+        Lines that arrive meanwhile are kept for the loop."""
+        if self.proc is None:
+            raise RpcError("the Delta Chat core is not running")
+        gen = self.gen
+        rid = self._request(method, params, _SYNC)
+        if gen != self.gen:
+            raise RpcError("the Delta Chat core is gone")
+        deadline = time.monotonic() + self.CALL_TIMEOUT
+        held = []
+        try:
+            self._flush_blocking(deadline)
+            if gen != self.gen:
+                raise RpcError("the Delta Chat core is gone")
+            while True:
+                while b"\n" in self.rbuf:
+                    raw, _, self.rbuf = self.rbuf.partition(b"\n")
+                    msg = _json_line(raw)
+                    if msg is not None and msg.get("id") == rid:
+                        if msg.get("error"):
+                            raise RpcError("%s: %s" % (method, (msg["error"] or {}).get(
+                                "message", msg["error"])))
+                        return msg.get("result")
+                    held.append(raw)
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    raise RpcError("%s: no answer from the Delta Chat core" % method)
+                if select.select([self.rfd], [], [], left)[0]:
+                    try:
+                        data = os.read(self.rfd, 65536)
+                    except BlockingIOError:
+                        continue
+                    except OSError:
+                        data = b""
+                    if not data:
+                        self._lost(self._exit_reason())
+                        raise RpcError("the Delta Chat core exited")
+                    self.rbuf += data
+        finally:
+            if gen == self.gen:
+                self.pending.pop(rid, None)
+                if held:
+                    self.rbuf = b"\n".join(held) + b"\n" + self.rbuf
+                    self.loop.call_later(0, lambda: gen == self.gen and self._process())
+
+    # -- setting up -------------------------------------------------------------
+    def _started(self, res, err):
+        self.loop.cancel(self.timer)
+        if err is not None:
+            self._fail("the Delta Chat core failed to start: %s" % err)
+            return
+        _log.debug("%s: core %s", self.account.id, (res or {}).get("deltachat_core_version"))
+        self._next_event()
+        try:
+            ids = self.call("get_all_account_ids")
+            self.acct = ids[0] if ids else self.call("add_account")
+            if self.call("is_configured", self.acct):
+                self._go()
+            else:
+                self._configure()
+        except (RpcError, UserError) as e:
+            if self.proc is not None:
+                self._fail(str(e))
+
+    def _login(self):
+        o = self.account.opts
+        host = (o.get("imap_server") or o.get("host") or self.addr.rpartition("@")[2]).strip()
+        return host, (o.get("imap_user") or self.addr).strip()
+
+    def _configure(self):
+        host, login = self._login()
+        pw = find_password(self.account.id, host, login, "imap")
+        if not pw:
+            raise UserError("no password for %s: put it in $%s or ~/.netrc (machine %s login %s "
+                            "password ...)" % (self.addr, _env_name(self.account.id), host, login))
+        o = self.account.opts
+        p = {"addr": self.addr, "password": pw}
+        for key, name in (("imap_server", "imapServer"), ("smtp_server", "smtpServer"),
+                          ("imap_user", "imapUser"), ("smtp_user", "smtpUser")):
+            if o.get(key, "").strip():
+                p[name] = o[key].strip()
+        for key, name in (("imap_port", "imapPort"), ("smtp_port", "smtpPort")):
+            if o.get(key, "").strip():
+                try:
+                    p[name] = int(o[key])
+                except ValueError:
+                    raise UserError("[account:%s] %s must be a number" % (self.account.id, key))
+        if not _bool(o.get("verify"), True):
+            p["certificateChecks"] = "acceptInvalidCertificates"
+        self.phase = "setup"
+        gen = self.gen
+        self.timer = self.loop.call_later(
+            self.SETUP_TIMEOUT,
+            lambda: gen == self.gen and self._fail("setting up %s took too long" % self.addr))
+        self.chat.set_state(self.account, "connecting",
+                            "setting up %s (the first time takes a minute)" % self.addr)
+        self._request("add_or_update_transport", [self.acct, p], self._configured)
+
+    def _configured(self, res, err):
+        self.loop.cancel(self.timer)
+        if err is not None:
+            self._fail("setting up %s failed: %s" % (self.addr, err))
+            return
+        try:
+            self._go()
+        except (RpcError, UserError) as e:
+            if self.proc is not None:
+                self._fail(str(e))
+
+    def _go(self):
+        name = (self.account.opts.get("name") or "").strip()
+        if name:
+            self.call("set_config", self.acct, "displayname", name)
+        self.call("start_io", self.acct)
+        self.phase = "up"
+        self.t_up = self.loop.clock()
+        self._load_chats()
+        self._connectivity()
+
+    def _connectivity(self):
+        v = self.call("get_connectivity", self.acct)
+        now = ("connected", self.addr) if v >= self.CONNECTED else \
+            ("connecting", "waiting for the mail server (%s)" % self.addr)
+        if now != self.link:
+            self.link = now
+            self.chat.set_state(self.account, *now)
+
+    # -- the chat list and messages -----------------------------------------------
+    def _chat_of(self, cid):
+        return self.account.convs.get("%s/%d" % (self.account.id, cid))
+
+    def _conv(self, cid, name, kind, request=False):
+        conv = self._chat_of(cid)
+        if conv is None:
+            conv = self.chat.ensure_conv(self.account, str(cid), kind, name)
+            if request:
+                self.system(conv, "%s is not in your contacts: a reply accepts the chat" % name)
+        elif conv.title != name:
+            conv.title = name
+        (self.requests.add if request else self.requests.discard)(cid)
+        return conv
+
+    def _load_chats(self):
+        ids = self.call("get_chatlist_entries", self.acct, 0, None, None)
+        items = self.call("get_chatlist_items_by_entries", self.acct, ids)
+        for cid in ids:
+            it = items.get(str(cid)) or {}
+            if it.get("kind") != "ChatListItem" or it.get("isSelfTalk") or it.get("isDeviceTalk"):
+                continue
+            conv = self._conv(cid, it["name"], "direct" if it["chatType"] == "Single" else "group",
+                              it.get("isContactRequest"))
+            self.chat.merge_history(conv, self._messages(conv, self._last_ids(cid)))
+            self._members(conv)
+            fresh = it.get("freshMessageCounter", 0)
+            if conv.unread != fresh:
+                conv.unread = fresh
+                self.chat.events.push("unread", conv.id, fresh)
+
+    def _last_ids(self, cid, before=None):
+        ids = self.call("get_message_ids", self.acct, cid, False, False)
+        if before is not None:
+            ids = [i for i in ids if i < before]
+        return ids[-self.HISTORY_LOAD:]
+
+    def _messages(self, conv, ids):
+        if not ids:
+            return []
+        got = self.call("get_messages", self.acct, ids)
+        return [self._to_message(conv, got[str(i)]) for i in ids
+                if (got.get(str(i)) or {}).get("kind") == "message"]
+
+    def _to_message(self, conv, m):
+        mine = m["fromId"] == self.SELF
+        flags = ("s" if mine else "") + ("n" if m.get("isInfo") else "") \
+            + ("e" if m.get("showPadlock") else "") + ("r" if mine or m.get("state") == 16 else "")
+        text = m.get("text") or ""
+        if m.get("viewType") not in (None, "Text", "Unknown") or m.get("file"):
+            what = "[attachment: %s]" % (m.get("fileName") or m.get("viewType") or "file")
+            text = what + (" " + text if text else "")
+        who = m.get("sender") or {}
+        sender = Contact(who.get("address") or "", who.get("displayName") or None)
+        if m.get("isInfo"):
+            sender = Contact("")
+        return Message("%s:%d" % (self.account.id, m["id"]), conv.id,
+                       m.get("sortTimestamp") or m.get("timestamp") or time.time(),
+                       sender, text, flags)
+
+    @staticmethod
+    def _core_id(msg):
+        tail = msg.id.rpartition(":")[2]
+        return int(tail) if tail.isdigit() else None
+
+    def _members(self, conv):
+        if conv.kind != "group":
+            return
+        conv.members = {}
+        for c in self.call("get_chat_contacts", self.acct, int(conv.target)):
+            if c != self.SELF:
+                ct = self.call("get_contact", self.acct, c)
+                conv.members[ct["address"].lower()] = (ct["address"], ct["displayName"], "member")
+        self.chat.events.push("members", conv.id)
+
+    def fetch_history(self, conv, kind):
+        """Older messages from the core's database, past the in-memory ring:
+        True when there are some (a 'history CONV before' event follows)."""
+        if kind != "before" or conv.kind == "server" or self.phase != "up":
+            return False
+        have = [i for i in (self._core_id(m) for m in conv.history) if i is not None]
+        try:
+            msgs = self._messages(conv, self._last_ids(int(conv.target),
+                                                       min(have) if have else None))
+        except RpcError:
+            return False
+        if not msgs or not self.chat.merge_history(conv, msgs):
+            conv.history_done = True
+            return False
+        self.chat.events.push("history", conv.id, "before")
+        return True
+
+    # -- events ---------------------------------------------------------------------
+    def _next_event(self):
+        self._request("get_next_event", [], self._on_event)
+
+    def _on_event(self, res, err):
+        gen = self.gen
+        if err is not None:
+            self._lost("the Delta Chat core failed: %s" % err)
+            return
+        try:
+            self._event(res["contextId"], res["event"])
+        except (RpcError, KeyError, TypeError, ValueError):
+            if gen == self.gen:
+                _log.exception("%s: event %r failed", self.account.id, res)
+        if gen == self.gen:
+            self._next_event()
+
+    def _event(self, ctx, ev):
+        kind = ev.get("kind")
+        _log.debug("%s << event %s", self.account.id, json.dumps(ev))
+        if self.acct is not None and ctx != self.acct:
+            return
+        if kind == "ConfigureProgress" and self.phase == "setup":
+            self.chat.set_state(self.account, "connecting", "setting up %s: %d%%" %
+                                (self.addr, ev.get("progress", 0) // 10))
+        elif kind == "Error" and ev.get("msg"):
+            self.system(self.server_conv(), "error: %s" % ev["msg"])
+        if self.phase != "up":
+            return
+        cid = ev.get("chatId", ev.get("chat_id"))
+        if kind in ("IncomingMsg", "MsgsChanged") and cid and ev.get("msgId"):
+            self._arrived(cid, ev["msgId"], kind == "IncomingMsg")
+        elif kind == "MsgFailed" and cid:
+            conv = self._chat_of(cid)
+            if conv is not None:
+                m = self.call("get_message", self.acct, ev["msgId"])
+                self.system(conv, "not delivered: %s" % (m.get("error") or "the mail server refused it"))
+        elif kind == "ChatModified" and cid:
+            info = self.call("get_basic_chat_info", self.acct, cid)
+            if self._chat_of(cid) is not None or not self._skip(info):
+                conv = self._conv(cid, info["name"], "direct" if info["chatType"] == "Single"
+                                  else "group", info.get("isContactRequest"))
+                self._members(conv)
+        elif kind == "ChatDeleted" and cid:
+            conv = self._chat_of(cid)
+            if conv is not None:
+                self.chat.remove_conv(conv)
+        elif kind == "MsgsNoticed" and cid:
+            conv = self._chat_of(cid)
+            if conv is not None and conv.unread:
+                self.chat.mark_read(conv, hook=False)
+        elif kind in ("ConnectivityChanged", "ImapConnected", "SmtpConnected"):
+            self._connectivity()
+
+    @staticmethod
+    def _skip(info):
+        return info.get("isSelfTalk") or info.get("isDeviceChat")
+
+    def _arrived(self, cid, mid, incoming):
+        """A message the core has stored: new to us unless already shown (our
+        own sends are, and IncomingMsg is followed by MsgsChanged)."""
+        msgid = "%s:%d" % (self.account.id, mid)
+        conv = self._chat_of(cid)
+        if conv is not None and any(m.id == msgid for m in conv.history):
+            return
+        if conv is None:
+            info = self.call("get_basic_chat_info", self.acct, cid)
+            if self._skip(info):
+                return
+            conv = self._conv(cid, info["name"], "direct" if info["chatType"] == "Single"
+                              else "group", info.get("isContactRequest"))
+            self._members(conv)
+        msg = self._to_message(conv, self.call("get_message", self.acct, mid))
+        self.chat.add_message(conv, msg, count="s" not in msg.flags and incoming)
+
+    # -- what the user does -----------------------------------------------------------
+    def _need_up(self):
+        if self.phase != "up":
+            raise UserError("%s is not connected - Chat > Connect first" % self.account.display)
+
+    def join(self, target):
+        """Start (or find) the chat with an email address."""
+        self._need_up()
+        addr = target.strip()
+        if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", addr):
+            raise UserError("a Delta Chat chat is started with an email address (%r is not one)"
+                            % target)
+        try:
+            cid = self.call("lookup_contact_id_by_addr", self.acct, addr)
+            if cid is None:
+                cid = self.call("create_contact", self.acct, addr, None)
+            chat_id = self.call("create_chat_by_contact_id", self.acct, cid)
+            info = self.call("get_basic_chat_info", self.acct, chat_id)
+            conv = self._conv(chat_id, info["name"], "direct")
+            self.chat.merge_history(conv, self._messages(conv, self._last_ids(chat_id)))
+        except RpcError as e:
+            raise UserError(str(e))
+        return conv
+
+    def part(self, conv):
+        raise UserError("tvchat cannot leave or delete a Delta Chat chat yet")
+
+    def send(self, conv, text):
+        self._need_up()
+        if conv.kind == "server":
+            raise UserError("the server window takes no messages - start a chat (Chat > Join...)")
+        if text.startswith("/") and not text.startswith("//"):
+            raise UserError("Delta Chat has no /commands here (start with // to send a /)")
+        if text.startswith("//"):
+            text = text[1:]
+        if not text.strip():
+            raise UserError("nothing to send")
+        cid = int(conv.target)
+        try:
+            if cid in self.requests:
+                self.call("accept_chat", self.acct, cid)
+                self.requests.discard(cid)
+            mid = self.call("misc_send_text_message", self.acct, cid, text)
+            msg = self._to_message(conv, self.call("get_message", self.acct, mid))
+        except RpcError as e:
+            raise UserError(str(e))
+        self.chat.add_message(conv, msg, count=False)
+        return msg.id
+
+    def marked_read(self, conv, msgid):
+        """The chat was read here: tell the core (it sends read receipts, if
+        the user's settings say so)."""
+        if self.phase != "up" or conv.kind == "server":
+            return
+        ids = []
+        for m in conv.history:
+            if "r" not in m.flags and self._core_id(m) is not None:
+                ids.append(self._core_id(m))
+            if msgid is not None and m.id == msgid:
+                break
+        try:
+            self.call("marknoticed_chat", self.acct, int(conv.target))
+            if ids:
+                self.call("markseen_msgs", self.acct, ids)
+        except RpcError as e:
+            _log.debug("%s: marking read failed: %s", self.account.id, e)
 
 
 ADAPTERS = {"irc": IrcAdapter, "deltachat": DeltaChatAdapter, "talk": TalkAdapter}
@@ -2182,7 +2849,10 @@ class Chat:
         conv.topic = text
         self.events.push("topic", conv.id, text)
 
-    def mark_read(self, conv, msgid=None):
+    def mark_read(self, conv, msgid=None, hook=True):
+        ad = self.adapters.get(conv.account.id)
+        if hook and hasattr(ad, "marked_read"):
+            ad.marked_read(conv, msgid)  # the protocol's own "seen" (Delta Chat)
         for msg in conv.history:
             if "r" not in msg.flags:
                 msg.flags += "r"

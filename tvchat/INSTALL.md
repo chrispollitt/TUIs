@@ -57,6 +57,38 @@ the SASL login counts:
 2. `~/.mu-tickets`: `irc://yournick:PASSWORD@irc.libera.chat`;
 3. `~/.netrc` (mode 600): `machine irc.libera.chat login yournick password PASSWORD`.
 
+## Delta Chat
+
+A Delta Chat account needs the official core, `deltachat-rpc-server`, a
+separate program (tvchat does not reimplement Delta Chat). Without it only the
+Delta Chat account reports an error; IRC and talk work as before. Either:
+
+- `pip install deltachat-rpc-server` (PyPI wheels for Linux, macOS and
+  Windows; the program lands in a `bin` directory on your `PATH`), or
+- download a release binary from <https://github.com/chatmail/core/releases>
+  and put it on your `PATH`, or name it with `rpc_server =` in the account.
+
+Tested with 2.65.0. On Cygwin the Windows build works too (tvchat hands it a
+Windows path for its data directory).
+
+Use a **dedicated** mailbox: the core moves chat mail into its own folder and
+may delete it from the server. The first connect sets the account up (the
+address and its password, from the same places as IRC's: `$TVCHAT_PASS_<ACCOUNT>`,
+`~/.mu-tickets`, or `~/.netrc` with `machine <mail host> login <address>`); after
+that the core remembers it in `~/.local/share/tvchat/deltachat/<ACCOUNT>/`
+(`$XDG_DATA_HOME` is respected), which belongs to the core: do not edit it.
+
+```ini
+[account:delta]
+protocol = deltachat
+display  = Delta Chat
+addr     = chat@example.org
+# only when autoconfiguration cannot work it out:
+#imap_server = mail.example.org
+#smtp_server = mail.example.org
+# a server with a self-signed certificate:  verify = false
+```
+
 ## Your own IRC server
 
 `chrispollitt/POSIX`'s `chat-setup` sets up an Ergo server on a LAN box and

@@ -66,5 +66,18 @@ display  = Delta Chat
 # a DEDICATED address: Delta Chat moves (and may delete) chat mail on the
 # server, which would confuse tvmail's view of an everyday inbox
 addr     = chat@example.org
-# password from ~/.netrc:  machine mail.example.org  login chat@example.org  password ...
+# The password comes from the same places as IRC's ($TVCHAT_PASS_DELTA, then
+# ~/.mu-tickets, then ~/.netrc) and is needed only for the first connect:
+#   machine mail.example.org  login chat@example.org  password ...
+# (the machine is the address's domain, or imap_server when you set it)
+# The official core, found on PATH by default (see INSTALL.md); a full path works
 rpc_server = deltachat-rpc-server
+# your name as the people you write to see it (set on every connect)
+#name     = Your Name
+# only if autoconfiguration cannot work the mailbox out
+#imap_server = mail.example.org
+#imap_port   = 993
+#smtp_server = mail.example.org
+#smtp_port   = 465
+# a server with a self-signed certificate
+#verify   = false

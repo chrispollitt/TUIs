@@ -2,42 +2,24 @@ tvchat does IRC (with IRCv3) and talk(1). What is left is below, in the order
 it is likely to be done. Defects live in BUGS.md, not here.
 
 Next
-1 Delta Chat adapter - chat carried over email, through the same adapter
-  interface as IRC and talk. Today `DeltaChatAdapter` is a placeholder whose
-  `connect` answers "not supported yet". The plan:
-  - Do not reimplement Delta Chat. Spawn the official `deltachat-rpc-server`
-    as a child of `tvchat-backend` and speak JSON-RPC 2.0 to it, one JSON
-    object per line over stdin/stdout. The core does Autocrypt/OpenPGP,
-    encryption, IMAP IDLE, SMTP and its own database.
-  - The one non-stdlib piece is that separate executable (not a Python
-    import). Find it on PATH or through `rpc_server =`; if it is missing the
-    account reports `state ... error` with an install hint and IRC keeps
-    working. Document installing it in INSTALL.md (check the current
-    recommended method: a PyPI wheel and release binaries have both existed).
-  - Verify the API names against the installed server version before coding
-    (the `deltachat-rpc-client` Python package's source is the best
-    reference). Expected: account management (`add_account`, `set_config`,
-    `configure`), `start_io`, chat list and message fetch, a text-send call,
-    mark-noticed/seen, and a long-poll `get_next_event`.
-  - Event pump: exactly one `get_next_event` outstanding at all times, read by
-    the same `selectors` loop (`Loop.watch` on the child's stdout); translate
-    incoming-message, chat-modified and connectivity events into tvchat's
-    normalized events (see DESIGN.md).
-  - Accounts directory `~/.local/share/tvchat/deltachat/` (respect
-    XDG_DATA_HOME), mode 0700. Never touch the core's database directly.
-  - Mailbox: a dedicated address on cpbee, not the main inbox - the core moves
-    chat messages into its own folder and may delete them from the server.
-    `configure` with that address and its password (same lookup as IRC).
-  - Mapping: chat id -> conversation `ACCOUNT/<chat id>`; contact email ->
-    sender-address, display name -> sender-display; encrypted -> flag `e`;
-    groups kind `group`, one-to-one kind `direct`.
-  - Out of scope for the first version: attachments (show `[attachment:
-    NAME]`), verification QR codes, multi-device setup, invite links.
-  - Tests: a fake RPC server (a stub speaking JSON-RPC lines), and a
-    real-binary test that exits 77 when `deltachat-rpc-server` is not
-    installed.
-  - Needs from Chris: which dedicated address on cpbee, and whether mail-setup
-    (chrispollitt/POSIX) creates the mailbox or it is made by hand.
+1 Delta Chat, what is left after the adapter (tvchat/DESIGN.md "Delta Chat
+  adapter"; built and tested against a stub core and against the real
+  deltachat-rpc-server 2.65.0 as far as an unconfigured account goes):
+  - Try it on a real mailbox: needs a dedicated address on cpbee, and
+    whether chrispollitt/POSIX mail-setup creates the mailbox or it is made by
+    hand. Expect fixes (autoconfiguration on a LAN server, certificates, how
+    long the first setup takes, what the core says on a bad password).
+  - The UI still says "Delta Chat to come" (About, Help, the README, the
+    package description) and the Join dialog asks for a channel or nick: it
+    should ask for an email address on a Delta Chat account.
+  - Chat > Leave (`part`) is refused: leave a group / delete a chat.
+  - Not in the first version: attachments (shown as `[attachment: NAME]`),
+    verification QR codes and invite links, multi-device setup, reactions,
+    a chat renamed on another device (the title is refreshed, but no event
+    tells the UI), a new group or "add member" (Join takes an address only).
+  - Tests: `TestDeltaChat` (a stub core, `tests/fake_deltachat_rpc.py`) and
+    `TestDeltaChatRealCore` (skipped without `deltachat-rpc-server`; point
+    `$TVCHAT_TEST_DC_RPC` at it). A pty case in `e2e_regress` with the stub core.
 
 Smaller things
 2 Reconnect a lost talkd connection by itself (IRC's backoff is not reused

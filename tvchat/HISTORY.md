@@ -2,6 +2,14 @@
 
 ## Unreleased (October 2026)
 
+- **Delta Chat adapter** (`protocol = deltachat`), first step: the official
+  `deltachat-rpc-server` runs as a child of the backend and `DeltaChatAdapter`
+  speaks JSON-RPC to it - setting up the mailbox, the chats with their last 50
+  messages and unread counts, incoming and sent messages, contact requests,
+  read marks, older history from the core, and a restart if the core dies. Not
+  yet tried against a real mailbox or in the UI (the UI still says "Delta Chat
+  to come").
+
 - **talk(1)** (`protocol = talk`): through chat-setup's talkd on the LAN
   master, so a plain `talk you@cpbee` from any shell rings you in tvchat. Join
   calls, Enter (or Chat > Answer) answers, Leave hangs up. Two views, View >

@@ -13,7 +13,7 @@ fixed.
    '-- chatBackend() -- pipe ---> tvchat-backend serve    (stdlib Python)
          ^ ChatClient                |-- IrcAdapter ---- TLS socket --> an IRC server
                                      |-- TalkAdapter --- UDP/TCP -----> talkd on the LAN master
-                                     '-- DeltaChatAdapter (not built: see TO-DO.txt)
+                                     '-- DeltaChatAdapter - pipes --> deltachat-rpc-server (JSON-RPC)
 ```
 
 - **Thin C++ face, Python helper.** All protocol work (sockets, TLS, SASL,
@@ -241,13 +241,75 @@ talk itself: LAN only (`--allow`: loopback + the LAN's subnet).
   whole lines on Enter, "NAME is typing..." while the other side has an
   unfinished line). IRC conversations are always the log.
 
+## Delta Chat adapter
+
+`DeltaChatAdapter`: not a reimplementation - the official core,
+`deltachat-rpc-server` (chatmail/core), runs as a child of the backend, one per
+account, and speaks JSON-RPC 2.0 (one object per line) on its stdin / stdout.
+It does the Autocrypt / OpenPGP, IMAP IDLE, SMTP and its own database; the
+adapter maps its chats onto the shared model. Written against 2.65.0 (the API
+names were checked against `--openrpc` and the `deltachat-rpc-client` source).
+
+- **Process:** `rpc_server =` (default `deltachat-rpc-server` on `PATH`) is
+  started with `DC_ACCOUNTS_PATH` = `$XDG_DATA_HOME/tvchat/deltachat/ACCOUNT/`
+  (mode 0700, default `~/.local/share`); its stderr goes to `ACCOUNT.log` beside
+  it, whose last line explains a core that would not start. A missing core is a
+  `UserError` with the install hint (the account goes to `error`; the others
+  work). On Cygwin a `.exe` core gets its directory as a Windows path.
+- **Two ways of asking.** Slow calls are asynchronous on the shared loop (the
+  child's stdout is a `Loop.watch` reader, writes are buffered and non-blocking):
+  the first `get_system_info` (30 s), `add_or_update_transport` (180 s), and
+  `get_next_event`, of which **exactly one is outstanding at all times** - the
+  next goes out after the previous event is handled. Whatever the user triggers
+  (`send`, `join`, `history`, `mark-read`) and the work an event needs is a
+  local database call, so `call()` writes the request and waits for its
+  answer, holding any other lines for the loop (10 s limit). That is why `send`
+  can answer with the message's real id.
+- **Connecting:** `get_all_account_ids` (none: `add_account`) -> `is_configured`.
+  Not configured: the password (`find_password`, the IRC places, login = the
+  address, host = `imap_server` or the address's domain) -> `add_or_update_transport`
+  with `addr` and `password` (the rest autoconfigured; `imap_server`, `imap_port`,
+  `smtp_server`, `smtp_port`, `imap_user`, `smtp_user`, `verify = false` are
+  passed on) - `ConfigureProgress` shows as the `connecting` detail. Then
+  `name` -> `displayname`, `start_io`, the chat list. The state follows
+  `get_connectivity`: `connected` at 3000 (working) or more, else `connecting`
+  "waiting for the mail server" - so a laptop with no network still shows its chats.
+- **Mapping:** chat id -> conversation `ACCOUNT/<chat id>` (kind `direct` for a
+  one-to-one chat, `group` otherwise; plus the usual `*` server conversation for
+  the core's errors and restart notes); message id -> `ACCOUNT:<core id>`;
+  sender address and display name from the message's contact; flags `s` (from
+  me), `n` (an info line), `e` (`showPadlock`), `r` (mine, or seen). A
+  non-text message is `[attachment: NAME]` plus its text. The saved-messages
+  and device chats are left out. Unread = the core's fresh counter, at connect.
+- **Events** (`get_next_event`): `IncomingMsg` and `MsgsChanged` (a message
+  not yet shown is fetched and added; ours, already shown by `send`, are not
+  doubled), `MsgFailed` (a note in the chat), `ChatModified` (title, members),
+  `ChatDeleted`, `MsgsNoticed` (read on another device: unread goes to 0 without
+  telling the core again), `ConnectivityChanged`, `Error` (a note in the server
+  window). Events of other core accounts are ignored.
+- **Contact requests:** a message from someone new arrives in a chat the core
+  marks as a request; it is listed with a note, and the first reply calls
+  `accept_chat`.
+- **Reading:** `mark-read` also tells the core (`marknoticed_chat`,
+  `markseen_msgs`), which sends read receipts if the user's settings say so.
+- **History:** the last 50 messages of each chat at connect; `history --before`
+  past the ring loads 50 more from the core (the `history CONV before` event),
+  so, unlike IRC's, Delta Chat's history persists.
+- **Typed commands:** none yet; `/word` is refused, `//x` sends `/x`. `join`
+  takes an email address and opens (or creates) the one-to-one chat; `part` is
+  refused.
+- **Lost core:** an exit, a broken pipe or a core error while up -> `_lost()`
+  -> restart after 2, 4 ... 300 s (like IRC's reconnect), a note in the server
+  window; a start that fails the first time is not retried. Disconnect asks the
+  core to stop its I/O, then closes its stdin, which ends it.
+
 ## Configuration
 
 `~/.config/tvchat/tvchat.conf` (INI; `$TVCHAT_CONF` overrides; no file = no
 chat, no co-process). `configure/tvchat.conf.example` is the commented
 reference and is installed with the docs. No interpolation, so `%` is literal.
 `[account:NAME]`: NAME may not contain `/`, `\` or whitespace; `protocol = irc |
-talk | deltachat` is required (deltachat is not built yet); `display =` defaults
+talk | deltachat` is required; `display =` defaults
 to NAME. `[chat] autoconnect` must name existing accounts; they connect when
 `serve` starts. `[ui] mesg = n | y` (default n) is read by the C++.
 
