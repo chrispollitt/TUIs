@@ -964,7 +964,7 @@ class IrcAdapter(CommandMixin):
         self.tls = _bool(o.get("tls"), True)
         self.port = int(o.get("port") or (6697 if self.tls else 6667))
         self.verify = _bool(o.get("verify"), True)
-        self.cafile = (o.get("cafile") or "").strip() or None
+        self.cafile = os.path.expanduser((o.get("cafile") or "").strip()) or None
         self.want_nick = (o.get("nick") or "").strip() or _me()
         self.username = (o.get("username") or "").strip() or self.want_nick
         self.realname = (o.get("realname") or "").strip() or self.want_nick
@@ -1098,6 +1098,11 @@ class IrcAdapter(CommandMixin):
             self._register()
             return
         try:
+            if self.verify and self.cafile and not os.path.isfile(self.cafile):
+                self._fail("cafile %s does not exist on this machine (account %s: put the server's "
+                           "certificate there, or change cafile = in tvchat.conf; ~ is your home)"
+                           % (self.cafile, self.account.id))
+                return
             if self.verify:
                 ctx = ssl.create_default_context(cafile=self.cafile)
             else:
@@ -3692,8 +3697,8 @@ def check_config(path):
         if a.protocol == "irc":
             host = (o.get("host") or "").strip()
             ca = (o.get("cafile") or "").strip()
-            if ca and not os.path.isfile(ca):
-                warnings.append("[account:%s] cafile %s is not a file (a full path: no ~ expansion)" % (i, ca))
+            if ca and not os.path.isfile(os.path.expanduser(ca)):
+                warnings.append("[account:%s] cafile %s is not a file on this machine" % (i, ca))
             sasl = (o.get("sasl") or "").strip()
             if sasl and host and not find_password_where(i, host, sasl, "irc")[0]:
                 warnings.append("[account:%s] no password found for %s on %s: $%s, ~/.mu-tickets or "

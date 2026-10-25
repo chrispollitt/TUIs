@@ -36,7 +36,7 @@ tls      = true
 # verify the server certificate (default true); for a LAN server with a
 # self-signed cert, point cafile at its .pem instead of turning this off
 verify   = true
-#cafile  = /etc/ssl/certs/my-ircd.pem
+#cafile  = /etc/ssl/certs/my-ircd.pem   (or ~/.config/tvchat/my-ircd.pem)
 nick     = yournick
 realname = Your Name
 # SASL account name (a nick registered with NickServ); leave it out to

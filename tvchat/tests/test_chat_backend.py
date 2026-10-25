@@ -873,6 +873,20 @@ class TestIrcSession(IrcBase):
 
 
 class TestIrcHardening(IrcBase):
+    def test_a_missing_cafile_is_said_in_words_and_tilde_is_home(self):
+        srv = FakeIrc(lambda s: None)
+        self.addCleanup(srv.close)
+        self.srv = srv
+        self.conf("[account:libera]\nprotocol = irc\nhost = 127.0.0.1\nport = %d\ntls = true\n"
+                  "verify = true\ncafile = ~/missing.pem\nnick = t\n" % srv.port)
+        self.chat = cb._chat()
+        acct = self.chat.by_id["libera"]
+        self.assertEqual(self.chat.adapter(acct).cafile, str(self.home / "missing.pem"))   # ~ is expanded
+        self.chat.connect(acct)
+        self.turn(lambda: acct.state == "error")
+        self.assertIn("cafile %s does not exist on this machine" % (self.home / "missing.pem"), acct.detail)
+        self.assertNotIn("Errno", acct.detail)
+
     """IRC hardening: keepalive, reconnect with backoff, flood control, typed
     /commands, server-side history (chathistory)."""
 
