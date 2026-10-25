@@ -75,6 +75,13 @@ are remote clients.
   instead (`./configure.sh --role client`).
 - No credentials live anywhere in this project.
 
+## Configuration
+
+File > Edit configuration... opens `tvmail.conf` in a window (a new file starts as the shipped
+example). **F9** verifies what is in it - the mode, the ports, whether a password can be found
+for the IMAP login - without connecting to anything, **F8** verifies, saves (the old file is
+kept beside it) and has the backend start afresh on it, **Ctrl-S** only saves.
+
 ## Platforms
 
 Builds and runs natively on **Linux** (including Raspberry Pi and WSL),
