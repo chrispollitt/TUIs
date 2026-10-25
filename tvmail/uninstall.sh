@@ -28,6 +28,10 @@
 #   -h, --help      this text
 #
 set -euo pipefail
+# Cygwin: cmake finds its modules from the path it was run as; a PATH with /bin but
+# not /usr/bin (a bare ssh login) makes it look in /share and fail with "Could not
+# find CMAKE_ROOT"
+case "$(uname -s 2>/dev/null)" in CYGWIN*) PATH=/usr/bin:$PATH; export PATH ;; esac
 
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
