@@ -74,5 +74,6 @@ private:
     std::string pullLogPath;
     bool pullQuiet = false;  // the pull is the periodic one: only errors and new mail speak
     int unreadBefore = -1;   // the inbox when the pull began
+    int lastUnread = -1;     // the inbox after the last pull
 #endif
 };

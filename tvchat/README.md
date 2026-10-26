@@ -46,7 +46,7 @@ who pastes it into Chat > Join...; after that, Join with an address opens a
 chat. Unlike IRC, the history is kept by the core, so PgUp reads all of it.
 
 Messages that need no answer are **toasts** - a note at the bottom right that goes away by itself;
-$1
+Window > Notification history keeps them.
 A new message raises a toast when it lands in a conversation you are not looking at, or in the
 one shown when you have touched no key for `[ui] idle` seconds (default 60). Your own lines,
 notices and replayed history do not. `[ui] beep = y` adds a BEL, which a terminal turns into a

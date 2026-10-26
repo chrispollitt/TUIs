@@ -79,8 +79,8 @@ are remote clients.
 
 Messages that need no answer ("Message sent", "Saved to ...", errors) are **toasts** - a note at
 the bottom right that takes no key and goes away by itself. Window > Notification history keeps
-$1
-tvmail pulls quietly in the background every `[ui] check` seconds (default 300, 0 = never); the
+them. Questions (delete? save changes?) are still boxes.
+In remote (IMAP) mode the server does the fetching, so the check is just the spam sweep and an IMAP count; locally it also runs the puller. tvmail checks quietly in the background every `[ui] check` seconds (default 300, 0 = never); the
 pull files spam, and if it left new mail in the inbox a toast says how many. `[ui] beep = y` adds a
 BEL, which a terminal turns into a beep or a window flash (default off).
 

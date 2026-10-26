@@ -113,7 +113,9 @@ subject = ***SPAM***
 #   cleared, as `mesg n` does, and put back on exit.  Root's messages still
 #   get through: Ctrl-L (Window > Redraw screen) clears them off the screen.
 # y: leave the terminal as it is.
-$1# check = SECONDS between quiet background pulls (default 300, 0 = never).  A
+#mesg = n
+# check = SECONDS between quiet background checks (default 300, 0 = never).  Local: runs
+#   the puller; remote (IMAP): only the spam sweep and a count.  A
 #   pull files spam; if it left new mail in the inbox, a toast says how many.
 #check = 300
 # beep = y: also send a BEL with that toast (a terminal beeps or flashes its

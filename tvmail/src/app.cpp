@@ -864,7 +864,11 @@ void TVMailApp::pullMail()
 #ifndef _WIN32
     if (pullPid > 0)
         return; // one at a time
+    // The baseline is the inbox as the last pull left it (spam already filed), or fewer if you
+    // have read some since; so spam waiting at the last count, now swept, is not taken for a loss.
     unreadBefore = mailInboxUnread();
+    if (unreadBefore >= 0 && lastUnread >= 0)
+        unreadBefore = std::min(unreadBefore, lastUnread);
     std::string log = tempDir() + "tvmail_pull_" + std::to_string(procId()) + ".log";
     pid_t p = mailBackend().spawnLogged("pull", log);
     if (p > 0)
@@ -942,6 +946,7 @@ void TVMailApp::pullFinished()
     int now = mailInboxUnread();
     int fresh = unreadBefore >= 0 && now > unreadBefore ? now - unreadBefore : 0;
     unreadBefore = -1;
+    lastUnread = now;
     if (fresh > 0) // spam was filed by the pull itself, so it is not counted
         notifyAlert(std::to_string(fresh) + " new message" + (fresh == 1 ? "" : "s") + " in the inbox");
     if (quiet && pullExit < 2)
