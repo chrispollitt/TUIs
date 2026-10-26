@@ -1340,12 +1340,12 @@ class TestTalk(TalkBase):
             call = srv.expect("CALL ")
             stage["call"] = call
             cid = call.split()[1]
-            srv.send("STATE %s ringing miche on pts/1" % cid)
+            srv.send("STATE %s ringing michelle on pts/1" % cid)
             srv.send("CONNECT %s tok1" % cid)
             s, first = srv.data("tok1")
             # tvchat's three edit characters (in the ATTACH write, or after it)
             stage["edit"] = (first if len(first) >= 3 else first + recv_some(s, b"\x17"))[:3]
-            # miche's talk: ^H as her erase; a line, then half of one
+            # michelle's talk: ^H as her erase; a line, then half of one
             s.sendall(b"\x08\x15\x17hix\x08 there\nhalf")
             # the keys raw, erase and all (the receiver applies it), then lines
             stage["lines"] = recv_some(s, b"line two\n")
@@ -1356,33 +1356,33 @@ class TestTalk(TalkBase):
         self.verb("connect", "talk")
         self.turn(lambda: self.acct.state == "connected")
         self.assertEqual(self.acct.detail, "chris@cpbee")
-        self.assertEqual(self.verb("join", "talk", "miche"), (0, b"talk/miche\n"))
+        self.assertEqual(self.verb("join", "talk", "michelle"), (0, b"talk/michelle\n"))
         self.turn(lambda: "call" in stage)             # the fake runs on its own thread
-        self.assertTrue(stage["call"].endswith(" miche"))
-        self.turn(lambda: ("connected", "") in self.talks("talk/miche"))
-        self.assertIn(("ringing", "ringing miche on pts/1"), self.talks("talk/miche"))
+        self.assertTrue(stage["call"].endswith(" michelle"))
+        self.turn(lambda: ("connected", "") in self.talks("talk/michelle"))
+        self.assertIn(("ringing", "ringing michelle on pts/1"), self.talks("talk/michelle"))
         self.turn(lambda: "edit" in stage)
         self.assertEqual(stage["edit"], b"\x7f\x15\x17")       # ours, first
-        self.turn(lambda: ("typing", "talk/miche", "half") in self.events("typing"))
-        theirs = [m for m in self.msgs() if m[1] == "talk/miche" and m[5] == ""]
-        self.assertEqual([(m[3], m[6]) for m in theirs], [("miche", "hi there")])
-        self.assertEqual(self.acct.convs["talk/miche"].unread, 1)
+        self.turn(lambda: ("typing", "talk/michelle", "half") in self.events("typing"))
+        theirs = [m for m in self.msgs() if m[1] == "talk/michelle" and m[5] == ""]
+        self.assertEqual([(m[3], m[6]) for m in theirs], [("michelle", "hi there")])
+        self.assertEqual(self.acct.convs["talk/michelle"].unread, 1)
         # classic: keystrokes go as typed; a finished line is ours in the log
-        self.assertEqual(self.verb("keys", "talk/miche", "ab\x7fc\n"), (0, b""))
+        self.assertEqual(self.verb("keys", "talk/michelle", "ab\x7fc\n"), (0, b""))
         # irc mode: whole lines
-        self.assertEqual(self.verb("send", "talk/miche", "line one\nline two")[0], 0)
+        self.assertEqual(self.verb("send", "talk/michelle", "line one\nline two")[0], 0)
         self.turn(lambda: "lines" in stage)
         self.assertEqual(stage["lines"], b"ab\x7fc\nline one\nline two\n")
-        mine = [m[6] for m in self.msgs() if m[1] == "talk/miche" and m[5] == "s"]
+        mine = [m[6] for m in self.msgs() if m[1] == "talk/michelle" and m[5] == "s"]
         self.assertEqual(mine, ["ac", "line one", "line two"])
         # she hangs up: her unfinished line still counts
-        self.turn(lambda: self.acct.convs["talk/miche"].state == "ended")
-        self.assertEqual(self.talks("talk/miche")[-1], ("ended", "miche hung up"))
-        self.assertIn("half", [m[6] for m in self.msgs() if m[3] == "miche"])
-        self.assertEqual(self.events("typing")[-1], ("typing", "talk/miche", ""))
-        st, body = self.verb("send", "talk/miche", "anyone?")
+        self.turn(lambda: self.acct.convs["talk/michelle"].state == "ended")
+        self.assertEqual(self.talks("talk/michelle")[-1], ("ended", "michelle hung up"))
+        self.assertIn("half", [m[6] for m in self.msgs() if m[3] == "michelle"])
+        self.assertEqual(self.events("typing")[-1], ("typing", "talk/michelle", ""))
+        st, body = self.verb("send", "talk/michelle", "anyone?")
         self.assertEqual(st, 1)
-        self.assertIn(b"not talking to miche now", body)
+        self.assertIn(b"not talking to michelle now", body)
         self.chat.close()
 
     def test_answering_and_declining(self):
@@ -1398,7 +1398,7 @@ class TestTalk(TalkBase):
             stage["attached"] = True
             srv.expect("HANGUP t1")
             srv.send("GONE t1 hung up")          # talkd says so too: harmless
-            srv.send("RING t2 miche@cpbee")
+            srv.send("RING t2 michelle@cpbee")
             stage["declined"] = srv.expect("DECLINE t2")
             srv.expect("QUIT-never")
 
@@ -1415,14 +1415,14 @@ class TestTalk(TalkBase):
         self.turn(lambda: conv.state == "connected" and "attached" in stage)
         self.assertEqual(self.verb("part", "talk/alice@cmlaptop"), (0, b""))
         self.assertEqual(self.talks("talk/alice@cmlaptop")[-1], ("ended", "you hung up"))
-        # a call from talkd's own host is just the user: talk/miche
-        self.turn(lambda: "talk/miche" in self.acct.convs)
-        self.assertEqual(self.verb("part", "talk/miche"), (0, b""))
+        # a call from talkd's own host is just the user: talk/michelle
+        self.turn(lambda: "talk/michelle" in self.acct.convs)
+        self.assertEqual(self.verb("part", "talk/michelle"), (0, b""))
         self.turn(lambda: "declined" in stage)
-        self.assertEqual(self.acct.convs["talk/miche"].state, "ended")
+        self.assertEqual(self.acct.convs["talk/michelle"].state, "ended")
         # with no call, part leaves the conversation
-        self.assertEqual(self.verb("part", "talk/miche"), (0, b""))
-        self.assertNotIn("talk/miche", self.acct.convs)
+        self.assertEqual(self.verb("part", "talk/michelle"), (0, b""))
+        self.assertNotIn("talk/michelle", self.acct.convs)
         self.assertEqual(self.verb("answer", "talk/alice@cmlaptop")[0], 1)
         self.chat.close()
 
@@ -1467,7 +1467,7 @@ class TestTalk(TalkBase):
             srv.send("ERR HELLO needs a user name")
 
         self.setup_talk(script)
-        self.assertEqual(self.verb("join", "talk", "miche")[0], 1)        # not connected
+        self.assertEqual(self.verb("join", "talk", "michelle")[0], 1)        # not connected
         self.verb("connect", "talk")
         self.turn(lambda: self.acct.state == "error")
         self.assertIn("talkd: HELLO needs a user name", self.acct.detail)
@@ -1523,32 +1523,32 @@ class TestTalkWithTheRealTalkd(TalkBase):
             host = 127.0.0.1
             port = %d
             user = chris
-            [account:miche]
+            [account:michelle]
             protocol = talk
             host = 127.0.0.1
             port = %d
-            user = miche
+            user = michelle
             talk_view = irc
             """ % (port, port))
         self.chat = cb._chat()
         self.srv = type("S", (), {"error": None, "got": []})()
-        c, m = self.chat.by_id["chris"], self.chat.by_id["miche"]
+        c, m = self.chat.by_id["chris"], self.chat.by_id["michelle"]
         self.verb("connect", "chris")
-        self.verb("connect", "miche")
+        self.verb("connect", "michelle")
         self.turn(lambda: c.state == m.state == "connected")
-        self.assertEqual((c.detail, m.detail), ("chris@cpbee", "miche@cpbee"))
-        self.verb("join", "chris", "miche")
-        self.turn(lambda: "miche/chris" in m.convs and m.convs["miche/chris"].state == "incoming")
-        self.verb("answer", "miche/chris")
-        self.turn(lambda: c.convs["chris/miche"].state == m.convs["miche/chris"].state == "connected")
-        self.verb("keys", "chris/miche", "hellp\x7fo miche\nhalf")
-        self.verb("send", "miche/chris", "hi chris")
-        self.turn(lambda: ("typing", "miche/chris", "half") in self.events("typing") and
-                  any(x[1] == "chris/miche" and x[6] == "hi chris" for x in self.msgs()))
-        self.assertIn(("miche/chris", "chris", "", "hello miche"),
+        self.assertEqual((c.detail, m.detail), ("chris@cpbee", "michelle@cpbee"))
+        self.verb("join", "chris", "michelle")
+        self.turn(lambda: "michelle/chris" in m.convs and m.convs["michelle/chris"].state == "incoming")
+        self.verb("answer", "michelle/chris")
+        self.turn(lambda: c.convs["chris/michelle"].state == m.convs["michelle/chris"].state == "connected")
+        self.verb("keys", "chris/michelle", "hellp\x7fo michelle\nhalf")
+        self.verb("send", "michelle/chris", "hi chris")
+        self.turn(lambda: ("typing", "michelle/chris", "half") in self.events("typing") and
+                  any(x[1] == "chris/michelle" and x[6] == "hi chris" for x in self.msgs()))
+        self.assertIn(("michelle/chris", "chris", "", "hello michelle"),
                       [(x[1], x[3], x[5], x[6]) for x in self.msgs()])
-        self.verb("part", "chris/miche")
-        self.turn(lambda: m.convs["miche/chris"].state == "ended")
+        self.verb("part", "chris/michelle")
+        self.turn(lambda: m.convs["michelle/chris"].state == "ended")
         self.chat.close()
 
 

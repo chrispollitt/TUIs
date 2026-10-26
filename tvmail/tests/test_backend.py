@@ -1910,7 +1910,7 @@ class TestVacation(Base):
         # user's table gets only their own line, never the shared address or
         # the other user's
         gen.write_text("# comment\n@cpbee  shared@u-l.ca\nroot@localhost   shared@u-l.ca\n"
-                       "tester@cpbee  tester@u-l.ca\nmiche@cpbee  miche@u-l.ca\n")
+                       "tester@cpbee  tester@u-l.ca\nmichelle@cpbee  michelle@u-l.ca\n")
         os.environ["TVMAIL_POSTFIX_GENERIC"] = str(gen)       # USER=tester here
         out = self.vac("addresses").stdout.decode().splitlines()
         pub = [l.split("\t") for l in out if l.endswith("postfix generic map")]
@@ -1920,11 +1920,11 @@ class TestVacation(Base):
         self.vac("on", "--message-file", self.msgfile())
         script = self.sieve.scripts["tvmail-vacation"]
         self.assertIn('"tester@u-l.ca"', script)
-        self.assertNotIn("miche@u-l.ca", script)
+        self.assertNotIn("michelle@u-l.ca", script)
         self.assertNotIn("shared@u-l.ca", script)
 
     def test_plus_addressing_gives_each_user_a_tagged_public_address(self):
-        # cwp+chris@u-l.ca and cwp+miche@u-l.ca both land in cwp@u-l.ca; the
+        # cwp+chris@u-l.ca and cwp+michelle@u-l.ca both land in cwp@u-l.ca; the
         # tag says whose, so one public mailbox can serve several users
         def table(plus, user="chris", **kw):
             os.environ["USER"] = user
@@ -1936,7 +1936,7 @@ class TestVacation(Base):
         self.assertEqual([a for a, _ in got],
                          ["cwp+chris@u-l.ca", "odd+x@u-l.ca", "chris@cpbee"])  # bare dropped
         self.assertEqual(got[0][1], "plus-address of cwp@u-l.ca")
-        self.assertEqual([a for a, _ in table("true", "miche")][0], "cwp+miche@u-l.ca")
+        self.assertEqual([a for a, _ in table("true", "michelle")][0], "cwp+michelle@u-l.ca")
         self.assertEqual([a for a, _ in table("both")][:2], ["cwp@u-l.ca", "cwp+chris@u-l.ca"])
         self.assertEqual([a for a, _ in table("true", tag="home")][0], "cwp+home@u-l.ca")
         self.assertEqual([a for a, _ in table("false")][0], "cwp@u-l.ca")   # off by default

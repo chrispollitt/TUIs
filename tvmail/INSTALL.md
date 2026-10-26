@@ -224,10 +224,10 @@ tvmail-backend vacation status        # "state: none"
 tvmail-backend vacation addresses     # the address table described below
 ```
 
-**Several users (chris and miche).** Each user logs into ManageSieve as
+**Several users (chris and michelle).** Each user logs into ManageSieve as
 themselves and gets their own script in their own `~/sieve`, their own
 `tvmail.conf`, and their own address list: switching chris's reply on does
-nothing for miche.
+nothing for michelle.
 
 **Addresses: the "NAT table".** A master like cpbee hides behind a public
 mailbox. It fetches `cwp@u-l.ca` over POP and hands the mail to a local user,
@@ -239,11 +239,11 @@ in from, in order: `[sieve] addresses`, `[smtp] from`, the user in `~/.mail`'s
 `mailer` URL, your own `user@host` line in `/etc/postfix/generic` (a
 domain-wide `@host` line is shared by everyone, so it is not used), and the
 local identity (`user@master`). Check the result before you save. For each local
-user, give *their* public address: chris and miche must not list each other's.
+user, give *their* public address: chris and michelle must not list each other's.
 The reply goes out From the address the mail was sent to.
 
 **Plus addressing instead.** If several users share *one* public mailbox,
-give each a tagged address: mail for `cwp+chris@u-l.ca` and `cwp+miche@u-l.ca`
+give each a tagged address: mail for `cwp+chris@u-l.ca` and `cwp+michelle@u-l.ca`
 lands in `cwp@u-l.ca`, and the part after the `+` says whose it is. Set
 `[sieve] plus = true` (and optionally `tag =`, default the local user name) and
 the table lists `cwp+chris@u-l.ca` in place of `cwp@u-l.ca` (`plus = both`

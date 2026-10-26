@@ -429,22 +429,22 @@ def talk_classic_call_in(opts):
     c.check(srv.greeted(), "tvchat-backend never said HELLO to talkd")
     c.check(tv.wait(lambda: re.search(r"Talk\b.*\bYes\b", tv.text()), 5),
             "the server pane does not show Talk as connected (Yes)")
-    srv.ring("miche@cpbee", "t1")
-    c.check(tv.wait("miche is calling", 4), "a talk call did not say so on the status line")
+    srv.ring("michelle@cpbee", "t1")
+    c.check(tv.wait("michelle is calling", 4), "a talk call did not say so on the status line")
     tv.send("Enter")                             # Servers -> Conversations
-    c.check(tv.wait(lambda: re.search(r"miche.*- calling you", tv.text()), 4),
-            "the conversation list does not show miche calling")
-    tv.send("Down", "Enter", settle=0.8)         # onto miche, into the chat pane
+    c.check(tv.wait(lambda: re.search(r"michelle.*- calling you", tv.text()), 4),
+            "the conversation list does not show michelle calling")
+    tv.send("Down", "Enter", settle=0.8)         # onto michelle, into the chat pane
     c.check(tv.wait("talk: calling you - Enter answers", 3),
             "the heading does not say how to answer")
     tv.send("Enter", settle=0.8)                 # answers
     c.check(srv.wait(lambda: srv.sent("ACCEPT t1")), "Enter did not ACCEPT the call")
     c.check(srv.attached(), "the session never attached")
-    c.check(tv.wait(lambda: talk_rule(tv, "miche — connected") is not None, 4),
-            "classic: no rule saying miche - connected")
+    c.check(tv.wait(lambda: talk_rule(tv, "michelle — connected") is not None, 4),
+            "classic: no rule saying michelle - connected")
     # the rule is faint but seen: its words and its line (live check, Oct 22:
     # drawn cyan on cyan, it was not there at all)
-    ry = talk_rule(tv, "miche")
+    ry = talk_rule(tv, "michelle")
     bad = low_contrast(tv, box=(ry, 24, ry, COLS - 2))
     line = [x for x in range(24, COLS - 2) if tv.screen.buffer[ry][x].data == "─"]
     c.check(not bad, "classic: the rule's words are hard to read: %s" % bad)
@@ -453,7 +453,7 @@ def talk_classic_call_in(opts):
     # theirs: as typed, their own erase (^H) applied; an unfinished line live
     srv.peer("hi chrix\x08s\nhalf a li")
     c.check(tv.wait("half a li", 4), "classic: their unfinished line does not show as typed")
-    rule = talk_rule(tv, "miche")
+    rule = talk_rule(tv, "michelle")
     lines = tv.lines()
     below = "\n".join(lines[rule + 1:])
     c.check(rule is not None and "hi chris" in below and "hi chrix" not in below and
@@ -462,12 +462,12 @@ def talk_classic_call_in(opts):
     tv.send("y", "o", "u", "\x7f", settle=0.6)
     c.check(srv.wait(lambda: srv.heard() == b"you\x7f", 3),
             "classic: keystrokes were not sent as typed: %r" % srv.heard())
-    above = "\n".join(tv.lines()[:talk_rule(tv, "miche")])
+    above = "\n".join(tv.lines()[:talk_rule(tv, "michelle")])
     c.check("yo" in above and "you" not in above, "classic: our line is not above the rule as typed")
     tv.send("Enter", settle=0.6)
     c.check(srv.wait(lambda: srv.heard() == b"you\x7f\n", 3), "classic: Enter did not send a newline")
     srv.hang_up()
-    c.check(tv.wait(lambda: talk_rule(tv, "miche — hung up") is not None, 4),
+    c.check(tv.wait(lambda: talk_rule(tv, "michelle — hung up") is not None, 4),
             "the rule does not say the call ended")
     c.check(tv.alive(), "tvchat exited")
     return tv
@@ -483,7 +483,7 @@ def talk_irc_mode_call_out_and_toggle(opts):
             "the server pane does not show Talk as connected (Yes)")
     tv.send(alt("c"), "j")
     c.check(tv.wait("invite link", 3), "Chat > Join... did not ask")
-    tv.send("miche", "Enter", settle=0.8)
+    tv.send("michelle", "Enter", settle=0.8)
     c.check(srv.wait(lambda: srv.sent("CALL ")), "Join did not CALL")
     cid = srv.sent("CALL ")[0].split()[1]
     c.check(tv.wait("talk: ringing...", 4), "the heading does not say it is ringing")
@@ -498,18 +498,18 @@ def talk_irc_mode_call_out_and_toggle(opts):
             "IRC mode: the line did not go on Enter: %r" % srv.heard())
     c.check(tv.wait("<chris> hello there", 3), "IRC mode: our line is not in the log")
     srv.peer("typ")
-    c.check(tv.wait("miche is typing...", 4), "IRC mode: no 'miche is typing...'")
+    c.check(tv.wait("michelle is typing...", 4), "IRC mode: no 'michelle is typing...'")
     srv.peer("ed a line\n")
-    c.check(tv.wait("<miche> typed a line", 4), "IRC mode: their finished line is not in the log")
+    c.check(tv.wait("<michelle> typed a line", 4), "IRC mode: their finished line is not in the log")
     c.check(tv.wait(lambda: not tv.has("is typing..."), 3), "'is typing...' stayed after the line ended")
     # Ctrl-T: classic for this conversation, and back
     tv.send("\x14", settle=0.8)
-    c.check(tv.wait(lambda: talk_rule(tv, "miche — connected") is not None, 3),
+    c.check(tv.wait(lambda: talk_rule(tv, "michelle — connected") is not None, 3),
             "Ctrl-T did not switch to the classic view")
     tv.send("x", settle=0.5)
     c.check(srv.wait(lambda: srv.heard().endswith(b"\nx"), 3), "classic after Ctrl-T: a keystroke did not go at once")
     tv.send("\x14", settle=0.8)
-    c.check(tv.wait(lambda: talk_rule(tv, "miche") is None and tv.has("<miche> typed a line"), 3),
+    c.check(tv.wait(lambda: talk_rule(tv, "michelle") is None and tv.has("<michelle> typed a line"), 3),
             "Ctrl-T again did not come back to the log")
     c.check(tv.alive(), "tvchat exited")
     return tv

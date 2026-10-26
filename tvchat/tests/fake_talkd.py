@@ -57,7 +57,7 @@ class FakeTalkd(threading.Thread):
         with self.lock:
             self.conn.sendall(line.encode("utf-8") + b"\n")
 
-    def ring(self, who="miche@cpbee", ident="t1"):
+    def ring(self, who="michelle@cpbee", ident="t1"):
         self.say("RING %s %s" % (ident, who))
 
     def connect(self, ident):

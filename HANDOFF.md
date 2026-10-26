@@ -106,7 +106,7 @@ name to fetch (`git clone --branch v1.3.0 --depth 1 <repo>`). Oct 25: both are 1
   `--open-firewall` opens TCP 518 for the laptops; UDP 518 on lan0). cmpi-router's
   `setup-router.sh` (master copy on cmlaptop, `~/src/Claude/cmpi-router`, not in
   git, copied to cpbee) reads `/etc/router-setup/lan0-udp-ports`. Live check
-  passed Oct 22-23: Chris and miche talking through it, both views.
+  passed Oct 22-23: Chris and michelle talking through it, both views.
 - **Libera.Chat:** nick `chris-pollitt`, registered, channel `#tvmail-test`.
   Chris's `tvchat.conf` and passwords live on his machine only, in
   `~/.config/tvchat/tvchat.conf` (written by `configure-tvchat.sh`; it copies

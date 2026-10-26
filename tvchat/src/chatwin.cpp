@@ -364,7 +364,7 @@ public:
     std::vector<std::string> mine, theirs; // finished lines, oldest first
     std::string cur;                       // ours, unfinished (sent key by key already)
     std::string typing;                    // theirs, unfinished
-    std::string rule;                      // "miche - connected"
+    std::string rule;                      // "michelle - connected"
     std::function<void(const std::string &)> keys; // keystrokes to the backend
     std::function<bool()> live;                    // a session to type into
     std::function<void()> enterOff;                // Enter with none: answer, or say why not
