@@ -864,6 +864,7 @@ void TVMailApp::pullMail()
 #ifndef _WIN32
     if (pullPid > 0)
         return; // one at a time
+    unreadBefore = mailInboxUnread();
     std::string log = tempDir() + "tvmail_pull_" + std::to_string(procId()) + ".log";
     pid_t p = mailBackend().spawnLogged("pull", log);
     if (p > 0)
@@ -936,6 +937,15 @@ void TVMailApp::pullFinished()
         ::remove(pullLogPath.c_str());
     pullLogPath.clear();
     reload();
+    bool quiet = pullQuiet;
+    pullQuiet = false;
+    int now = mailInboxUnread();
+    int fresh = unreadBefore >= 0 && now > unreadBefore ? now - unreadBefore : 0;
+    unreadBefore = -1;
+    if (fresh > 0) // spam was filed by the pull itself, so it is not counted
+        notifyAlert(std::to_string(fresh) + " new message" + (fresh == 1 ? "" : "s") + " in the inbox");
+    if (quiet && pullExit < 2)
+        return; // the periodic pull says nothing when it found nothing
 
     // the puller's last line is the summary; show the tail so verbose
     // "delivered msg ..." lines are visible too.
@@ -974,6 +984,15 @@ void TVMailApp::handleEvent(TEvent &e)
         break;
     case cmPullDone:
         pullFinished();
+        break;
+    case cmPullAuto:
+        if (pullPid <= 0) // a pull is on already: skip this round
+        {
+            pullQuiet = true;
+            pullMail();
+            if (pullPid <= 0)
+                pullQuiet = false; // it ran in the foreground, or did not start
+        }
         break;
     case cmReload:
         reload();

@@ -20,7 +20,13 @@ autoconnect = libera
 #   cleared, as `mesg n` does, and put back on exit.  Root's messages still
 #   get through: Ctrl-L (Window > Redraw screen) clears them off the screen.
 # y: leave the terminal as it is.
-#mesg = n
+$1# A toast announces a new message in a conversation you are not looking at, or
+# in the one shown after you have touched no key for idle SECONDS (default 60,
+# 0 = only the first kind).
+#idle = 60
+# beep = y: also send a BEL with the toast (a terminal beeps or flashes its
+#   window).  Default n.
+#beep = n
 
 # One section per account, [account:NAME].  NAME is the account's id in the
 # UI and in conversation ids, so no '/', '\' or spaces in it.

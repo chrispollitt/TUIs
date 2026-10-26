@@ -18,6 +18,14 @@ public:
         // (the clipboard, Find dialogs and greyed edit commands: TTvApp)
         mainWin = newMailWindow(deskTop->getExtent());
         deskTop->insert(mainWin);
+#ifndef _WIN32
+        // [ui] check = SECONDS between quiet pulls (default 300, 0 = never); a pull
+        // files spam, and a toast says how many new messages it left in the inbox
+        const char *conf = getenv("TVMAIL_CONF");
+        std::string v = confValue(conf && *conf ? conf : homePath(".config/tvmail/tvmail.conf"), "ui", "check");
+        int secs = v.empty() ? 300 : std::atoi(v.c_str());
+        ticks.push_back({cmPullAuto, [secs]() { return secs * 1000; }, std::chrono::steady_clock::now()});
+#endif
     }
 
     static TMenuBar *initMenuBar(TRect r);
@@ -64,5 +72,7 @@ private:
     pid_t pullPid = -1; // >0 while pop-pull runs detached
     int pullExit = 0;
     std::string pullLogPath;
+    bool pullQuiet = false;  // the pull is the periodic one: only errors and new mail speak
+    int unreadBefore = -1;   // the inbox when the pull began
 #endif
 };

@@ -253,3 +253,46 @@ void notifyRecordFlash(const std::string &msg)
 {
     record(msg, noteInfo);
 }
+
+// ---- the optional beep, and how long the user has been idle ----
+namespace
+{
+bool gBeepOn = false;
+Clock::time_point gLastBeep, gLastInput = Clock::now();
+} // namespace
+
+// [ui] beep = y | n (default n) in the app's .conf.
+void beepFromConf(const std::string &confPath)
+{
+    std::string v = lowered(confValue(confPath, "ui", "beep"));
+    gBeepOn = v == "y" || v == "yes" || v == "true" || v == "1";
+}
+
+// BEL: a terminal turns it into a beep or a window flash.  At most one every two
+// seconds, so a busy channel does not buzz.
+void notifyBeep()
+{
+    auto now = Clock::now();
+    if (!gBeepOn || now - gLastBeep < std::chrono::seconds(2))
+        return;
+    gLastBeep = now;
+    TScreen::flushScreen(); // what tvision has pending goes first
+    if (write(1, "\a", 1) < 0)
+        return;
+}
+
+void notifyAlert(const std::string &text, NoteLevel level)
+{
+    notify(text, level);
+    notifyBeep();
+}
+
+void inputSeen()
+{
+    gLastInput = Clock::now();
+}
+
+int idleSeconds()
+{
+    return (int)std::chrono::duration_cast<std::chrono::seconds>(Clock::now() - gLastInput).count();
+}

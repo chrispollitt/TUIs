@@ -123,6 +123,38 @@ void TVChatApp::idle()
     }
 }
 
+// A message that just arrived and is not yet in front of the user: in another
+// conversation, with the chat window behind something else, or in the one
+// shown while the user has not touched a key for [ui] idle seconds (default 60;
+// 0 = never).  Own lines, notices and replayed history (flags s, n, r) never
+// count.  One toast per conversation every few seconds, so a busy channel does not
+// pile them up.
+static void toastNewMessage(const ChatClient &cc, const ChatEvent &ev)
+{
+    const std::vector<std::string> &f = ev.fields;
+    if (f.size() < 8 || f[6].find_first_of("snr") != std::string::npos)
+        return;
+    const std::string &conv = f[2];
+    static int idleLimit = -1;
+    if (idleLimit < 0)
+    {
+        std::string v = confValue(ChatClient::confPath(), "ui", "idle");
+        idleLimit = v.empty() ? 60 : std::max(0, std::atoi(v.c_str()));
+    }
+    if (chatWatchedConv() == conv && (idleLimit == 0 || idleSeconds() < idleLimit))
+        return;
+    static std::map<std::string, std::chrono::steady_clock::time_point> last;
+    auto now = std::chrono::steady_clock::now();
+    auto it = last.find(conv);
+    if (it != last.end() && now - it->second < std::chrono::seconds(5))
+        return;
+    last[conv] = now;
+    auto c = cc.convs().find(conv);
+    std::string title = c != cc.convs().end() && !c->second.title.empty() ? c->second.title : conv;
+    std::string who = f[5].empty() ? f[4] : f[5];
+    notifyAlert(title + ": " + (who.empty() || who == title ? std::string() : who + ": ") + f[7]);
+}
+
 // Poll tvchat-backend and hand each event to every window as a broadcast;
 // a restarted backend is announced first, so the windows re-read.
 void TVChatApp::chatEvents()
@@ -141,6 +173,8 @@ void TVChatApp::chatEvents()
         invited = invited || ev.fields[0] == "invite";
         if (ev.fields[0] == "notice" && ev.fields.size() > 1) // e.g. tvmail asked for a chat
             notify(ev.fields[1]);
+        if (ev.fields[0] == "msg")
+            toastNewMessage(cc, ev);
         message(deskTop, evBroadcast, cmChatEvent, (void *)&ev);
     }
     if (accounts)

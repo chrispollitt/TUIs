@@ -709,6 +709,11 @@ void mailReload()
         gMailWin->reloadFolder();
 }
 
+int mailInboxUnread()
+{
+    return gUnread[0]; // gFolders[0] is the inbox
+}
+
 void mailViewChanged(bool resetSel)
 {
     if (gMailWin)

@@ -73,6 +73,7 @@ int main(int argc, char **argv)
 
     const char *conf = getenv("TVMAIL_CONF");
     mesgFromConf(conf && *conf ? conf : homePath(".config/tvmail/tvmail.conf"));
+    beepFromConf(conf && *conf ? conf : homePath(".config/tvmail/tvmail.conf"));
     TVMailApp app;
     long long tuiStarted = gTraceLog ? traceMicros() : 0;
     app.run();

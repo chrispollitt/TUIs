@@ -207,6 +207,14 @@ void notify(const std::string &text, NoteLevel level = noteInfo);
 void notifyTick();                          // from idle(): expire the toasts
 void notifyHistoryWindow(TDeskTop *desk);
 void notifyRecordFlash(const std::string &msg); // flashStatus() keeps its line in the history too
+// A new message, mail or chat: the toast, and a BEL if [ui] beep = y (a terminal
+// beeps or flashes its window; at most one in two seconds).
+void beepFromConf(const std::string &confPath); // goes in main(), like mesgFromConf
+void notifyBeep();
+void notifyAlert(const std::string &text, NoteLevel level = noteInfo);
+// The last key or mouse click, from TTvApp::getEvent: "idle" for the chat toast.
+void inputSeen();
+int idleSeconds();
 void systemClipboard(const std::string &text);
 
 // ---------------------------------------------------- the config editor ---

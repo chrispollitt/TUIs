@@ -1461,6 +1461,12 @@ bool chatInFront()
     return gChatWin && TProgram::deskTop && TProgram::deskTop->current == gChatWin;
 }
 
+// The conversation the user is looking at: "" if the chat window is not the front one.
+std::string chatWatchedConv()
+{
+    return chatInFront() ? gChatWin->convId() : std::string();
+}
+
 // ------------------------------------------------------------ dialogs ---
 // Pick one of `cand` (indices into accounts()); no dialog when there is
 // only one to pick.  -1 = cancelled.

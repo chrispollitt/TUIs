@@ -34,6 +34,7 @@ const ushort cmInsSig = 2019;       // (compose) insert the signature
 const ushort cmInsDead = 2020;      // (compose) insert ~/dead.letter
 const ushort cmResumeDead = 2021;   // open ~/dead.letter as a new compose
 const ushort cmPullDone = 2023;     // background pop-pull finished (self-posted)
+const ushort cmPullAuto = 2052;     // the periodic tick: pull quietly, a toast for new mail (self-posted)
 const ushort cmViewParts = 2025;    // open the MIME-parts window
 const ushort cmForwardMsg = 2026;   // forward the focused message
 const ushort cmReplyAllMsg = 2027;  // reply-all to the focused message
@@ -109,6 +110,7 @@ void showMailWindow(); // bring the 3-pane mail window to the front
 int mailFocusedRow();             // the highlighted row of gRows, or -1
 void mailMarkFocused(bool read);
 void mailReload();                // F5: counts + the folder, same message
+int mailInboxUnread();            // unread in the inbox as of the last counts, -1 if not known
 void mailViewChanged(bool resetSel);
 void mailSetWrap(bool wrap);
 

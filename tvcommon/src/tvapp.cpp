@@ -137,6 +137,8 @@ void TTvApp::handleEvent(TEvent &e)
 void TTvApp::getEvent(TEvent &e)
 {
     TApplication::getEvent(e);
+    if (e.what == evKeyDown || e.what == evMouseDown)
+        inputSeen();
     if (e.what == evKeyDown && e.keyDown.keyCode == kbCtrlL)
     {
         redrawScreen();

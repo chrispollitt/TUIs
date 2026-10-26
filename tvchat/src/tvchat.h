@@ -46,6 +46,7 @@ void chatMenuRebuild();                // the account list and its states, afres
 void chatMenuGrey();                   // set the items' disabled flags
 bool chatCommand(ushort command);      // a cmChat* command; false if not one
 void openChatWindow();                 // the 3-pane window, made the first time
+std::string chatWatchedConv();           // the conversation shown while the chat window is in front, else ""
 
 // --------------------------------------------------------------- help.cpp ---
 TWindow *newHelpWindow(const TRect &bounds);
