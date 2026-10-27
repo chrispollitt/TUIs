@@ -45,6 +45,19 @@ swap keys once: one runs Chat > Invite... and gives the link to the other,
 who pastes it into Chat > Join...; after that, Join with an address opens a
 chat. Unlike IRC, the history is kept by the core, so PgUp reads all of it.
 
+**Floyd** (`protocol = floyd`): a robot to keep you company, after Infocom's
+*Planetfall*. No server, no network: he is an account with one conversation. He
+speaks of himself in the third person, is delighted by most things, and talks
+by himself when you leave him alone (`idle = SECONDS`, default 180, 0 = never;
+he shuts down to save power after three tries). He also plays a little
+interactive fiction with you: he holds things out (`take it`), and the
+parser understands `look`, `take`, `drop`, `inventory`, `go north`,
+`give X to floyd`, `examine X` and `fetch X`, typed bare or as `/look`,
+`/take`, `/drop`, `/inventory`. He does small errands: `what time is it`,
+`flip a coin`, `roll d20`, `count to 5`, `remind me in 10 minutes to stretch`.
+`/play` starts Hider and Seeker, at which he is terrible. A plain line that
+is not a parser line, like "take care", is just chat.
+
 Messages that need no answer are **toasts** - a note at the bottom right that goes away by itself;
 Window > Notification history keeps them.
 A new message raises a toast when it lands in a conversation you are not looking at, or in the

@@ -67,6 +67,16 @@ host      = cpbee
 # keystroke sent) or irc (the log, whole lines, "... is typing")
 talk_view = classic
 
+# Floyd, the robot from Infocom's Planetfall: no server, just company.  Remove
+# the leading # from these lines to have him in the Servers list.
+#[account:floyd]
+#protocol = floyd
+#display  = Floyd
+# what Floyd calls you (default: your login name)
+#nick     = yourname
+# seconds of quiet before Floyd speaks up by himself (default 180, 0 = never)
+#idle     = 180
+
 [account:delta]
 protocol = deltachat
 display  = Delta Chat

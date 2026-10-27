@@ -69,6 +69,20 @@ event follows; joining a channel asks for its latest 50 the same way
 .BR "history CONV latest" ).
 .PP
 A
+.B protocol = floyd
+account has no network: it is a robot after Infocom's Planetfall
+(\fBnick\fP, \fBidle\fP seconds before he speaks by himself, 0 = never, default 180;
+\fBseed\fP for a repeatable one).  It has one conversation, the
+.B floyd
+target; he answers
+.B send
+after a short pause, plays Hider and Seeker, and understands interactive-fiction
+verbs (look, take, drop, inventory, go, give) and small errands (the time, a coin,
+dice, counting, reminders).  Narrator lines carry the
+.B n
+flag.
+.PP
+A
 .B protocol = talk
 account is a client of chat-setup's talkd on the LAN master (\fBhost\fP,
 \fBport\fP 518, \fBuser\fP, \fBtalk_view\fP classic | irc):

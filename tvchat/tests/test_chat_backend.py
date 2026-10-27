@@ -2481,6 +2481,184 @@ class TestConfigEditing(Base):
         self.assertEqual(cb.dispatch(cb.build_parser(), ["reload-config"])[0], 1)
 
 
+class TestFloyd(Base):
+    """The Floyd account: a robot after Infocom's Planetfall, no network."""
+
+    def setUp(self):
+        Base.setUp(self)
+        self.conf("""\
+            [chat]
+            autoconnect = floyd
+
+            [account:floyd]
+            protocol = floyd
+            nick     = tester
+            idle     = 60
+            seed     = 7
+            """)
+        self.clk = FakeClock(1000.0)
+        self.chat = cb.Chat(loop=cb.Loop(self.clk), clock=self.clk)
+        self.acct = self.chat.account("floyd")
+        self.chat.connect(self.acct)
+        self.ad = self.chat.adapter(self.acct)
+        self.conv = self.acct.convs["floyd/floyd"]
+
+    def wait(self, secs):
+        """Let `secs` of Floyd's time pass, a bit at a time."""
+        for _ in range(int(secs * 4)):
+            self.clk.t += 0.25
+            self.chat.loop.run_due()
+
+    def say(self, text, secs=15):
+        self.chat.adapter(self.acct).send(self.conv, text)
+        self.wait(secs)
+        return [(m.sender.display or "-", m.flags, m.text) for m in self.conv.history]
+
+    def texts(self, after=0):
+        return [m.text for m in list(self.conv.history)[after:]]
+
+    def test_connects_with_a_conversation_and_an_opening(self):
+        self.assertEqual(self.acct.state, "connected")
+        self.assertEqual(self.conv.kind, "direct")
+        self.assertIn("*", [c.target for c in self.acct.convs.values()])   # the server window
+        self.wait(10)
+        self.assertTrue(self.texts()[0].startswith("Oh boy! A new friend! Hi, tester!"))
+        self.assertTrue(any("holds out" in m.text for m in self.conv.history))   # and offers something
+        self.assertIn("floyd", self.conv.members)
+
+    def test_answers_after_a_pause_and_counts_unread(self):
+        self.wait(10)
+        self.chat.mark_read(self.conv)
+        n = len(self.conv.history)
+        self.ad.send(self.conv, "hello there")
+        self.assertEqual(len(self.conv.history), n + 1)      # only our line, so far
+        self.assertEqual(self.conv.history[-1].flags, "s")
+        self.wait(3)
+        reply = self.conv.history[-1]
+        self.assertEqual((reply.sender.display, reply.flags), ("Floyd", ""))
+        self.assertIn("tester", reply.text)
+        self.assertEqual(self.conv.unread, 1)
+
+    def test_take_what_he_holds_out(self):
+        self.wait(10)
+        offered = self.ad.mind.offered
+        self.assertIsNotNone(offered)
+        self.say("take it")
+        self.assertIn(offered, self.ad.mind.inv)
+        self.assertIsNone(self.ad.mind.offered)
+        self.assertIn("Taken.", self.texts())
+        self.say("inventory")
+        self.assertIn("You are carrying: %s." % self.ad.mind.ITEMS[offered][0], self.texts())
+
+    def test_look_take_drop_and_go_like_interactive_fiction(self):
+        self.say("look")
+        self.assertIn("Repair Room", self.texts())
+        self.assertTrue(any("an oil can" in t for t in self.texts()))
+        self.ad.send(self.conv, "/take oil")
+        self.wait(3)
+        self.assertEqual(self.ad.mind.inv.count("oilcan"), 1)
+        self.say("go north")
+        self.assertIn("Corridor", self.texts())
+        self.say("drop oil can")
+        self.assertIn("oilcan", self.ad.mind.floor["corridor"])
+        self.say("go west")
+        self.assertIn("You can't go that way.", self.texts())
+
+    def test_give_him_something_and_he_keeps_it(self):
+        self.ad.send(self.conv, "/take flashlight")
+        self.say("give flashlight to floyd")
+        self.assertIn("flashlight", self.ad.mind.floyd_has)
+        self.assertNotIn("flashlight", self.ad.mind.inv)
+
+    def test_chat_that_sounds_like_a_command_stays_chat(self):
+        out = self.say("take care")
+        self.assertFalse(any("any such thing" in m[2] for m in out))
+        self.assertFalse(self.ad.mind.inv)
+
+    def test_errands_the_time_a_coin_a_count_and_a_reminder(self):
+        self.say("what time is it")
+        self.assertTrue(any(t.startswith("Floyd looked at the big clock. It says ") for t in self.texts()))
+        self.say("count to 3", secs=10)
+        self.assertTrue(set(["1...", "2...", "3..."]) <= set(self.texts()))
+        self.say("remind me in 2 minutes to stretch", secs=1)
+        self.assertFalse(any("stretch" in t and "remembered" in t for t in self.texts()))
+        self.wait(125)
+        self.assertTrue(any("remembered" in t and "stretch" in t for t in self.texts()))
+
+    def test_hide_and_seek_ends_and_a_game_is_not_restarted(self):
+        self.say("let's play hide and seek")
+        self.assertIn(self.ad.mind.game, ("hide", "seek"))
+        for _ in range(4):
+            self.say("behind the sofa", secs=5)
+        self.assertIsNone(self.ad.mind.game)
+
+    def test_alone_he_wanders_then_shuts_down_and_wakes_on_a_word(self):
+        self.wait(10)
+        n = len(self.conv.history)
+        self.wait(61)
+        self.assertGreater(len(self.conv.history), n)        # spoke up unprompted
+        self.wait(60 * 4)
+        self.assertIn("Floyd shut down to save power", self.conv.history[-1].text)
+        n = len(self.conv.history)
+        self.wait(600)
+        self.assertEqual(len(self.conv.history), n)          # asleep: silent
+        self.say("hello", secs=3)
+        self.assertGreater(len(self.conv.history), n + 1)    # awake again
+
+    def test_idle_zero_means_he_never_speaks_first(self):
+        self.conf("""\
+            [account:floyd]
+            protocol = floyd
+            idle     = 0
+            """)
+        cb._CHAT = None
+        chat = cb.Chat(loop=cb.Loop(self.clk), clock=self.clk)
+        a = chat.account("floyd")
+        chat.connect(a)
+        conv = a.convs["floyd/floyd"]
+        for _ in range(4 * 400):
+            self.clk.t += 0.25
+            chat.loop.run_due()
+        self.assertEqual(sum(1 for m in conv.history if m.flags == ""), 1)    # just the opening
+
+    def test_commands_and_refusals(self):
+        with self.assertRaises(cb.UserError):
+            self.ad.send(self.conv, "/join #chan")        # no such thing here
+        with self.assertRaises(cb.UserError):
+            self.ad.send(self.conv, "/leave")
+        with self.assertRaises(cb.UserError):
+            self.ad.send(self.acct.convs["floyd/*"], "hello")
+        self.assertIn("/take THING", "\n".join(cb.help_lines("floyd")))
+        self.ad.send(self.conv, "/me waves")
+        self.assertEqual(self.conv.history[-1].flags, "sa")
+
+    def test_bad_idle_is_refused_by_the_config_check(self):
+        with self.assertRaises(cb.UserError):
+            cb.FloydAdapter.idle_seconds("often")
+        self.assertEqual(cb.FloydAdapter.idle_seconds(""), 180.0)
+        bad = self.conf("""\
+            [account:f]
+            protocol = floyd
+            idle     = often
+            seed     = x
+            """)
+        errors, _, _ = cb.check_config(str(bad))
+        self.assertEqual(len(errors), 2)
+        self.assertIn("idle=", errors[0])
+        good = self.conf("[account:f]\nprotocol = floyd\n")
+        self.assertEqual(cb.check_config(str(good))[0], [])
+
+    def test_disconnect_silences_a_pending_reply(self):
+        self.ad.send(self.conv, "hello")
+        self.ad.disconnect()
+        n = len(self.conv.history)
+        self.wait(10)
+        self.assertEqual(len(self.conv.history), n)
+        self.assertEqual(self.acct.state, "disconnected")
+        with self.assertRaises(cb.UserError):
+            self.ad.send(self.conv, "hello")
+
+
 class TestVersions(unittest.TestCase):
     """tvmail and tvchat share one version (../VERSION, set by ../version.sh)."""
 

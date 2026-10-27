@@ -268,6 +268,21 @@ goes to the adapter's `speak(conv, text)`. The shared ones:
 in-memory log and has the UI re-read it (`history CONV latest`; Delta Chat's history stays in the
 core, so PgUp brings it back). The UI only takes `/leave` for a Delta Chat chat, to ask first.
 
+## Floyd adapter
+
+`protocol = floyd` is an account with no network: `FloydAdapter` answers the same verbs as the
+others (`connect` is at once `connected`; one `direct` conversation `ACCOUNT/floyd`, plus the
+usual `*` server window), and `FloydMind` is the personality, pure apart from its random
+generator (`seed =` makes it repeatable) and a clock. `reply()` / `command()` / `idle()` return
+a plan, `[(delay, text, flags)]`, which the adapter plays on the loop's timers (guarded by
+`gen`, so a disconnect silences what is pending). Flags are the message flags: `''` Floyd
+speaks, `a` he acts (`/me`), `n` the narrator - room and item text, as in interactive fiction.
+The little world (three rooms, a few items, what you carry, what Floyd holds) lives in
+`FloydMind`. A parser-style line that names nothing known ("take care") returns `None` from
+`command()` and is chat; the `/look` `/take` `/drop` `/inventory` commands pass `explicit=True` and
+always get an answer. Talking by himself is one timer re-armed on every line; after three
+unanswered tries he shuts down until spoken to. Tests: `TestFloyd`.
+
 ## Delta Chat adapter
 
 `DeltaChatAdapter`: not a reimplementation - the official core,

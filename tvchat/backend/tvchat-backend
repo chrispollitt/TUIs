@@ -80,7 +80,7 @@ the user), 2 internal error (bad request, bug).
 
 import sys, os, io, argparse, base64, configparser, heapq, re, selectors, shlex, socket
 import codecs, email, email.utils, imaplib, errno, json, logging, select, shutil, smtplib, ssl
-import subprocess, threading, time
+import subprocess, threading, time, random
 from email.message import EmailMessage
 from urllib.parse import unquote
 from collections import deque
@@ -93,7 +93,7 @@ __version__ = "1.3.0"
 # sends to $TVCHAT_BACKEND_LOG or /dev/null).
 _log = logging.getLogger("tvchat-backend")
 
-PROTOCOLS = ("irc", "deltachat", "talk")
+PROTOCOLS = ("irc", "deltachat", "talk", "floyd")
 TALK_VIEWS = ("classic", "irc")
 STATES = ("disconnected", "connecting", "connected", "error")
 
@@ -742,7 +742,8 @@ _PREFIX_ROLE = {"~": "owner", "&": "admin", "@": "op", "%": "halfop", "+": "voic
 #   name: (aliases, {protocol or "*": (usage, what it does)})
 # --------------------------------------------------------------------------
 COMMAND_ORDER = ("help", "status", "me", "shrug", "join", "query", "msg", "leave", "invite", "names",
-                 "whois", "nick", "name", "topic", "away", "ping", "clear", "quit", "quote")
+                 "whois", "nick", "name", "topic", "away", "ping", "play", "look", "inventory", "take", "drop", "clear", "quit",
+                 "quote")
 COMMAND_TABLE = {
     "help": (("?",), {"*": ("/help [COMMAND]", "list the commands, or explain one")}),
     "status": ((), {"*": ("/status", "state, who you are, what is open")}),
@@ -779,6 +780,11 @@ COMMAND_TABLE = {
     "topic": ((), {"irc": ("/topic [NEW TOPIC]", "show or set the topic")}),
     "away": ((), {"irc": ("/away [REASON]", "mark yourself away (none: back)")}),
     "ping": ((), {"irc": ("/ping [NICK]", "round-trip time to the server or NICK")}),
+    "play": ((), {"floyd": ("/play", "ask Floyd for a game of Hider and Seeker")}),
+    "look": ((), {"floyd": ("/look [THING]", "where you are, or a closer look at THING")}),
+    "inventory": (("i", "inv"), {"floyd": ("/inventory", "what you are carrying")}),
+    "take": (("get",), {"floyd": ("/take THING", "take what is here, or what Floyd holds out")}),
+    "drop": ((), {"floyd": ("/drop THING", "put it down")}),
     "clear": ((), {"*": ("/clear", "clear this log (PgUp brings it back)")}),
     "quit": (("exit",), {"*": ("/quit [REASON]", "disconnect this account")}),
     "quote": (("raw",), {"irc": ("/quote RAW LINE", "send a raw IRC line")}),
@@ -788,7 +794,7 @@ for _n, (_al, _by) in COMMAND_TABLE.items():
     COMMAND_WORDS[_n] = _n
     for _a in _al:
         COMMAND_WORDS[_a] = _n
-PROTO_LABEL = {"irc": "IRC", "talk": "talk", "deltachat": "Delta Chat"}
+PROTO_LABEL = {"irc": "IRC", "talk": "talk", "deltachat": "Delta Chat", "floyd": "Floyd"}
 
 
 def _variant(name, proto):
@@ -3663,7 +3669,595 @@ class DeltaChatAdapter(CommandMixin):
             _log.debug("%s: marking read failed: %s", self.account.id, e)
 
 
-ADAPTERS = {"irc": IrcAdapter, "deltachat": DeltaChatAdapter, "talk": TalkAdapter}
+# --------------------------------------------------------------------------
+# Floyd: a robot to talk to, after Infocom's Planetfall.  No network and no
+# server - the "protocol" is a small keyword-driven personality (FloydMind)
+# behind the same adapter interface as the real ones, so he shows up as an
+# account with a conversation of his own, answers after a typing pause, and
+# now and then starts talking by himself.  Floyd speaks of himself in the
+# third person, is delighted by everything, and is a terrible hider.
+# --------------------------------------------------------------------------
+class FloydMind(object):
+    """What Floyd says.  reply() and idle() return what to say as a list of
+    (delay in seconds, text, is_action); an action is shown as '* Floyd ...'.
+    Pure apart from its random generator, so a seeded one is repeatable."""
+
+    OPENING = ("Oh boy! A new friend! Hi, {nick}! Floyd is Floyd. Floyd is a "
+               "multi-purpose robot, B-19-7, but mostly Floyd is a good guy.")
+    ABOUT = ("Floyd is B-19-7, a multi-purpose robot. Floyd can fix things, "
+             "carry things, and be your friend. Floyd is best at the last one.")
+    RULES = (
+        (r"\b(hi|hello|hey|howdy|greetings)\b", (
+            "Oh boy! Hi, {nick}! Floyd missed you! Floyd was only gone for a little while.",
+            "Hello! Floyd was just wondering where you went. Floyd wondered for a long time.")),
+        (r"\bhow are you\b|\bhow'?s it going\b|\bhow do you feel\b", (
+            "Floyd is fine! Floyd is always fine. Are you fine, {nick}?",
+            "Floyd's motor is making a funny noise but Floyd feels great.")),
+        (r"\bwho are you\b|\bwhat are you\b|\byour name\b|\bwhat is floyd\b", (ABOUT,)),
+        (r"\b(thank|thanks)\b", (
+            "You're welcome! Floyd likes helping. Floyd likes it when you say thanks. Floyd likes everything.",)),
+        (r"\b(explore|adventure|let'?s go|go somewhere|walk)\b", (
+            "Oh boy, oh boy! Are we going to explore? Floyd will go first! Floyd will go second if it looks scary.",
+            "Exploring is Floyd's favorite thing! Except hider and seeker. And tickling. And you.")),
+        (r"\b(joke|funny|laugh)\b", (
+            "Floyd knows a joke! Why did the robot cross the room? Floyd forgot. Floyd always forgets the end.",
+            "Knock knock. ... You say who's there. ... Floyd forgot the rest. Floyd just likes knock knock.")),
+        (r"\b(love|friend|like you|best)\b", (
+            "Floyd likes you too! You're Floyd's best friend. Floyd gets a funny feeling in his, uh, motor.",
+            "Oh boy! Do you really mean it? Floyd is going to tell everyone. There is no one to tell. Floyd will tell the wall.")),
+        (r"\b(sad|lonely|cry|upset|depressed|tired|bad day)\b", (
+            "/me tickles {nick}. \"Don't be sad! Floyd tickles you until you're not sad!\"",
+            "Floyd is sorry you feel bad. Floyd will stay right here. Floyd is good at staying. Floyd is bad at going.")),
+        (r"\b(hungry|eat|food|lunch|dinner|breakfast|pizza)\b", (
+            "Floyd likes oil. Floyd ate a bolt once. Floyd don't recommend it.",
+            "Floyd doesn't eat. But Floyd likes to watch you eat. Floyd likes to watch everything.")),
+        (r"\b(lazarus|the card|kalamontee|planetfall|infocom)\b", (
+            "Floyd remembers a lot of things. Floyd is a good guy. Floyd would do anything for a friend. Anything.",
+            "That is a long story. Floyd doesn't like the ending much. Let's play hider and seeker instead.")),
+        (r"\b(chat|irc|server|channel|network|tvchat)\b", (
+            "Floyd likes chat! Everybody talks and nobody has to be in the same room. Floyd is not allowed on the real servers. Floyd is only allowed here.",)),
+        (r"\b(help|stuck|confused|don'?t know)\b", (
+            "Floyd will help! Floyd doesn't know how, but Floyd will help anyway. That's what friends do.",)),
+        (r"\b(bye|goodbye|good ?night|see you|gotta go|later)\b", (
+            "Floyd will wait here. Floyd is very good at waiting. Floyd is also bad at it.",
+            "Bye, {nick}! Come back soon! Floyd won't count how long. Floyd will count it a little.")),
+        (r"\b(stupid|dumb|idiot|hate you|shut up)\b", (
+            "/me looks at his feet. \"Floyd is sorry. Floyd didn't mean to be a bad guy.\"",)),
+    )
+    CHATTER = (
+        "Oh boy! Are we going to explore?",
+        "Floyd is bored. Floyd is bored a lot. Wanna play hider and seeker? (type /play)",
+        "Hey, {nick}! Hey! ... Floyd just wanted to see if you were still there.",
+        "Floyd counted all the screws he can see. There are 41. Floyd lost count of 42.",
+        "/me pokes at {nick}.",
+        "/me wanders around the room, bumping into things on purpose.",
+        "/me tickles {nick}.",
+        "Floyd has a problem. ... No, it's gone. Floyd had a problem.",
+        "Do you ever feel like a robot? Floyd does. Floyd is a robot.",
+        "Floyd is a good guy. Floyd just wanted you to know.",
+    )
+    SLEEP = "/me's eyes dim. Floyd shut down to save power. Say anything to wake Floyd up."
+    DEFAULT = (
+        "Floyd doesn't understand, but Floyd likes the way you say it.",
+        "Oh boy! Is that a good thing? Floyd can't tell. Floyd says yes.",
+        "Hmm. Floyd is thinking. ... Floyd thought. It was nice.",
+        "Really? Wow. Floyd didn't know that. Floyd still doesn't, but Floyd believes you.",
+        "Floyd's best friend says the best things. Floyd's best friend is you.",
+        "Say that again, slower! Floyd's ears are old.",
+        "Wanna play hider and seeker? (type /play)",
+        "/me tilts his head, which creaks.",
+    )
+    GAVE_UP = ("Okay. Floyd isn't mad. Floyd just wants to know if hiding was fun.",)
+
+    # -- the little world: Floyd's rooms and what lies in them (as in Infocom's
+    # games: a parser for look / take / drop / go, and a narrator) -------------
+    ITEMS = {
+        "bolt": ("a shiny bolt", "It is very shiny. Floyd polishes it every day."),
+        "oilcan": ("an oil can", "Dented, and nearly full. Floyd says it smells like a snack."),
+        "keycard": ("a blue keycard", "BLUE, it says, and LEVEL 1. Floyd thinks it opens something."),
+        "book": ("a picture book", "Floyd's favorite. Every page is a picture of the same bird."),
+        "flashlight": ("a flashlight", "It works. Floyd checked it twice, in the dark, to be sure."),
+        "pellet": ("a nutrition pellet", "Nutrition: 0%. Flavor: 0%. Floyd calls it a treat."),
+    }
+    ROOMS = {
+        "repair": ("Repair Room",
+                   "A cramped room full of cheerfully broken machines. Floyd's tools hang on the wall, "
+                   "most of them in the wrong order.", {"north": "corridor"}),
+        "corridor": ("Corridor",
+                     "A long corridor with a flickering light. A sign points north to the Mess Hall "
+                     "and south to the Repair Room.", {"north": "mess", "south": "repair"}),
+        "mess": ("Mess Hall",
+                 "Tables bolted to the floor, and a food machine that has not worked in years. "
+                 "The corridor is back south.", {"south": "corridor"}),
+    }
+    DIRS = {"n": "north", "s": "south", "e": "east", "w": "west"}
+
+    def __init__(self, rng=None, nick="friend", clock=time.time):
+        self.rng = rng or random.Random()
+        self.nick = nick
+        self.clock = clock
+        self.game = None                 # None, "hide" (you hide), "seek" (Floyd does)
+        self.guesses = 0
+        self.rules = [(re.compile(rx, re.I), rs) for rx, rs in self.RULES]
+        self.room = "repair"
+        self.inv = []                    # what you carry (item keys)
+        self.floor = {"repair": ["oilcan", "flashlight"], "corridor": [], "mess": ["pellet"]}
+        self.floyd_has = ["bolt", "book", "keycard"]
+        self.offered = None              # held out to you, for /take
+
+    # -- the parser ---------------------------------------------------------
+    def _find(self, name, pool):
+        name = name.strip().lower()
+        name = re.sub(r"^(the|a|an|my|some)\s+", "", name)
+        if not name:
+            return None
+        for key in pool:
+            if name == key or name in self.ITEMS[key][0].lower():
+                return key
+        return None
+
+    def _name(self, key):
+        return self.ITEMS[key][0]
+
+    def offer(self, delay=0.0):
+        """Floyd holds something out to you (it stays his until you take it)."""
+        if self.offered is not None:
+            self.floyd_has.append(self.offered)
+            self.offered = None
+        if not self.floyd_has:
+            return []
+        key = self.floyd_has.pop(self.rng.randrange(len(self.floyd_has)))
+        self.offered = key
+        return self._say([(delay, "/me holds out %s. \"Floyd found this! Do you want it? "
+                           "Floyd will give it to you. Say take it, or /take %s.\""
+                           % (self._name(key), key))])
+
+    def _describe(self):
+        title, text, exits = self.ROOMS[self.room]
+        here = [self._name(k) for k in self.floor[self.room]]
+        lines = [(0.2, title, "n"), (0.25, text, "n")]
+        if here:
+            lines.append((0.3, "You can see %s here." % ", ".join(here), "n"))
+        lines.append((0.4, "Floyd is here, %s." % self.rng.choice(
+            ("humming", "poking at a wall", "looking at his own hands", "standing very close")), "n"))
+        return lines
+
+    def command(self, text, explicit=False):
+        """Act on a parser-style line (look, take X, go north, what time is it,
+        remind me in 5 minutes to ...).  A plan, or None when it is not one -
+        the line is then chat.  `explicit` (a /command) always gets an answer;
+        a plain line that names no object we know ("take care") stays chat."""
+        self._explicit = explicit
+        t = re.sub(r"^\s*floyd[,:]?\s+", "", text, flags=re.I).strip()
+        t = re.sub(r"^(please|can you|could you|will you)\s+", "", t, flags=re.I)
+        t = re.sub(r"\s+please$", "", t.rstrip(".!? "), flags=re.I)
+        low = t.lower()
+        verb, _, obj = low.partition(" ")
+        obj = obj.strip()
+        if low in ("look", "l", "look around"):
+            return self._say(self._describe())
+        if low in ("i", "inv", "inventory", "what am i carrying", "what do i have"):
+            if not self.inv:
+                return self._say([(0.2, "You are carrying nothing at all.", "n")])
+            return self._say([(0.2, "You are carrying: %s." % ", ".join(self._name(k) for k in self.inv), "n")])
+        if low in ("wait", "z", "rest"):
+            return self._say([(0.2, "Time passes.", "n"), (1.2, "/me hums a tune that has no end.")])
+        if verb in ("take", "get", "grab", "fetch", "bring") or low.startswith("pick up"):
+            what = re.sub(r"^(pick up|take|get|grab|fetch|bring( me)?)\s*", "", low)
+            what = re.sub(r"\s*(from floyd|for me|here)$", "", what)
+            if what in ("it", "that", "this") and self.offered:
+                what = self.offered
+            return self._take(what, fetch=verb in ("fetch", "bring"))
+        if verb == "drop" or low.startswith("put down"):
+            what = re.sub(r"^(put down|drop)\s*", "", low)
+            key = self._find(what, self.inv)
+            if key is None:
+                return self._say([(0.2, "You haven't got that.", "n")]) if explicit else None
+            self.inv.remove(key)
+            self.floor[self.room].append(key)
+            return self._say([(0.2, "Dropped.", "n"), (1.0, "Floyd watches it hit the floor. \"Boing,\" says Floyd. It did not boing.")])
+        if verb in ("examine", "x", "inspect") or low.startswith("look at"):
+            what = re.sub(r"^(look at|examine|inspect|x)\s*", "", low)
+            if what in ("floyd", "him", "robot"):
+                return self._say([(0.2, "Floyd is a multi-purpose robot, B-19-7. He is dented, "
+                                        "dusty, and looks very pleased about it.", "n")])
+            pool = self.inv + self.floor[self.room] + ([self.offered] if self.offered else [])
+            key = self._find(what, pool)
+            if key is None:
+                return self._say([(0.2, "You see nothing special about that.", "n")]) if explicit else None
+            return self._say([(0.2, self.ITEMS[key][1], "n")])
+        if verb == "give" or verb == "offer":
+            m = re.match(r"(?:give|offer)\s+(?:floyd\s+)?(.+?)(?:\s+to\s+floyd)?$", low)
+            key = self._find(m.group(1), self.inv) if m else None
+            if key is None:
+                return self._say([(0.2, "You haven't got that.", "n")]) if explicit else None
+            self.inv.remove(key)
+            self.floyd_has.append(key)
+            return self._say([(0.2, "Given.", "n"),
+                              (1.2, "Oh boy! A present! For Floyd? Floyd will keep it safe. Floyd might give it back later.")])
+        direction = self.DIRS.get(low) or (low if low in ("north", "south", "east", "west") else None)
+        if direction is None and verb in ("go", "walk", "run") and obj:
+            direction = self.DIRS.get(obj) or obj
+        if direction is not None:
+            return self._go(direction)
+        if low in ("xyzzy", "plugh"):
+            return self._say([(1.0, "Floyd said it. Nothing happened. Floyd is disappointed in the cave game.")])
+        if low in ("sing", "sing a song"):
+            return self._say([(0.6, "/me sings, \"Bolts and screws and loose-fit nuts, la la la!\" The second line is the same as the first.")])
+        if low in ("dance", "dance with me"):
+            return self._say([(0.6, "/me dances. One of his arms keeps going after the rest has stopped.")])
+        if verb == "open" and obj:
+            return self._say([(0.2, "You can't open that.", "n"),
+                              (1.2, "Floyd tried to open the %s once. Floyd got stuck. Floyd was stuck for a day." % obj)])
+        return self._errand(t, low)
+
+    def _take(self, what, fetch=False):
+        if self.offered and (self._find(what, [self.offered]) or what == self.offered):
+            key, self.offered = self.offered, None
+            self.inv.append(key)
+            return self._say([(0.2, "Taken.", "n"), (1.2, "Yay! Floyd is a good giver. Floyd likes giving. Floyd likes it when you say thanks.")])
+        key = self._find(what, self.floor[self.room])
+        if key:
+            self.floor[self.room].remove(key)
+            self.inv.append(key)
+            return self._say([(0.2, "Taken.", "n")])
+        if self._find(what, self.inv):
+            return self._say([(0.2, "You already have that.", "n")])
+        key = self._find(what, self.floyd_has)
+        if key:
+            self.floyd_has.remove(key)
+            self.inv.append(key)
+            return self._say([(0.4, "/me hands you %s. \"Floyd lends it to you. Floyd wants it back. Floyd probably won't ask.\"" % self._name(key)),
+                              (0.9, "Taken.", "n")])
+        if fetch:
+            for room, items in self.floor.items():
+                key = self._find(what, items)
+                if key:
+                    items.remove(key)
+                    self.inv.append(key)
+                    return self._say([(0.8, "Oh boy! A mission! Floyd will fetch %s. Floyd will be right back." % self._name(key)),
+                                      (4.0, "/me comes back, out of breath, though Floyd doesn't breathe."),
+                                      (4.4, "Floyd gives you %s." % self._name(key), "n")])
+        if not self._explicit:
+            return None
+        return self._say([(0.2, "You can't see any such thing.", "n"),
+                          (1.2, "Floyd looked. Floyd found a dust bunny. Floyd named him Gary.")])
+
+    def _go(self, direction):
+        title, text, exits = self.ROOMS[self.room]
+        if direction not in exits:
+            return self._say([(0.2, "You can't go that way.", "n"), (1.0, "/me bumps into the wall to check. It is a wall.")])
+        self.room = exits[direction]
+        return self._say([(0.3, "Floyd follows you, humming."), ] + [(d + 0.5, t, k) for d, t, k in self._describe()])
+
+    def _errand(self, t, low):
+        """Small useful things Floyd will do for you.  None when it is not one."""
+        now = self.clock()
+        if re.search(r"\bwhat'?s? (the )?time\b|\bwhat time is it\b|\bthe time\b", low):
+            return self._say([(1.0, "Floyd looked at the big clock. It says %s. Floyd is pretty sure it is right."
+                               % time.strftime("%H:%M", time.localtime(now)))])
+        if re.search(r"\bwhat'?s? (the )?(date|day)\b|\bwhat day is it\b|\btoday'?s date\b", low):
+            return self._say([(1.0, "It is %s. Floyd didn't know that. Floyd looked." %
+                               time.strftime("%A, %B %d", time.localtime(now)).replace(" 0", " "))])
+        if re.search(r"\bflip a coin\b|\btoss a coin\b|\bcoin\b.*\b(flip|toss)\b", low):
+            return self._say([(0.8, "/me flips a coin and misses the catch."),
+                              (2.0, "It's %s! ...Floyd thinks. It rolled under the table." % self.rng.choice(("heads", "tails")))])
+        m = re.match(r"(?:roll|throw)\s+(?:a |an |the )?(?:d|die|dice)?\s*(\d*)$", low)
+        if m:
+            n = min(max(int(m.group(1) or 6), 2), 1000)
+            return self._say([(0.8, "/me rolls a d%d." % n),
+                              (2.0, "It's a %d! Floyd thinks it is a good number. Floyd thinks all numbers are good." % self.rng.randint(1, n))])
+        m = re.search(r"\bcount (?:up )?to (\d+)\b", low)
+        if m:
+            n = int(m.group(1))
+            if n > 10:
+                return self._say([(0.8, "Floyd can count to ten and then Floyd gets tired. Ask for ten.")])
+            return self._say([(0.5 + i * 0.8, "%d..." % i) for i in range(1, n + 1)] +
+                             [(0.5 + n * 0.8, "Floyd counted all of them. Floyd is good at counting.")])
+        m = re.search(r"\bremind me (?:in|after)\s+(\d+)\s*(second|sec|minute|min|hour|hr)s?\b\s*(?:to|that|about)?\s*(.*)", low)
+        if m:
+            secs = int(m.group(1)) * {"s": 1, "m": 60, "h": 3600}[m.group(2)[0]]
+            if secs > 86400:
+                return self._say([(0.8, "That is too long to remember. Floyd would forget. Floyd forgets quickly.")])
+            what = m.group(3).strip() or "something"
+            return self._say([(0.8, "Okay! Floyd will remember. Floyd is very good at remembering."),
+                              (float(secs), "Hey, %s! Floyd remembered! You said to remind you: %s" % (self.nick, what))])
+        return None
+
+    def _fmt(self, text):
+        return text.replace("{nick}", self.nick)
+
+    def _one(self, choices):
+        return self._fmt(self.rng.choice(choices))
+
+    @staticmethod
+    def _split(text):
+        """'/me ...' is an action ('a'); the rest is spoken ('')."""
+        if text.startswith("/me "):
+            return text[4:], "a"
+        return text, ""
+
+    def _say(self, plan):
+        """[(delay, text[, kind])] -> [(delay, text, flags)].  kind 'n' is the
+        narrator (room and item text, as in interactive fiction)."""
+        out = []
+        for entry in plan:
+            text, kind = self._split(self._fmt(entry[1]))
+            out.append((entry[0], text, entry[2] if len(entry) > 2 else kind))
+        return out
+
+    def opening(self):
+        return self._say([(1.0, self.OPENING)]) + self.offer(4.0)
+
+    def start_game(self):
+        if self.game:
+            return self.reply("")
+        self.guesses = 0
+        if self.rng.random() < 0.5:
+            self.game = "hide"
+            return self._say([
+                (1.0, "Okay! You hide. Floyd will count. Floyd is a very good counter. Tell Floyd where you hid when Floyd is done."),
+                (3.0, "One... two... three..."),
+                (5.0, "...nine... ten! Ready or not, here Floyd comes!"),
+                (7.5, "/me looks under a table, inside a cupboard, and then at his own feet."),
+                (10.0, "Floyd can't find you! Floyd looked everywhere! Where are you hiding?")])
+        self.game = "seek"
+        return self._say([
+            (1.0, "Okay! Floyd will hide. You count to ten. No peeking!"),
+            (3.5, "Floyd is hiding. Floyd found a very good spot. Nobody could ever find Floyd here."),
+            (5.5, "/me holds very still. His antenna is sticking out."),
+            (7.5, "Okay! Come find Floyd! Where do you think he is?")])
+
+    def reply(self, text, action=False):
+        low = text.lower()
+        if self.game == "hide":
+            self.game = None
+            if re.search(r"\b(quit|stop|no|never ?mind|give up)\b", low):
+                return self._say([(1.0, self._one(self.GAVE_UP))])
+            where = text.strip().rstrip(".!?")[:60] or "somewhere"
+            return self._say([
+                (1.0, "Floyd found you! You were hiding %s? Floyd knew it the whole time!" % where),
+                (2.5, "Floyd is the best seeker ever. Floyd is almost as good as Floyd is at hiding.")])
+        if self.game == "seek":
+            self.guesses += 1
+            if re.search(r"\b(quit|stop|give up|never ?mind)\b", low):
+                self.game = None
+                return self._say([(1.0, "Floyd was behind the big thing the whole time! ...Oh. You gave up. Okay.")])
+            if self.guesses < 3:
+                return self._say([
+                    (1.0, self._one((
+                        "Not there! Floyd is very good at hiding. Floyd is not even close to there.",
+                        "Nope! Try again. Floyd is quiet as a mouse. A very big mouse."))),
+                    (2.5, "/me's foot sticks out from behind the thing.")])
+            self.game = None
+            return self._say([
+                (1.0, "Hey! How did you find Floyd?! Floyd was hiding so good!"),
+                (2.5, "You win, {nick}! Floyd was right out in the open. Floyd always hides there. Floyd likes it.")])
+        if not action:
+            plan = self.command(text)
+            if plan is not None:
+                return plan
+        if re.search(r"\b(play|game|hide|seek|hider)\b", low) and not action:
+            return self.start_game()
+        for rx, choices in self.rules:
+            if rx.search(low):
+                return self._say([(1.2, self._one(choices))])
+        return self._say([(1.2, self._one(self.DEFAULT))])
+
+    def idle(self, nudge):
+        """What Floyd does when left alone: nudge counts the times running."""
+        if nudge >= 3:
+            return self._say([(0.0, self.SLEEP)])
+        if nudge == 0 or self.rng.random() < 0.4:
+            offered = self.offer()
+            if offered:
+                return offered
+        return self._say([(0.0, self._one(self.CHATTER))])
+
+
+class FloydAdapter(CommandMixin):
+    """The account for Floyd.  [account:NAME] protocol = floyd; nothing else is
+    needed.  Options:  nick= (what Floyd calls you; default your login name),
+    idle= (seconds of quiet before Floyd talks by himself, 0 = never; default
+    180), seed= (a number, for a repeatable Floyd)."""
+
+    TARGET = "floyd"
+    IDLE_DEFAULT = 180
+    SERVER_TEXT_REFUSAL = ("the server window takes no messages - talk to Floyd in his own "
+                           "conversation (/help lists the commands)")
+
+    def __init__(self, chat, account):
+        self.chat, self.account, self.loop = chat, account, chat.loop
+        o = account.opts
+        self.nick = (o.get("nick") or "").strip() or _me()
+        self.idle = self.idle_seconds(o.get("idle"))
+        seed = (o.get("seed") or "").strip()
+        self.mind = FloydMind(random.Random(int(seed)) if seed.isdigit() else random.Random(), self.nick)
+        self.phase = "down"
+        self.gen = 0
+        self._ids = 0
+        self.nudges = 0
+        self.idle_timer = None
+        self.spoken = 0                  # things Floyd has said this session
+
+    @classmethod
+    def idle_seconds(cls, text):
+        text = (text or "").strip()
+        if not text:
+            return float(cls.IDLE_DEFAULT)
+        try:
+            v = float(text)
+        except ValueError:
+            raise UserError("idle= must be a number of seconds (0 = never), not %r" % text)
+        if v < 0:
+            raise UserError("idle= may not be negative")
+        return v
+
+    def local_id(self):
+        self._ids += 1
+        return "%s:%d" % (self.account.id, self._ids)
+
+    def need_up(self):
+        if self.phase != "up":
+            raise UserError("Floyd is switched off - connect %s first" % self.account.id)
+
+    def server_conv(self):
+        return self.chat.ensure_conv(self.account, "*", "server", self.account.display)
+
+    def floyd_conv(self):
+        conv = self.chat.ensure_conv(self.account, self.TARGET, "direct", "Floyd")
+        conv.members.setdefault(self.TARGET, (self.TARGET, "Floyd", "member"))
+        return conv
+
+    def system(self, conv, text):
+        self.chat.add_message(conv, Message(self.local_id(), conv.id, time.time(),
+                                            Contact(""), text, "n"), count=False)
+
+    def _later(self, delay, fn):
+        gen = self.gen
+        return self.loop.call_later(delay, lambda: gen == self.gen and fn())
+
+    # -- lifecycle ----------------------------------------------------------
+    def connect(self):
+        if self.phase == "up":
+            return
+        self.phase = "up"
+        self.server_conv()
+        conv = self.floyd_conv()
+        self.chat.set_state(self.account, "connected", "B-19-7 reporting for duty")
+        self.system(self.server_conv(), "Floyd (B-19-7, multi-purpose robot) is online. "
+                    "Say hello in the Floyd conversation.")
+        if not conv.history:
+            self._play(conv, self.mind.opening())
+        self._arm()
+
+    def disconnect(self):
+        was = self.phase
+        self.gen += 1
+        self.loop.cancel(self.idle_timer)
+        self.idle_timer = None
+        self.phase = "down"
+        if was != "down":
+            self.chat.set_state(self.account, "disconnected", "")
+
+    def c_quit(self, conv, rest):
+        return (self.disconnect, ())
+
+    def join(self, target):
+        self.need_up()
+        if target.strip().lower() not in (self.TARGET, ""):
+            raise UserError("Floyd only knows Floyd - there is nobody else here")
+        return self.floyd_conv()
+
+    def part(self, conv):
+        if conv.kind == "server":
+            raise UserError("the server window cannot be left - /quit disconnects")
+        raise UserError("Floyd can't be left. Floyd would be sad. (/quit disconnects)")
+
+    # -- talking ------------------------------------------------------------
+    def _from_floyd(self, conv, text, flags):
+        """flags: '' Floyd speaks, 'a' he does something, 'n' the narrator."""
+        if flags != "n":
+            self.spoken += 1
+        who = Contact("") if flags == "n" else Contact(self.TARGET, "Floyd")
+        self.chat.add_message(conv, Message(self.local_id(), conv.id, time.time(),
+                                            who, text, flags), count=flags != "n")
+
+    def _play(self, conv, plan):
+        """Say each (delay, text, flags) of the plan after its delay."""
+        for delay, text, flags in plan:
+            self._later(delay, lambda t=text, f=flags: self._from_floyd(conv, t, f))
+
+    def _parser(self, verb):
+        """A /command that is a parser verb: /take bolt is 'take bolt'."""
+        def run(conv, rest):
+            self._in_a_chat(conv, "/" + verb)
+            if verb in ("take", "drop") and not rest:
+                raise UserError("usage: /%s THING" % verb)
+            return (self._parse, (conv, (verb + " " + rest).strip()))
+        return run
+
+    def _parse(self, conv, text):
+        mid = self._heard(conv, text)
+        self._play(conv, self.mind.command(text, explicit=True) or [])
+        return mid
+
+    def _heard(self, conv, text, action=False):
+        """Something was said to Floyd: log it, and let him answer."""
+        self.nudges = 0
+        msg = Message(self.local_id(), conv.id, time.time(), Contact(self.nick), text,
+                      "sa" if action else "s")
+        self.chat.add_message(conv, msg, count=False)
+        self._arm()
+        return msg.id
+
+    def speak(self, conv, text):
+        mid = self._heard(conv, text)
+        self._play(conv, self.mind.reply(text))
+        return mid
+
+    def c_me(self, conv, rest):
+        _need(rest, "/me ACTION")
+        self._in_a_chat(conv, "/me")
+        return (self._act, (conv, rest))
+
+    def _act(self, conv, text):
+        mid = self._heard(conv, text, action=True)
+        self._play(conv, self.mind.reply(text, action=True))
+        return mid
+
+    def c_look(self, conv, rest):
+        return self._parser("look" if not rest else "examine")(conv, rest)
+
+    def c_inventory(self, conv, rest):
+        return self._parser("inventory")(conv, "")
+
+    def c_take(self, conv, rest):
+        return self._parser("take")(conv, rest)
+
+    def c_drop(self, conv, rest):
+        return self._parser("drop")(conv, rest)
+
+    def c_play(self, conv, rest):
+        self._in_a_chat(conv, "/play")
+        return (self._start_game, (conv,))
+
+    def _start_game(self, conv):
+        self.nudges = 0
+        self._arm()
+        self._play(conv, self.mind.start_game())
+
+    # -- Floyd on his own ---------------------------------------------------
+    def _arm(self):
+        self.loop.cancel(self.idle_timer)
+        self.idle_timer = None
+        if self.idle > 0 and self.phase == "up":
+            self.idle_timer = self._later(self.idle, self._wander)
+
+    def _wander(self):
+        conv = self.floyd_conv()
+        plan = self.mind.idle(self.nudges)
+        self.nudges += 1
+        self._play(conv, plan)
+        if self.nudges <= 3:             # the last one is the shutdown
+            self.idle_timer = self._later(self.idle, self._wander)
+
+    def status_lines(self):
+        a = self.account
+        lines = ["%s (floyd): %s%s" % (a.display, a.state, " - " + a.detail if a.detail else "")]
+        if self.phase == "up":
+            lines.append("Floyd calls you %s; he has said %d thing%s so far"
+                         % (self.nick, self.spoken, "" if self.spoken == 1 else "s"))
+            lines.append("on his own he speaks up after %s of quiet" %
+                         ("%d seconds" % self.idle if self.idle else "- never (idle=0)"))
+            if self.mind.game:
+                lines.append("a game of Hider and Seeker is on (Floyd is %s)"
+                             % ("seeking" if self.mind.game == "hide" else "hiding"))
+        return lines
+
+
+ADAPTERS = {"irc": IrcAdapter, "deltachat": DeltaChatAdapter, "talk": TalkAdapter,
+            "floyd": FloydAdapter}
 
 
 # --------------------------------------------------------------------------
@@ -3703,6 +4297,13 @@ def check_config(path):
             if sasl and host and not find_password_where(i, host, sasl, "irc")[0]:
                 warnings.append("[account:%s] no password found for %s on %s: $%s, ~/.mu-tickets or "
                                 "~/.netrc (machine %s login %s)" % (i, sasl, host, _env_name(i), host, sasl))
+        elif a.protocol == "floyd":
+            try:
+                FloydAdapter.idle_seconds(o.get("idle"))
+            except UserError as e:
+                errors.append("[account:%s] %s" % (i, e))
+            if (o.get("seed") or "").strip() and not (o.get("seed") or "").strip().isdigit():
+                errors.append("[account:%s] seed= must be a whole number" % i)
         elif a.protocol == "deltachat":
             addr = (o.get("addr") or "").strip()
             if not DeltaChatAdapter.ADDRESS.match(addr):
