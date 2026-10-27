@@ -66,8 +66,8 @@ when it is not. What he remembers (seen, tells, karma, quotes, facts) is kept be
 `~/.local/share/tvchat/floyd/NAME.json` (`memory = PATH` moves it, `memory = none` keeps nothing).
 
 **Floyd in your other conversations.** In any IRC channel, talk call or Delta Chat chat, `/floyd`
-(or `/floyd on`) has him listen there; `/floyd off` sends him away, `/floyd status` says. The
-Floyd account must be connected. He then answers `!commands`, `nick++` and `floyd: ...` (the
+(or `/floyd on`) has him listen there, switching his account on if it was off (and from then on
+he starts with tvchat); `/floyd off` sends him away, `/floyd status` says. He then answers `!commands`, `nick++` and `floyd: ...` (the
 errands, the games, the parser) and notes who says what for `!seen` and `!tell`; the rest of the
 conversation he ignores. He speaks **as you**, so every line starts with `[Floyd] ` (`tag =` changes
 or empties it, `/me` actions are sent as they are), he leaves at least 2 seconds between answers,

@@ -4357,7 +4357,7 @@ class FloydAdapter(CommandMixin):
         att = self.memory.data["attached"]
         if on:
             if self.phase != "up":
-                raise UserError("Floyd is switched off - connect the %s account first" % self.account.id)
+                self.chat.connect(self.account)      # he needs no network: just switch him on
             if conv.id not in att:
                 att.append(conv.id)
                 self.memory.save()
@@ -4917,6 +4917,11 @@ class Chat:
                 self.connect(self.by_id[ident])
             except UserError:
                 pass                     # already reported as a state event
+        for a in self.accounts:          # Floyd, wherever he was left listening
+            if a.protocol == "floyd" and a.id not in self.autoconnect:
+                ad = self.adapter(a)
+                if ad.patterns or ad.memory.data["attached"]:
+                    self.connect(a)
 
     def close(self):
         for ad in self.adapters.values():

@@ -2789,6 +2789,30 @@ class TestFloydAttached(Base):
             self.clk.t += 0.25
             self.chat.loop.run_due()
 
+    def test_floyd_on_switches_him_on_and_a_restart_brings_him_back(self):
+        self.chat.adapters["floyd"].disconnect()
+        self.assertEqual(self.chat.account("floyd").state, "disconnected")
+        self.other.send(self.conv, "/floyd on")            # no need to connect him first
+        self.assertEqual(self.chat.account("floyd").state, "connected")
+        self.hear("bob", "!8ball ok")
+        self.assertEqual(len(self.other.said), 1)
+        path = self.tmp / "floyd.json"
+        self.floyd.memory.path = str(path)
+        self.floyd.memory.save()
+        self.conf("""\
+            [account:floyd]
+            protocol = floyd
+            memory   = %s
+
+            [account:net]
+            protocol = irc
+            host     = irc.example.org
+            """ % path)
+        cb._CHAT = None
+        again = cb.Chat(loop=cb.Loop(self.clk), clock=self.clk)
+        again.start()                                      # not in autoconnect, but attached
+        self.assertEqual(again.account("floyd").state, "connected")
+
     def test_silent_until_attached(self):
         self.hear("bob", "!help")
         self.assertEqual(self.other.said, [])
