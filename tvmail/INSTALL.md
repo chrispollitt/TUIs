@@ -224,6 +224,15 @@ tvmail-backend vacation status        # "state: none"
 tvmail-backend vacation addresses     # the address table described below
 ```
 
+**The master's name has a dot.** Give Postfix on the master a fully qualified
+`myhostname` (`cpbee.cmnet`, not `cpbee`). Every address it makes or rewrites -
+local senders, bounces, a LAN client's `user@laptop` - is `user@` that name, and
+Delta Chat (so tvchat's "Chat with sender" from tvmail) refuses an address
+whose domain has no dot. `configure-sendmail-relay.sh` sets this for you, keeping
+the short name in `mydestination` so mail addressed to it still arrives; check
+it with `postconf myhostname`. Mail stored before the change keeps its
+short-name headers.
+
 **Several users (chris and michelle).** Each user logs into ManageSieve as
 themselves and gets their own script in their own `~/sieve`, their own
 `tvmail.conf`, and their own address list: switching chris's reply on does
@@ -240,7 +249,9 @@ in from, in order: `[sieve] addresses`, `[smtp] from`, the user in `~/.mail`'s
 domain-wide `@host` line is shared by everyone, so it is not used), and the
 local identity (`user@master`). Check the result before you save. For each local
 user, give *their* public address: chris and michelle must not list each other's.
-The reply goes out From the address the mail was sent to.
+The reply goes out From the address the mail was sent to. Only people get it:
+no-reply and monitoring senders, mailing lists, bulk and auto-generated mail
+are skipped.
 
 **Plus addressing instead.** If several users share *one* public mailbox,
 give each a tagged address: mail for `cwp+chris@u-l.ca` and `cwp+michelle@u-l.ca`
@@ -250,7 +261,7 @@ the table lists `cwp+chris@u-l.ca` in place of `cwp@u-l.ca` (`plus = both`
 lists the two). This only changes what the vacation reply *answers*. Two other
 pieces make the tag mean something, and both live in mail-setup: the fetch has
 to sort mail to the local user named by the tag, and Postfix's generic map has
-to send each user out as their tagged address (`chris@cpbee  cwp+chris@u-l.ca`).
+to send each user out as their tagged address (`chris@cpbee.cmnet  cwp+chris@u-l.ca`).
 Mind where the host puts tagged mail: cPanel hosts such as u-l.ca deliver
 `cwp+chris@u-l.ca` into an IMAP *folder* named `chris`, not the inbox, where POP
 can't see it. mail-setup's `configure-getmail.sh --imap --plus-base ...` fetches

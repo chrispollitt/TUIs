@@ -1918,8 +1918,12 @@ class TestVacation(Base):
         # two users on one master, plus the shared domain-wide rewrite: each
         # user's table gets only their own line, never the shared address or
         # the other user's
-        gen.write_text("# comment\n@cpbee  shared@u-l.ca\nroot@localhost   shared@u-l.ca\n"
-                       "tester@cpbee  tester@u-l.ca\nmichelle@cpbee  michelle@u-l.ca\n")
+        # (as configure-sendmail-relay.sh writes it: the master's FQDN first,
+        # then its short name and localhost)
+        gen.write_text("# comment\n"
+                       "tester@cpbee.cmnet  tester@u-l.ca\ntester@cpbee  tester@u-l.ca\n"
+                       "michelle@cpbee.cmnet  michelle@u-l.ca\nmichelle@cpbee  michelle@u-l.ca\n"
+                       "@cpbee.cmnet  shared@u-l.ca\n@cpbee  shared@u-l.ca\nroot@localhost   shared@u-l.ca\n")
         os.environ["TVMAIL_POSTFIX_GENERIC"] = str(gen)       # USER=tester here
         out = self.vac("addresses").stdout.decode().splitlines()
         pub = [l.split("\t") for l in out if l.endswith("postfix generic map")]
