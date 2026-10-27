@@ -80,7 +80,13 @@ after a short pause, plays Hider and Seeker, and understands interactive-fiction
 verbs (look, take, drop, inventory, go, give) and small errands (the time, a coin,
 dice, counting, reminders).  Narrator lines carry the
 .B n
-flag.
+flag.  He is also an old-school bot (!seen, !tell, karma, !quote, !learn, !8ball, !fortune,
+which runs fortune(6) when it is installed), keeping his memory in the JSON file named by
+\fBmemory\fP (default ~/.local/share/tvchat/floyd/NAME.json, or \fBnone\fP).  The typed command
+.B /floyd
+[on|off|status] (IRC, talk and Delta Chat) makes him listen in that conversation, and
+\fBattach\fP lists conversation ids (shell patterns) to attach him to always; there he answers
+!commands, nick++ and "floyd: ..." as the user, each line behind \fBtag\fP (default "[Floyd] ").
 .PP
 A
 .B protocol = talk

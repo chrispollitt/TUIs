@@ -281,7 +281,22 @@ The little world (three rooms, a few items, what you carry, what Floyd holds) li
 `FloydMind`. A parser-style line that names nothing known ("take care") returns `None` from
 `command()` and is chat; the `/look` `/take` `/drop` `/inventory` commands pass `explicit=True` and
 always get an answer. Talking by himself is one timer re-armed on every line; after three
-unanswered tries he shuts down until spoken to. Tests: `TestFloyd`.
+unanswered tries he shuts down until spoken to.
+
+The bot in him is `FloydMind.botcmd()` (`!seen !tell !quote !addquote !karma !8ball !fortune !learn
+!forget !help`, `nick++`, facts) over `FloydMemory`, one JSON file per account (written atomically,
+each list capped, a damaged file starts empty). `!fortune` runs `fortune -s` if it is on `PATH`
+(2 s timeout), else uses his own. **Attaching:** `Chat.add_message` offers every message to each
+`FloydAdapter`, whose `hear()` returns unless the conversation is attached (`/floyd on`, kept in the
+memory file, or a config `attach=` pattern matched against the conversation id) and Floyd's
+account is up. It notes the line (`observe`) and answers only `!commands`, karma and
+`floyd: ...`, through one `FloydMind` per attached conversation, by calling the other account's
+adapter `send()` - so he speaks as the user, behind `tag` (default `[Floyd] `). Safeguards, since
+this is outward-facing: opt-in per conversation; lines starting with the tag, `n` notices, lines
+older than 60 s and message ids already seen are ignored (no loops, no replays); at most 5 lines and
+one answer per 2 s per conversation; a reply that starts with `/` is sent literally (`//`) or behind
+the tag, so a stored quote cannot run an IRC command. Tests: `TestFloyd`, `TestFloydBot`,
+`TestFloydAttached`.
 
 ## Delta Chat adapter
 

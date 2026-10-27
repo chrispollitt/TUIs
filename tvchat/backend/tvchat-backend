@@ -80,7 +80,7 @@ the user), 2 internal error (bad request, bug).
 
 import sys, os, io, argparse, base64, configparser, heapq, re, selectors, shlex, socket
 import codecs, email, email.utils, imaplib, errno, json, logging, select, shutil, smtplib, ssl
-import subprocess, threading, time, random
+import subprocess, threading, time, random, fnmatch
 from email.message import EmailMessage
 from urllib.parse import unquote
 from collections import deque
@@ -742,7 +742,7 @@ _PREFIX_ROLE = {"~": "owner", "&": "admin", "@": "op", "%": "halfop", "+": "voic
 #   name: (aliases, {protocol or "*": (usage, what it does)})
 # --------------------------------------------------------------------------
 COMMAND_ORDER = ("help", "status", "me", "shrug", "join", "query", "msg", "leave", "invite", "names",
-                 "whois", "nick", "name", "topic", "away", "ping", "play", "look", "inventory", "take", "drop", "clear", "quit",
+                 "whois", "nick", "name", "topic", "away", "ping", "floyd", "play", "look", "inventory", "take", "drop", "clear", "quit",
                  "quote")
 COMMAND_TABLE = {
     "help": (("?",), {"*": ("/help [COMMAND]", "list the commands, or explain one")}),
@@ -780,6 +780,8 @@ COMMAND_TABLE = {
     "topic": ((), {"irc": ("/topic [NEW TOPIC]", "show or set the topic")}),
     "away": ((), {"irc": ("/away [REASON]", "mark yourself away (none: back)")}),
     "ping": ((), {"irc": ("/ping [NICK]", "round-trip time to the server or NICK")}),
+    "floyd": ((), dict((p, ("/floyd [on|off|status]", "have Floyd the robot listen here (answers !commands as you)"))
+                       for p in ("irc", "talk", "deltachat"))),
     "play": ((), {"floyd": ("/play", "ask Floyd for a game of Hider and Seeker")}),
     "look": ((), {"floyd": ("/look [THING]", "where you are, or a closer look at THING")}),
     "inventory": (("i", "inv"), {"floyd": ("/inventory", "what you are carrying")}),
@@ -916,6 +918,24 @@ class CommandMixin(object):
     def c_shrug(self, conv, rest):
         self._in_a_chat(conv, "/shrug")
         return (self.speak, (conv, (rest + " " if rest else "") + "\xaf\\_(\u30c4)_/\xaf"))
+
+    def c_floyd(self, conv, rest):
+        """/floyd [on|off|status]: have Floyd listen in this conversation (he
+        answers !commands and 'floyd: ...', speaking as you, tagged)."""
+        self._in_a_chat(conv, "/floyd")
+        word = rest.strip().lower() or "on"
+        if word not in ("on", "off", "status"):
+            raise UserError("usage: /floyd [on|off|status]")
+        ad = self.chat.floyd()
+        return (self._floyd_cmd, (ad, conv, word))
+
+    def _floyd_cmd(self, ad, conv, word):
+        if word == "status":
+            note = "Floyd is %s here" % ("listening" if ad.attached(conv) and ad.phase == "up"
+                                         else "not listening")
+        else:
+            note = ad.attach(conv, word == "on")
+        self.system(conv, note)
 
     def c_clear(self, conv, rest):
         return (self._clear_cmd, (conv,))
@@ -3677,6 +3697,71 @@ class DeltaChatAdapter(CommandMixin):
 # now and then starts talking by himself.  Floyd speaks of himself in the
 # third person, is delighted by everything, and is a terrible hider.
 # --------------------------------------------------------------------------
+class FloydMemory(object):
+    """What Floyd remembers between sessions, like an Eggdrop's user file: who
+    was last seen saying what, messages left for people (!tell), karma, quotes,
+    learned facts, and the conversations he is attached to.  One small JSON
+    file; path None keeps it in memory only.  Each list is capped."""
+
+    CAPS = {"seen": 2000, "tells": 200, "quotes": 500, "facts": 1000, "karma": 2000}
+
+    def __init__(self, path=None):
+        self.path = path
+        self.data = {"seen": {}, "tells": [], "karma": {}, "quotes": [], "facts": {},
+                     "attached": []}
+        if path:
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    stored = json.load(fh)
+                for k, v in self.data.items():
+                    if isinstance(stored.get(k), type(v)):
+                        self.data[k] = stored[k]
+            except (OSError, ValueError, AttributeError):
+                pass
+
+    def save(self):
+        if not self.path:
+            return
+        d = self.data
+        for k, cap in self.CAPS.items():
+            if len(d[k]) > cap:
+                if isinstance(d[k], list):
+                    d[k] = d[k][-cap:]
+                else:                    # a dict: drop the oldest-inserted
+                    for old in list(d[k])[:len(d[k]) - cap]:
+                        del d[k][old]
+        try:
+            os.makedirs(os.path.dirname(self.path), mode=0o700, exist_ok=True)
+            tmp = self.path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(d, fh)
+            os.replace(tmp, self.path)
+        except OSError as e:
+            _log.debug("floyd: cannot save %s: %s", self.path, e)
+
+    def seen_set(self, who, when, where, text):
+        self.data["seen"].pop(who, None)         # keep the newest last
+        self.data["seen"][who] = [when, where, text]
+        self.save()
+
+    def add_tell(self, to, frm, text, when):
+        self.data["tells"].append({"to": to, "from": frm, "text": text, "ts": when})
+        self.save()
+
+    def take_tells(self, to):
+        mine = [t for t in self.data["tells"] if t["to"] == to]
+        if mine:
+            self.data["tells"] = [t for t in self.data["tells"] if t["to"] != to]
+            self.save()
+        return mine
+
+    def karma_add(self, thing, delta):
+        k = self.data["karma"]
+        k[thing] = k.get(thing, 0) + delta
+        self.save()
+        return k[thing]
+
+
 class FloydMind(object):
     """What Floyd says.  reply() and idle() return what to say as a list of
     (delay in seconds, text, is_action); an action is shown as '* Floyd ...'.
@@ -3772,10 +3857,33 @@ class FloydMind(object):
     }
     DIRS = {"n": "north", "s": "south", "e": "east", "w": "west"}
 
-    def __init__(self, rng=None, nick="friend", clock=time.time):
+    EIGHT_BALL = (
+        "Floyd asked the ball. The ball said yes. Floyd didn't understand the question either.",
+        "Floyd shook the ball so hard. It says no. Floyd is sorry.",
+        "The ball says ask again later. Floyd will wait. Floyd is bad at it.",
+        "Definitely! ...Floyd thinks. The ball is a little cracked.",
+        "Floyd looked inside the ball. There is a tiny robot in there. He says maybe.",
+        "Signs point to yes! Floyd doesn't know which signs. Floyd just likes pointing.",
+    )
+    FORTUNES = (
+        "A robot who counts his screws will never be lonely. He will be busy.",
+        "You will soon find a thing you lost. Floyd probably has it.",
+        "Today is a good day to explore. So is every day. Floyd checked.",
+        "A friend is someone who holds your bolt. You have a friend.",
+        "Beware of the dark. Floyd isn't afraid. Floyd is cautious.",
+    )
+    KARMA = re.compile(r"^@?([\w\[\]\\`^{|}.-]+?)(\+\+|--)\s*$")
+    # the !words that are just the errands under another name
+    BANG_ERRANDS = {"time": "what time is it", "date": "what's the date", "coin": "flip a coin",
+                    "flip": "flip a coin", "remind": "remind me in %s", "count": "count to %s"}
+
+    def __init__(self, rng=None, nick="friend", clock=time.time, memory=None):
         self.rng = rng or random.Random()
         self.nick = nick
         self.clock = clock
+        self.memory = memory or FloydMemory()
+        # where fortune(6) is, looked for when asked (or a path, or None for none)
+        self.fortune_prog = lambda: shutil.which("fortune")
         self.game = None                 # None, "hide" (you hide), "seek" (Floyd does)
         self.guesses = 0
         self.rules = [(re.compile(rx, re.I), rs) for rx, rs in self.RULES]
@@ -3939,6 +4047,8 @@ class FloydMind(object):
         if re.search(r"\bwhat'?s? (the )?(date|day)\b|\bwhat day is it\b|\btoday'?s date\b", low):
             return self._say([(1.0, "It is %s. Floyd didn't know that. Floyd looked." %
                                time.strftime("%A, %B %d", time.localtime(now)).replace(" 0", " "))])
+        if re.search(r"\b(a|my|the) fortune\b|^fortune$", low):
+            return self._fortune()
         if re.search(r"\bflip a coin\b|\btoss a coin\b|\bcoin\b.*\b(flip|toss)\b", low):
             return self._say([(0.8, "/me flips a coin and misses the catch."),
                               (2.0, "It's %s! ...Floyd thinks. It rolled under the table." % self.rng.choice(("heads", "tails")))])
@@ -3989,6 +4099,131 @@ class FloydMind(object):
     def opening(self):
         return self._say([(1.0, self.OPENING)]) + self.offer(4.0)
 
+    # -- the old-school bot in him ------------------------------------------
+    def observe(self, who, text, where):
+        """Every line anyone says where Floyd listens: note who was seen, and
+        hand over what was left for them (!tell)."""
+        now = self.clock()
+        mem = self.memory
+        if text.strip():
+            mem.seen_set(who.lower(), now, where, text[:200])
+        plan = []
+        for i, t in enumerate(mem.take_tells(who.lower())):
+            plan.append((0.8 + 0.7 * i, "%s: Floyd has a message for you from %s (%s ago): %s"
+                         % (who, t["from"], _dur(now - t["ts"]), t["text"])))
+        return self._say(plan)
+
+    def botcmd(self, text, who):
+        """!seen !tell !quote !addquote !karma !8ball !learn !forget !help, a
+        learned fact (!word), the errands under a ! (!time, !roll 20), and
+        nick++ / nick--.  A plan, or None when the line is none of those."""
+        t = text.strip()
+        mem = self.memory
+        m = self.KARMA.match(t)
+        if m:
+            thing = m.group(1).lower()
+            if thing == who.lower():
+                return self._say([(0.8, "Floyd won't let you vote for yourself. That's cheating. Floyd knows cheating. Floyd tried it once.")])
+            n = mem.karma_add(thing, 1 if m.group(2) == "++" else -1)
+            return self._say([(0.8, "Floyd %s %s a point. %s has %d point%s now." % (
+                "gave" if m.group(2) == "++" else "took", m.group(1), m.group(1), n, "" if abs(n) == 1 else "s"))])
+        if not t.startswith("!"):
+            return None
+        cmd, _, arg = t[1:].partition(" ")
+        cmd, arg = cmd.lower(), arg.strip()
+        if cmd == "seen":
+            who2 = arg.split(" ")[0].lower().lstrip("@") if arg else ""
+            if not who2:
+                return self._say([(0.8, "Seen who? Say !seen NICK.")])
+            if who2 == who.lower():
+                return self._say([(0.8, "Floyd can see you right now! Hi!")])
+            if who2 == "floyd":
+                return self._say([(0.8, "Floyd is right here. Floyd is always right here. Floyd has nowhere else to be.")])
+            seen = mem.data["seen"].get(who2)
+            if not seen:
+                return self._say([(0.8, "Floyd hasn't seen %s. Floyd looked in the drawers." % arg.split(" ")[0])])
+            return self._say([(0.8, "Floyd last saw %s %s ago, in %s, saying: \"%s\""
+                               % (arg.split(" ")[0], _dur(self.clock() - seen[0]), seen[1], seen[2]))])
+        if cmd == "tell":
+            to, _, msg = arg.partition(" ")
+            to, msg = to.lstrip("@"), msg.strip()
+            if not to or not msg:
+                return self._say([(0.8, "Tell who what? Say !tell NICK MESSAGE.")])
+            if len(msg) > 300:
+                return self._say([(0.8, "That is a lot of message. Floyd can only hold 300 letters. Floyd's pockets are small.")])
+            if to.lower() == "floyd":
+                return self._say([(0.8, "Floyd is right here! Floyd heard you! You can just say it.")])
+            mem.add_tell(to.lower(), who, msg, self.clock())
+            return self._say([(0.8, "Okay! Floyd will tell %s next time Floyd sees them. Floyd is good at remembering. Mostly." % to)])
+        if cmd == "addquote":
+            if not arg:
+                return self._say([(0.8, "Add what? Say !addquote TEXT.")])
+            mem.data["quotes"].append(arg[:300])
+            mem.save()
+            return self._say([(0.8, "Floyd wrote it down! That is quote #%d." % len(mem.data["quotes"]))])
+        if cmd == "quote":
+            q = mem.data["quotes"]
+            if not q:
+                return self._say([(0.8, "Floyd has no quotes. Floyd is a quote-free robot. Add one with !addquote TEXT.")])
+            n = int(arg) if arg.isdigit() and 1 <= int(arg) <= len(q) else self.rng.randint(1, len(q))
+            return self._say([(0.8, "#%d: %s" % (n, q[n - 1]))])
+        if cmd == "karma":
+            k = mem.data["karma"]
+            if arg:
+                return self._say([(0.8, "%s has %d point%s. Floyd checked." % (arg.split(" ")[0], k.get(arg.split(" ")[0].lower(), 0),
+                                                                              "" if k.get(arg.split(" ")[0].lower(), 0) == 1 else "s"))])
+            if not k:
+                return self._say([(0.8, "Nobody has any points. Floyd would give you one, but Floyd isn't allowed. Say someone++.")])
+            top = sorted(k.items(), key=lambda kv: -kv[1])[:3]
+            return self._say([(0.8, "Floyd's best friends: " + ", ".join("%s (%d)" % kv for kv in top) + ".")])
+        if cmd in ("8ball", "eightball"):
+            return self._say([(1.0, self.rng.choice(self.EIGHT_BALL))])
+        if cmd == "fortune":
+            return self._fortune()
+        if cmd == "learn":
+            m = re.match(r"(.+?)\s+(?:is|=)\s+(.+)$", arg)
+            if not m or len(m.group(2)) > 300:
+                return self._say([(0.8, "Learn what? Say !learn THING is WHAT (not too long).")])
+            mem.data["facts"][m.group(1).strip().lower()] = m.group(2).strip()
+            mem.save()
+            return self._say([(0.8, "Oh boy! Floyd learned something. %s is %s. Floyd will remember that. Probably." % (m.group(1).strip(), m.group(2).strip()))])
+        if cmd == "forget":
+            if mem.data["facts"].pop(arg.lower(), None) is None:
+                return self._say([(0.8, "Floyd doesn't know %s. Floyd can't forget it. Floyd is relieved." % arg)])
+            mem.save()
+            return self._say([(0.8, "Floyd forgot %s. Floyd forgets quickly. It was easy." % arg)])
+        if cmd == "help":
+            return self._say([
+                (0.8, "Floyd knows: !seen NICK, !tell NICK MESSAGE, !quote [N], !addquote TEXT, !karma [THING], someone++ / someone--, !8ball QUESTION, !fortune."),
+                (1.8, "Also !learn THING is WHAT, !forget THING, !THING, !time, !date, !coin, !roll [N], !count N, !remind 5 minutes to X. Say 'floyd: play' for Hider and Seeker.")])
+        if cmd == "roll":
+            return self._errand("roll d%s" % (arg or "6"), "roll d%s" % (arg or "6"))
+        if cmd in self.BANG_ERRANDS:
+            line = self.BANG_ERRANDS[cmd]
+            line = line % arg if "%s" in line else line
+            return self._errand(line, line.lower())
+        key = t[1:].strip().lower()              # a fact may be several words
+        fact = mem.data["facts"].get(key)
+        if fact is not None:
+            return self._say([(0.8, "%s is %s." % (key, fact))])
+        return None
+
+    def _fortune(self):
+        """fortune(6), when it is installed (a short one, at most 300 letters, on one
+        line); Floyd's own few otherwise."""
+        prog = self.fortune_prog() if callable(self.fortune_prog) else self.fortune_prog
+        text = ""
+        if prog:
+            try:
+                out = subprocess.run([prog, "-s"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                     timeout=2, universal_newlines=True).stdout
+                text = " ".join(out.split())[:300]
+            except (OSError, subprocess.SubprocessError, ValueError):
+                text = ""
+        if text:
+            return self._say([(1.0, "Floyd opened the fortune machine. It says: " + text)])
+        return self._say([(1.0, self.rng.choice(self.FORTUNES))])
+
     def start_game(self):
         if self.game:
             return self.reply("")
@@ -4008,7 +4243,9 @@ class FloydMind(object):
             (5.5, "/me holds very still. His antenna is sticking out."),
             (7.5, "Okay! Come find Floyd! Where do you think he is?")])
 
-    def reply(self, text, action=False):
+    def reply(self, text, action=False, who=None):
+        if who:
+            self.nick = who
         low = text.lower()
         if self.game == "hide":
             self.game = None
@@ -4034,7 +4271,13 @@ class FloydMind(object):
                 (1.0, "Hey! How did you find Floyd?! Floyd was hiding so good!"),
                 (2.5, "You win, {nick}! Floyd was right out in the open. Floyd always hides there. Floyd likes it.")])
         if not action:
-            plan = self.command(text)
+            plan = self.botcmd(text, self.nick)
+            if plan is None:
+                fact = self.memory.data["facts"].get(low.rstrip("? ").strip()) if low.endswith("?") else None
+                if fact is not None:
+                    plan = self._say([(0.8, "%s is %s." % (low.rstrip("? ").strip(), fact))])
+            if plan is None:
+                plan = self.command(text)
             if plan is not None:
                 return plan
         if re.search(r"\b(play|game|hide|seek|hider)\b", low) and not action:
@@ -4072,13 +4315,113 @@ class FloydAdapter(CommandMixin):
         self.nick = (o.get("nick") or "").strip() or _me()
         self.idle = self.idle_seconds(o.get("idle"))
         seed = (o.get("seed") or "").strip()
-        self.mind = FloydMind(random.Random(int(seed)) if seed.isdigit() else random.Random(), self.nick)
+        self.seed = int(seed) if seed.isdigit() else None
+        where = (o.get("memory") or "").strip()
+        if where.lower() == "none":
+            path = None
+        else:
+            path = os.path.expanduser(where) if where else os.path.join(
+                os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share"),
+                "tvchat", "floyd", account.id + ".json")
+        self.memory = FloydMemory(path)
+        self.patterns = [p.strip() for p in (o.get("attach") or "").split(",") if p.strip()]
+        self.tag = o["tag"] if "tag" in o else "[Floyd] "
+        self.minds = {}                  # conv id -> his wits there (attached elsewhere)
+        self.last_out = {}               # conv id -> when he last spoke there
+        self.heard_ids = deque(maxlen=200)
+        self.mind = self._new_mind(self.nick)
         self.phase = "down"
         self.gen = 0
         self._ids = 0
         self.nudges = 0
         self.idle_timer = None
         self.spoken = 0                  # things Floyd has said this session
+
+    def _new_mind(self, nick):
+        return FloydMind(random.Random(self.seed) if self.seed is not None else random.Random(),
+                         nick, clock=self.chat.loop.clock, memory=self.memory)
+
+    # -- attached to another account's conversation ------------------------
+    ATTACH_GAP = 2.0                     # seconds between his answers in one place
+    ATTACH_MAX_LINES = 5
+    MAX_AGE = 60                         # ignore lines older than this (replays)
+
+    def attached(self, conv):
+        return (conv.id in self.memory.data["attached"] or
+                any(fnmatch.fnmatchcase(conv.id, p) for p in self.patterns))
+
+    def attach(self, conv, on):
+        """/floyd on|off in another account's conversation.  The note to show."""
+        if conv.kind == "server":
+            raise UserError("Floyd can't listen in a server window - use a channel or a chat")
+        att = self.memory.data["attached"]
+        if on:
+            if self.phase != "up":
+                raise UserError("Floyd is switched off - connect the %s account first" % self.account.id)
+            if conv.id not in att:
+                att.append(conv.id)
+                self.memory.save()
+            return ("Floyd is listening here. He answers !commands and 'floyd: ...' as you "
+                    "(each line starts with %s). /floyd off sends him away." % (self.tag.strip() or "his name"))
+        if conv.id in att:
+            att.remove(conv.id)
+            self.memory.save()
+        if self.attached(conv):
+            return "Floyd is off here, but tvchat.conf attach= still lists this conversation"
+        return "Floyd has gone back to his own conversation."
+
+    def hear(self, conv, msg):
+        """Called for every message added to any conversation: if Floyd is
+        attached here, note it (!seen, !tell) and answer what is for him."""
+        if self.phase != "up" or conv.account is self.account or conv.kind == "server":
+            return
+        if "n" in msg.flags or not self.attached(conv):
+            return
+        if msg.id in self.heard_ids or self.chat.loop.clock() - msg.when > self.MAX_AGE:
+            return
+        self.heard_ids.append(msg.id)
+        text = msg.text.strip()
+        tag = self.tag.strip()
+        if not text or (tag and text.startswith(tag)):
+            return                       # blank, or Floyd's own line (or another Floyd's)
+        who = msg.sender.display or msg.sender.address or "someone"
+        mind = self.minds.get(conv.id)
+        if mind is None:
+            mind = self.minds[conv.id] = self._new_mind(who)
+        mind.nick = who
+        plan = mind.observe(who, text, conv.title)
+        m = re.match(r"^@?floyd\s*[:,]\s*(.*)$", text, re.I)
+        if "a" in msg.flags:
+            pass                         # an action is not addressed to him
+        elif m:
+            plan += mind.reply(m.group(1), who=who)
+        elif text.startswith("!") or mind.KARMA.match(text):
+            plan += mind.botcmd(text, who) or []
+        if not plan:
+            return
+        now = self.chat.loop.clock()
+        if now - self.last_out.get(conv.id, -1e9) < self.ATTACH_GAP:
+            return                       # a flood of triggers: let this one go
+        self.last_out[conv.id] = now
+        plan = plan[:self.ATTACH_MAX_LINES]
+        self._out(conv, plan)
+
+    def _out(self, conv, plan):
+        for delay, text, flags in plan:
+            self._later(delay, lambda t=text, f=flags: self._send_out(conv, t, f))
+
+    def _send_out(self, conv, text, flags):
+        """Say it in the other account's conversation, as the user, behind the tag."""
+        if flags == "a":
+            line = "/me " + text
+        elif self.tag:
+            line = self.tag + text
+        else:
+            line = "/" + text if text.startswith("/") else text    # "//x" is a literal "/x"
+        try:
+            self.chat.adapter(conv.account).send(conv, line)
+        except UserError as e:
+            _log.debug("floyd: cannot speak in %s: %s", conv.id, e)
 
     @classmethod
     def idle_seconds(cls, text):
@@ -4193,7 +4536,7 @@ class FloydAdapter(CommandMixin):
 
     def speak(self, conv, text):
         mid = self._heard(conv, text)
-        self._play(conv, self.mind.reply(text))
+        self._play(conv, self.mind.observe(self.nick, text, "Floyd") + self.mind.reply(text))
         return mid
 
     def c_me(self, conv, rest):
@@ -4408,6 +4751,20 @@ class Chat:
         if count:
             conv.unread += 1
             self.events.push("unread", conv.id, conv.unread)
+        for ad in list(self.adapters.values()):      # Floyd, where he is attached
+            if isinstance(ad, FloydAdapter):
+                try:
+                    ad.hear(conv, msg)
+                except Exception:
+                    _log.exception("floyd: hearing %s failed", conv.id)
+
+    def floyd(self):
+        """The Floyd account's adapter, or a UserError saying how to have one."""
+        self.check_config()
+        for a in self.accounts:
+            if a.protocol == "floyd":
+                return self.adapter(a)
+        raise UserError("no Floyd account - add [account:floyd] with protocol = floyd to tvchat.conf")
 
     def merge_history(self, conv, msgs):
         """Messages from the server's history into the ring, in time order,

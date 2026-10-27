@@ -2495,6 +2495,7 @@ class TestFloyd(Base):
             nick     = tester
             idle     = 60
             seed     = 7
+            memory   = none
             """)
         self.clk = FakeClock(1000.0)
         self.chat = cb.Chat(loop=cb.Loop(self.clk), clock=self.clk)
@@ -2657,6 +2658,210 @@ class TestFloyd(Base):
         self.assertEqual(self.acct.state, "disconnected")
         with self.assertRaises(cb.UserError):
             self.ad.send(self.conv, "hello")
+
+
+class TestFloydBot(TestFloyd):
+    """The old-school bot in him: !seen, !tell, karma, quotes, facts, !fortune."""
+
+    def test_seen_and_tell_and_karma(self):
+        self.say("!seen nobody")
+        self.assertTrue(any("hasn't seen nobody" in t for t in self.texts()))
+        self.say("!seen tester")
+        self.assertIn("Floyd can see you right now! Hi!", self.texts())
+        self.ad.mind.observe("bob", "hi all", "#chan")
+        self.say("!seen bob")
+        self.assertTrue(any(t.startswith("Floyd last saw bob") and '"hi all"' in t and "#chan" in t
+                            for t in self.texts()))
+        self.say("!tell tester buy milk")
+        self.say("anyone there?")
+        self.assertTrue(any("message for you from tester" in t and "buy milk" in t for t in self.texts()))
+        self.say("bob++")
+        self.say("bob++")
+        self.assertTrue(any("bob has 2 points now" in t for t in self.texts()))
+        self.say("tester++")
+        self.assertTrue(any("vote for yourself" in t for t in self.texts()))
+        self.say("!karma")
+        self.assertTrue(any(t.startswith("Floyd's best friends: bob (2)") for t in self.texts()))
+
+    def test_quotes_and_facts(self):
+        self.say("!quote")
+        self.assertTrue(any("no quotes" in t for t in self.texts()))
+        self.say("!addquote the bird is the word")
+        self.say("!quote 1")
+        self.assertIn("#1: the bird is the word", self.texts())
+        self.say("!learn the bird is a pigeon")
+        self.say("!the bird")
+        self.assertIn("the bird is a pigeon.", self.texts())
+        self.say("the bird?")
+        self.assertEqual(self.texts().count("the bird is a pigeon."), 2)
+        self.say("!forget the bird")
+        self.say("!the bird")
+        self.assertEqual(self.texts().count("the bird is a pigeon."), 2)
+
+    def test_bang_errands_and_help(self):
+        self.say("!roll 20")
+        self.assertTrue(any(t.startswith("It's a ") for t in self.texts()))
+        self.say("!help")
+        self.assertTrue(any(t.startswith("Floyd knows: !seen NICK") for t in self.texts()))
+
+    def test_fortune_uses_the_real_one_when_installed_else_his_own(self):
+        self.ad.mind.fortune_prog = None
+        n = len(self.conv.history)
+        self.say("!fortune")
+        self.assertTrue([t for t in self.texts(n) if t in cb.FloydMind.FORTUNES])
+        if os.name == "nt":
+            return
+        prog = self.tmp / "fortune"
+        prog.write_text("#!/bin/sh\necho 'A bird in the hand'\necho '  is a bird.'\n")
+        prog.chmod(0o755)
+        self.ad.mind.fortune_prog = str(prog)
+        n = len(self.conv.history)
+        self.say("tell me a fortune")
+        self.assertIn("Floyd opened the fortune machine. It says: A bird in the hand is a bird.",
+                      self.texts(n))
+        self.ad.mind.fortune_prog = str(self.tmp / "no-such-fortune")      # broken: his own
+        n = len(self.conv.history)
+        self.say("!fortune")
+        self.assertTrue([t for t in self.texts(n) if t in cb.FloydMind.FORTUNES])
+
+    def test_memory_survives_a_restart(self):
+        path = str(self.tmp / "floyd.json")
+        mem = cb.FloydMemory(path)
+        mind = cb.FloydMind(memory=mem, clock=self.clk)
+        mind.botcmd("!addquote kept", "bob")
+        mind.botcmd("bob++", "carol")
+        mind.observe("bob", "back soon", "#c")
+        again = cb.FloydMemory(path)
+        self.assertEqual(again.data["quotes"], ["kept"])
+        self.assertEqual(again.data["karma"], {"bob": 1})
+        self.assertIn("bob", again.data["seen"])
+        Path(path).write_text("{ not json")
+        self.assertEqual(cb.FloydMemory(path).data["quotes"], [])         # damaged: starts empty
+
+
+class TestFloydAttached(Base):
+    """Floyd listening in another account's conversation."""
+
+    class Other(cb.CommandMixin):
+        def __init__(self, chat, account):
+            self.chat, self.account = chat, account
+            self.said, self.notes = [], []
+
+        def need_up(self):
+            pass
+
+        def speak(self, conv, text):
+            self.said.append(text)
+            return "m"
+
+        def system(self, conv, text):
+            self.notes.append(text)
+
+        def status_lines(self):
+            return []
+
+    def setUp(self):
+        Base.setUp(self)
+        self.conf("""\
+            [account:floyd]
+            protocol = floyd
+            idle     = 0
+            seed     = 5
+            memory   = none
+
+            [account:net]
+            protocol = irc
+            host     = irc.example.org
+            """)
+        self.clk = FakeClock(1000.0)
+        self.chat = cb.Chat(loop=cb.Loop(self.clk), clock=self.clk)
+        self.net = self.chat.account("net")
+        self.other = self.chat.adapters["net"] = self.Other(self.chat, self.net)
+        self.conv = self.chat.ensure_conv(self.net, "#room", "channel")
+        self.chat.connect(self.chat.account("floyd"))
+        self.floyd = self.chat.floyd()
+
+    def hear(self, who, text, flags="", age=0):
+        msg = cb.Message("m%d" % len(self.conv.history), self.conv.id, self.clk.t - age,
+                         cb.Contact(who), text, flags)
+        self.chat.add_message(self.conv, msg)
+        for _ in range(40):
+            self.clk.t += 0.25
+            self.chat.loop.run_due()
+
+    def test_silent_until_attached(self):
+        self.hear("bob", "!help")
+        self.assertEqual(self.other.said, [])
+
+    def test_slash_floyd_attaches_and_detaches(self):
+        self.other.send(self.conv, "/floyd")
+        self.assertTrue(self.other.notes[-1].startswith("Floyd is listening here."))
+        self.assertIn(self.conv.id, self.floyd.memory.data["attached"])
+        self.other.send(self.conv, "/floyd status")
+        self.assertEqual(self.other.notes[-1], "Floyd is listening here")
+        self.other.send(self.conv, "/floyd off")
+        self.hear("bob", "!help")
+        self.assertEqual([s for s in self.other.said if s.startswith("[Floyd]")], [])
+        with self.assertRaises(cb.UserError):
+            self.other.send(self.conv, "/floyd maybe")
+
+    def test_answers_commands_and_address_tagged_and_ignores_chat(self):
+        self.other.send(self.conv, "/floyd on")
+        self.hear("bob", "just chatting about the weather")
+        self.assertEqual(self.other.said, [])
+        self.hear("bob", "!8ball will it work")
+        self.assertEqual(len(self.other.said), 1)
+        self.assertTrue(self.other.said[0].startswith("[Floyd] "))
+        self.hear("bob", "floyd: what time is it")
+        self.assertTrue(self.other.said[-1].startswith("[Floyd] Floyd looked at the big clock"))
+        self.hear("bob", "alice++")
+        self.assertIn("[Floyd] Floyd gave alice a point. alice has 1 point now.", self.other.said)
+
+    def test_seen_tell_work_across_people_and_nothing_is_said_to_the_wrong_one(self):
+        self.other.send(self.conv, "/floyd on")
+        self.hear("alice", "hello room")
+        self.hear("bob", "!tell alice the build is green")
+        self.hear("bob", "!seen alice")
+        self.assertTrue(any("Floyd last saw alice" in s and "hello room" in s for s in self.other.said))
+        n = len(self.other.said)
+        self.hear("carol", "morning")
+        self.assertEqual(len(self.other.said), n)
+        self.hear("alice", "back")
+        last = self.other.said[-1]
+        self.assertTrue(last.startswith("[Floyd] alice: Floyd has a message for you from bob ("), last)
+        self.assertTrue(last.endswith(" ago): the build is green"), last)
+
+    def test_does_not_answer_himself_old_lines_or_a_flood(self):
+        self.other.send(self.conv, "/floyd on")
+        self.hear("me", "[Floyd] !help")                  # his own tag: ignored
+        self.hear("bob", "!help", age=300)                # a replay
+        self.assertEqual(self.other.said, [])
+        self.hear("bob", "!8ball a")
+        self.floyd.last_out[self.conv.id] = self.clk.t    # just spoke
+        n = len(self.other.said)
+        self.hear("bob", "!8ball b")
+        self.assertEqual(len(self.other.said), n)
+
+    def test_a_quote_cannot_smuggle_a_command(self):
+        self.floyd.memory.data["quotes"].append("/kick everyone")
+        self.other.send(self.conv, "/floyd on")
+        self.hear("bob", "!quote 1")
+        self.assertEqual(self.other.said, ["[Floyd] #1: /kick everyone"])
+        floyd = self.floyd
+        floyd.tag = ""
+        floyd._send_out(self.conv, "/kick everyone", "")
+        self.assertEqual(self.other.said[-1], "/kick everyone")      # sent as "//kick", i.e. literal text
+
+    def test_config_attach_patterns_and_no_floyd_account(self):
+        self.floyd.patterns = ["net/#r*"]
+        self.assertTrue(self.floyd.attached(self.conv))
+        self.hear("bob", "!8ball x")
+        self.assertEqual(len(self.other.said), 1)
+        cb._CHAT = None
+        self.conf("[account:net]\nprotocol = irc\nhost = x\n")
+        chat = cb.Chat(loop=cb.Loop(self.clk), clock=self.clk)
+        with self.assertRaises(cb.UserError):
+            chat.floyd()
 
 
 class TestVersions(unittest.TestCase):

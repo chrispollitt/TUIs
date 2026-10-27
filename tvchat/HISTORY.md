@@ -8,7 +8,10 @@ any place that records it drifts), so tvchat jumps from 0.1.0 to 1.3.0 to meet t
 - **Floyd** (`protocol = floyd`): a robot after Infocom's Planetfall to talk to, offline. He
   chats in the third person, speaks up when left alone, plays Hider and Seeker, holds things
   out, and understands interactive-fiction verbs (`look`, `take`, `drop`, `go`, `give`) and
-  small errands (the time, a coin, dice, counting, reminders).
+  small errands (the time, a coin, dice, counting, reminders). He is an old-school bot too
+  (`!seen`, `!tell`, karma, quotes, learned facts, `!8ball`, `!fortune` through the real
+  fortune(6) when installed), remembering between sessions, and `/floyd` has him listen in any
+  IRC, talk or Delta Chat conversation, answering as you behind a `[Floyd]` tag.
 - **Typed /commands are one vocabulary** for IRC, talk and Delta Chat: `/help` (made from one
   table, per protocol), `/status`, `/me`, `/shrug`, `/join`, `/query`, `/msg`, `/leave`
   (`/part`, `/close`), `/invite`, `/names`, `/whois`, `/nick`, `/name`, `/topic`, `/away`,

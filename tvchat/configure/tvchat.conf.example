@@ -76,6 +76,13 @@ talk_view = classic
 #nick     = yourname
 # seconds of quiet before Floyd speaks up by himself (default 180, 0 = never)
 #idle     = 180
+# conversations he is attached to every time (comma-separated conversation ids,
+# ACCOUNT/target in lower case, * matches); /floyd on|off does it from the chat
+#attach   = libera/#tvmail-test
+# he speaks as you in those, behind this tag (default "[Floyd] ")
+#tag      = [Floyd]
+# what he remembers (seen, tells, karma, quotes, facts); "none" keeps nothing
+#memory   = ~/.local/share/tvchat/floyd/floyd.json
 
 [account:delta]
 protocol = deltachat

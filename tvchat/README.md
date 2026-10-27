@@ -58,6 +58,23 @@ parser understands `look`, `take`, `drop`, `inventory`, `go north`,
 `/play` starts Hider and Seeker, at which he is terrible. A plain line that
 is not a parser line, like "take care", is just chat.
 
+He is also an old-school channel bot, in his own voice: `!seen NICK`, `!tell NICK MESSAGE`
+(delivered the next time they speak), karma with `someone++` / `someone--` and `!karma`,
+`!quote` / `!addquote`, `!learn THING is WHAT` then `!THING` or `THING?`, `!8ball`, `!help`,
+and `!fortune`, which asks the real `fortune(6)` when it is installed and has a few of his own
+when it is not. What he remembers (seen, tells, karma, quotes, facts) is kept between sessions in
+`~/.local/share/tvchat/floyd/NAME.json` (`memory = PATH` moves it, `memory = none` keeps nothing).
+
+**Floyd in your other conversations.** In any IRC channel, talk call or Delta Chat chat, `/floyd`
+(or `/floyd on`) has him listen there; `/floyd off` sends him away, `/floyd status` says. The
+Floyd account must be connected. He then answers `!commands`, `nick++` and `floyd: ...` (the
+errands, the games, the parser) and notes who says what for `!seen` and `!tell`; the rest of the
+conversation he ignores. He speaks **as you**, so every line starts with `[Floyd] ` (`tag =` changes
+or empties it, `/me` actions are sent as they are), he leaves at least 2 seconds between answers,
+ignores lines older than a minute, and never answers a line that carries his own tag. `attach =
+libera/#tvmail-test, delta/*` in his account section lists conversations (by id, `*` matches) to
+attach him to every time.
+
 Messages that need no answer are **toasts** - a note at the bottom right that goes away by itself;
 Window > Notification history keeps them.
 A new message raises a toast when it lands in a conversation you are not looking at, or in the
