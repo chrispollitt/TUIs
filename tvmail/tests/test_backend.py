@@ -1830,13 +1830,22 @@ class TestVacation(Base):
     # -- the script text itself ------------------------------------------
     def test_script_without_dates_is_a_bare_vacation(self):
         s = be._vac_script("Away", 7, "", "", "Back soon.")
-        self.assertIn('require ["vacation"];', s)
+        self.assertIn('require ["vacation", "regex"];', s)
         self.assertNotIn("currentdate", s)
         self.assertIn('vacation :days 7 :subject "Away" text:\nBack soon.\n.\n;', s)
 
+    def test_script_skips_robots_lists_and_auto_mail(self):
+        s = be._vac_script("Away", 7, "", "", "Back soon.")
+        self.assertIn("if not anyof (", s)
+        for what in ("no[-_]?reply", "mailer-daemon", "list-id", "precedence", "auto-submitted"):
+            self.assertIn(what, s)
+        # dates and the robot guard are one allof
+        d = be._vac_script("Away", 3, "2026-12-24", "2026-12-31", "x")
+        self.assertIn("allof (not anyof (", d)
+
     def test_script_with_dates_tests_currentdate_inclusively(self):
         s = be._vac_script("Away", 3, "2026-12-24", "2026-12-31", "x")
-        self.assertIn('require ["vacation", "date", "relational"];', s)
+        self.assertIn('require ["vacation", "regex", "date", "relational"];', s)
         self.assertIn('currentdate :value "ge" "date" "2026-12-24"', s)
         self.assertIn('currentdate :value "le" "date" "2026-12-31"', s)
 

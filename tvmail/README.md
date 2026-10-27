@@ -271,7 +271,9 @@ before moving the matches to trash (or **Expunge** to delete them outright).
 subject, a message, optional first and last day, and how often the same sender
 gets a reply. It runs **on the mail server** as a Sieve `vacation` script (set
 over ManageSieve), so it keeps answering with tvmail closed, and each user has
-their own. The server needs managesieve enabled once —
+their own. Only people get the reply: no-reply and monitoring addresses
+(`noreply`, `postmaster`, `mailer-daemon`, ...), mailing lists, bulk mail and
+other auto-generated mail are skipped. The server needs managesieve enabled once —
 mail-setup's `configure-sieve.sh`, see [INSTALL.md](INSTALL.md) ("Out of
 office"). The dialog's **Addresses** line is the *NAT table*: a master that
 hides behind one public mailbox receives mail addressed to that public

@@ -1945,6 +1945,17 @@ def _sieve_open():
     return s, c.get("sieve", "script", fallback="tvmail-vacation").strip() or "tvmail-vacation"
 
 
+# Only a person gets the reply.  The server already declines a null sender, but
+# not a no-reply address or a monitoring robot, whose "unknown user" bounce
+# then lands in the postmaster's box.
+_VAC_HUMAN_ONLY = r'''not anyof (
+  address :localpart :regex "from" "(^|[-_.+])(no[-_]?reply|do[-_]?not[-_]?reply|mailer-daemon|postmaster|bounces?|notifications?|daemon|root|nobody|listserv|majordomo)([-_.+0-9]|$)",
+  exists ["list-id", "list-unsubscribe"],
+  header :contains "precedence" ["bulk", "list", "junk", "auto_reply"],
+  header :contains "x-auto-response-suppress" ["all", "oof", "autoreply"],
+  allof (exists "auto-submitted", not header :is "auto-submitted" "no"))'''
+
+
 def _vac_script(subject, days, start, end, message, addresses=()):
     """The vacation Sieve script.  The settings ride along as '# key: value'
     header comments so _vac_parse() can read them back for the dialog."""
@@ -1960,23 +1971,20 @@ def _vac_script(subject, days, start, end, message, addresses=()):
         out.append("# end: " + end)
     if addresses:
         out.append("# addresses: " + ", ".join(addresses))
-    need = ["vacation"]
-    tests = []
+    need = ["vacation", "regex"]
+    tests = [_VAC_HUMAN_ONLY]
     if start:
         tests.append('currentdate :value "ge" "date" "%s"' % start)
     if end:
         tests.append('currentdate :value "le" "date" "%s"' % end)
-    if tests:
+    if start or end:
         need += ["date", "relational"]
     out.append("require [%s];" % ", ".join('"%s"' % n for n in need))
     addr = (" :addresses [%s]" % ", ".join(_sieve_quote(x) for x in addresses)) if addresses else ""
     act = "vacation :days %d :subject %s%s text:\n%s\n.\n;" % (
         days, _sieve_quote(subject), addr, stuffed)
-    if tests:
-        cond = tests[0] if len(tests) == 1 else "allof (%s)" % ", ".join(tests)
-        out.append("if %s {\n%s\n}" % (cond, act))
-    else:
-        out.append(act)
+    cond = tests[0] if len(tests) == 1 else "allof (%s)" % ",\n  ".join(tests)
+    out.append("if %s {\n%s\n}" % (cond, act))
     return "\n".join(out) + "\n"
 
 
