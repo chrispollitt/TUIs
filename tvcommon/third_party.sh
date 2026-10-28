@@ -42,8 +42,15 @@ update=0
 command -v git >/dev/null 2>&1 || { echo "third_party.sh: git not found" >&2; exit 1; }
 mkdir -p "$tp"
 
+# Cygwin git and Git for Windows share these trees and disagree about the execute
+# bit on NTFS: with core.fileMode=true the tree shows dozens of "mode changes".
+# Ours are read-only copies, so fileMode off (the files keep the bits they were
+# checked out with).
+nomode() { git -C "$1" config core.fileMode false 2>/dev/null || true; }
+
 pull() {   # pull DIR - fast-forward an existing checkout
   echo ">> updating $1"
+  nomode "$1"
   git -C "$1" pull --ff-only --depth 1 || echo "third_party.sh: couldn't update $1 (local changes?)" >&2
 }
 
@@ -55,6 +62,7 @@ fetch_tvision() {
     echo ">> cloning $TVISION_REPO ..."
     rm -rf "$tv"
     git clone --depth 1 "$TVISION_REPO" "$tv" || return 1
+    nomode "$tv"
   fi
   patch_tvision "$tv"
 }
@@ -131,6 +139,7 @@ fetch_posix() {
     rm -rf "$d"
     git clone --depth 1 "$POSIX_REPO" "$d" || return 1
   fi
+  nomode "$d"
   if [ ! -f "$d/mail-setup/mail-setup.sh" ]; then
     echo "third_party.sh: $POSIX_REPO has no mail-setup/mail-setup.sh (not pushed yet?)" >&2
     rm -rf "$d"
