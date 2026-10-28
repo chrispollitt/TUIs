@@ -58,6 +58,16 @@ so one raised while a dialog is open still goes away on time. An app's own `idle
 tvcommon has no build of its own: build and test through an app (`./build.sh`,
 `./test.sh` in `tvmail/` or `tvchat/`). A change here should be tested in both.
 
+## Floyd's shared Python: `py/tvfloyd.py`
+
+Both Floyds (tvchat's bot, tvmail's assistant) share one stdlib-only module, `py/tvfloyd.py`: the
+**levels** (`off`, `minimal`, `helpful`, `chatty`, `clippy`), a calculator that parses arithmetic
+with `ast` and never evaluates anything else, unit and time-zone conversion, a per-person to-do
+list and notes (one small JSON file), and the "Floyd not clippy but ..." tips. It is pure: no
+sockets, no UI. Each backend finds it by path - beside itself, in `../../tvcommon/py` in the source
+tree, or in `../share/<app>` once installed (each app's CMake installs its own copy) - and falls
+back to levels without tools if it is missing. Tests: `tests/test_tvfloyd.py`.
+
 ## Over ssh from Windows Terminal
 
 Running tvmail or tvchat over ssh from inside Windows Terminal used to garble

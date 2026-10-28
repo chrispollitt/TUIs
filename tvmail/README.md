@@ -75,6 +75,29 @@ are remote clients.
   instead (`./configure.sh --role client`).
 - No credentials live anywhere in this project.
 
+## Floyd, the assistant
+
+**File > Floyd, the assistant... (F7)** opens a small transcript over an input line. Type to him;
+the work is done by `tvmail-backend floyd`, so he can do exactly what the menus can, and anything
+that deletes mail shows a count and waits for `yes`.
+
+| say | he does |
+| --- | --- |
+| `unread` | the inbox count and the newest unread subjects |
+| `triage` | the unread mail that looks like it is from people (not `noreply`, newsletters, receipts) |
+| `find mail from alice about invoice last week [in archive]` | searches a folder by sender, subject and date |
+| `archive` / `archive older than 30 days` | moves **read** inbox mail older than 90 days (or N) to the archive; unread is never touched; asks first |
+| `empty trash` | says how many, then deletes them for good on `yes` |
+| `unset ooo` (`ooo` for the state) | switches the out-of-office reply off |
+| `counts` | every folder's total and unread |
+| `calc 12*7`, `convert 5 km to mi`, `time in Tokyo`, `todo add X`, `note X` | small useful things; the to-dos and notes are kept between sessions |
+| `level [off\|minimal\|helpful\|chatty\|clippy]` | how much he does (`[floyd] level` in tvmail.conf sets the default) |
+
+At **clippy** he also volunteers, as a toast after a pull brings mail and in his window when it
+opens, what looks worth doing ("Floyd not clippy but your out-of-office reply is still on"); at the
+lower levels he says nothing unasked. His levels, calculator and conversions are shared with
+tvchat's Floyd (`../tvcommon/py/tvfloyd.py`).
+
 ## Notifications
 
 Messages that need no answer ("Message sent", "Saved to ...", errors) are **toasts** - a note at

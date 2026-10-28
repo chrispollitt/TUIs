@@ -2012,6 +2012,188 @@ class TestVacation(Base):
         self.assertEqual(self.sieve.active, "")
 
 
+class TestFloyd(Base):
+    """Floyd in tvmail: what he reads, finds, tidies - and asks before he deletes."""
+
+    @staticmethod
+    def _m(frm, subj, days_ago, seen):
+        date = email.utils.formatdate(time.time() - days_ago * 86400, localtime=True)
+        return ("From x Mon Sep  1 00:00:00 2026\nFrom: %s\nDate: %s\nSubject: %s\n%s\nbody\n\n"
+                % (frm, date, subj, "Status: RO\n" if seen else ""))
+
+    def setUp(self):
+        super().setUp()
+        self.spool.write_text(
+            self._m("Carol <carol@x.org>", "ancient unread", 200, False)      # file order = arrival
+            + self._m("Bob <bob@x.org>", "old note", 120, True)
+            + self._m("Cron <noreply@cpbee>", "cron output", 120, True)
+            + self._m("Shop <noreply@shop.example>", "Your order has shipped", 2, False)
+            + self._m("Alice <alice@x.org>", "lunch?", 1, False))
+        self.state = self.tmp / "state"
+        self.f = be.MailFloyd(be.build_parser(), str(self.state))
+        self.f.set_level("helpful")
+
+    def say(self, text):
+        return "\n".join(self.f.handle(text))
+
+    def count(self, mbox="spool"):
+        return len([r for r in self.rows(str(self.spool) if mbox == "spool" else mbox)])
+
+    def test_unread(self):
+        out = self.say("unread")
+        self.assertIn("Inbox: 3 unread of 5.", out)
+        self.assertIn("lunch?", out)
+        self.assertLess(out.index("lunch?"), out.index("ancient unread"))      # newest first
+
+    def test_triage_leaves_out_the_automatic(self):
+        out = self.say("triage")
+        self.assertIn("2 of 3 unread look like they are from people", out)
+        self.assertIn("lunch?", out)
+        self.assertIn("ancient unread", out)
+        self.assertNotIn("order has shipped", out)
+
+    def test_find(self):
+        self.assertIn("Found 1:", self.say("find mail from alice"))
+        self.assertIn("old note", self.say("find mail from bob about old"))
+        self.assertIn("ancient", self.say("find ancient"))
+        out = self.say("find mail from bob last week")
+        self.assertIn("Nothing found", out)
+        self.assertIn("lunch?", self.say("find lunch in the last 7 days"))
+        self.assertIn("Nothing found", self.say("find mail from alice in trash"))
+        self.assertIn("find what", self.say("find mail"))
+
+    def test_archive_asks_first_and_only_moves_read_mail(self):
+        out = self.say("archive")
+        self.assertIn("archive 2 read messages older than 90 days", out)
+        self.assertEqual(self.count(), 5)                           # nothing moved yet
+        out = self.say("yes")
+        self.assertIn("Archived 2 messages.", out)
+        self.assertEqual(self.count(), 3)
+        self.assertEqual(self.count("mbox"), 2)
+        self.assertIn("ancient unread", self.say("find ancient"))   # unread, so it stayed
+
+    def test_archive_with_a_number_of_days(self):
+        self.assertIn("older than 30 days", self.say("archive older than 30 days"))
+        self.assertIn("older than 14 days", self.say("archive old mail over 2 weeks"))
+
+    def test_no_and_anything_else_cancel(self):
+        self.say("archive")
+        self.assertIn("did nothing", self.say("no"))
+        self.assertEqual(self.count(), 5)
+        self.say("archive")
+        self.say("unread")                                          # something else: cancelled
+        self.assertNotIn("Archived", self.say("yes"))
+        self.assertEqual(self.count(), 5)
+
+    def test_a_yes_goes_stale(self):
+        now = [1000.0]
+        f = be.MailFloyd(be.build_parser(), None, clock=lambda: now[0])
+        f.set_level("helpful")
+        f.handle("archive")
+        now[0] += 400
+        self.assertNotIn("Archived", "\n".join(f.handle("yes")))
+        self.assertEqual(self.count(), 5)
+
+    def test_nothing_to_archive(self):
+        self.assertIn("Nothing read and older than 400 days", self.say("archive older than 400 days"))
+
+    def test_empty_trash_asks_first(self):
+        self.be("purge", "--from", "noreply", "--older-than", "30")   # one message into the trash
+        self.assertEqual(self.count("trash"), 1)
+        out = self.say("empty trash")
+        self.assertIn("holds 1 message", out)
+        self.assertIn("no undo", out)
+        self.assertEqual(self.count("trash"), 1)
+        self.assertIn("Emptied the trash: 1 message gone for good.", self.say("yes"))
+        self.assertEqual(self.count("trash"), 0)
+        self.assertIn("empty already", self.say("clean out the trash"))
+
+    def test_unset_ooo(self):
+        from unittest import mock
+        seen = []
+
+        def ok(*argv):
+            seen.append(argv)
+            return "state: on\nsubject: Away\n" if argv[1] == "status" else "off\n"
+        with mock.patch.object(self.f, "_ok", side_effect=ok):
+            self.assertIn("on (Away)", self.say("ooo"))
+            self.assertIn("Out of office is off", self.say("unset ooo"))
+        self.assertIn(("vacation", "off"), seen)
+
+        def ok_off(*argv):
+            return "state: off\n"
+        with mock.patch.object(self.f, "_ok", side_effect=ok_off):
+            self.assertIn("already off", self.say("turn off my out of office"))
+
+        def ok_none(*argv):
+            return "state: none\n"
+        with mock.patch.object(self.f, "_ok", side_effect=ok_none):
+            self.assertIn("No out-of-office", self.say("ooo"))
+
+    def test_a_backend_failure_is_said_not_raised(self):
+        from unittest import mock
+        with mock.patch.object(self.f, "_run", return_value=(2, "tvmail-backend: no server\n")):
+            self.assertIn("Floyd can't. tvmail-backend: no server", self.say("unread"))
+
+    def test_levels(self):
+        self.f.set_level("off")
+        self.assertEqual(self.f.handle("unread"), ["Floyd is off. Say \"level chatty\" to wake him."])
+        self.assertIn("Floyd is now at level minimal", self.say("level minimal"))
+        self.assertIn("Inbox: 3 unread", self.say("unread"))        # minimal still does the work
+        self.assertIn("doesn't know", self.say("what is 6*7"))      # but not plain words
+        self.say("level helpful")
+        self.assertIn("6*7 = 42", self.say("what is 6*7"))
+        self.assertNotIn("Gary", self.say("find mail from zed"))
+        self.say("level chatty")
+        self.assertIn("Gary", self.say("find mail from zed"))
+        self.assertIn("no level called loud", self.say("level loud"))
+
+    def test_the_level_is_kept(self):
+        self.say("level clippy")
+        again = be.MailFloyd(be.build_parser(), str(self.state))
+        self.assertEqual(again.level, "clippy")
+
+    def test_the_level_from_the_config_and_the_environment(self):
+        conf = self.tmp / "tvmail.conf"
+        conf.write_text("[floyd]\nlevel = minimal\n")
+        os.environ["TVMAIL_CONF"] = str(conf)
+        self.assertEqual(be.MailFloyd(be.build_parser(), None).level, "minimal")
+        os.environ["TVMAIL_FLOYD_LEVEL"] = "off"
+        try:
+            self.assertEqual(be.MailFloyd(be.build_parser(), None).level, "off")
+        finally:
+            del os.environ["TVMAIL_FLOYD_LEVEL"]
+
+    def test_tools_and_todos(self):
+        self.assertIn("12*7 = 84", self.say("calc 12*7"))
+        self.assertIn("5 km is 3.10686 mi", self.say("convert 5 km to mi"))
+        self.assertIn("Added as number 1.", self.say("todo add reply to Alice"))
+        self.assertIn("1. reply to Alice", self.say("todo"))
+        again = be.MailFloyd(be.build_parser(), str(self.state))     # it outlives the session
+        self.assertIn("1. reply to Alice", "\n".join(again.handle("todo")))
+        self.assertIn("Floyd can't.", self.say("calc 1/0"))
+
+    def test_tips_are_clippy_only_and_not_repeated(self):
+        self.assertEqual(self.f.tips(), [])                          # helpful: no tips
+        self.f.set_level("clippy")
+        tips = self.f.tips()
+        self.assertTrue(tips and all(t.startswith("Floyd not clippy but ") for t in tips))
+        self.assertIn("2 messages from real people", tips[0])
+        self.assertEqual(self.f.tips(), [])                          # not twice in half an hour
+        self.assertTrue(self.f.tips(force=True))                     # unless asked
+        self.assertTrue(self.say("tips"))
+
+    def test_the_verb(self):
+        p = self.be("floyd", "calc", "2+2")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.decode().strip(), "2+2 = 4")
+        p = self.be("floyd", "--status")
+        self.assertIn(b"\t", p.stdout)
+        self.assertEqual(self.be("floyd", "--tips").stdout, b"")      # level is not clippy
+        p = self.be("floyd", "unread")
+        self.assertIn(b"Inbox: 3 unread of 5.", p.stdout)
+
+
 class TestCheckConfig(unittest.TestCase):
     """tvmail-backend check-config: the in-app config editor's Verify."""
 

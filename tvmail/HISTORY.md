@@ -3,6 +3,16 @@
 What changed, release by release. (Why tvmail exists is in [WHY.md](WHY.md).)
 Releases are tagged `tvmail-vX.Y.Z`; `git log` has the rest.
 
+## Unreleased
+
+- **Floyd in tvmail** (File > Floyd..., F7; `tvmail-backend floyd`): an assistant that reads the
+  unread subjects, triages unread mail from real people, finds mail by sender, subject and date,
+  archives read inbox mail older than N days, empties the trash and switches the out-of-office
+  reply off - asking with a count before it deletes or moves anything - plus a calculator, unit
+  and time-zone conversion, and to-dos and notes that outlive the session. Levels `off`,
+  `minimal`, `helpful`, `chatty`, `clippy` (`[floyd] level`); at clippy he offers "Floyd not
+  clippy but ..." tips after a pull and when his window opens.
+
 ## 1.3.0 - October 2026
 
 tvmail and tvchat now share one version (`../VERSION`, set with `../version.sh`).

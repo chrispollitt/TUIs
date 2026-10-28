@@ -82,6 +82,8 @@ add_test(NAME install_roundtrip
 include(GNUInstallDirs)
 install(TARGETS tvchat RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(PROGRAMS backend/tvchat-backend DESTINATION ${CMAKE_INSTALL_BINDIR})
+# Floyd's levels and tools, shared with tvmail (the backend looks in ../share/tvchat)
+install(FILES ${TVCOMMON_DIR}/py/tvfloyd.py DESTINATION ${CMAKE_INSTALL_DATADIR}/tvchat)
 install(FILES man/tvchat.1 man/tvchat-backend.1
         DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
 install(FILES README.md INSTALL.md HISTORY.md LICENSE AUTHORS WARRANTY

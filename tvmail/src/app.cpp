@@ -22,6 +22,7 @@ TMenuBar *TVMailApp::initMenuBar(TRect r)
                             *new TMenuItem("P~u~rge...", cmPurgeMsgs, kbNoKey, hcNoContext) +
                             *new TMenuItem("Empty ~t~rash...", cmEmptyTrash, kbNoKey, hcNoContext) +
                             newLine() +
+                            *new TMenuItem("~F~loyd, the assistant...", cmFloyd, kbF7, hcNoContext, "F7") +
                             *new TMenuItem("Edit si~g~nature", cmEditSig, kbNoKey, hcNoContext) +
                             tvConfigItem() +
                             *new TMenuItem("Resume dead.~l~etter", cmResumeDead, kbNoKey, hcNoContext) +
@@ -948,7 +949,10 @@ void TVMailApp::pullFinished()
     unreadBefore = -1;
     lastUnread = now;
     if (fresh > 0) // spam was filed by the pull itself, so it is not counted
+    {
         notifyAlert(std::to_string(fresh) + " new message" + (fresh == 1 ? "" : "s") + " in the inbox");
+        floydTips(); // nothing unless Floyd is at the clippy level
+    }
     if (quiet && pullExit < 2)
         return; // the periodic pull says nothing when it found nothing
 
@@ -1085,6 +1089,13 @@ void TVMailApp::handleEvent(TEvent &e)
     case cmEmptyTrash:
         emptyTrash();
         break;
+    case cmFloyd:
+    {
+        TRect r = deskTop->getExtent();
+        r.grow(-6, -3);
+        deskTop->insert(newFloydWindow(r));
+        break;
+    }
     case cmAddrBook:
     {
         TRect r = deskTop->getExtent();

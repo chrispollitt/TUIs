@@ -54,6 +54,7 @@ const ushort cmFilterChanged = 2041; // broadcast: list view rebuilt (title refr
 const ushort cmChatWith = 2050;     // Message > Chat with sender (asks tvchat, if installed)
 const ushort cmChatInvite = 2051;   // Message > Open chat invite (hands a Delta Chat link to tvchat)
 const ushort cmOutOfOffice = 2042;  // File > Out of office... (Sieve vacation reply)
+const ushort cmFloyd = 2053;        // File > Floyd... (the assistant)
 
 // ------------------------------------------------------ tvmail-backend ---
 // backend.cpp
@@ -123,3 +124,5 @@ TWindow *newPartsWindow(const TRect &bounds, int idx,       // parts.cpp
                         const std::string &mbox, const char *title);
 TWindow *newSigWindow(const TRect &bounds);                 // signature.cpp
 TWindow *newHelpWindow(const TRect &bounds);                // help.cpp
+TWindow *newFloydWindow(const TRect &bounds);               // floydwin.cpp
+void floydTips();                                           // floydwin.cpp: toasts, clippy level only

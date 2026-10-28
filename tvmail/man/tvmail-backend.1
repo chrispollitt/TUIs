@@ -590,6 +590,25 @@ then
 if
 .B SENDMAIL
 is unset.
+.SH FLOYD
+.B floyd
+[\fB\-\-tips\fR | \fB\-\-status\fR] [\fITEXT\fR...] says TEXT to Floyd, the assistant behind File > Floyd..., and prints
+his answer.  He drives the other verbs (counts, list, purge, empty-trash, vacation), so he can do what the
+menus can: "unread", "triage" (unread mail that looks like it is from people), "find mail from NAME about
+WORDS [last week|N days] [in archive|trash|sent]", "counts", "archive [older than N days]" (read inbox
+messages to the archive; never unread), "empty trash", "unset ooo" / "ooo", "calc EXPR", "convert 5 km to mi",
+"time in CITY", "todo [add X|done N]", "note X", "tips" and "level [NAME]".  Archiving and emptying the trash
+print a count and wait for "yes" (kept by the persistent
+.B serve
+process, for five minutes); anything else cancels.
+.B \-\-tips
+prints the "Floyd not clippy but ..." lines about the mailbox, only at the clippy level, each at most once in
+half an hour;
+.B \-\-status
+prints the level and what it means.  The level comes from $TVMAIL_FLOYD_LEVEL, then
+~/.local/share/tvmail/floyd/state.json (what "level NAME" saved), then \fB[floyd] level\fR in tvmail.conf:
+off, minimal, helpful, chatty (the default) or clippy.  The tools and levels are tvfloyd.py, found beside the
+backend, in ../../tvcommon/py or in ../share/tvmail; without it he has levels and the mail verbs only.
 .SH "SEE ALSO"
 .BR tvmail (1),
 .BR mail (1),

@@ -74,6 +74,8 @@ talk_view = classic
 #[account:floyd]
 #protocol = floyd
 #local    = yes
+# off | minimal | helpful | chatty | clippy - how much he does (see floyd.conf.example)
+#level    = chatty
 #display  = Floyd
 # what Floyd calls you (default: your login name)
 #nick     = yourname

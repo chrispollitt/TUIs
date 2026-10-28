@@ -3100,6 +3100,184 @@ class TestFloydDaemon(Base):
             cb.cmd_floyd_daemon(argparse.Namespace(conf=None))
 
 
+class TestFloydLevels(TestFloydDaemon):
+    """How much he does: off, minimal, helpful, chatty, clippy - and the tools."""
+
+    def at(self, level):
+        self.start()
+        self.floyd.level = level
+        self.said = self.other.said
+
+    def test_off_hears_nothing_but_a_level_change(self):
+        self.at("off")
+        self.hear("bob", "floyd: hello")
+        self.hear("bob", "!8ball ok")
+        self.hear("bob", "!seen alice")
+        self.assertEqual(self.said, [])
+        self.assertEqual(self.floyd.memory.data["seen"], {})       # not even noted
+        self.hear("bob", "!level")
+        self.assertTrue(any("level off" in t for t in self.said))
+
+    def test_minimal_does_commands_and_nothing_else(self):
+        self.at("minimal")
+        self.hear("bob", "just chatting")
+        self.hear("bob", "alice++")                                # no karma
+        self.assertEqual(self.said, [])
+        self.assertIn("bob", self.floyd.memory.data["seen"])       # but he still notes it, silently
+        self.hear("bob", "!calc 12*7")
+        self.assertIn("12*7 = 84", self.said)
+        self.hear("bob", "floyd: hello there")                     # no banter
+        self.assertTrue(any("only does commands" in t for t in self.said))
+        self.said.clear()
+        self.hear("bob", "floyd: what is 6*7")                     # plain words: helpful up
+        self.assertFalse(any("42" in t for t in self.said))
+
+    def test_helpful_adds_plain_words_karma_and_tells(self):
+        self.at("helpful")
+        self.hear("bob", "floyd: what is 6*7?")
+        self.assertIn("6*7 = 42", self.said)
+        self.hear("bob", "floyd: how many feet in 3 m")
+        self.assertTrue(any("3 m is 9.84252 feet" in t for t in self.said))
+        self.hear("bob", "alice++")
+        self.assertTrue(any("alice" in t and "point" in t for t in self.said))
+        self.said.clear()
+        self.hear("bob", "floyd: tell me a story")                 # chatter is chatty's
+        self.assertFalse(any("Floyd is Floyd" in t for t in self.said))
+
+    def test_chatty_talks_back(self):
+        self.at("chatty")
+        self.hear("bob", "floyd: hello")
+        self.assertEqual(len(self.said), 1)
+        self.assertNotIn("only does commands", self.said[0])
+
+    def test_clippy_butts_in_once_and_can_be_shooed(self):
+        self.at("clippy")
+        self.hear("bob", "I really need to buy milk later")
+        self.assertEqual(len(self.said), 1)
+        self.assertTrue(self.said[0].startswith("Floyd not clippy but "))
+        self.hear("bob", "and don't forget the bread")           # inside the gap: silent
+        self.assertEqual(len(self.said), 1)
+        self.hear("bob", "chat chat chat")
+        self.assertEqual(len(self.said), 1)
+
+    def test_clippy_says_nothing_to_nothing_and_shoo_mutes(self):
+        self.at("clippy")
+        self.hear("bob", "nice weather")
+        self.assertEqual(self.said, [])
+        self.hear("bob", "floyd: shoo")
+        self.assertTrue(any("keep his tips" in t for t in self.said))
+        self.said.clear()
+        self.clk.t += 400                                          # past the gap, inside the hour
+        self.hear("bob", "I need to buy milk")
+        self.assertEqual(self.said, [])
+        self.clk.t += 4000
+        self.hear("bob", "I need to buy milk")
+        self.assertEqual(len(self.said), 1)
+
+    def test_lower_levels_give_no_tips(self):
+        self.at("chatty")
+        self.hear("bob", "I need to buy milk")
+        self.assertEqual(self.said, [])
+
+    def test_only_an_admin_sets_the_level_and_it_is_per_conversation(self):
+        self.at("chatty")
+        self.hear("mallory", "!level off", account="mallory")
+        self.assertEqual(self.floyd.level_of(self.conv), "chatty")
+        self.assertTrue(any("Only Floyd's admins" in t for t in self.said))
+        self.hear("chris", "!level minimal", account="chris")
+        self.assertEqual(self.floyd.level_of(self.conv), "minimal")
+        self.assertEqual(self.floyd.level_of(self.dm), "chatty")   # only here
+        self.hear("chris", "!level nonsense", account="chris")
+        self.assertTrue(any("no level called" in t for t in self.said))
+        self.hear("chris", "!level default", account="chris")
+        self.assertEqual(self.floyd.level_of(self.conv), "chatty")
+
+    def test_the_level_is_remembered(self):
+        self.at("chatty")
+        self.hear("chris", "!level helpful", account="chris")
+        self.assertEqual(self.floyd.memory.data["levels"], {self.conv.id: "helpful"})
+
+    def test_the_configured_level_is_the_default(self):
+        self.conf((self.CONF % "no").replace("claude_lines = 4", "claude_lines = 4\n        level = Minimal"))
+        chat = cb.Chat(loop=cb.Loop(FakeClock()))
+        self.assertEqual(cb.FloydAdapter(chat, chat.account("floyd")).level, "minimal")
+        bad = self.conf("[account:f]\nprotocol = floyd\nlevel = loud\n")
+        errors, _, _ = cb.check_config(str(bad))
+        self.assertIn("level=", errors[0])
+
+    def test_no_idle_chatter_below_chatty(self):
+        self.at("helpful")
+        self.floyd.idle = 30
+        self.floyd._arm()
+        self.assertIsNone(self.floyd.idle_timer)
+
+    # -- the tools
+    def test_tools_and_their_errors(self):
+        self.at("helpful")
+        self.hear("bob", "!convert 70 f to c")
+        self.hear("bob", "!convert 5 km to kg")
+        self.hear("bob", "!calc 1/0")
+        self.hear("bob", "!calc __import__('os')")
+        said = " | ".join(self.said)
+        self.assertIn("70 f is 21.1111 c", said)
+        self.assertIn("Floyd can't turn length into mass", said)
+        self.assertEqual(said.count("Floyd can't."), 3)
+
+    def test_todos_are_per_person(self):
+        self.at("helpful")
+        self.hear("bob", "!todo add buy milk", account="bob")
+        self.hear("eve", "!todo", account="eve")
+        self.hear("bob", "!todo", account="bob")
+        self.hear("bob", "!todo done 1", account="bob")
+        self.hear("bob", "!note the code is 1234", account="bob")
+        self.hear("bob", "!notes", account="bob")
+        said = " | ".join(self.said)
+        self.assertIn("Added as number 1.", said)
+        self.assertIn("Nothing to do.", said)                      # eve has her own list
+        self.assertIn("1. buy milk", said)
+        self.assertIn("Done: buy milk.", said)
+        self.assertIn("1. the code is 1234", said)
+
+    def test_todos_survive_in_a_file(self):
+        self.conf((self.CONF % "no").replace("memory   = none", "memory   = %s" % (self.tmp / "f" / "floyd.json")))
+        self.clk = FakeClock(1000.0)
+        self.chat = cb.Chat(loop=cb.Loop(self.clk), clock=self.clk)
+        ad = cb.FloydAdapter(self.chat, self.chat.account("floyd"))
+        ad._notes_for(cb.Contact("bob", account="Bob"), "bob").todo("add keep this")
+        again = cb.FloydAdapter(self.chat, self.chat.account("floyd"))
+        self.assertIn("keep this", again._notes_for(cb.Contact("bob", account="bob"), "bob").todo(""))
+
+    def test_catchup(self):
+        self.at("helpful")
+        self.hear("bob", "me earlier")                              # his last words
+        self.hear("alice", "bob are you there?")
+        self.hear("carol", "see https://example.org/x")
+        self.hear("alice", "lunch anyone?")
+        self.said.clear()
+        self.hear("bob", "!catchup")
+        said = " | ".join(self.said)
+        self.assertIn("3 messages from alice (2), carol (1)", said)
+        self.assertIn("Mentioning you: <alice> bob are you there?", said)
+        self.assertIn("Questions:", said)
+        self.assertIn("1 link went by.", said)
+        self.said.clear()
+        self.hear("alice", "back again")
+        self.hear("bob", "floyd: catch me up")                      # in plain words, too
+        self.assertTrue(any("Since you last spoke" in t for t in self.said))
+
+    def test_catchup_with_nothing_to_say(self):
+        self.at("helpful")
+        self.hear("bob", "!catchup")
+        self.assertTrue(any("Nothing happened" in t for t in self.said))
+
+    def test_tools_in_a_private_message_need_no_prefix(self):
+        self.at("helpful")
+        self.hear("bob", "calc 2+2", conv=self.dm)
+        self.hear("bob", "todo add x", conv=self.dm, account="bob")
+        self.assertIn("2+2 = 4", self.said)
+        self.assertIn("Added as number 1.", self.said)
+
+
 class TestFloydDaemonProcess(IrcBase):
     """`floyd-daemon` as a real process, against a fake IRC server."""
 

@@ -101,6 +101,39 @@ __version__ = "1.3.0"
 # sends to $TVCHAT_BACKEND_LOG or /dev/null).
 _log = logging.getLogger("tvchat-backend")
 
+
+def _load_tvfloyd():
+    """tvcommon's tvfloyd.py - Floyd's levels and useful tools, shared with tvmail -
+    from beside this file, the source tree or the install; a do-nothing stand-in
+    when it is nowhere (Floyd then has levels but no tools)."""
+    import importlib.util
+    here = os.path.dirname(os.path.realpath(__file__))
+    for d in (here, os.path.join(here, "..", "..", "tvcommon", "py"),
+              os.path.join(here, "..", "share", "tvchat"),
+              "/usr/local/share/tvchat", "/usr/share/tvchat"):
+        path = os.path.join(d, "tvfloyd.py")
+        if os.path.isfile(path):
+            try:
+                spec = importlib.util.spec_from_file_location("tvfloyd", path)
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                return mod
+            except Exception:
+                _log.debug("cannot load %s", path, exc_info=True)
+    import types
+    levels = ("off", "minimal", "helpful", "chatty", "clippy")
+    stub = types.SimpleNamespace(
+        LEVELS=levels, DEFAULT_LEVEL="chatty", CalcError=ValueError,
+        LEVEL_BLURB=dict((l, l) for l in levels),
+        parse_level=lambda t, default=None: (t or "").strip().lower() if (t or "").strip().lower() in levels else default,
+        at_least=lambda a, b: levels.index(a) >= levels.index(b),
+        run_tool=lambda *a, **k: None, natural=lambda *a, **k: None,
+        clippy_chat=lambda t: None, Notes=lambda path=None: None)
+    return stub
+
+
+tvf = _load_tvfloyd()
+
 PROTOCOLS = ("irc", "deltachat", "talk", "floyd")
 TALK_VIEWS = ("classic", "irc")
 STATES = ("disconnected", "connecting", "connected", "error")
@@ -3720,7 +3753,7 @@ class FloydMemory(object):
     def __init__(self, path=None):
         self.path = path
         self.data = {"seen": {}, "tells": [], "karma": {}, "quotes": [], "facts": {},
-                     "attached": []}
+                     "attached": [], "levels": {}}
         if path:
             try:
                 with open(path, encoding="utf-8") as fh:
@@ -4207,7 +4240,8 @@ class FloydMind(object):
         if cmd == "help":
             return self._say([
                 (0.8, "Floyd knows: !seen NICK, !tell NICK MESSAGE, !quote [N], !addquote TEXT, !karma [THING], someone++ / someone--, !8ball QUESTION, !fortune."),
-                (1.8, "Also !learn THING is WHAT, !forget THING, !THING, !time, !date, !coin, !roll [N], !count N, !remind 5 minutes to X. Say 'floyd: play' for Hider and Seeker.")])
+                (1.8, "Also !learn THING is WHAT, !forget THING, !THING, !time, !date, !coin, !roll [N], !count N, !remind 5 minutes to X. Say 'floyd: play' for Hider and Seeker."),
+                (2.8, "Useful: !calc 12*7, !convert 5 km to mi, !time in Tokyo, !todo [add X|done N], !note X / !notes, !catchup, !level [off|minimal|helpful|chatty|clippy].")])
         if cmd == "roll":
             return self._errand("roll d%s" % (arg or "6"), "roll d%s" % (arg or "6"))
         if cmd in self.BANG_ERRANDS:
@@ -4352,6 +4386,12 @@ class FloydAdapter(CommandMixin):
         self.claude_timeout = self._number(o.get("claude_timeout"), 180)
         self.claude_lines = int(self._number(o.get("claude_lines"), 10))
         self.claude_busy = False
+        # how much he does: off, minimal, helpful, chatty, clippy (tvfloyd.py); !level
+        # changes it per conversation
+        self.level = tvf.parse_level(o.get("level"), tvf.DEFAULT_LEVEL)
+        self.clip_gap = self._number(o.get("clippy_gap"), 300)    # seconds between tips in one place
+        self.clip_last, self.clip_mute = {}, {}
+        self.notes = {}                  # person -> their to-dos and notes
         self.minds = {}                  # conv id -> his wits there (attached elsewhere)
         self.last_out = {}               # conv id -> when he last spoke there
         self.heard_ids = deque(maxlen=200)
@@ -4417,32 +4457,184 @@ class FloydAdapter(CommandMixin):
         if mind is None:
             mind = self.minds[conv.id] = self._new_mind(who)
         mind.nick = who
-        plan = mind.observe(who, text, conv.title)
+        now = self.chat.loop.clock()
+        lvl = self.level_of(conv)
         m = re.match(r"^@?floyd\s*[:,]\s*(.*)$", text, re.I)
         # on the server, a private message is always meant for him
         to_him = bool(m) or (self.chat.daemon and conv.kind == "direct")
         body = m.group(1) if m else text
-        c = None if "a" in msg.flags else self.CLAUDE_RX.match(body)
-        order = bool(c) and (to_him or body.startswith("!"))
-        if order:
-            plan += self._order(conv, msg.sender, who, c.group(1))
-        elif body.strip().lower() in ("!whoami", "whoami") and (to_him or body.startswith("!")):
-            plan += mind._say([(0.8, self._whoami(msg.sender, who))])
-        elif "a" in msg.flags:
-            pass                         # an action is not addressed to him
-        elif to_him:
-            plan += mind.reply(body, who=who)
-        elif text.startswith("!") or mind.KARMA.match(text):
-            plan += mind.botcmd(text, who) or []
+        bang = body.startswith("!")
+        direct = (to_him or bang) and "a" not in msg.flags       # said to him, not about him
+        low = body.strip().lower()
+        plan, order = [], False
+        lm = self.LEVEL_RX.match(body) if direct else None
+        if lm:                           # heard at every level, off included
+            plan = self._level_cmd(conv, mind, msg, who, lm.group(1))
+        elif lvl == "off":
+            return
+        else:
+            if tvf.at_least(lvl, "helpful"):
+                plan = mind.observe(who, text, conv.title)       # also hands over his !tells
+            elif text.strip():
+                self.memory.seen_set(who.lower(), now, conv.title, text[:200])
+            c = self.CLAUDE_RX.match(body) if direct else None
+            order = bool(c)
+            if order:
+                plan += self._order(conv, msg.sender, who, c.group(1))
+            elif direct and low in ("!whoami", "whoami"):
+                plan += mind._say([(0.8, self._whoami(msg.sender, who))])
+            elif direct and lvl == "clippy" and self.SHOO_RX.match(low):
+                self.clip_mute[conv.id] = now + 3600
+                plan += mind._say([(0.8, "Okay. Floyd will keep his tips to himself for an hour. Floyd has a lot of tips.")])
+            else:
+                got = self._tool(conv, mind, msg, who, body, bang, lvl) if direct else None
+                if got is not None:
+                    plan += got
+                elif "a" in msg.flags:
+                    pass                 # an action is not addressed to him
+                elif bang:
+                    plan += mind.botcmd(body, who) or []
+                elif to_him:
+                    plan += self._talk(mind, body, who, lvl)
+                elif tvf.at_least(lvl, "helpful") and mind.KARMA.match(text):
+                    plan += mind.botcmd(text, who) or []
+            if not plan and lvl == "clippy" and not direct and "a" not in msg.flags:
+                tip = self._clippy(conv, text, now)
+                if tip:
+                    plan = mind._say([(1.5, tip)])
         if not plan:
             return
-        now = self.chat.loop.clock()
         if now - self.last_out.get(conv.id, -1e9) < self.ATTACH_GAP and not (
                 order and self.is_admin(msg.sender)):
             return                       # a flood of triggers: let this one go
         self.last_out[conv.id] = now
         plan = plan[:self.ATTACH_MAX_LINES]
         self._out(conv, plan)
+
+    # -- levels, the useful tools, and tips -----------------------------------
+    LEVEL_RX = re.compile(r"^!?\s*level(?:\s+(\S+))?\s*$", re.I)
+    SHOO_RX = re.compile(r"^(?:shoo|no tips|stop (?:the )?tips|be quiet|not now)\W*$")
+    CATCHUP_RX = re.compile(r"\b(?:catch me up|what did i miss|what have i missed|catch ?up)\b", re.I)
+    TOOL_VERBS = frozenset(("calc", "calculate", "compute", "math", "convert", "conv", "units",
+                            "tz", "time", "clock", "todo", "note", "notes"))
+
+    def level_of(self, conv):
+        return tvf.parse_level(self.memory.data["levels"].get(conv.id), None) or self.level
+
+    def _level_cmd(self, conv, mind, msg, who, arg):
+        """!level [NAME|default]: say, or (admins; in a session of your own, you) set."""
+        cur = self.level_of(conv)
+        if not arg:
+            return mind._say([
+                (0.8, "Floyd is at level %s here. %s" % (cur, tvf.LEVEL_BLURB[cur])),
+                (1.6, "The levels are %s. Say !level NAME to change it." % ", ".join(tvf.LEVELS))])
+        reset = arg.lower() == "default"
+        new = self.level if reset else tvf.parse_level(arg, None)
+        if new is None:
+            return mind._say([(0.8, "Floyd has no level called %s. He has %s." % (arg, ", ".join(tvf.LEVELS)))])
+        if not (self.is_admin(msg.sender) or (not self.chat.daemon and "s" in msg.flags)):
+            return mind._say([(0.8, "Only Floyd's admins can change his level, %s. It is %s here." % (who, cur))])
+        lv = self.memory.data["levels"]
+        if reset:
+            lv.pop(conv.id, None)
+        else:
+            lv[conv.id] = new
+        self.memory.save()
+        _log.info("floyd: level of %s is now %s (by %s)", conv.id, new, who)
+        wake = "" if new != "off" else " Say !level NAME to wake him."
+        return mind._say([(0.8, "Floyd is now at level %s. %s%s" % (new, tvf.LEVEL_BLURB[new], wake))])
+
+    def _talk(self, mind, body, who, lvl):
+        """Something said to him that is not a !command or a tool."""
+        if tvf.at_least(lvl, "chatty"):
+            return mind.reply(body, who=who)
+        plan = mind.command(body)         # the errands, the parser
+        return plan or mind._say([(0.8, "Floyd only does commands at level %s. Try !help." % lvl)])
+
+    def _notes_for(self, sender, who):
+        key = re.sub(r"[^a-z0-9_.-]", "_",
+                     (getattr(sender, "account", None) or who or "x").lower())[:40]
+        n = self.notes.get(key)
+        if n is None:
+            base = self.memory.path
+            if len(self.notes) > 100:
+                self.notes.clear()
+            n = self.notes[key] = tvf.Notes(
+                os.path.join(os.path.dirname(base), "notes-%s.json" % key) if base else None)
+        return n
+
+    def _tool(self, conv, mind, msg, who, body, bang, lvl):
+        """!calc, !convert, !time in X, !todo, !note, !catchup - and, from helpful up,
+        the same in plain words.  A plan, or None when it is none of those."""
+        t = (body[1:] if bang else body).strip()
+        verb, _, rest = t.partition(" ")
+        verb = verb.lower()
+        now = self.chat.loop.clock()
+        text = None
+        try:
+            if verb == "catchup" or (not bang and self.CATCHUP_RX.search(t)
+                                     and tvf.at_least(lvl, "helpful")):
+                lines = self._catchup(conv, msg, who, now)
+                return mind._say([(0.8 + 0.8 * i, ln) for i, ln in enumerate(lines)])
+            if verb in self.TOOL_VERBS and (bang or tvf.at_least(lvl, "helpful")) \
+                    and not (verb in ("time", "clock") and not rest.strip()):
+                text = tvf.run_tool(verb, rest, self._notes_for(msg.sender, who), now)
+            if text is None and not bang and tvf.at_least(lvl, "helpful"):
+                text = tvf.natural(t, self._notes_for(msg.sender, who), now)
+        except tvf.CalcError as e:
+            text = "Floyd can't. %s" % e
+        if text is None:
+            return None
+        return mind._say([(0.8 + 0.6 * i, ln) for i, ln in enumerate(text.split("\n")[:5])])
+
+    def _catchup(self, conv, msg, who, now):
+        """What was said since the asker last spoke here: who, mentions, questions."""
+        daemon = self.chat.daemon
+
+        def mine(m):
+            return ((m.sender.display or m.sender.address or "").lower() == who.lower()
+                    or (not daemon and "s" in m.flags))
+        hist = list(conv.history)
+        cut = 0
+        for i in range(len(hist) - 1, -1, -1):
+            if hist[i] is not msg and mine(hist[i]):
+                cut = i + 1
+                break
+        seg = [m for m in hist[cut:] if m is not msg and "n" not in m.flags
+               and not (daemon and "s" in m.flags) and m.sender.address][-300:]
+        if not seg:
+            return ["Nothing happened while you were away. Floyd watched. Floyd saw nothing."]
+        counts = {}
+        for m in seg:
+            n = m.sender.display or m.sender.address
+            counts[n] = counts.get(n, 0) + 1
+        top = sorted(counts.items(), key=lambda kv: -kv[1])[:3]
+        lines = ["Since you last spoke (%s ago): %d message%s from %s."
+                 % (_dur(now - seg[0].when), len(seg), "" if len(seg) == 1 else "s",
+                    ", ".join("%s (%d)" % kv for kv in top))]
+        word = re.compile(r"\b%s\b" % re.escape(who), re.I)
+        hits = ["<%s> %s" % (m.sender.display or m.sender.address, m.text[:90])
+                for m in seg if word.search(m.text)][-3:]
+        if hits:
+            lines.append("Mentioning you: " + " | ".join(hits))
+        qs = ["<%s> %s" % (m.sender.display or m.sender.address, m.text[:90])
+              for m in seg if m.text.rstrip().endswith("?")][-2:]
+        if qs:
+            lines.append("Questions: " + " | ".join(qs))
+        links = sum(len(re.findall(r"https?://", m.text)) for m in seg)
+        if links:
+            lines.append("%d link%s went by." % (links, "" if links == 1 else "s"))
+        return lines
+
+    def _clippy(self, conv, text, now):
+        """An unprompted tip - 'Floyd not clippy but ...' - at most one per clippy_gap
+        seconds in a place, and none for an hour after 'shoo'."""
+        if now < self.clip_mute.get(conv.id, 0) or now - self.clip_last.get(conv.id, -1e9) < self.clip_gap:
+            return None
+        tip = tvf.clippy_chat(text)
+        if tip:
+            self.clip_last[conv.id] = now
+        return tip
 
     def _out(self, conv, plan):
         for delay, text, flags in plan:
@@ -4710,7 +4902,7 @@ class FloydAdapter(CommandMixin):
     def _arm(self):
         self.loop.cancel(self.idle_timer)
         self.idle_timer = None
-        if self.idle > 0 and self.phase == "up":
+        if self.idle > 0 and self.phase == "up" and tvf.at_least(self.level, "chatty"):
             self.idle_timer = self._later(self.idle, self._wander)
 
     def _wander(self):
@@ -4727,6 +4919,7 @@ class FloydAdapter(CommandMixin):
         if self.phase == "up":
             lines.append("Floyd calls you %s; he has said %d thing%s so far"
                          % (self.nick, self.spoken, "" if self.spoken == 1 else "s"))
+            lines.append("level %s: %s" % (self.level, tvf.LEVEL_BLURB[self.level]))
             lines.append("on his own he speaks up after %s of quiet" %
                          ("%d seconds" % self.idle if self.idle else "- never (idle=0)"))
             if self.mind.game:
@@ -4783,6 +4976,8 @@ def check_config(path):
                 errors.append("[account:%s] %s" % (i, e))
             if (o.get("seed") or "").strip() and not (o.get("seed") or "").strip().isdigit():
                 errors.append("[account:%s] seed= must be a whole number" % i)
+            if (o.get("level") or "").strip() and tvf.parse_level(o.get("level")) is None:
+                errors.append("[account:%s] level= must be one of %s" % (i, ", ".join(tvf.LEVELS)))
         elif a.protocol == "deltachat":
             addr = (o.get("addr") or "").strip()
             if not DeltaChatAdapter.ADDRESS.match(addr):

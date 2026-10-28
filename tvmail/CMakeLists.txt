@@ -25,7 +25,7 @@ include("${TVCOMMON_DIR}/tvcommon.cmake")
 add_executable(tvmail
     src/main.cpp src/app.cpp src/mailwin.cpp src/compose.cpp
     src/addrbook.cpp src/parts.cpp src/signature.cpp src/help.cpp
-    src/dialogs.cpp src/backend.cpp
+    src/dialogs.cpp src/backend.cpp src/floydwin.cpp
     ${TVCOMMON_SOURCES})
 tvcommon_setup(tvmail)
 target_compile_definitions(tvmail PRIVATE TVMAIL_VERSION="${PROJECT_VERSION}")
@@ -94,6 +94,8 @@ endif()
 include(GNUInstallDirs)
 install(TARGETS tvmail RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(PROGRAMS backend/tvmail-backend DESTINATION ${CMAKE_INSTALL_BINDIR})
+# Floyd's levels and tools, shared with tvchat (the backend looks in ../share/tvmail)
+install(FILES ${TVCOMMON_DIR}/py/tvfloyd.py DESTINATION ${CMAKE_INSTALL_DATADIR}/tvmail)
 install(FILES man/tvmail.1 man/tvmail-backend.1
         DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
 install(FILES README.md INSTALL.md HISTORY.md WHY.md LICENSE AUTHORS WARRANTY
