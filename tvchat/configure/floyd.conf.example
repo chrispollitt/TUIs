@@ -1,17 +1,17 @@
 # The central Floyd: configuration for `tvchat-backend floyd-daemon`.
 #
-# Copy to /etc/tvchat/floyd.conf on the LAN master (cpbee) and edit; the unit
-# configure/tvchat-floyd.service runs it.  It is an ordinary tvchat.conf: an IRC
+# On the LAN master (cpbee), chrispollitt/POSIX chat-setup/scripts/configure-floyd.sh
+# writes this to /etc/tvchat/floyd.conf (with his nick, the account and the admins
+# filled in), installs configure/tvchat-floyd.service and starts it.  Or copy it there
+# and edit it yourself.  It is an ordinary tvchat.conf: an IRC
 # account (Floyd's own nick, logged in to services) and a protocol = floyd
 # account that listens through it.
 #
 # NO PASSWORDS HERE.  Floyd's NickServ password goes in /etc/tvchat/floyd.env
-# (chmod 600, owned by the service user) as
+# (chmod 600) as
 #   TVCHAT_PASS_CPBEE=...
-# or in that user's ~/.netrc:  machine cpbee  login Floyd  password ...
-#
-# One-time, before the first start (as yourself, from any IRC client):
-#   /msg NickServ REGISTER <password> <email>  after /nick Floyd
+# or in the service user's ~/.netrc:  machine cpbee  login Floyd  password ...
+# configure-floyd.sh registers the nick and writes that file.
 
 [account:cpbee]
 protocol = irc
@@ -54,11 +54,14 @@ admins   = chris
 # Floyd can ask the Claude CLI for an admin: "!claude QUESTION" in a channel,
 # or "claude QUESTION" in a private message.  The CLI runs as the service user
 # with only the tools below, so it can read but not run or change anything.
-# Read is not confined to claude_dir: it reads whatever that user can.
+# Read is not confined to claude_dir: it reads whatever that user can.  The service
+# runs as the floyd user (configure-floyd.sh's default), so that is only what floyd can
+# read; he needs his own login:  sudo -u floyd -H bash -l, then  claude
 claude   = yes
 #claude_cmd     = claude
 #claude_tools   = Read,Grep,Glob
-claude_dir      = ~/gh_cp
+# (~ is the service user's home; configure-floyd.sh --claude-dir DIR sets it)
+claude_dir      = ~
 #claude_model   =
 # any more command-line arguments, e.g. --max-turns 8
 #claude_args    =
