@@ -35,6 +35,17 @@ attach   = cpbee/*
 tag      =
 # no wandering about in his own empty conversation
 idle     = 0
+# how much he does: off | minimal | helpful | chatty | clippy
+#   off      deaf and mute (only "!level" is heard)
+#   minimal  answers when spoken to and runs !commands, including !calc, !convert, !time in X,
+#            !todo, !note, !catchup; no banter, no karma, no unprompted anything
+#   helpful  + the same in plain words ("floyd: what is 12*7"), karma, !tell delivery
+#   chatty   + banter and games (the default)
+#   clippy   + unprompted tips: "Floyd not clippy but it looks like you ..." (one per conversation
+#            per clippy_gap seconds; "floyd: shoo" mutes him for an hour)
+# Admins change it per conversation with "!level NAME" (this is the default).
+#level      = chatty
+#clippy_gap = 300
 # who may give him orders: NickServ account names (case does not matter).  The
 # server vouches for the account on every line (IRCv3 account-tag); a nick, or
 # a name inside a message, counts for nothing.  "!whoami" tells anyone what

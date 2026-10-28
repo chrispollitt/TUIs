@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Floyd's levels** (`level = off | minimal | helpful | chatty | clippy`, `!level NAME` per
+  conversation): from deaf to "full clippy mode", where he offers tips introduced "Floyd not
+  clippy but ...". At *minimal* he only answers `!commands` and what is said to him; *helpful* adds
+  plain-words questions, karma and `!tell`s; *chatty* is the old Floyd; talking by himself needs it.
+- **Useful things:** `!calc`, `!convert`, `!time in CITY`, `!todo`, `!note`, and `!catchup` (who said
+  what since you last spoke, what mentioned you, the questions asked). Shared with tvmail's Floyd
+  in `tvcommon/py/tvfloyd.py`, which each app installs.
+
 - **Floyd lives on the server.** `tvchat-backend floyd-daemon` runs him as a persistent, headless
   IRC bot (his own nick, logged in to services; systemd unit and `configure/floyd.conf.example`
   included); a Floyd account in a tvchat session now refuses to start unless it says

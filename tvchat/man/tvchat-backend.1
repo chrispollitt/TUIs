@@ -97,6 +97,15 @@ unless it has \fBlocal = yes\fP; see
 .B floyd\-daemon
 below.
 .PP
+\fBlevel\fP (off, minimal, helpful, chatty, clippy; default chatty) sets how much Floyd does, and
+\fB!level\fP [NAME|default] reads or sets it for one conversation (admins; in a session of your own, you).
+Off hears only \fB!level\fP; minimal answers when spoken to and the \fB!commands\fP; helpful adds the tools in
+plain words, karma and \fB!tell\fP delivery; chatty adds banter and talking by himself; clippy adds tips
+introduced "Floyd not clippy but ..." (\fBclippy_gap\fP seconds apart, default 300).  The tools, at
+minimal and up as \fB!commands\fP: \fB!calc\fP, \fB!convert\fP, \fB!time in\fP PLACE, \fB!todo\fP, \fB!note\fP / \fB!notes\fP
+(per person; kept next to the memory file) and \fB!catchup\fP (what was said since you last spoke).  They come
+from tvfloyd.py (tvcommon/py, installed in ../share/tvchat).
+.PP
 .B floyd\-daemon
 runs the central Floyd: no UI, the accounts of
 .I FILE

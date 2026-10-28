@@ -69,45 +69,59 @@ attachments, a member picker for groups, tvchat sending an invite through tvmail
 After that: tvchat/TO-DO.txt (small things), tvmail/TO-DO.txt (periodic pull
 first), and the open bugs in tvmail/BUGS.md.
 
-## Oct 27: the central Floyd - on branch `central-floyd`, ready for Chris's review (not merged)
+## Oct 27: Floyd - central bot (merged), levels, useful tools, Floyd in tvmail (branch `floyd-levels`, for review)
 
-Chris's three asks for tvchat: (1) some users are admins (just `chris` for now); (2) Floyd runs
-centrally on cpbee as a persistent server, not locally; (3) admins can have Floyd consult the
-Claude CLI (run as chris). Decided with Chris: Floyd is **his own IRC nick on the Ergo server**
-(people /msg him or invite him; no tvchat-specific client); an admin is a **NickServ/services
-account** (IRCv3 `account` tag, never a nick or text); the consult is **read-only** (Read, Grep,
-Glob; no Bash or edits). Design and safeguards: DESIGN.md "The central Floyd".
+**Merged to `main` (71b0c4e): the central Floyd.** `tvchat-backend floyd-daemon` runs him on cpbee as his
+own IRC nick (`configure/floyd.conf.example`, `tvchat-floyd.service`, INSTALL.md "The central
+Floyd"); admins = services accounts (IRCv3 account tag); `!claude QUESTION` asks the Claude CLI
+read-only as the service user; a Floyd account in a tvchat session needs `local = yes`. Design:
+tvchat/DESIGN.md "The central Floyd".
 
-**Done and tested (chat_unit 177 pass under Cygwin; install_roundtrip passes):**
-`tvchat-backend floyd-daemon [--conf FILE]`; `Contact.account`; `admins`, `claude`, `claude_*`
-options; `!claude` / `claude` orders, `!whoami`; local Floyd refuses without `local = yes`;
-`configure/floyd.conf.example`, `configure/tvchat-floyd.service`, installed into the doc dir;
-README, INSTALL ("The central Floyd"), DESIGN, HISTORY, man page, tvchat.conf.example. Tests:
-`TestFloydDaemon`, `TestFloydDaemonProcess` (real process against a fake IRC server with account tags).
+**On branch `floyd-levels` (not merged; Chris asked for these three):**
+1. *Levels* `off | minimal | helpful | chatty | clippy` ("full clippy mode" = clippy: tips introduced
+   "Floyd not clippy but ..."). tvchat: `level =` per account, `!level NAME` per conversation (admins
+   on the server). tvmail: `[floyd] level`, `level NAME` in his window, kept in
+   `~/.local/share/tvmail/floyd/state.json`, `$TVMAIL_FLOYD_LEVEL` beats both.
+2. *Floyd in tvmail:* File > Floyd (F7), `src/floydwin.cpp` (transcript + input line) over the new
+   `tvmail-backend floyd [--tips|--status] TEXT` verb (`MailFloyd`). It drives the existing verbs.
+3. *Useful things:* shared `tvcommon/py/tvfloyd.py` (calc by `ast`, units, time zones, per-person
+   to-dos/notes, the tips; each app installs its own copy to `share/<app>/`, the backends look beside
+   themselves, in `../../tvcommon/py`, `../share/<app>`). tvchat: `!calc !convert !time in !todo !note
+   !catchup` (+ plain words from helpful). tvmail: unread, triage (heuristic: not noreply/bulk), find
+   (sender/subject/date/folder), **archive** (READ inbox mail older than N days, default 90, to the
+   archive; unread never), **empty trash**, **unset ooo** (`vacation off`); archive and empty trash show
+   a count and wait for `yes` (5 minutes, kept in the `serve` process).
+
+**Tests:** tvcommon `test_tvfloyd` 15; tvchat `chat_unit` 213 (`TestFloydDaemon`, `TestFloydLevels`,
+`TestFloydDaemonProcess`); tvmail `test_backend` 153 incl. `TestFloyd`; e2e case
+`floyd_window_answers_and_asks_before_deleting`; both `install_roundtrip` pass. tvmail `./test.sh` (Oct 27): 6 of 7 pass; `mingw_compile` FAILS, and not because of this work:
+`app.cpp` uses `pullPid` / `pullQuiet` in the `cmPullAuto` handler outside `#ifndef _WIN32` (from the
+Oct 25 periodic pull); `floydwin.cpp` compiles under mingw. Fix that next (guard the case).
 
 **Not verified / to do:**
-1. **Live on cpbee:** register the `Floyd` NickServ account, install the unit (INSTALL.md steps),
-   and check `claude -p` really takes the prompt on stdin with `--tools/--allowedTools/
-   --permission-mode dontAsk` there (flags checked against `claude --help` on Windows only; the
-   tests use a fake script). Check that Ergo sends `account-tag` to the daemon.
-2. A script for those manual steps (a `chat-setup` one in the POSIX repo): not written - per the
-   rule that manual steps are script bugs.
-3. `e2e_regress` case `chat_history_pgup` FAILS, also with the original backend (a toast box
-   covers the log; likely from the Oct 25-27 toast work, not from this change). Look at it.
-4. Decide: the old "speaks as you" attach (`/floyd on`) now needs `local = yes`; remove it later?
-5. Commit/merge: committed on `central-floyd`; per Chris's global rule, after review merge to
-   `main` and append `repo branch` to `/home/chris/gh_cp/tmp-branches.txt`.
+1. Live on cpbee: register the `Floyd` NickServ account, install the unit (INSTALL.md), check Ergo sends
+   `account-tag` to the daemon and that `claude -p` takes the prompt on stdin with
+   `--tools/--allowedTools/--permission-mode dontAsk` there (flags checked only against
+   `claude --help` on Windows; tests use a fake script).
+2. A script for those manual steps (chat-setup in the POSIX repo): not written.
+3. tvchat e2e case `chat_history_pgup` FAILED before this work too (a toast covers the log).
+4. tvmail's Floyd has no live clippy tips on message selection (only on window open and after a pull);
+   no "draft a reply / summarise" (that would be the Claude CLI; tvchat's admin-only consult is the
+   model). Mail `find` scans the folder listing (headers), not bodies.
+5. Decide: the old "speaks as you" attach (`/floyd on`) needs `local = yes` now; remove it later?
+6. Merge `floyd-levels` into `main` after review; then add `TUIs floyd-levels` to
+   `/home/chris/gh_cp/tmp-branches.txt` (Chris's rule).
 
-**Cautions:** the consult runs as chris and `Read` is not confined to a directory (it can read
-`~/.netrc` and the like), hence read-only plus admin-only; keep `admins` short.
-`DEV-NOTES.txt` in the repo root holds plaintext passwords in a git-tracked repo - Chris
-should move it out and rotate them.
+**Cautions:** the Claude consult runs as chris and `Read` is not confined to a directory, hence
+read-only plus admin-only; keep `admins` short. `DEV-NOTES.txt` in the repo root holds plaintext
+passwords in a git-tracked repo - Chris should move it out and rotate them.
 
 Env notes: Git Bash has no `python3`; use
 `/c/Users/chris/AppData/Local/Programs/Python/Python311/python`, or Cygwin's python through
-`D:\cygwininash.exe -lc` (the unit and e2e tests need Cygwin). Windows Python writes CRLF
-unless `newline=""`. In Bash tool commands a doubled backslash arrives as one: write scripts
-with the Write tool. `git` root is `TUIs/`.
+`D:\cygwin\bin\bash.exe -lc` (the unit and e2e tests need Cygwin). Windows Python writes CRLF
+unless `newline=""`. In Bash tool commands a doubled backslash arrives as one, and a raw ESC can end
+up in a file: write scripts with the Write tool. e2e `-k` takes a bug number or the full case name.
+`git` root is `TUIs/`.
 
 ## Versions
 

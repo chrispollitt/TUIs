@@ -106,6 +106,19 @@ subject = ***SPAM***
 #plus = true
 #tag  = chris
 
+# Floyd, the assistant (File > Floyd..., F7).  How much he does:
+#   off      nothing; he only answers "level NAME"
+#   minimal  the mail commands (unread, triage, find, archive, empty trash, unset ooo,
+#            calc, todo ...), no plain-words questions, no banter
+#   helpful  + plain words ("what is 12*7", "how many feet in 3 m")
+#   chatty   + his personality (the default)
+#   clippy   + unprompted tips, "Floyd not clippy but ...", when the window opens and
+#            after a pull brings new mail
+# "level NAME" in his window changes it and is remembered
+# (~/.local/share/tvmail/floyd/state.json); $TVMAIL_FLOYD_LEVEL beats both.
+[floyd]
+#level = chatty
+
 # The terminal while tvmail runs (read by tvmail itself).
 [ui]
 # n (the default): no talk(1) requests or write / wall messages from ordinary

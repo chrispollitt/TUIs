@@ -74,6 +74,21 @@ services accounts, `chris` for now) can send him orders: `!whoami` says who he t
 `!claude QUESTION` (or `claude QUESTION` in a private message) has him consult the Claude CLI, run
 as the service user with read-only tools; anyone else is politely refused.
 
+**Levels.** `level = off | minimal | helpful | chatty | clippy` (per account; `!level NAME` sets it
+for one conversation, admins only on the server) says how much he does: *off* hears nothing;
+*minimal* answers when spoken to and runs `!commands`; *helpful* adds the useful things in plain
+words, karma and delivering `!tell`s; *chatty* (the default) adds banter, games and talking by
+himself; *clippy* adds unprompted tips, always introduced "Floyd not clippy but ..." (at most one
+per conversation every 5 minutes; `floyd: shoo` silences him for an hour). `!level` alone says
+where he is.
+
+**Useful things** (in tvmail's Floyd too): `!calc 12*7` (arithmetic only - never code),
+`!convert 5 km to mi` (length, mass, volume, speed, time, data, temperature), `!time in Tokyo`,
+`!todo [add X|done N|clear]` and `!note X` / `!notes` (each person has their own, kept between
+sessions), and `!catchup` (or "floyd: catch me up"): who said what since you last spoke - how
+many messages, who, what mentioned you, questions asked, links. From *helpful* up the first
+three also work as plain questions: "floyd: what is 12*7", "how many feet in 3 m".
+
 **Floyd in your other conversations** (only with `local = yes`). In any IRC channel, talk call or Delta Chat chat, `/floyd`
 (or `/floyd on`) has him listen there, switching his account on if it was off (and from then on
 he starts with tvchat); `/floyd off` sends him away, `/floyd status` says. He then answers `!commands`, `nick++` and `floyd: ...` (the

@@ -298,6 +298,21 @@ one answer per 2 s per conversation; a reply that starts with `/` is sent litera
 the tag, so a stored quote cannot run an IRC command. Tests: `TestFloyd`, `TestFloydBot`,
 `TestFloydAttached`.
 
+**Levels and tools.** `tvcommon/py/tvfloyd.py` (shared with tvmail; found beside the backend, in
+`../../tvcommon/py`, or `../share/tvchat`; a stub with levels but no tools if absent) defines
+`LEVELS = off, minimal, helpful, chatty, clippy`. `FloydAdapter.hear()` first decides what a line
+is - `to_him` (addressed, or any private message on the server), `bang` (starts with `!`), `direct`
+(either, and not a `/me`) - then gates on the conversation's level (`level_of()`: the per-conversation
+override in `FloydMemory.data["levels"]`, else `level =`): `!level` is heard at every level; *off*
+returns before anything is noted; *minimal* notes `seen` silently (no `observe()`, which would eat the
+`!tell`s), runs `!commands` and `_tool()` for `!calc`-type verbs, and answers other addressed text with
+`mind.command()` (errands) or one terse line; *helpful* adds `observe()`, karma and the plain-words
+`tvf.natural()`; *chatty* sends addressed text to `mind.reply()`; *clippy* adds `_clippy()` - a tip
+from `tvf.clippy_chat()`, only when nothing else was said, at most one per `clippy_gap` per
+conversation, muted an hour by `shoo`. `_arm()` (talking by himself) needs *chatty*. To-dos and notes are
+`tvf.Notes`, one file per person (`notes-<account or nick>.json` beside the memory file). `_catchup()` reads
+`conv.history` back to the asker's last line (in the daemon `s` means Floyd, so only the nick counts).
+
 **The central Floyd.** Floyd lives on the LAN master as a process, not in each tvchat session:
 `tvchat-backend floyd-daemon` (`cmd_floyd_daemon`, run by `configure/tvchat-floyd.service`) loads a
 tvchat.conf of its own - an `irc` account that is his nick and a `floyd` account with `attach =
