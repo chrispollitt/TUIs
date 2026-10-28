@@ -3046,16 +3046,22 @@ class TestFloydDaemon(Base):
         self.assertEqual(argv[argv.index("--tools") + 1], "Read,Grep,Glob")
         self.assertEqual(argv[argv.index("--permission-mode") + 1], "dontAsk")
         self.assertNotIn("Bash", " ".join(argv))
+        # no connectors: an empty, strict MCP config and no skills
+        self.assertIn("--strict-mcp-config", argv)
+        self.assertEqual(argv[argv.index("--mcp-config") + 1], '{"mcpServers":{}}')
+        self.assertIn("--disable-slash-commands", argv)
 
     def test_the_prompt_goes_in_on_stdin(self):
         self.start()
         script = self.tmp / "fakeclaude"
-        script.write_text("#!/bin/sh\necho \"args: $*\" > %s/args\ncat\n" % self.tmp)
+        script.write_text("#!/bin/sh\necho \"args: $*\" > %s/args\necho \"mcp: $ENABLE_CLAUDEAI_MCP_SERVERS\" > %s/env\ncat\n"
+                          % (self.tmp, self.tmp))
         script.chmod(0o755)
         ad = self.chat.adapters["floyd"]
         del ad._run_claude                                     # the real one
         self.assertEqual(ad._run_claude([str(script), "-p"], "-- hi there"), "-- hi there")
         self.assertEqual((self.tmp / "args").read_text().strip(), "args: -p")
+        self.assertEqual((self.tmp / "env").read_text().strip(), "mcp: false")   # connectors off
 
     def test_a_dead_cli_is_an_error(self):
         self.start()

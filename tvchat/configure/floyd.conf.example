@@ -57,6 +57,8 @@ admins   = chris
 # Read is not confined to claude_dir: it reads whatever that user can.  The service
 # runs as the floyd user (configure-floyd.sh's default), so that is only what floyd can
 # read; he needs his own login:  sudo -u floyd -H bash -l, then  claude
+# The CLI is also cut off from every connector (Google Drive, GitHub ... that the login's
+# account has) and from skills: an empty strict --mcp-config, ENABLE_CLAUDEAI_MCP_SERVERS=false.
 claude   = yes
 #claude_cmd     = claude
 #claude_tools   = Read,Grep,Glob

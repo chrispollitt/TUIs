@@ -3,8 +3,11 @@
 ## Unreleased
 
 - **Input history:** Up / Down in the chat input line recall what you sent (one list for every
-  conversation, kept between sessions in `~/.local/state/tvchat/input-history`, never a NickServ /
-  OPER, /pass); the log scrolls with PgUp / PgDn and Shift-Up / Shift-Down instead.
+  conversation, kept between sessions in `~/.local/state/tvchat/input-history`, never a NickServ,
+  OPER or `/pass` line); the log scrolls with PgUp / PgDn and Shift-Up / Shift-Down instead.
+- **Floyd's Claude has no connectors:** the CLI that `!claude` runs is cut off from MCP servers, the
+  login's claude.ai connectors (Google Drive, GitHub ...) and skills, as well as from every built-in
+  tool but Read, Grep and Glob.
 
 - **Cygwin is the only Windows** (tvchat never had a native build; the shared `_WIN32` branches in
   tvcommon, and the mingw test and build option in tvmail, are gone).
