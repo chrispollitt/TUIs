@@ -60,6 +60,10 @@ channels = #test
 #display     = Floyd's mail
 #addr        = floyd@cpbee.cmnet
 #name        = Floyd
+# who he talks to by mail: name=address, comma-separated.  Mail from anyone else is
+# dropped without a word, and he never mails anyone else (mail from his own mailbox's
+# domain is still answered).  Empty = no limit.
+#known       = michelle=michelle.houle@gmail.com, chris=chris.pollitt@gmail.com
 # the master's own mail server, if the address's domain is not it:
 #imap_server = localhost
 #imap_user   = floyd
