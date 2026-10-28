@@ -2310,6 +2310,31 @@ class TestMailReplies(Base):
         import email
         self.assertEqual([email.message_from_bytes(m)["To"] for m in self.mail.sent], ["carol@example.org"])
 
+    def whoami(self, headers, sender="chris@elsewhere.org"):
+        self.chat.adapter(self.chat.by_id["mail"]).known = cb.parse_known("chris=chris@elsewhere.org")
+        self.chat.adapter(self.chat.by_id["floyd"]).admins = {"chris"}
+        self.mail.add_mail("From: %s\nSubject: who\n%s\n!whoami\n" % (sender, headers))
+        self.up()
+        self.turn(lambda: self.mail.sent)
+        import email
+        return email.message_from_bytes(self.mail.sent[0]).get_payload(decode=True).decode()
+
+    OK_HDR = "X-Spam-Report: rules\n  -0.1 DKIM_VALID_AU   Message has a valid DKIM signature\n"
+
+    def test_a_known_admin_with_a_verified_signature_is_an_admin_by_mail(self):
+        self.assertIn("as account chris, an admin.", self.whoami(self.OK_HDR))
+
+    def test_no_verified_signature_no_admin(self):
+        self.assertNotIn("an admin", self.whoami("X-Spam-Report: DKIM_VALID\n"))
+        self.assertNotIn("an admin", self.whoami(""))
+
+    def test_a_forged_report_below_the_servers_own_does_not_count(self):
+        hdr = "X-Spam-Report: rules, no dkim\n" + self.OK_HDR.replace("X-Spam-Report", "X-Ham-Report")
+        self.assertNotIn("an admin", self.whoami(hdr))
+
+    def test_verified_but_only_known_by_domain_is_not_an_admin(self):
+        self.assertNotIn("an admin", self.whoami(self.OK_HDR, sender="chris@example.org"))
+
     def test_the_sender_is_not_an_admin_whatever_the_from_line_says(self):
         self.mail.add_mail("From: alice@example.org\nSubject: x\n\n!claude do things\n")
         self.up()

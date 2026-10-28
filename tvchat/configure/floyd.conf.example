@@ -51,8 +51,11 @@ channels = #test
 # the same thread, one mail per question).  He reads his INBOX every 30 s, answers
 # what is for him as in any chat (!commands, "floyd: ...", plain questions), skips
 # robots (Auto-Submitted, bulk, lists, noreply, bounces) and answers one address at
-# most 5 times an hour (60 in all).  A mail is never from an admin: the From line
-# proves nothing, so !claude is refused by mail.  Its mailbox password is in
+# most 5 times an hour (60 in all).  A From line proves nothing, so a mail is an admin
+# only when the sender is in known= AND the receiving server verified their DKIM
+# signature for the From domain (SpamAssassin's DKIM_VALID_AU in the topmost
+# X-Spam-Report / X-Ham-Report); the name in known= is then their account name, so
+# put it in admins= too (!claude).  Anyone else is refused.  Its mailbox password is in
 # floyd.env as TVCHAT_PASS_MAIL (the account's name, upper case).  Uncomment, adjust, and add mail/* to
 # attach = below.
 #[account:mail]
