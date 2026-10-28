@@ -5715,6 +5715,10 @@ def cmd_serve(a):
 # account attached to its conversations - but no UI: a headless process on the
 # server, until SIGTERM.  Run it from systemd (configure/tvchat-floyd.service).
 # --------------------------------------------------------------------------
+SERVER_TROUBLE = re.compile(r"cannot|can't|denied|invalid|no such|not allowed|forbidden|banned|"
+                            r"must be|only|fail|error|refus|unavailable|reserved", re.I)
+
+
 def cmd_floyd_daemon(a):
     if a.conf:
         os.environ["TVCHAT_CONF"] = a.conf       # before the config is read
@@ -5742,6 +5746,10 @@ def cmd_floyd_daemon(a):
                 _log.info("%s: %s%s", fields[1], fields[2], (" - " + fields[3]) if fields[3] else "")
             elif fields[0] == "conv-new" and fields[2] in ("channel", "direct"):
                 _log.info("%s: joined %s", fields[1].split("/", 1)[0], fields[1].split("/", 1)[-1])
+            elif fields[0] == "msg" and fields[2].endswith("/*") and SERVER_TROUBLE.search(fields[7]):
+                # the server window: only what reads like trouble (a refused JOIN, a failed
+                # login), not the MOTD
+                _log.info("%s: server: %s", fields[2].split("/", 1)[0], fields[7][:200])
         loop.call_later(2, drain)
 
     for sig in (signal.SIGTERM, signal.SIGINT):
