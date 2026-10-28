@@ -1633,6 +1633,20 @@ class IrcAdapter(CommandMixin):
             self.chat.events.push("members", conv.id)
         self.system(conv, "%s has joined %s" % (m.nick, chan), self.when(m))
 
+    def on_INVITE(self, m):
+        # INVITE <target> <channel>: only ours matter.  The central Floyd takes
+        # every invitation (that is how he is asked into a new channel); in a
+        # session it is a note, unless join_invites = yes.
+        if len(m.params) < 2 or not self.is_me(m.params[0]):
+            return
+        chan = m.params[1]
+        join = self.chat.daemon or _bool(self.account.opts.get("join_invites"), False)
+        self.system(self.server_conv(), "%s invites you to %s%s" % (
+            m.nick, chan, " - joining" if join else " (/join %s to accept)" % chan),
+            self.when(m))
+        if join and self.find_conv(chan) is None:
+            self.send_raw("JOIN %s" % chan)
+
     def on_PART(self, m):
         conv = self.find_conv(m.params[0]) if m.params else None
         if conv is None:
