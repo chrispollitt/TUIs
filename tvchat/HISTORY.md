@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Floyd answers an unknown `!command`** ("Floyd doesn't know !foo ... Try !help") instead of
+  staying silent, in channels and chats he listens in. `!!!` and a lone `!` are still ignored.
+
 - **`/invite Floyd #newchannel` works:** an incoming IRC `INVITE` was ignored; the central Floyd now
   joins any channel he is invited to, and a session shows a note in the server window (`/join` to
   accept, or `join_invites = yes` on the account to join at once).
