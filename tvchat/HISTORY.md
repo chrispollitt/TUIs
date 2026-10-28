@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Admins can give orders by mail:** a mail counts as from an admin only when the sender is in
+  `known =` and the receiving mail server verified their DKIM signature for the From domain
+  (`DKIM_VALID_AU` in the topmost `X-Spam-Report` / `X-Ham-Report`); the sender's `known =` name is
+  then their account name, so it must be in `admins =` (`!claude`, `!whoami`). A forged From line,
+  an unsigned mail or a signed mail from someone not in `known =` is refused as before. This relies on
+  the mail host adding that header.
+
 - **Mail Floyd only talks to people he knows:** `known = name=address, ...` on the mail account
   limits whom he reads and answers by mail; anyone else is dropped silently (the mailbox's own
   domain still counts). `!claude` stays admin-only, and a mail is never from an admin.

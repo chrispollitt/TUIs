@@ -5020,6 +5020,17 @@ def mail_text_for_floyd(text, subject=""):
     return body or re.sub(r"^(?:re|fw|fwd):\s*", "", subject.strip(), flags=re.I)[:200]
 
 
+def mail_dkim_verified(msg):
+    """True when the mail server that received it checked the sender's DKIM
+    signature against the From domain (SpamAssassin's DKIM_VALID_AU, in the
+    X-Spam-Report / X-Ham-Report it adds).  Only the topmost such header counts:
+    the receiving server adds its own above anything the sender wrote."""
+    for key, val in msg.items():
+        if key.lower() in ("x-spam-report", "x-ham-report"):
+            return re.search(r"\bDKIM_VALID_AU\b", str(val)) is not None
+    return False
+
+
 def parse_known(text):
     """known = michelle=michelle@example.org, chris=chris@example.org: the
     addresses he talks to by mail, lower-cased, with the name he calls each.  A
@@ -5039,7 +5050,7 @@ def parse_known(text):
 
 
 def fetch_new_mail(p):
-    """[(uid, msgid, references, sender, display, subject, text, automatic, invite)] for
+    """[(uid, msgid, references, sender, display, subject, text, automatic, invite, verified)] for
     the unseen mail in the INBOX, marked seen as it is taken (a thread)."""
     m = _imap_open(p)
     out = []
@@ -5056,7 +5067,8 @@ def fetch_new_mail(p):
             subj = str(email.header.make_header(email.header.decode_header(msg.get("Subject", ""))))
             out.append((uid.decode(), (msg.get("Message-ID") or "").strip(),
                         " ".join((msg.get("References") or "").split()), sender, name, subj,
-                        _text_of(msg), mail_is_automatic(msg, sender), bool(msg.get(INVITE_HEADER))))
+                        _text_of(msg), mail_is_automatic(msg, sender), bool(msg.get(INVITE_HEADER)),
+                        mail_dkim_verified(msg)))
             m.uid("STORE", uid, "+FLAGS", "(\\Seen)")
     finally:
         try:
@@ -5249,7 +5261,7 @@ class MailAdapter(CommandMixin):
         if err is not None:
             _log.debug("%s: reading the mailbox failed: %s", self.account.id, err)
             self.system(self.server_conv(), "could not read the mailbox: %s" % err)
-        for uid, msgid, refs, sender, name, subject, text, automatic, invite in res or []:
+        for uid, msgid, refs, sender, name, subject, text, automatic, invite, verified in res or []:
             if invite or automatic or sender == self.addr.lower():
                 continue                 # a Delta Chat invitation (its own adapter), a robot, ourselves
             if not self.allowed(sender):
@@ -5258,11 +5270,14 @@ class MailAdapter(CommandMixin):
             said = mail_text_for_floyd(text, subject)
             if not said:
                 continue
+            # admin by mail: a person in known= whose DKIM signature the server verified;
+            # their name there is their account name (so it must be in admins=)
+            account = self.known.get(sender) if verified and sender in self.known else None
             name = self.known.get(sender) or name or sender
             conv = self.chat.ensure_conv(self.account, sender, "direct", name)
             self.threads[conv.id] = {"subject": subject, "msgid": msgid, "refs": refs}
             self.chat.add_message(conv, Message(self.local_id(), conv.id, time.time(),
-                                                Contact(sender, name), said, ""))
+                                                Contact(sender, name, account), said, ""))
         self.timer = self.loop.call_later(self.poll, self._poll)
 
     # -- going out: what is said in a conversation is one reply mail --------------
