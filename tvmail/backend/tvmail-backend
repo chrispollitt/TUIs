@@ -62,6 +62,11 @@ INBOX/Archive/Trash/Drafts/Sent/Junk):
                             the master) postfix's generic map.  'addresses'
                             prints that table.  --force replaces whatever
                             other Sieve script is active
+  floyd [--tips|--status] [TEXT...]
+                            say TEXT to Floyd, the assistant (unread, triage, find,
+                            archive, empty trash, unset ooo, calc, todo, level ...);
+                            he asks before anything that deletes.  --tips: his
+                            unprompted tips (clippy level); --status: level and meaning
   check-config FILE         check a tvmail.conf without connecting: 'error:' / 'warning:'
                             lines and an 'ok:' summary; exit 1 on errors (the in-app
                             config editor's Verify)
@@ -80,6 +85,7 @@ Exit status: 0 ok, 1 usage/not-found, 2 runtime error.
 """
 
 import sys, os, io, json, argparse, subprocess, tempfile, shutil, email, email.utils
+import re, time, random
 import logging
 import configparser, socket
 import email.policy
@@ -2086,6 +2092,411 @@ def cmd_vacation(a):
         s.close()
 
 
+# --------------------------------------------------------------------------
+# Floyd: the assistant in tvmail (Window > Floyd).  `floyd TEXT...` is one line
+# said to him and prints what he answers; he keeps a little state between calls
+# in the persistent `serve` process (a question waiting for its "yes").  He drives
+# the verbs above through _dispatch, so he can do exactly what the UI can and no
+# more.  Anything that destroys mail asks first: archive and empty-trash show how
+# many messages, then wait for "yes".  Levels, calculator, conversions and the
+# to-do list are tvcommon's tvfloyd.py, shared with tvchat; without that file he
+# has levels and the mail help only.
+# --------------------------------------------------------------------------
+def _load_tvfloyd():
+    import importlib.util
+    import types
+    here = os.path.dirname(os.path.realpath(__file__))
+    for d in (here, os.path.join(here, "..", "..", "tvcommon", "py"),
+              os.path.join(here, "..", "share", "tvcommon"),
+              "/usr/local/share/tvcommon", "/usr/share/tvcommon"):
+        path = os.path.join(d, "tvfloyd.py")
+        if os.path.isfile(path):
+            try:
+                spec = importlib.util.spec_from_file_location("tvfloyd", path)
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                return mod
+            except Exception:
+                _log.debug("cannot load %s", path, exc_info=True)
+    levels = ("off", "minimal", "helpful", "chatty", "clippy")
+    return types.SimpleNamespace(
+        LEVELS=levels, DEFAULT_LEVEL="chatty", CalcError=ValueError,
+        LEVEL_BLURB=dict((l, l) for l in levels),
+        parse_level=lambda t, default=None: (t or "").strip().lower() if (t or "").strip().lower() in levels else default,
+        at_least=lambda a, b: levels.index(a) >= levels.index(b),
+        run_tool=lambda *a, **k: None, natural=lambda *a, **k: None,
+        clippy_mail=lambda *a, **k: [], Notes=lambda path=None: None)
+
+
+tvf = _load_tvfloyd()
+
+
+class MailFloyd(object):
+    """What Floyd does for a mailbox.  handle(text) -> the lines he says."""
+
+    BULK_FROM = re.compile(r"no-?reply|do-?not-?reply|notification|newsletter|mailer-daemon|postmaster|"
+                           r"bounce|alerts?@|news@|updates?@|marketing|digest|receipts?@|billing@|orders?@|"
+                           r"@.*\.(?:mailchimp|sendgrid|substack)", re.I)
+    BULK_SUBJ = re.compile(r"unsubscribe|newsletter|digest|receipt|your order|invoice|verify your|"
+                           r"password reset|\bsale\b|% off|webinar", re.I)
+    PENDING_TTL = 300
+    TOOL_VERBS = frozenset(("calc", "calculate", "compute", "math", "convert", "conv", "units",
+                            "tz", "time", "clock", "todo", "note", "notes"))
+    FOLDERS = {"inbox": "spool", "archive": "mbox", "trash": "trash", "sent": "sent",
+               "spam": "spam", "junk": "spam", "drafts": "drafts"}
+    VOICE = {
+        "unread": ("Floyd read all the subjects. Floyd moved his lips.",),
+        "triage": ("Floyd sorted them by how much they look like people. Floyd is not sure about Floyd.",),
+        "find": ("Floyd looked in all the drawers.",),
+        "done": ("Floyd is good at tidying. Floyd is bad at stopping.",),
+        "none": ("Floyd looked. Floyd found a dust bunny. Floyd named him Gary.",),
+    }
+
+    def __init__(self, parser, state_dir=None, clock=time.time, rng=None):
+        self.parser, self.clock = parser, clock
+        self.rng = rng or random.Random()
+        self.state_dir = state_dir
+        self.pending = None              # (when, what, action) waiting for "yes"
+        self.tip_seen = {}               # tip -> when it was last given
+        self.notes = tvf.Notes(os.path.join(state_dir, "notes.json") if state_dir else None)
+        self.level = self._initial_level()
+
+    # -- level, kept in a small file ------------------------------------------
+    def _state_file(self):
+        return os.path.join(self.state_dir, "state.json") if self.state_dir else None
+
+    def _initial_level(self):
+        env = tvf.parse_level(os.environ.get("TVMAIL_FLOYD_LEVEL"), None)
+        if env:
+            return env
+        path = self._state_file()
+        if path:
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    lv = tvf.parse_level(json.load(fh).get("level"), None)
+                if lv:
+                    return lv
+            except (OSError, ValueError, AttributeError):
+                pass
+        return tvf.parse_level(_conf().get("floyd", "level", fallback=""), tvf.DEFAULT_LEVEL)
+
+    def set_level(self, level):
+        self.level = level
+        path = self._state_file()
+        if path:
+            try:
+                os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+                with open(path, "w", encoding="utf-8") as fh:
+                    json.dump({"level": level}, fh)
+            except OSError:
+                pass
+
+    # -- plumbing ----------------------------------------------------------------
+    def _run(self, *argv):
+        st, body = _dispatch(self.parser, list(argv))
+        return st, body.decode("utf-8", "replace")
+
+    def _ok(self, *argv):
+        st, out = self._run(*argv)
+        if st:
+            raise ValueError((out.strip().splitlines() or ["it failed"])[-1])
+        return out
+
+    def _rows(self, mbox):
+        """(idx, flag, date, from, subject) for each message of the folder, oldest first."""
+        rows = []
+        for ln in self._ok("list", mbox).splitlines():
+            f = ln.split("\t")
+            if len(f) >= 5:
+                rows.append((f[0], f[1], f[2], f[3], f[4]))
+        return rows
+
+    def _count(self, mbox):
+        for ln in self._ok("counts", mbox).splitlines():
+            f = ln.split("\t")
+            if len(f) >= 3 and f[1].isdigit() and f[2].isdigit():
+                return int(f[1]), int(f[2])
+        return 0, 0
+
+    @staticmethod
+    def _row(r):
+        return "%s  %s: %s" % (r[2][:10], r[3][:24], r[4][:60])
+
+    def _voice(self, kind):
+        if tvf.at_least(self.level, "chatty"):
+            return [self.rng.choice(self.VOICE[kind])]
+        return []
+
+    def _purge_n(self, out):
+        m = re.findall(r"(?:would purge|purged) (\d+) message", out)
+        return int(m[-1]) if m else 0
+
+    # -- the words ------------------------------------------------------------
+    HELP = [
+        "Floyd can: unread | triage | find mail from NAME about WORDS [last week] [in archive] | counts",
+        "archive [older than 90 days] | empty trash | unset ooo (or: ooo) | tips",
+        "calc 12*7 | convert 5 km to mi | time in Tokyo | todo [add X|done N] | note X | level [NAME]",
+    ]
+
+    def handle(self, text):
+        t = " ".join(text.split())
+        low = t.lower().rstrip("?!. ")
+        bare = low[1:].strip() if low.startswith("!") else low
+        if self.pending and self.clock() - self.pending[0] > self.PENDING_TTL:
+            self.pending = None
+        m = re.match(r"^level(?:\s+(\S+))?$", bare)
+        if m:
+            return self._level(m.group(1))
+        if self.level == "off":
+            return ["Floyd is off. Say \"level chatty\" to wake him."]
+        if self.pending:
+            action, self.pending = self.pending, None
+            if bare in ("yes", "y", "yes please", "do it", "go", "go ahead", "sure", "ok", "okay"):
+                return self._guard(action[2])
+            if bare in ("no", "n", "cancel", "nope", "stop", "never mind"):
+                return ["Okay. Floyd did nothing. Floyd is good at that."]
+        if not bare:
+            return ["Hi! Floyd is at level %s." % self.level] + self.HELP[:1]
+        try:
+            return self._intent(t, bare)
+        except ValueError as e:
+            return ["Floyd can't. %s" % e]
+
+    def _guard(self, fn):
+        try:
+            return fn()
+        except ValueError as e:
+            return ["Floyd can't. %s" % e]
+
+    def _level(self, arg):
+        if not arg:
+            return ["Floyd is at level %s. %s" % (self.level, tvf.LEVEL_BLURB[self.level]),
+                    "The levels are %s. Say level NAME to change it." % ", ".join(tvf.LEVELS)]
+        new = tvf.parse_level(arg, None)
+        if new is None:
+            return ["Floyd has no level called %s. He has %s." % (arg, ", ".join(tvf.LEVELS))]
+        self.set_level(new)
+        return ["Floyd is now at level %s. %s" % (new, tvf.LEVEL_BLURB[new])]
+
+    def _intent(self, t, low):
+        helpful = tvf.at_least(self.level, "helpful")
+        if low in ("help", "?", "what can you do", "commands"):
+            return self.HELP
+        if re.match(r"^(unread|new|new mail|what'?s new|inbox|any (new )?mail|check mail)$", low):
+            return self._unread()
+        if re.match(r"^(triage|what needs (a )?repl(y|ies)|needs? (a )?repl(y|ies)|who is waiting|who'?s waiting)", low):
+            return self._triage()
+        if low in ("counts", "folders", "status", "how much mail"):
+            return self._counts()
+        if low in ("tips", "tip", "any tips"):
+            return self.tips(force=True) or ["Floyd has no tips. Floyd is surprised."]
+        m = re.match(r"^(?:unset|clear|turn off|disable|switch off|end|cancel|stop)\s+(?:my\s+)?"
+                     r"(?:ooo|out[ -]of[ -]office|vacation|auto-?reply)(?:\s+reply)?$|^(?:ooo|vacation)\s+off$", low)
+        if m:
+            return self._ooo(False)
+        if re.match(r"^(?:my\s+)?(?:ooo|out[ -]of[ -]office|vacation)(?:\s+(?:status|reply))?$", low):
+            return self._ooo(None)
+        m = re.match(r"^(?:empty|clean(?: out)?|clear|purge|take out)\s+(?:the\s+|my\s+)?(?:trash|bin|deleted(?: items)?)$", low)
+        if m:
+            return self._trash()
+        m = re.match(r"^(?:archive|tidy(?: up)?|file away)(?:\s+(?:old|older)(?:\s+(?:mail|messages?|emails?))?)?"
+                     r"(?:\s+(?:older than|over|more than)?\s*(\d+)\s*(day|week|month|year)s?)?"
+                     r"(?:\s+(?:old|older))?(?:\s+(?:mail|messages?|emails?))?$", low)
+        if m:
+            n = int(m.group(1)) if m.group(1) else 90
+            n *= {"day": 1, "week": 7, "month": 30, "year": 365}.get(m.group(2), 1)
+            return self._archive(n)
+        m = (re.match(r"^(?:find|search(?: for)?|look for|show(?: me)?)\s+(.+)$", low)
+             or re.match(r"^((?:mail|messages?|emails?)\s+(?:from|about)\s+.+)$", low))
+        if m:
+            return self._find(m.group(1))
+        verb, _, rest = low.partition(" ")
+        verb = verb.lstrip("!")
+        try:
+            out = None
+            if verb in self.TOOL_VERBS and not (verb in ("time", "clock") and not rest.strip()):
+                out = tvf.run_tool(verb, rest if verb not in ("note", "notes", "todo") else t.partition(" ")[2], self.notes, self.clock())
+            if out is None and helpful:
+                out = tvf.natural(t, self.notes, self.clock())
+        except tvf.CalcError as e:
+            return ["Floyd can't. %s" % e]
+        if out is not None:
+            return out.split("\n")
+        if tvf.at_least(self.level, "chatty"):
+            return ["Floyd doesn't understand, but Floyd likes the way you say it. Say help."]
+        return ["Floyd doesn't know that one. Say help."]
+
+    # -- mail ---------------------------------------------------------------------
+    def _unread(self):
+        total, unseen = self._count("spool")
+        if not unseen:
+            return ["Nothing unread in the inbox (%d messages)." % total] + self._voice("none")
+        new = [r for r in self._rows("spool") if r[1] == "N"]
+        out = ["Inbox: %d unread of %d." % (unseen, total)]
+        out += ["  " + self._row(r) for r in reversed(new[-8:])]
+        if len(new) > 8:
+            out.append("  ... and %d more." % (len(new) - 8))
+        return out + self._voice("unread")
+
+    def _triage(self):
+        """Unread mail that looks like it is from a person - what is likely waiting
+        for an answer.  A guess from the sender and subject, nothing more."""
+        new = [r for r in self._rows("spool") if r[1] == "N"]
+        real = [r for r in new if not self.BULK_FROM.search(r[3]) and not self.BULK_SUBJ.search(r[4])]
+        if not real:
+            return ["No unread mail from real people. %d unread in all, all of it looks automatic." % len(new)
+                    if new else "No unread mail at all."]
+        out = ["%d of %d unread look like they are from people:" % (len(real), len(new))]
+        out += ["  " + self._row(r) for r in reversed(real[-8:])]
+        if len(real) > 8:
+            out.append("  ... and %d more." % (len(real) - 8))
+        return out + self._voice("triage")
+
+    def _counts(self):
+        out = []
+        for ln in self._ok("counts").splitlines():
+            f = ln.split("\t")
+            if len(f) >= 3:
+                out.append("%-8s %5s messages, %s unread" % (f[0], f[1], f[2]))
+        return out
+
+    def _find(self, rest):
+        folder, cutoff = "spool", None
+        mf = re.search(r"\bin\s+(?:the\s+)?(inbox|archive|trash|sent|spam|junk|drafts)\b", rest)
+        if mf:
+            folder = self.FOLDERS[mf.group(1)]
+            rest = rest.replace(mf.group(0), " ")
+        day = 86400
+        for rx, days in ((r"\btoday\b", 0), (r"\byesterday\b", 1), (r"\blast week\b", 7),
+                         (r"\blast month\b", 30), (r"\blast year\b", 365)):
+            if re.search(rx, rest):
+                cutoff = days
+                rest = re.sub(rx, " ", rest)
+        mn = re.search(r"\b(?:in the |over the )?(?:last|past)\s+(\d+)\s+(day|week|month)s?\b", rest)
+        if mn:
+            cutoff = int(mn.group(1)) * {"day": 1, "week": 7, "month": 30}[mn.group(2)]
+            rest = rest.replace(mn.group(0), " ")
+        frm = re.search(r"\bfrom\s+(\S+)", rest)
+        subj = re.search(r"\b(?:about|subject|regarding|with)\s+(.+?)(?=\s+from\b|$)", rest)
+        free = re.sub(r"\b(?:mail|messages?|emails?|from\s+\S+|(?:about|subject|regarding|with)\s+.+)\b", " ", rest).strip()
+        if not (frm or subj or free):
+            raise ValueError("find what? Try: find mail from alice about invoice last week")
+        min_date = (time.strftime("%Y-%m-%d", time.localtime(self.clock() - cutoff * day))
+                    if cutoff is not None else "")
+        hits = []
+        for r in self._rows(folder):
+            who, sub_ = r[3].lower(), r[4].lower()
+            if frm and frm.group(1).lower() not in who:
+                continue
+            if subj and subj.group(1).strip() not in sub_:
+                continue
+            if free and not (frm or subj) and free not in who and free not in sub_:
+                continue
+            if min_date and r[2][:10] < min_date:
+                continue
+            hits.append(r)
+        if not hits:
+            return ["Nothing found."] + self._voice("none")
+        out = ["Found %d:" % len(hits)] + ["  " + self._row(r) for r in reversed(hits[-10:])]
+        if len(hits) > 10:
+            out.append("  ... and %d older." % (len(hits) - 10))
+        return out + self._voice("find")
+
+    def _archive(self, days):
+        """Read messages older than DAYS, inbox -> archive.  Asks first."""
+        args = ("purge", "spool", "--older-than", str(days), "--seen", "--to-folder", "mbox")
+        out = self._ok(*(args + ("-n",)))
+        n = self._purge_n(out)
+        if not n:
+            return ["Nothing read and older than %d days in the inbox." % days] + self._voice("none")
+
+        def do():
+            moved = self._purge_n(self._ok(*args))
+            return ["Archived %d message%s." % (moved, "" if moved == 1 else "s")] + self._voice("done")
+        self.pending = (self.clock(), "archive", do)
+        return ["Floyd can archive %d read message%s older than %d days from the inbox."
+                % (n, "" if n == 1 else "s", days),
+                "Say yes to do it. Anything else cancels. Unread mail is never touched."]
+
+    def _trash(self):
+        out = self._ok("empty-trash", "-n")
+        n = self._purge_n(out)
+        if not n:
+            return ["The trash is empty already."]
+
+        def do():
+            gone = self._purge_n(self._ok("empty-trash"))
+            return ["Emptied the trash: %d message%s gone for good." % (gone, "" if gone == 1 else "s")] + self._voice("done")
+        self.pending = (self.clock(), "trash", do)
+        return ["The trash holds %d message%s. Emptying it deletes them for good - there is no undo." % (n, "" if n == 1 else "s"),
+                "Say yes to do it. Anything else cancels."]
+
+    def _ooo(self, want):
+        """want False: switch the out-of-office reply off; None: say how it stands."""
+        st = {}
+        for ln in self._ok("vacation", "status").splitlines():
+            k, _, v = ln.partition(": ")
+            if v:
+                st[k] = v
+        state = st.get("state", "none")
+        if want is None:
+            if state == "none":
+                return ["No out-of-office reply is set up."]
+            extra = " (%s)" % st["subject"] if st.get("subject") else ""
+            return ["Your out-of-office reply is %s%s." % (state, extra)]
+        if state != "on":
+            return ["Your out-of-office reply is already off." if state == "off"
+                    else "No out-of-office reply is set up, so none is on."]
+        self._ok("vacation", "off")
+        return ["Out of office is off. Welcome back!"] + self._voice("done")
+
+    # -- unprompted ---------------------------------------------------------------
+    def tips(self, force=False):
+        """'Floyd not clippy but ...' lines about this mailbox - clippy level only
+        (or when asked); each given at most once in 30 minutes."""
+        if not force and self.level != "clippy":
+            return []
+
+        def safe(fn, default=0):
+            try:
+                return fn()
+            except Exception:
+                return default
+        total, unseen = safe(lambda: self._count("spool"), (0, 0))
+        new = safe(lambda: [r for r in self._rows("spool") if r[1] == "N"], [])
+        real = [r for r in new if not self.BULK_FROM.search(r[3]) and not self.BULK_SUBJ.search(r[4])]
+        old = safe(lambda: self._purge_n(self._ok("purge", "spool", "--older-than", "90", "--seen",
+                                                 "--to-folder", "mbox", "-n")))
+        trash = safe(lambda: self._count("trash")[0])
+        vac = safe(lambda: "state: on" in self._ok("vacation", "status"), False)
+        out, now = [], self.clock()
+        for tip in tvf.clippy_mail(unseen, len(real), old, trash, vac):
+            if force or now - self.tip_seen.get(tip, -1e9) > 1800:
+                self.tip_seen[tip] = now
+                out.append(tip)
+        return out[:3]
+
+
+_FLOYD = None
+
+
+def cmd_floyd(a):
+    """floyd TEXT...  - say it to Floyd; floyd --tips  - his unprompted tips (clippy
+    level); floyd --status  - 'LEVEL<TAB>what it means'."""
+    global _FLOYD
+    if _FLOYD is None:
+        base = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+        _FLOYD = MailFloyd(build_parser(), os.path.join(base, "tvmail", "floyd"))
+    f = _FLOYD
+    if a.status:
+        sys.stdout.write("%s\t%s\n" % (f.level, tvf.LEVEL_BLURB[f.level]))
+        return 0
+    lines = f.tips() if a.tips else f.handle(" ".join(a.text))
+    for ln in lines:
+        sys.stdout.write(ln.replace("\t", " ") + "\n")
+    return 0
+
+
 def cmd_ping(a):
     sys.stdout.write("pong\n")
     return 0
@@ -2140,7 +2551,7 @@ class _CapStream:
 # verbs that consume stdin or take over the terminal - never run them inside
 # the serve loop (they would eat the request stream)
 _SERVE_BLOCKED = frozenset(("serve", "send", "save-draft", "pull"))
-_COMMANDS = frozenset(("list", "counts", "vacation", "show", "raw", "parts", "save", "delete",
+_COMMANDS = frozenset(("floyd", "list", "counts", "vacation", "show", "raw", "parts", "save", "delete",
                        "mark", "purge", "empty-trash", "compose-template", "send",
                        "save-draft", "aliases", "pull", "ping", "mode",
                        "host", "serve"))
@@ -2287,6 +2698,9 @@ def build_parser():
     p = sub.add_parser("ping"); p.set_defaults(fn=cmd_ping)
     p = sub.add_parser("mode"); p.set_defaults(fn=cmd_mode)
     p = sub.add_parser("host"); p.set_defaults(fn=cmd_host)
+    p = sub.add_parser("floyd"); p.add_argument("text", nargs="*")
+    p.add_argument("--tips", action="store_true"); p.add_argument("--status", action="store_true")
+    p.set_defaults(fn=cmd_floyd)
     p = sub.add_parser("serve"); p.set_defaults(fn=cmd_serve)
     return ap
 
