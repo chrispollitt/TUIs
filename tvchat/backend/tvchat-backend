@@ -5020,6 +5020,24 @@ def mail_text_for_floyd(text, subject=""):
     return body or re.sub(r"^(?:re|fw|fwd):\s*", "", subject.strip(), flags=re.I)[:200]
 
 
+def parse_known(text):
+    """known = michelle=michelle@example.org, chris=chris@example.org: the
+    addresses he talks to by mail, lower-cased, with the name he calls each.  A
+    bare address is its own name."""
+    out = {}
+    for item in re.split(r"[,\s]+", (text or "").strip()):
+        if not item:
+            continue
+        name, eq, addr = item.partition("=")
+        if not eq:
+            name, addr = "", name
+        addr = addr.strip().lower()
+        if not re.match(r"^[^@\s=]+@[^@\s=]+$", addr):
+            raise UserError("known= wants name=address entries, not %r" % item)
+        out[addr] = name.strip() or addr
+    return out
+
+
 def fetch_new_mail(p):
     """[(uid, msgid, references, sender, display, subject, text, automatic, invite)] for
     the unseen mail in the INBOX, marked seen as it is taken (a thread)."""
@@ -5107,6 +5125,7 @@ class MailAdapter(CommandMixin):
         o = account.opts
         self.addr = (o.get("addr") or "").strip()
         self.name = (o.get("name") or "").strip()
+        self.known = parse_known(o.get("known"))
         try:
             self.poll = float(o.get("poll") or self.POLL)
         except ValueError:
@@ -5120,6 +5139,14 @@ class MailAdapter(CommandMixin):
         self.flush_timers = {}
         self.sent = {}                   # address -> [times of replies]
         self.sent_all = []
+
+    def allowed(self, address):
+        """known= lists who he talks to by mail (mail from, and replies to, anyone
+        else are dropped); the same domain as his own mailbox is also his.  With
+        no known= there is no limit."""
+        address = address.lower()
+        return (not self.known or address in self.known
+                or address.rpartition("@")[2] == self.addr.lower().rpartition("@")[2])
 
     def local_id(self):
         self._ids += 1
@@ -5225,13 +5252,17 @@ class MailAdapter(CommandMixin):
         for uid, msgid, refs, sender, name, subject, text, automatic, invite in res or []:
             if invite or automatic or sender == self.addr.lower():
                 continue                 # a Delta Chat invitation (its own adapter), a robot, ourselves
+            if not self.allowed(sender):
+                _log.info("%s: ignored mail from %s (not in known=)", self.account.id, sender)
+                continue                 # no answer, not even a refusal: a stranger learns nothing
             said = mail_text_for_floyd(text, subject)
             if not said:
                 continue
-            conv = self.chat.ensure_conv(self.account, sender, "direct", name or sender)
+            name = self.known.get(sender) or name or sender
+            conv = self.chat.ensure_conv(self.account, sender, "direct", name)
             self.threads[conv.id] = {"subject": subject, "msgid": msgid, "refs": refs}
             self.chat.add_message(conv, Message(self.local_id(), conv.id, time.time(),
-                                                Contact(sender, name or sender), said, ""))
+                                                Contact(sender, name), said, ""))
         self.timer = self.loop.call_later(self.poll, self._poll)
 
     # -- going out: what is said in a conversation is one reply mail --------------
@@ -5253,6 +5284,9 @@ class MailAdapter(CommandMixin):
         lines = self.outbox.pop(conv.id, [])
         self.flush_timers.pop(conv.id, None)
         if not lines:
+            return
+        if not self.allowed(conv.target):
+            _log.info("%s: not mailing %s (not in known=)", self.account.id, conv.target)
             return
         now = self.loop.clock()
         self.sent_all = [t for t in self.sent_all if now - t < 3600]
@@ -5337,6 +5371,10 @@ def check_config(path):
         elif a.protocol == "mail":
             if not DeltaChatAdapter.ADDRESS.match((o.get("addr") or "").strip()):
                 errors.append("[account:%s] addr= must be the mailbox's email address" % i)
+            try:
+                parse_known(o.get("known"))
+            except UserError as e:
+                errors.append("[account:%s] %s" % (i, e))
         elif a.protocol == "deltachat":
             addr = (o.get("addr") or "").strip()
             if not DeltaChatAdapter.ADDRESS.match(addr):

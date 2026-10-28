@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Mail Floyd only talks to people he knows:** `known = name=address, ...` on the mail account
+  limits whom he reads and answers by mail; anyone else is dropped silently (the mailbox's own
+  domain still counts). `!claude` stays admin-only, and a mail is never from an admin.
+
 - **Mail Floyd and he mails back:** a new `protocol = mail` account (`floyd-daemon` starts it) reads
   a mailbox every 30 s; each sender is a conversation Floyd listens in (`attach = mail/*`), and what
   he says comes back as one reply mail in the same thread (`Re:` subject, `In-Reply-To`,

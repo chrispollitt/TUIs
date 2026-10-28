@@ -2293,7 +2293,7 @@ class TestMailReplies(Base):
                           msg["Auto-Submitted"]),
                          ("alice@example.org", "floyd@example.org", "Re: hello", "<m1@example.org>",
                           "auto-replied"))
-        self.assertIn(msg.get_payload().strip(), cb.FloydMind.EIGHT_BALL)
+        self.assertIn(msg.get_payload(decode=True).decode().strip(), cb.FloydMind.EIGHT_BALL)
         self.settle()
         self.assertEqual(len(self.mail.sent), 1)                       # read once, answered once
 
@@ -2325,6 +2325,27 @@ class TestMailReplies(Base):
         self.turn(lambda: all(m.get("seen") for m in self.mail.inbox))
         self.settle(1.5)
         self.assertEqual(len(self.mail.sent), 1)
+
+    def test_only_known_addresses_and_the_own_domain_are_answered(self):
+        self.chat.adapter(self.chat.by_id["mail"]).known = cb.parse_known(
+            "michelle=Michelle@Elsewhere.org, chris=chris@elsewhere.org")
+        self.mail.add_mail("From: stranger@spam.example\nSubject: a\n\n!8ball who\n")
+        self.mail.add_mail("From: Mich <michelle@elsewhere.org>\nSubject: b\n\n!8ball hi\n")
+        self.mail.add_mail("From: inhouse@example.org\nSubject: c\n\n!8ball hi\n")
+        self.up()
+        self.turn(lambda: len(self.mail.sent) == 2)
+        self.settle()
+        import email
+        self.assertEqual(sorted(email.message_from_bytes(m)["To"] for m in self.mail.sent),
+                         ["inhouse@example.org", "michelle@elsewhere.org"])
+        self.assertEqual(self.chat.by_id["mail"].convs["mail/michelle@elsewhere.org"].title, "michelle")
+
+    def test_known_parsing(self):
+        self.assertEqual(cb.parse_known("a=A@x.org, b=b@y.org"), {"a@x.org": "a", "b@y.org": "b"})
+        self.assertEqual(cb.parse_known("c@z.org"), {"c@z.org": "c@z.org"})
+        self.assertEqual(cb.parse_known(""), {})
+        with self.assertRaises(cb.UserError):
+            cb.parse_known("nobody")
 
     def test_text_for_floyd(self):
         f = cb.mail_text_for_floyd
