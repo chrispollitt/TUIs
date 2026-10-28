@@ -1054,6 +1054,38 @@ class TestIrcHardening(IrcBase):
         self.assertFalse(any("fine line" in g or "bogus" in g for g in self.srv.got))
         self.chat.close()
 
+    def _invited(self, extra="", daemon=False):
+        stage = {}
+
+        def script(srv):
+            welcome(srv)
+            srv.expect("JOIN #Test")
+            srv.send(":tester!u@h JOIN #Test")
+            srv.send(":Dave!u@h INVITE tester #new")
+            srv.send(":Dave!u@h INVITE someoneelse #other")
+            srv.send(":srv PING :sync")
+            srv.expect("PONG")
+            stage["done"] = True
+
+        self.setup_irc(script, extra)
+        self.chat.daemon = daemon
+        self.adapter(BURST=50)
+        self.verb("connect", "libera")
+        self.turn(lambda: "done" in stage)
+        return self.srv.got
+
+    def test_invite_only_noted_in_a_session(self):
+        got = self._invited()
+        self.assertNotIn("JOIN #new", got)
+        self.assertIn("/join #new to accept", "\n".join(m[-1] for m in self.msgs() if "libera/*" in m))
+
+    def test_invite_joined_by_option(self):
+        self.assertIn("JOIN #new", self._invited("join_invites = yes"))
+        self.assertNotIn("JOIN #other", self.srv.got)
+
+    def test_invite_joined_in_the_daemon(self):
+        self.assertIn("JOIN #new", self._invited(daemon=True))
+
     def test_shared_commands_on_irc(self):
         stage = {}
 

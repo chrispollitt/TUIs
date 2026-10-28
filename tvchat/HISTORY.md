@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **`/invite Floyd #newchannel` works:** an incoming IRC `INVITE` was ignored; the central Floyd now
+  joins any channel he is invited to, and a session shows a note in the server window (`/join` to
+  accept, or `join_invites = yes` on the account to join at once).
 - **Input history:** Up / Down in the chat input line recall what you sent (one list for every
   conversation, kept between sessions in `~/.local/state/tvchat/input-history`, never a NickServ,
   OPER or `/pass` line); the log scrolls with PgUp / PgDn and Shift-Up / Shift-Down instead.

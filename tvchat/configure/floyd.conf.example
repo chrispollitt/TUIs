@@ -24,7 +24,7 @@ nick     = Floyd
 realname = Floyd, B-19-7 (a robot)
 # his services account; the password is looked up as above
 sasl     = Floyd
-# joined on every start; anyone can also /invite him or /msg him
+# joined on every start; anyone can also /invite him (he joins at once) or /msg him
 channels = #test
 
 [account:floyd]
