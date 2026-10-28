@@ -138,6 +138,20 @@ defined), `tvmail/build.sh --mingw`, `tvmail/tests/mingw_compile.sh` and its cte
 handling, WSL, and mentions of Windows Terminal / the Windows build of the Delta Chat core (that is
 the core's own build, run under Cygwin).
 
+## Oct 27 (evening): Floyd is live on cpbee
+
+Running as the `floyd` user under systemd (`tvchat-floyd`), connected to Ergo as `Floyd` (SASL), admin
+`chris`, `!claude` works (floyd's own Claude login; read-only tools; cannot read chris's files). Lessons
+the setup hit, now handled by POSIX `chat-setup/scripts/configure-floyd.sh` (which now does every step:
+tvchat build+install, Claude CLI install for floyd, clones into `~floyd/src`, floyd.conf with `host` =
+the address Ergo listens on, `claude_cmd` = the full path, the unit, start, Claude login + a test
+question): (1) on cpbee the name `cpbee` is loopback but Ergo's TLS port is LAN-only, so use the LAN
+address; (2) Ergo refuses a registered nick to an unauthenticated connection (re-runs saw "in use");
+(3) systemd's PATH lacks `~floyd/.local/bin`, so `claude_cmd` must be absolute; (4) running `claude`
+from chris's directory makes it try chris's `.claude` settings - run it from floyd's home. The daemon
+now logs connects, joins and server refusals to the journal. Not done: `#test` membership was not
+confirmed (the probe saw no members; maybe secret), and no one-line `--status` for the daemon.
+
 ## Versions
 
 tvmail and tvchat share one version: `VERSION` at the top, set with `./version.sh X.Y.Z` (it shows
