@@ -10,6 +10,7 @@
 #include <functional>
 #include <map>
 #include <set>
+#include <sys/stat.h>
 #include <tuple>
 
 namespace
@@ -682,6 +683,11 @@ class TChatMainWindow : public TWindow
     std::string acct, conv, name;                  // shown: account, conversation, its name
     std::map<std::string, std::string> lastConv;   // per account: the conversation last shown
     std::map<std::string, std::string> drafts;     // per conversation: typed, not sent
+    // Up / Down in the input line recall what was sent before, as in a shell: one list for
+    // every conversation, kept between sessions in ~/.local/state/tvchat/input-history
+    std::vector<std::string> recall;
+    size_t recallAt = 0;      // an index into recall; recall.size() = not browsing
+    std::string recallDraft;  // what was typed before the first Up
     std::vector<ChatLine> msgs; // the shown conversation's, oldest first
     std::set<std::string> ids;  // what msgs holds: history and events overlap
     bool noOlder = false;       // `history --before` came back empty
@@ -926,6 +932,78 @@ class TChatMainWindow : public TWindow
         // applies to the model (and the lists, through the broadcast)
     }
 
+    static std::string recallPath()
+    {
+        const char *x = getenv("XDG_STATE_HOME");
+        return (x && *x ? std::string(x) : homePath(".local/state")) + "/tvchat/input-history";
+    }
+    // Never kept: what may hold a password (the NickServ and OPER commands, /pass), and a
+    // line typed with a leading space, as in a shell with HISTCONTROL=ignorespace.
+    static bool recallSecret(const std::string &t)
+    {
+        if (!t.empty() && t[0] == ' ')
+            return true;
+        std::string l = lowered(trimmed(t));
+        static const char *const starts[] = {
+            "/msg nickserv", "/msg chanserv", "/query nickserv", "/query chanserv", "/ns ", "/cs ",
+            "/nickserv", "/chanserv", "/quote pass", "/quote oper", "/quote authenticate",
+            "/oper ", "/pass "};
+        for (const char *w : starts)
+            if (l.compare(0, std::strlen(w), w) == 0)
+                return true;
+        return false;
+    }
+    void recallLoad()
+    {
+        for (const std::string &l : splitLines(slurp(recallPath())))
+            if (!l.empty())
+                recall.push_back(l);
+        if (recall.size() > 500)
+            recall.erase(recall.begin(), recall.end() - 500);
+        recallAt = recall.size();
+    }
+    void recallAdd(const std::string &line)
+    {
+        recallAt = recall.size();
+        if (trimmed(line).empty() || recallSecret(line) || (!recall.empty() && recall.back() == line))
+            return;
+        recall.push_back(line);
+        if (recall.size() > 500)
+            recall.erase(recall.begin());
+        recallAt = recall.size();
+        std::string path = recallPath();
+        for (size_t i = 1; i < path.size(); ++i) // mkdir -p, owner only
+            if (path[i] == '/')
+                ::mkdir(path.substr(0, i).c_str(), 0700);
+        if (FILE *f = std::fopen(path.c_str(), "ab"))
+        {
+            std::fputs((line + "\n").c_str(), f);
+            std::fclose(f);
+            ::chmod(path.c_str(), 0600);
+        }
+    }
+    // Up (dir < 0) goes back through what was sent, Down forward again to what was being typed
+    void recallStep(int dir)
+    {
+        if (recall.empty())
+            return;
+        if (dir < 0)
+        {
+            if (recallAt == 0)
+                return;
+            if (recallAt == recall.size())
+                recallDraft = inputText();
+            --recallAt;
+        }
+        else
+        {
+            if (recallAt >= recall.size())
+                return;
+            ++recallAt;
+        }
+        setInput(recallAt == recall.size() ? recallDraft : recall[recallAt]);
+    }
+
     std::string inputText() const { return input && input->data ? input->data : ""; }
     void setInput(const std::string &s)
     {
@@ -979,6 +1057,7 @@ class TChatMainWindow : public TWindow
         }
         setInput(std::string());
         drafts.erase(conv);
+        recallAdd(text);
         pollNow(); // our line (the backend's copy or the server's echo) now
     }
 
@@ -1044,6 +1123,7 @@ class TChatMainWindow : public TWindow
             talkCur[conv] = talk->cur;
         }
         conv = c;
+        recallAt = recall.size();
         if (!acct.empty())
             lastConv[acct] = conv;
         auto d = drafts.find(conv);
@@ -1163,6 +1243,7 @@ public:
         { loadOlder(); };
         prompt = new TStaticText(R.prompt, ">");
         input = new TChatInput(R.input, 2000);
+        recallLoad();
         talk = new TTalkView(TRect(R.log.a.x, R.log.a.y, R.input.b.x, R.input.b.y));
         talk->keys = [this](const std::string &k)
         {
@@ -1296,8 +1377,17 @@ public:
                 clearEvent(e);
                 return;
             }
-            if (k == kbPgUp || k == kbPgDn || k == kbUp || k == kbDown ||
-                k == kbCtrlPgUp || k == kbCtrlPgDn)
+            if (k == kbUp || k == kbDown)
+            {
+                // Up / Down recall what you sent; Shift-Up / Shift-Down (and PgUp / PgDn) scroll the log
+                if (e.keyDown.controlKeyState & kbShift)
+                    log->scrollKey(k);
+                else
+                    recallStep(k == kbUp ? -1 : 1);
+                clearEvent(e);
+                return;
+            }
+            if (k == kbPgUp || k == kbPgDn || k == kbCtrlPgUp || k == kbCtrlPgDn)
             {
                 log->scrollKey(k);
                 clearEvent(e);
