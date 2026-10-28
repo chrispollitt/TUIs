@@ -3089,6 +3089,36 @@ class TestFloydDaemon(Base):
         self.assertIn("lives on the server", str(cm.exception))
         self.assertEqual(self.chat.account("floyd").state, "error")
 
+    def test_a_local_floyd_that_may_not_run_does_not_stop_the_backend(self):
+        """Oct 27: an old [account:floyd] with attach= made Chat.start() raise, the serve
+        process died after its banner, and tvchat listed no servers at all."""
+        self.conf("""\
+            [chat]
+            autoconnect = net
+
+            [account:net]
+            protocol = irc
+            host     = irc.example.org
+
+            [account:floyd]
+            protocol = floyd
+            attach   = net/*
+            """)
+        chat = cb.Chat(loop=cb.Loop(FakeClock()))
+        chat.start()                                       # must not raise
+        self.assertEqual(chat.account("floyd").state, "error")
+        self.assertIn("lives on the server", chat.account("floyd").detail)
+        self.assertEqual([a.id for a in chat.accounts], ["net", "floyd"])   # and he is listed
+        # the same through the real serve process: it stays up and lists both
+        p = subprocess.Popen([sys.executable, str(BACKEND), "serve"], stdin=subprocess.PIPE,
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=dict(os.environ))
+        try:
+            out = p.communicate(b"accounts\nquit\n", timeout=30)[0].decode()
+        finally:
+            p.kill()
+        self.assertIn("net\tirc", out)
+        self.assertIn("floyd\tfloyd\terror", out)
+
     def test_the_daemon_wants_floyd_and_an_irc_account(self):
         import argparse
         self.conf("[account:net]\nprotocol = irc\nhost = h\n")

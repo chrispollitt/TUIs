@@ -5255,7 +5255,10 @@ class Chat:
             if a.protocol == "floyd" and a.id not in self.autoconnect:
                 ad = self.adapter(a)
                 if ad.patterns or ad.memory.data["attached"]:
-                    self.connect(a)
+                    try:
+                        self.connect(a)
+                    except UserError:
+                        pass             # a Floyd that may not run here: shown as an error, not a crash
 
     def close(self):
         for ad in self.adapters.values():
