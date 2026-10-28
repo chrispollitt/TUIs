@@ -131,27 +131,43 @@ to prove it.
 
 ## The central Floyd (on the server)
 
-Floyd runs on the LAN master as a bot with his own IRC nick, not inside each tvchat. On
-the master (cpbee), after `./build.sh && ./install.sh`:
+Floyd runs on the LAN master as a bot with his own IRC nick, not inside each tvchat, as the
+**`floyd`** system user (no login shell). On the master (cpbee), install tvchat first
+(`./build.sh && ./install.sh`), then run one script from
+[chrispollitt/POSIX](https://github.com/chrispollitt/POSIX):
 
 ```sh
-# 1. register his nick with the IRC server (any IRC client: /nick Floyd, then
-#    /msg NickServ REGISTER <password> <email>)
-# 2. his configuration and password (edit admins = and claude_dir = first)
-sudo mkdir -p /etc/tvchat
-sudo cp configure/floyd.conf.example /etc/tvchat/floyd.conf
-sudo install -m 600 -o chris /dev/null /etc/tvchat/floyd.env     # one line: TVCHAT_PASS_CPBEE=PASSWORD
-# 3. run him
-sudo cp configure/tvchat-floyd.service /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now tvchat-floyd
-journalctl -u tvchat-floyd -f
+sudo chat-setup/scripts/configure-floyd.sh --admins chris --claude-dir /path/he/may/read
 ```
 
-`tvchat-backend check-config /etc/tvchat/floyd.conf` checks the file. The unit runs as the user
-whose `claude` login Floyd borrows (chris); an admin (`admins =`, a services account name) can
-then say `!claude QUESTION` to him in a channel, or `claude QUESTION` in a private message. The
-Claude CLI gets only Read, Grep and Glob (`claude_tools`), but Read is not confined to
-`claude_dir`: it can read anything that user can, so keep `admins` short.
+It makes the `floyd` user and his mailbox (`cwp+floyd@...`, read with `sudo -u floyd -H tvmail`),
+registers the `Floyd` nick with NickServ (password in `/etc/tvchat/floyd.env`), writes
+`/etc/tvchat/floyd.conf` from `configure/floyd.conf.example`, installs
+`configure/tvchat-floyd.service` and starts it. It can be run again; each step is skipped when it is
+already done, and an existing `floyd.conf` is never overwritten. `--help` lists the options
+(`--no-start`, `--service-user`, `--tvchat-dir` ...).
+
+Then, once, give him his Claude login (only if you want `!claude`):
+
+```sh
+sudo -u floyd -H bash -l      # floyd has no login shell, so su cannot be used
+claude                        # log in, then exit
+```
+
+`tvchat-backend check-config /etc/tvchat/floyd.conf` checks the file; `journalctl -u tvchat-floyd -f`
+shows him and who asked Claude what. An admin (`admins =`, a NickServ account name) can say
+`!claude QUESTION` to him in a channel, or `claude QUESTION` in a private message. The Claude CLI gets
+only Read, Grep and Glob (`claude_tools`), but Read is not confined to `claude_dir`: it can read
+whatever the service user can. As `floyd` that is little (his home, and what you open up with
+`--claude-dir`); `--service-user chris` runs him as you, and then it is everything you can read,
+so keep `admins` short.
+
+**By hand**, without the script: register the nick (`/nick Floyd`, `/msg NickServ REGISTER <password>
+<email>`), copy `configure/floyd.conf.example` to `/etc/tvchat/floyd.conf` and edit `admins =` and
+`claude_dir =`, put `TVCHAT_PASS_CPBEE=<password>` in `/etc/tvchat/floyd.env` (mode 600; **do not**
+create that file with `install /dev/null` if the script already wrote it - that empties it), copy
+`configure/tvchat-floyd.service` to `/etc/systemd/system/`, set its `User=`, and
+`systemctl daemon-reload && systemctl enable --now tvchat-floyd`.
 
 ## Over ssh from Windows Terminal
 
