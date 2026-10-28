@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Mail Floyd and he mails back:** a new `protocol = mail` account (`floyd-daemon` starts it) reads
+  a mailbox every 30 s; each sender is a conversation Floyd listens in (`attach = mail/*`), and what
+  he says comes back as one reply mail in the same thread (`Re:` subject, `In-Reply-To`,
+  `Auto-Submitted: auto-replied`). Robots, lists, bounces, `noreply` and Delta Chat invitations are
+  never answered; one address gets at most 5 replies an hour (60 in all). A mail is never from an
+  admin (a From line proves nothing), so `!claude` is refused by mail.
+
 - **The central Floyd reads his Delta Chat inbox for invitations:** `floyd-daemon` now starts
   `protocol = deltachat` accounts too and accepts every chat invitation that arrives by mail
   (`/invite floyd@host`), as he joins any IRC channel he is invited to. In a session it is

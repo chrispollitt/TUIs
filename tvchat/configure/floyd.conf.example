@@ -46,10 +46,32 @@ channels = #test
 #smtp_port   = 587
 #verify      = false
 
+
+# Mail (optional): people can also EMAIL him, and he answers in an email (a reply in
+# the same thread, one mail per question).  He reads his INBOX every 30 s, answers
+# what is for him as in any chat (!commands, "floyd: ...", plain questions), skips
+# robots (Auto-Submitted, bulk, lists, noreply, bounces) and answers one address at
+# most 5 times an hour (60 in all).  A mail is never from an admin: the From line
+# proves nothing, so !claude is refused by mail.  Its mailbox password is in
+# floyd.env as TVCHAT_PASS_MAIL (the account's name, upper case).  Uncomment, adjust, and add mail/* to
+# attach = below.
+#[account:mail]
+#protocol    = mail
+#display     = Floyd's mail
+#addr        = floyd@cpbee.cmnet
+#name        = Floyd
+# the master's own mail server, if the address's domain is not it:
+#imap_server = localhost
+#imap_user   = floyd
+#smtp_server = localhost
+#smtp_user   = floyd
+#smtp_port   = 587
+#verify      = false
+
 [account:floyd]
 protocol = floyd
 # he listens in every conversation of that account, private messages included
-# add delta/* once the Delta Chat account above is on:  attach   = cpbee/*, delta/*
+# add delta/* and mail/* once those accounts above are on:  attach   = cpbee/*, delta/*, mail/*
 attach   = cpbee/*
 # speaks as himself, so no "[Floyd] " tag
 tag      =
