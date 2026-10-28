@@ -4679,19 +4679,27 @@ class FloydAdapter(CommandMixin):
         return self.mind._say([(0.8, "Floyd will ask Claude. Floyd has to climb a ladder. Floyd will be back.")])
 
     def _claude_argv(self):
-        """The CLI, read-only by default: only the named tools exist (--tools),
-        anything else is refused rather than asked about (dontAsk)."""
+        """The CLI, read-only by default: only the named built-in tools exist (--tools),
+        anything else is refused rather than asked about (dontAsk).  And nothing beyond
+        them: --tools does not limit MCP servers, and a Claude login brings its account's
+        connectors (Google Drive, GitHub ...), so every MCP server is shut out with an
+        empty strict config (_run_claude also turns the claude.ai ones off), and skills
+        are off."""
         argv = [self.claude_cmd, "-p", "--output-format", "text",
                 "--tools", self.claude_tools, "--allowedTools", self.claude_tools,
-                "--permission-mode", "dontAsk"]
+                "--permission-mode", "dontAsk",
+                "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
+                "--disable-slash-commands"]
         if self.claude_model:
             argv += ["--model", self.claude_model]
         return argv + self.claude_extra
 
     def _run_claude(self, argv, prompt):
         """On a thread: the prompt goes in on stdin, never on the command line."""
+        env = dict(os.environ)
+        env["ENABLE_CLAUDEAI_MCP_SERVERS"] = "false"     # no connectors from the account
         r = subprocess.run(argv, input=prompt.encode("utf-8"), stdout=subprocess.PIPE,
-                           stderr=subprocess.PIPE, cwd=self.claude_dir,
+                           stderr=subprocess.PIPE, cwd=self.claude_dir, env=env,
                            timeout=self.claude_timeout)
         out = r.stdout.decode("utf-8", "replace").strip()
         if r.returncode and not out:

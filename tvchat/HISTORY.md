@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Floyd's Claude has no connectors:** the CLI that `!claude` runs is cut off from MCP servers, the
+  login's claude.ai connectors (Google Drive, GitHub ...) and skills, as well as from every built-in
+  tool but Read, Grep and Glob.
+
 - **Cygwin is the only Windows** (tvchat never had a native build; the shared `_WIN32` branches in
   tvcommon, and the mingw test and build option in tvmail, are gone).
 

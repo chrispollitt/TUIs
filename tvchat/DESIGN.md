@@ -331,7 +331,11 @@ be taken for an option; `cwd` = `claude_dir`; `claude_timeout`), one at a time. 
 stripped of control characters (no CTCP, no escape sequences), cut to `CLAUDE_CHARS` and
 `claude_lines`, and sent back through `_out` like any of his lines. A valid order is exempt from the
 2-second gap (a bystander's `!8ball` must not swallow it); refusals and failures are logged at INFO.
-Tests: `TestFloydDaemon` (with `_run_claude` replaced, and with fake `claude` scripts) and
+The CLI is isolated from everything but those three tools: `--tools` limits only the built-in
+tools, and a Claude login also brings its account's connectors (Google Drive, Claude Docs, GitHub ...),
+so the command line carries `--strict-mcp-config --mcp-config '{"mcpServers":{}}'` and
+`--disable-slash-commands`, and the environment `ENABLE_CLAUDEAI_MCP_SERVERS=false` (Oct 27: Floyd's
+Claude offered to use Google Drive). Tests: `TestFloydDaemon` (with `_run_claude` replaced, and with fake `claude` scripts) and
 `TestFloydDaemonProcess` (the real process against a fake IRC server that sends account tags).
 
 ## Delta Chat adapter
