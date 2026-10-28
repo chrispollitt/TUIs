@@ -27,9 +27,29 @@ sasl     = Floyd
 # joined on every start; anyone can also /invite him (he joins at once) or /msg him
 channels = #test
 
+
+# Delta Chat (optional): Floyd's own mailbox, so people can /invite floyd@HOST from
+# a Delta Chat account.  He reads his INBOX for invitations every 30 s and accepts
+# every one (as on IRC), then answers in the chat like anywhere else.  Needs
+# deltachat-rpc-server (pip install deltachat-rpc-server, as the service user), his
+# mailbox password in floyd.env as TVCHAT_PASS_DELTA (this account's name, upper
+# case), and the account in attach = below.  Uncomment and adjust:
+#[account:delta]
+#protocol    = deltachat
+#display     = Delta Chat
+#addr        = floyd@cpbee.cmnet
+# only when autoconfiguration cannot work it out (the master's own mail server):
+#imap_server = localhost
+#imap_user   = floyd
+#smtp_server = localhost
+#smtp_user   = floyd
+#smtp_port   = 587
+#verify      = false
+
 [account:floyd]
 protocol = floyd
 # he listens in every conversation of that account, private messages included
+# add delta/* once the Delta Chat account above is on:  attach   = cpbee/*, delta/*
 attach   = cpbee/*
 # speaks as himself, so no "[Floyd] " tag
 tag      =

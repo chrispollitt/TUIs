@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **The central Floyd reads his Delta Chat inbox for invitations:** `floyd-daemon` now starts
+  `protocol = deltachat` accounts too and accepts every chat invitation that arrives by mail
+  (`/invite floyd@host`), as he joins any IRC channel he is invited to. In a session it is
+  still a question; `accept_invites = yes` on the account accepts without asking. The example
+  config has the account (commented out) and says it needs `delta/*` in `attach =`.
+
 - **Floyd answers an unknown `!command`** ("Floyd doesn't know !foo ... Try !help") instead of
   staying silent, in channels and chats he listens in. `!!!` and a lone `!` are still ignored.
 

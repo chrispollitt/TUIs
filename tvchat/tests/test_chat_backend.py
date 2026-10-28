@@ -2288,6 +2288,19 @@ class TestDeltaInvitations(DeltaBase):
         self.assertEqual(self.verb("invites"), (0, b""))
         self.assertEqual(self.verb("accept-invite", "delta", "alice@example.org")[0], 1)
 
+    def test_the_central_floyd_accepts_invitations_by_himself(self):
+        link = "https://i.delta.chat/#ABC&v=3&a=alice%40example.org&n="
+        uid = self.mail.add("Alice <alice@example.org>", link)
+        self.setup_inv()
+        self.chat.daemon = True
+        self.up()
+        self.turn(lambda: self.requests("secure_join"))
+        self.assertEqual(self.requests("secure_join")[0]["params"], [1, link])
+        self.turn(lambda: uid not in [m["uid"] for m in self.mail.live()])
+        self.assertEqual(self.verb("invites"), (0, b""))
+        self.assertTrue(any("accepted the chat invitation from alice@example.org" in m.text
+                            for m in self.acct.convs["delta/*"].history))
+
     def test_declining_removes_the_mail_and_joins_nothing(self):
         link = "https://i.delta.chat/#ABC&a=alice%40example.org"
         uid = self.mail.add("alice@example.org", link)

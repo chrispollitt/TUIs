@@ -3417,7 +3417,22 @@ class DeltaChatAdapter(CommandMixin):
                 self.chat.events.push("invite", self.account.id, sender)
             if uid not in inv["uids"]:
                 inv["uids"].append(uid)
+        self._accept_waiting()
         self.scan_timer = self.loop.call_later(self.INVITE_POLL, self._watch_invites)
+
+    def _accept_waiting(self):
+        """The central Floyd has nobody to ask: he takes every invitation (as on
+        IRC); accept_invites = yes does the same in a session."""
+        if not (self.chat.daemon or _bool(self.account.opts.get("accept_invites"), False)):
+            return
+        for inv in list(self.invites.values()):
+            try:
+                self.accept_invite(inv["from"])
+                self.system(self.server_conv(), "accepted the chat invitation from %s" % inv["from"])
+            except UserError as e:
+                self.system(self.server_conv(), "could not accept the invitation from %s: %s"
+                            % (inv["from"], e))
+                self._drop_invite(inv)         # not tried again every 30 s
 
     def add_invite(self, link):
         """An invitation that came another way (tvmail found the link in a mail
@@ -3431,6 +3446,7 @@ class DeltaChatAdapter(CommandMixin):
             self.invites[sender.lower()] = {"from": sender, "link": link, "uids": []}
             self.system(self.server_conv(), "%s invites you to chat - Chat > Accept invite..." % sender)
             self.chat.events.push("invite", self.account.id, sender)
+            self._accept_waiting()
 
     def pending_invites(self):
         return [inv["from"] for inv in self.invites.values()]
@@ -5790,7 +5806,7 @@ def cmd_floyd_daemon(a):
         signal.signal(sig, lambda *_: loop.stop())
     chat.start()
     for x in chat.accounts:                      # he is always on, with or without [chat] autoconnect
-        if x.protocol in ("irc", "floyd") and x.state == "disconnected":
+        if x.protocol in ("irc", "deltachat", "floyd") and x.state == "disconnected":
             try:
                 chat.connect(x)
             except UserError as e:
