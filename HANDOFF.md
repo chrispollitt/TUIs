@@ -236,5 +236,14 @@ name to fetch (`git clone --branch v1.3.0 --depth 1 <repo>`). Oct 25: both are 1
 - **Every squashed bug gets a BUGS.md row and a regression case.** A flaky
   pty test is a test that waits a fixed time: wait for a condition instead
   (tvcommon/README.md).
+- **File modes (git).** Two gits share these trees: Cygwin git, and Git for Windows (the Bash tool's
+  `git`, the desktop app's worktrees). NTFS has no Unix execute bit, so with `core.fileMode=true` the
+  tree showed dozens of `mode change 100755 => 100644` and Cygwin even made plain files look
+  executable. Fix (Oct 27), outside the repos in `~/gh_cp/git-hooks/`: **every repo has
+  `core.fileMode=false`** (`fix-filemode.sh`, rerun after cloning a new repo; `third_party.sh` does it
+  for its clones), and the pre-commit stub runs `pre-commit-modes`, which marks every staged file
+  that starts with `#!` as executable in the index (what Linux/cpbee checks out) and re-sets
+  fileMode. So: a script needs a `#!` line, not a chmod; `chmod +x` alone is invisible to git.
+  `test-hooks.sh` tests it (run it with both gits). Never `git checkout -f` to clear mode noise.
 - **Keep these files true:** when something here, in a README or in TO-DO
   changes, fix it in the same commit.
