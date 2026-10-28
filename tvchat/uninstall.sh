@@ -63,7 +63,7 @@ ask() {   # ask "question" [default Y|N]
 }
 
 os=$(uname -s 2>/dev/null || echo unknown)
-IS_CYGWIN=0; case "$os" in CYGWIN*|MSYS*|MINGW*) IS_CYGWIN=1 ;; esac
+IS_CYGWIN=0; case "$os" in CYGWIN*) IS_CYGWIN=1 ;; esac
 
 # rm_paths PREFIX PATH... - remove files, then the doc dir if now empty
 rm_paths() {

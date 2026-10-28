@@ -5,6 +5,11 @@ Releases are tagged `tvmail-vX.Y.Z`; `git log` has the rest.
 
 ## Unreleased
 
+- **Cygwin is the only Windows.** The native (mingw) build is gone: `build.sh --mingw`, the
+  `mingw_compile` test and every `_WIN32` branch (in tvcommon too) are removed; CMake refuses a
+  Windows target and says to use Cygwin. That also ended the failing periodic-pull code in
+  the mingw syntax check.
+
 - **Floyd in tvmail** (File > Floyd..., F7; `tvmail-backend floyd`): an assistant that reads the
   unread subjects, triages unread mail from real people, finds mail by sender, subject and date,
   archives read inbox mail older than N days, empties the trash and switches the out-of-office

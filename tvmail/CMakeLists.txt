@@ -3,6 +3,12 @@ project(tvmail VERSION 1.3.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+# tvmail needs fork(), pipes and a POSIX shell.  There is no native Windows
+# build - use Cygwin (or WSL).
+if(WIN32)
+    message(FATAL_ERROR "tvmail needs a POSIX system: build it on Linux, macOS, "
+                        "the BSDs, Cygwin or WSL")
+endif()
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
@@ -48,48 +54,37 @@ if(TVMAIL_PYTHON)
                      -s "${CMAKE_CURRENT_SOURCE_DIR}/tests" -p "test_backend.py")
 endif()
 
-if(NOT WIN32)
-    # TVMAIL_MODE=local pins it to the on-disk mbox path regardless of any
-    # ~/.config/tvmail/tvmail.conf on the host - so a client machine's
-    # --selftest doesn't wander off to a live IMAP server.
-    add_test(NAME backend_pipe COMMAND tvmail --selftest)
-    set_tests_properties(backend_pipe PROPERTIES
-        ENVIRONMENT "PATH=${CMAKE_CURRENT_SOURCE_DIR}/backend:$ENV{PATH};TVMAIL_MODE=local"
-        PASS_REGULAR_EXPRESSION "selftest: served=1 status=0")
-    if(TVMAIL_PYTHON)
-        add_test(NAME e2e_tui
-                 COMMAND ${TVMAIL_PYTHON}
-                         "${CMAKE_CURRENT_SOURCE_DIR}/tests/e2e_tui.py"
-                         --bin $<TARGET_FILE:tvmail>
-                         --backend-dir "${CMAKE_CURRENT_SOURCE_DIR}/backend")
-        set_tests_properties(e2e_tui PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
-        add_test(NAME e2e_regress
-                 COMMAND ${TVMAIL_PYTHON}
-                         "${CMAKE_CURRENT_SOURCE_DIR}/tests/e2e_regress.py"
-                         --bin $<TARGET_FILE:tvmail>
-                         --backend-dir "${CMAKE_CURRENT_SOURCE_DIR}/backend")
-        set_tests_properties(e2e_regress PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 400)
-    endif()
-    # install_roundtrip : cmake --install into a temp prefix, ./uninstall.sh it
-    add_test(NAME install_roundtrip
-             COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/install_roundtrip.sh"
-                     "${CMAKE_CURRENT_BINARY_DIR}")
-    # mail_setup : ../tvcommon/third_party/POSIX/mail-setup's own sandboxed tests (F3 runs
-    #              its mail-pull); skipped if not fetched.  -LE mail_setup omits it
-    add_test(NAME mail_setup
-             COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/mail_setup.sh")
-    set_tests_properties(mail_setup PROPERTIES
-        SKIP_RETURN_CODE 77 TIMEOUT 300 LABELS mail_setup)
-    # mingw_compile : every src/*.cpp syntax-checked by the mingw-w64 cross g++
-    #                 and tvcommon's (warnings as errors) - the native Windows build;
-    #                 77 = no cross compiler, or tvision found as a package
-    if(DEFINED TVISION_DIR AND EXISTS "${TVISION_DIR}/include/tvision/tv.h")
-        add_test(NAME mingw_compile
-                 COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/mingw_compile.sh"
-                         "${TVISION_DIR}/include" "${TVCOMMON_DIR}")
-        set_tests_properties(mingw_compile PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)
-    endif()
+# TVMAIL_MODE=local pins it to the on-disk mbox path regardless of any
+# ~/.config/tvmail/tvmail.conf on the host - so a client machine's
+# --selftest doesn't wander off to a live IMAP server.
+add_test(NAME backend_pipe COMMAND tvmail --selftest)
+set_tests_properties(backend_pipe PROPERTIES
+    ENVIRONMENT "PATH=${CMAKE_CURRENT_SOURCE_DIR}/backend:$ENV{PATH};TVMAIL_MODE=local"
+    PASS_REGULAR_EXPRESSION "selftest: served=1 status=0")
+if(TVMAIL_PYTHON)
+    add_test(NAME e2e_tui
+             COMMAND ${TVMAIL_PYTHON}
+                     "${CMAKE_CURRENT_SOURCE_DIR}/tests/e2e_tui.py"
+                     --bin $<TARGET_FILE:tvmail>
+                     --backend-dir "${CMAKE_CURRENT_SOURCE_DIR}/backend")
+    set_tests_properties(e2e_tui PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
+    add_test(NAME e2e_regress
+             COMMAND ${TVMAIL_PYTHON}
+                     "${CMAKE_CURRENT_SOURCE_DIR}/tests/e2e_regress.py"
+                     --bin $<TARGET_FILE:tvmail>
+                     --backend-dir "${CMAKE_CURRENT_SOURCE_DIR}/backend")
+    set_tests_properties(e2e_regress PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 400)
 endif()
+# install_roundtrip : cmake --install into a temp prefix, ./uninstall.sh it
+add_test(NAME install_roundtrip
+         COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/install_roundtrip.sh"
+                 "${CMAKE_CURRENT_BINARY_DIR}")
+# mail_setup : ../tvcommon/third_party/POSIX/mail-setup's own sandboxed tests (F3 runs
+#              its mail-pull); skipped if not fetched.  -LE mail_setup omits it
+add_test(NAME mail_setup
+         COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/mail_setup.sh")
+set_tests_properties(mail_setup PROPERTIES
+    SKIP_RETURN_CODE 77 TIMEOUT 300 LABELS mail_setup)
 
 include(GNUInstallDirs)
 install(TARGETS tvmail RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

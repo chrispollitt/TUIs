@@ -7,8 +7,8 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
-# tvchat-backend is a co-process: tvchat needs fork() and pipes.  (tvmail
-# has a native Windows build; tvchat has none - use Cygwin or WSL.)
+# tvchat-backend is a co-process: tvchat needs fork() and pipes.  There is no
+# native Windows build - use Cygwin (or WSL).
 if(WIN32)
     message(FATAL_ERROR "tvchat needs a POSIX system (fork()): build it on "
                         "Linux, macOS, the BSDs, Cygwin or WSL")

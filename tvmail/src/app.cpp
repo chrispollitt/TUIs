@@ -862,7 +862,6 @@ void TVMailApp::emptyTrash()
 
 void TVMailApp::pullMail()
 {
-#ifndef _WIN32
     if (pullPid > 0)
         return; // one at a time
     // The baseline is the inbox as the last pull left it (spam already filed), or fewer if you
@@ -881,12 +880,10 @@ void TVMailApp::pullMail()
         disableCommands(cs); // grey "F3 Pull" until it's done
         return;
     }
-#endif
-    shInteractive(backendCommand("pull")); // fork failed / Windows: old way
+    shInteractive(backendCommand("pull")); // fork failed: old way
     reload();
 }
 
-#ifndef _WIN32
 // putEvent() holds one event, so idle() posts at most one per call; anything
 // else that is due goes on the next idle round, a moment later.
 void TVMailApp::post(ushort command)
@@ -928,11 +925,9 @@ void TVMailApp::idle()
     pullPid = -1;
     post(cmPullDone); // finish outside idle()
 }
-#endif
 
 void TVMailApp::pullFinished()
 {
-#ifndef _WIN32
     TCommandSet cs;
     cs.enableCmd(cmPull);
     enableCommands(cs);
@@ -970,7 +965,6 @@ void TVMailApp::pullFinished()
     if (tail.empty())
         tail = "Pull finished (no output).";
     notify(tail, pullExit >= 2 ? noteError : noteInfo);
-#endif
 }
 
 void TVMailApp::reload()

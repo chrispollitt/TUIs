@@ -3,7 +3,7 @@
 // tvchat-backend helper, Delta Chat.
 //
 // POSIX only (Linux incl. Raspberry Pi / WSL, macOS, the BSDs, Cygwin): the
-// backend is a co-process, and a native Windows build has no fork().
+// backend is a co-process (fork()).  On Windows use Cygwin.
 //
 // Build: ../build.sh
 
