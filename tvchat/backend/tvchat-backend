@@ -4507,7 +4507,7 @@ class FloydAdapter(CommandMixin):
                 elif "a" in msg.flags:
                     pass                 # an action is not addressed to him
                 elif bang:
-                    plan += mind.botcmd(body, who) or []
+                    plan += mind.botcmd(body, who) or self._unknown_bang(mind, body)
                 elif to_him:
                     plan += self._talk(mind, body, who, lvl)
                 elif tvf.at_least(lvl, "helpful") and mind.KARMA.match(text):
@@ -4531,6 +4531,15 @@ class FloydAdapter(CommandMixin):
     CATCHUP_RX = re.compile(r"\b(?:catch me up|what did i miss|what have i missed|catch ?up)\b", re.I)
     TOOL_VERBS = frozenset(("calc", "calculate", "compute", "math", "convert", "conv", "units",
                             "tz", "time", "clock", "todo", "note", "notes"))
+
+    BANG_WORD = re.compile(r"^!([A-Za-z][\w-]*)")
+
+    def _unknown_bang(self, mind, body):
+        """A !word he has no answer for (not a command, not a learned fact)."""
+        m = self.BANG_WORD.match(body)
+        if not m:                        # "!!", "! ", "!!!": not a command
+            return []
+        return mind._say([(0.8, "Floyd doesn't know !%s. Floyd looked everywhere. Try !help." % m.group(1))])
 
     def level_of(self, conv):
         return tvf.parse_level(self.memory.data["levels"].get(conv.id), None) or self.level

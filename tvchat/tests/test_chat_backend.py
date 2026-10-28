@@ -2877,6 +2877,15 @@ class TestFloydAttached(Base):
         self.hear("bob", "alice++")
         self.assertIn("[Floyd] Floyd gave alice a point. alice has 1 point now.", self.other.said)
 
+    def test_an_unknown_bang_command_gets_an_answer(self):
+        self.other.send(self.conv, "/floyd on")
+        self.hear("bob", "!frobnicate now")
+        self.assertIn("[Floyd] Floyd doesn't know !frobnicate. Floyd looked everywhere. Try !help.",
+                      self.other.said)
+        n = len(self.other.said)
+        self.hear("bob", "!!!")
+        self.assertEqual(len(self.other.said), n)
+
     def test_seen_tell_work_across_people_and_nothing_is_said_to_the_wrong_one(self):
         self.other.send(self.conv, "/floyd on")
         self.hear("alice", "hello room")
