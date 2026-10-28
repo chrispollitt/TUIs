@@ -85,7 +85,8 @@ install(PROGRAMS backend/tvchat-backend DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES man/tvchat.1 man/tvchat-backend.1
         DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
 install(FILES README.md INSTALL.md HISTORY.md LICENSE AUTHORS WARRANTY
-              configure/tvchat.conf.example
+              configure/tvchat.conf.example configure/floyd.conf.example
+              configure/tvchat-floyd.service
         DESTINATION ${CMAKE_INSTALL_DOCDIR})
 
 # --- tarballs (CPack) -------------------------------------------------------

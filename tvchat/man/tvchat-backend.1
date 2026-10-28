@@ -12,6 +12,11 @@ tvchat\-backend \- the chat helper behind tvchat
 .B irc\-tail
 .RB [ \-\-raw ]
 .I ACCOUNT
+.br
+.B tvchat\-backend
+.B floyd\-daemon
+.RB [ \-\-conf
+.IR FILE ]
 .SH DESCRIPTION
 .B tvchat\-backend
 holds every live chat connection (IRC and talk(1)) for
@@ -87,6 +92,26 @@ which runs fortune(6) when it is installed), keeping his memory in the JSON file
 [on|off|status] (IRC, talk and Delta Chat) makes him listen in that conversation, and
 \fBattach\fP lists conversation ids (shell patterns) to attach him to always; there he answers
 !commands, nick++ and "floyd: ..." as the user, each line behind \fBtag\fP (default "[Floyd] ").
+Since Floyd now lives on the server, a Floyd account refuses to connect in a tvchat session
+unless it has \fBlocal = yes\fP; see
+.B floyd\-daemon
+below.
+.PP
+.B floyd\-daemon
+runs the central Floyd: no UI, the accounts of
+.I FILE
+(default tvchat.conf; configure/floyd.conf.example) until SIGTERM, with every IRC and Floyd
+account connected.  The IRC account is his own nick, logged in to services; the Floyd account
+(\fBattach = ACCOUNT/*\fP, \fBtag =\fP) listens through it, and a private message is always
+meant for him.  \fBadmins\fP lists the services accounts (compared in lower case, taken from the
+IRCv3 account tag of the line, never from a nick or its text) that may give orders; "!whoami"
+says what he knows of the sender.  With \fBclaude = yes\fP an admin can have him consult the
+Claude CLI: "!claude QUESTION" anywhere, or "claude QUESTION" in a private message or after
+"floyd:".  The CLI (\fBclaude_cmd\fP, run in \fBclaude_dir\fP, QUESTION on its standard input)
+gets only the tools in \fBclaude_tools\fP (default Read,Grep,Glob) and refuses the rest;
+\fBclaude_model\fP, \fBclaude_args\fP, \fBclaude_timeout\fP (seconds, 180) and
+\fBclaude_lines\fP (10) tune it, and the answer is cut to about 1500 characters.  One consult
+runs at a time; every order and refusal is logged at INFO on standard error (journald).
 .PP
 A
 .B protocol = talk

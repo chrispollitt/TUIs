@@ -1,0 +1,28 @@
+# systemd unit for the central Floyd (tvchat-backend floyd-daemon).
+#
+#   sudo install -m 644 tvchat-floyd.service /etc/systemd/system/
+#   sudo mkdir -p /etc/tvchat && sudo cp floyd.conf.example /etc/tvchat/floyd.conf
+#   sudo install -m 600 -o chris /dev/null /etc/tvchat/floyd.env   # TVCHAT_PASS_CPBEE=...
+#   sudo systemctl daemon-reload && sudo systemctl enable --now tvchat-floyd
+#   journalctl -u tvchat-floyd -f        # also the audit trail of who asked Claude what
+#
+# User= must be the account whose `claude` login Floyd borrows (chris).
+[Unit]
+Description=Floyd, the central tvchat bot (IRC)
+After=network-online.target ergo.service
+Wants=network-online.target
+
+[Service]
+User=chris
+ExecStart=/usr/local/bin/tvchat-backend floyd-daemon --conf /etc/tvchat/floyd.conf
+EnvironmentFile=-/etc/tvchat/floyd.env
+Restart=always
+RestartSec=10
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+
+[Install]
+WantedBy=multi-user.target

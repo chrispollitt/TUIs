@@ -66,6 +66,14 @@ carriage return or backslash inside a field is escaped as \\t \\n \\r \\\\):
                             protocol socket - no threads.
 
   irc-tail --raw ACCOUNT    the same, plus every IRC line in (<<) and out (>>)
+  floyd-daemon [--conf FILE]
+                            the central Floyd: no UI, runs the accounts of FILE
+                            (default tvchat.conf) until SIGTERM - an IRC account
+                            and a protocol = floyd account attached to it.  Only
+                            here is Floyd on (elsewhere his account needs
+                            local = yes), and only here can an admin (admins =
+                            SERVICES-ACCOUNT, matched on the IRCv3 account tag)
+                            have him ask the Claude CLI (claude = yes)
 
 Diagnostics (before the sub-command, as tvchat passes them):
   --debug [FILE]            log to FILE (default debug.tvchat.backend.log): every request and
@@ -80,7 +88,7 @@ the user), 2 internal error (bad request, bug).
 
 import sys, os, io, argparse, base64, configparser, heapq, re, selectors, shlex, socket
 import codecs, email, email.utils, imaplib, errno, json, logging, select, shutil, smtplib, ssl
-import subprocess, threading, time, random, fnmatch
+import subprocess, threading, time, random, fnmatch, signal
 from email.message import EmailMessage
 from urllib.parse import unquote
 from collections import deque
@@ -174,9 +182,12 @@ class Contact:
     """A person: display name kept apart from the protocol address (an IRC
     nick, a Delta Chat email address)."""
 
-    def __init__(self, address, display=None):
+    def __init__(self, address, display=None, account=None):
         self.address = address
         self.display = display or address
+        # who the network vouches this person is (IRCv3 account-tag: the
+        # services account they logged in to), or None - never taken from text
+        self.account = account
 
 
 class Conversation:
@@ -1757,7 +1768,8 @@ class IrcAdapter(CommandMixin):
         if mine:
             flags += "s"
         msg = Message(m.tags.get("msgid") or self.local_id(), conv.id, self.when(m),
-                      Contact(m.nick), strip_formatting(text), flags)
+                      Contact(m.nick, account=m.tags.get("account") or None),
+                      strip_formatting(text), flags)
         self.chat.add_message(conv, msg, count=not mine and conv.kind != "server")
 
     def on_NOTICE(self, m):
@@ -4326,6 +4338,20 @@ class FloydAdapter(CommandMixin):
         self.memory = FloydMemory(path)
         self.patterns = [p.strip() for p in (o.get("attach") or "").split(",") if p.strip()]
         self.tag = o["tag"] if "tag" in o else "[Floyd] "
+        # Floyd runs on the server (`floyd-daemon`), not in a tvchat session
+        self.local = _bool(o.get("local"), False)
+        # services accounts (IRCv3 account-tag) that may send him orders
+        self.admins = set(x.strip().lower() for x in (o.get("admins") or "").split(",")
+                          if x.strip())
+        self.claude = _bool(o.get("claude"), False)
+        self.claude_cmd = (o.get("claude_cmd") or "").strip() or "claude"
+        self.claude_tools = (o.get("claude_tools") or "").strip() or "Read,Grep,Glob"
+        self.claude_dir = os.path.expanduser((o.get("claude_dir") or "").strip()) or None
+        self.claude_model = (o.get("claude_model") or "").strip()
+        self.claude_extra = shlex.split(o.get("claude_args") or "")
+        self.claude_timeout = self._number(o.get("claude_timeout"), 180)
+        self.claude_lines = int(self._number(o.get("claude_lines"), 10))
+        self.claude_busy = False
         self.minds = {}                  # conv id -> his wits there (attached elsewhere)
         self.last_out = {}               # conv id -> when he last spoke there
         self.heard_ids = deque(maxlen=200)
@@ -4377,6 +4403,8 @@ class FloydAdapter(CommandMixin):
             return
         if "n" in msg.flags or not self.attached(conv):
             return
+        if self.chat.daemon and "s" in msg.flags:
+            return                       # the bot never answers himself
         if msg.id in self.heard_ids or self.chat.loop.clock() - msg.when > self.MAX_AGE:
             return
         self.heard_ids.append(msg.id)
@@ -4391,16 +4419,26 @@ class FloydAdapter(CommandMixin):
         mind.nick = who
         plan = mind.observe(who, text, conv.title)
         m = re.match(r"^@?floyd\s*[:,]\s*(.*)$", text, re.I)
-        if "a" in msg.flags:
+        # on the server, a private message is always meant for him
+        to_him = bool(m) or (self.chat.daemon and conv.kind == "direct")
+        body = m.group(1) if m else text
+        c = None if "a" in msg.flags else self.CLAUDE_RX.match(body)
+        order = bool(c) and (to_him or body.startswith("!"))
+        if order:
+            plan += self._order(conv, msg.sender, who, c.group(1))
+        elif body.strip().lower() in ("!whoami", "whoami") and (to_him or body.startswith("!")):
+            plan += mind._say([(0.8, self._whoami(msg.sender, who))])
+        elif "a" in msg.flags:
             pass                         # an action is not addressed to him
-        elif m:
-            plan += mind.reply(m.group(1), who=who)
+        elif to_him:
+            plan += mind.reply(body, who=who)
         elif text.startswith("!") or mind.KARMA.match(text):
             plan += mind.botcmd(text, who) or []
         if not plan:
             return
         now = self.chat.loop.clock()
-        if now - self.last_out.get(conv.id, -1e9) < self.ATTACH_GAP:
+        if now - self.last_out.get(conv.id, -1e9) < self.ATTACH_GAP and not (
+                order and self.is_admin(msg.sender)):
             return                       # a flood of triggers: let this one go
         self.last_out[conv.id] = now
         plan = plan[:self.ATTACH_MAX_LINES]
@@ -4409,6 +4447,92 @@ class FloydAdapter(CommandMixin):
     def _out(self, conv, plan):
         for delay, text, flags in plan:
             self._later(delay, lambda t=text, f=flags: self._send_out(conv, t, f))
+
+    # -- orders only an admin may give ---------------------------------------
+    CLAUDE_RX = re.compile(r"^(?:!\s*claude|(?:ask\s+)?claude\s*[:,]?)\s+(\S.*)$", re.I | re.S)
+    CLAUDE_CHARS = 1500                  # the most of his answer that is passed on
+
+    def is_admin(self, sender):
+        """Only the network's word counts: the services account on the message
+        (IRCv3 account-tag), never a nick or a name in the text."""
+        acct = (getattr(sender, "account", None) or "").lower()
+        return bool(acct) and acct in self.admins
+
+    def _whoami(self, sender, who):
+        acct = getattr(sender, "account", None)
+        if not acct:
+            return "Floyd sees %s, but %s is not logged in to services. Floyd can't tell who that is." % (who, who)
+        return "Floyd knows %s as account %s%s." % (
+            who, acct, ", an admin" if self.is_admin(sender) else ", not an admin")
+
+    def _order(self, conv, sender, who, prompt):
+        """Consult the Claude CLI for an admin; the plan to say meanwhile."""
+        if not self.is_admin(sender):
+            _log.info("floyd: refused claude for %s (account %s) in %s", who,
+                      getattr(sender, "account", None), conv.id)
+            return self.mind._say([(0.8, "Floyd can't do that for you, %s. Only Floyd's admins can wake Claude. "
+                                    "Floyd asked nicely. Floyd was told no." % who)])
+        if not (self.claude and self.chat.daemon):
+            return self.mind._say([(0.8, "Claude is asleep. (Floyd's account needs claude = yes, and "
+                                    "Floyd has to be on the server.)")])
+        if self.claude_busy:
+            return self.mind._say([(0.8, "Floyd is still waiting for Claude. Claude is slow. Floyd is patient.")])
+        self.claude_busy = True
+        _log.info("floyd: claude for %s in %s: %s", who, conv.id, prompt[:200])
+        argv = self._claude_argv()
+        gen = self.gen
+        self.loop.run_in_thread(
+            lambda: self._run_claude(argv, prompt),
+            lambda res, err: self._consulted(gen, conv, who, res, err))
+        return self.mind._say([(0.8, "Floyd will ask Claude. Floyd has to climb a ladder. Floyd will be back.")])
+
+    def _claude_argv(self):
+        """The CLI, read-only by default: only the named tools exist (--tools),
+        anything else is refused rather than asked about (dontAsk)."""
+        argv = [self.claude_cmd, "-p", "--output-format", "text",
+                "--tools", self.claude_tools, "--allowedTools", self.claude_tools,
+                "--permission-mode", "dontAsk"]
+        if self.claude_model:
+            argv += ["--model", self.claude_model]
+        return argv + self.claude_extra
+
+    def _run_claude(self, argv, prompt):
+        """On a thread: the prompt goes in on stdin, never on the command line."""
+        r = subprocess.run(argv, input=prompt.encode("utf-8"), stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, cwd=self.claude_dir,
+                           timeout=self.claude_timeout)
+        out = r.stdout.decode("utf-8", "replace").strip()
+        if r.returncode and not out:
+            tail = r.stderr.decode("utf-8", "replace").strip().splitlines()
+            raise RuntimeError(tail[-1] if tail else "exit status %d" % r.returncode)
+        return out
+
+    def _consulted(self, gen, conv, who, res, err):
+        self.claude_busy = False
+        if gen != self.gen:
+            return                       # Floyd was switched off meanwhile
+        if err is not None:
+            what = ("Claude took too long" if isinstance(err, subprocess.TimeoutExpired)
+                    else "Claude could not be reached (%s)" % (str(err)[:120] or type(err).__name__))
+            _log.info("floyd: claude failed: %r", err)
+            lines = [what]
+        else:
+            text = re.sub(r"[\x00-\x08\x0b-\x1f\x7f]", "", res or "")
+            lines = [ln.rstrip() for ln in text.splitlines() if ln.strip()] or ["(Claude said nothing)"]
+            if sum(len(ln) for ln in lines) > self.CLAUDE_CHARS:
+                kept, n = [], 0
+                for ln in lines:
+                    if n + len(ln) > self.CLAUDE_CHARS:
+                        break
+                    kept.append(ln)
+                    n += len(ln)
+                lines = kept or [lines[0][:self.CLAUDE_CHARS]]
+                lines.append("... (cut short)")
+            if len(lines) > self.claude_lines:
+                lines = lines[:self.claude_lines] + ["... (%d more lines)" % (len(lines) - self.claude_lines)]
+        pre = "Claude: " if conv.kind == "direct" else "%s: Claude: " % who
+        self._out(conv, [(0.6 * i, (pre if i == 0 else "  ") + ln, "")
+                         for i, ln in enumerate(lines)])
 
     def _send_out(self, conv, text, flags):
         """Say it in the other account's conversation, as the user, behind the tag."""
@@ -4422,6 +4546,14 @@ class FloydAdapter(CommandMixin):
             self.chat.adapter(conv.account).send(conv, line)
         except UserError as e:
             _log.debug("floyd: cannot speak in %s: %s", conv.id, e)
+
+    @staticmethod
+    def _number(text, default):
+        try:
+            v = float((text or "").strip())
+        except ValueError:
+            return default
+        return v if v > 0 else default
 
     @classmethod
     def idle_seconds(cls, text):
@@ -4464,6 +4596,10 @@ class FloydAdapter(CommandMixin):
     def connect(self):
         if self.phase == "up":
             return
+        if not (self.chat.daemon or self.local):
+            raise UserError("Floyd now lives on the server (the IRC nick Floyd), not here - "
+                            "or set local = yes in [account:%s] to run him in this session"
+                            % self.account.id)
         self.phase = "up"
         self.server_conv()
         conv = self.floyd_conv()
@@ -4691,6 +4827,9 @@ class Chat:
             self.accounts, self.autoconnect = [], []
         self.by_id = dict((a.id, a) for a in self.accounts)
         self.adapters = {}
+        # set by `floyd-daemon`: this process is the central Floyd, a headless
+        # bot on the server, not a tvchat session
+        self.daemon = False
 
     def check_config(self):
         if self.conf_error is not None:
@@ -5375,6 +5514,54 @@ def cmd_serve(a):
     return 0
 
 
+# --------------------------------------------------------------------------
+# floyd-daemon: the central Floyd.  The same accounts as in any tvchat.conf -
+# an IRC account (his own nick, logged in to services) and a protocol = floyd
+# account attached to its conversations - but no UI: a headless process on the
+# server, until SIGTERM.  Run it from systemd (configure/tvchat-floyd.service).
+# --------------------------------------------------------------------------
+def cmd_floyd_daemon(a):
+    if a.conf:
+        os.environ["TVCHAT_CONF"] = a.conf       # before the config is read
+    chat = _chat()
+    chat.check_config()
+    floyds = [x for x in chat.accounts if x.protocol == "floyd"]
+    if not floyds:
+        raise UserError("%s has no [account:NAME] with protocol = floyd" % _conf_path())
+    if not any(x.protocol == "irc" for x in chat.accounts):
+        raise UserError("%s has no IRC account for Floyd to speak through" % _conf_path())
+    if not logging.getLogger().handlers:         # the audit trail: journald, via stderr
+        logging.basicConfig(stream=sys.stderr, level=logging.INFO,
+                            format="%(levelname)s %(message)s")
+        _log.setLevel(logging.INFO)
+    chat.daemon = True
+    loop = chat.loop
+    seen = [None]
+
+    def drain():                                 # nothing reads the events: keep the queue empty
+        for seq, _ in chat.events.drain(seen[0]):
+            seen[0] = seq
+        loop.call_later(30, drain)
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, lambda *_: loop.stop())
+    chat.start()
+    for x in chat.accounts:                      # he is always on, with or without [chat] autoconnect
+        if x.protocol in ("irc", "floyd") and x.state == "disconnected":
+            try:
+                chat.connect(x)
+            except UserError as e:
+                raise UserError("%s: %s" % (x.id, e))
+    _log.info("floyd-daemon %s: up (%s)", __version__, _conf_path())
+    loop.call_later(30, drain)
+    try:
+        loop.run()
+    finally:
+        chat.close()
+        _log.info("floyd-daemon: down")
+    return 0
+
+
 def build_parser():
     ap = _ArgParser(prog="tvchat-backend", add_help=True)
     ap.add_argument("--version", action="version",
@@ -5415,6 +5602,8 @@ def build_parser():
     p = sub.add_parser("events"); p.add_argument("--after", type=int); p.set_defaults(fn=cmd_events)
     p = sub.add_parser("ping"); p.set_defaults(fn=cmd_ping)
     p = sub.add_parser("serve"); p.set_defaults(fn=cmd_serve)
+    p = sub.add_parser("floyd-daemon"); p.add_argument("--conf", metavar="FILE")
+    p.set_defaults(fn=cmd_floyd_daemon)
     p = sub.add_parser("irc-tail"); p.add_argument("account")
     p.add_argument("--raw", action="store_true", help="also print every IRC line")
     p.set_defaults(fn=cmd_irc_tail)
@@ -5423,7 +5612,7 @@ def build_parser():
 
 _COMMANDS = frozenset(("accounts", "connect", "disconnect", "convs", "join", "part",
                        "send", "history", "members", "mark-read", "events", "ping",
-                       "serve", "irc-tail"))
+                       "serve", "irc-tail", "floyd-daemon"))
 
 
 def _normalize_cli(argv):

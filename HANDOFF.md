@@ -1,7 +1,7 @@
 # Handoff
 
 Where the work stands, for whoever picks it up next (Claude or Chris). Updated
-Oct 24, 2026. Facts about the code live in the code and in the files listed
+Oct 27, 2026. Facts about the code live in the code and in the files listed
 under "Where things are"; this file is what they do not say: the state, what
 is next, what was decided, and the live setup.
 
@@ -68,6 +68,46 @@ attachments, a member picker for groups, tvchat sending an invite through tvmail
 
 After that: tvchat/TO-DO.txt (small things), tvmail/TO-DO.txt (periodic pull
 first), and the open bugs in tvmail/BUGS.md.
+
+## Oct 27: the central Floyd - on branch `central-floyd`, ready for Chris's review (not merged)
+
+Chris's three asks for tvchat: (1) some users are admins (just `chris` for now); (2) Floyd runs
+centrally on cpbee as a persistent server, not locally; (3) admins can have Floyd consult the
+Claude CLI (run as chris). Decided with Chris: Floyd is **his own IRC nick on the Ergo server**
+(people /msg him or invite him; no tvchat-specific client); an admin is a **NickServ/services
+account** (IRCv3 `account` tag, never a nick or text); the consult is **read-only** (Read, Grep,
+Glob; no Bash or edits). Design and safeguards: DESIGN.md "The central Floyd".
+
+**Done and tested (chat_unit 177 pass under Cygwin; install_roundtrip passes):**
+`tvchat-backend floyd-daemon [--conf FILE]`; `Contact.account`; `admins`, `claude`, `claude_*`
+options; `!claude` / `claude` orders, `!whoami`; local Floyd refuses without `local = yes`;
+`configure/floyd.conf.example`, `configure/tvchat-floyd.service`, installed into the doc dir;
+README, INSTALL ("The central Floyd"), DESIGN, HISTORY, man page, tvchat.conf.example. Tests:
+`TestFloydDaemon`, `TestFloydDaemonProcess` (real process against a fake IRC server with account tags).
+
+**Not verified / to do:**
+1. **Live on cpbee:** register the `Floyd` NickServ account, install the unit (INSTALL.md steps),
+   and check `claude -p` really takes the prompt on stdin with `--tools/--allowedTools/
+   --permission-mode dontAsk` there (flags checked against `claude --help` on Windows only; the
+   tests use a fake script). Check that Ergo sends `account-tag` to the daemon.
+2. A script for those manual steps (a `chat-setup` one in the POSIX repo): not written - per the
+   rule that manual steps are script bugs.
+3. `e2e_regress` case `chat_history_pgup` FAILS, also with the original backend (a toast box
+   covers the log; likely from the Oct 25-27 toast work, not from this change). Look at it.
+4. Decide: the old "speaks as you" attach (`/floyd on`) now needs `local = yes`; remove it later?
+5. Commit/merge: committed on `central-floyd`; per Chris's global rule, after review merge to
+   `main` and append `repo branch` to `/home/chris/gh_cp/tmp-branches.txt`.
+
+**Cautions:** the consult runs as chris and `Read` is not confined to a directory (it can read
+`~/.netrc` and the like), hence read-only plus admin-only; keep `admins` short.
+`DEV-NOTES.txt` in the repo root holds plaintext passwords in a git-tracked repo - Chris
+should move it out and rotate them.
+
+Env notes: Git Bash has no `python3`; use
+`/c/Users/chris/AppData/Local/Programs/Python/Python311/python`, or Cygwin's python through
+`D:\cygwininash.exe -lc` (the unit and e2e tests need Cygwin). Windows Python writes CRLF
+unless `newline=""`. In Bash tool commands a doubled backslash arrives as one: write scripts
+with the Write tool. `git` root is `TUIs/`.
 
 ## Versions
 
