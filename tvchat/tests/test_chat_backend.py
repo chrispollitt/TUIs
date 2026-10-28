@@ -2293,7 +2293,7 @@ class TestMailReplies(Base):
                           msg["Auto-Submitted"]),
                          ("alice@example.org", "floyd@example.org", "Re: hello", "<m1@example.org>",
                           "auto-replied"))
-        self.assertIn(msg.get_payload().strip(), cb.FloydMind.EIGHT_BALL)
+        self.assertIn(msg.get_payload(decode=True).decode().strip(), cb.FloydMind.EIGHT_BALL)
         self.settle()
         self.assertEqual(len(self.mail.sent), 1)                       # read once, answered once
 
