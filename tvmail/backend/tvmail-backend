@@ -2107,8 +2107,8 @@ def _load_tvfloyd():
     import types
     here = os.path.dirname(os.path.realpath(__file__))
     for d in (here, os.path.join(here, "..", "..", "tvcommon", "py"),
-              os.path.join(here, "..", "share", "tvcommon"),
-              "/usr/local/share/tvcommon", "/usr/share/tvcommon"):
+              os.path.join(here, "..", "share", "tvmail"),
+              "/usr/local/share/tvmail", "/usr/share/tvmail"):
         path = os.path.join(d, "tvfloyd.py")
         if os.path.isfile(path):
             try:

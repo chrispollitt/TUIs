@@ -109,8 +109,8 @@ def _load_tvfloyd():
     import importlib.util
     here = os.path.dirname(os.path.realpath(__file__))
     for d in (here, os.path.join(here, "..", "..", "tvcommon", "py"),
-              os.path.join(here, "..", "share", "tvcommon"),
-              "/usr/local/share/tvcommon", "/usr/share/tvcommon"):
+              os.path.join(here, "..", "share", "tvchat"),
+              "/usr/local/share/tvchat", "/usr/share/tvchat"):
         path = os.path.join(d, "tvfloyd.py")
         if os.path.isfile(path):
             try:

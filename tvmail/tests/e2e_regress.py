@@ -85,6 +85,11 @@ class Tv(tvscreen.Tv):
         bindir = self.bindir
         real = bindir / "tvmail-backend"
         shutil.copy2(os.path.join(self.opts.backend_dir, "tvmail-backend"), real)
+        # Floyd's shared tools, found beside the backend
+        for d in (HERE.parent.parent / "tvcommon" / "py", HERE.parent / "tvcommon" / "py"):
+            if (d / "tvfloyd.py").exists():
+                shutil.copy2(d / "tvfloyd.py", bindir / "tvfloyd.py")
+                break
         if self.fail_save_draft or self.slow:
             # save-draft, delete and the like never go through the serve
             # co-process, so a shim can fail one on demand (save-draft, while
@@ -767,6 +772,32 @@ def out_of_office_keeps_entries(opts):
             "saving again did not switch it on")
     c.check("AWAYTEST" in sieve.scripts.get("tvmail-vacation", ""),
             "the saved script lacks the typed subject")
+    return tv
+
+
+@case()
+def floyd_window_answers_and_asks_before_deleting(opts):
+    # File > Floyd... (F7): a transcript over an input line, driven by `tvmail-backend floyd`
+    def setup(t):
+        t.env["TVMAIL_FLOYD_LEVEL"] = "chatty"
+    tv = Tv(opts, setup=setup)
+    c = Case(tv)
+    started(tv, c)
+    tv.send(chr(27) + "[18~", settle=1.0)         # F7
+    c.check(tv.wait("Floyd - ask him anything", 6) and tv.wait("Floyd is at level chatty", 6),
+            "F7 did not open Floyd, or he did not greet")
+    tv.send("calc 6*7", "Enter", settle=1.0)
+    c.check(tv.wait("6*7 = 42", 6) and tv.has("you:   calc 6*7"),
+            "he did not answer a sum")
+    tv.send("unread", "Enter", settle=1.0)
+    c.check(tv.wait("unread of 3", 6) or tv.wait("Nothing unread", 6) or tv.wait("Inbox:", 6),
+            "he did not read the inbox")
+    tv.send("empty trash", "Enter", settle=1.0)
+    c.check(tv.wait("empty already", 6) or tv.wait("no undo", 6),
+            "he did not answer 'empty trash'")
+    tv.send(chr(27), settle=0.8)                  # Esc
+    c.check(tv.wait(lambda: not tv.has("Floyd - ask him anything"), 5),
+            "Esc did not close Floyd")
     return tv
 
 

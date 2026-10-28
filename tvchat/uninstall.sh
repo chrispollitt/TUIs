@@ -94,7 +94,7 @@ for P in "${PREFIXES[@]}"; do
   if [ -e "$P/bin/tvchat.exe" ]; then add "$P/bin/tvchat.exe"; else add "$P/bin/tvchat"; fi
   for f in bin/tvchat-backend \
            share/man/man1/tvchat.1 share/man/man1/tvchat-backend.1 \
-           share/doc/tvchat; do
+           share/doc/tvchat share/tvchat; do
     add "$P/$f"
   done
   # whatever the last `cmake --install` into this prefix recorded
