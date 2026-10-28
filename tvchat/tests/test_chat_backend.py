@@ -3342,6 +3342,8 @@ class TestFloydDaemonProcess(IrcBase):
         self.assertEqual(len(got), 2, err)
         self.assertEqual(p.returncode, 0, err)
         self.assertIn("refused claude", err)
+        self.assertIn("net: connected", err)                 # the journal says when he is on
+        self.assertIn("net: joined #lobby", err)
 
 
 class TestVersions(unittest.TestCase):
