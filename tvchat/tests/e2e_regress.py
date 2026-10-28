@@ -255,6 +255,51 @@ def chat_typed_commands(opts):
     return tv
 
 
+def input_row(tv):
+    """What the chat input line holds (the row starting with the > prompt), or None."""
+    got = None
+    for line in tv.lines():
+        m = re.search(r"(?:^|[\u2551\u2502])>(.*)$", line)   # after a border; a log line has <nick>> before it
+        if m:
+            got = m.group(1).strip(" \u2551\u2502")
+    return got
+
+
+@case()
+def chat_input_history_up_down(opts):
+    # Up / Down in the input line recall what was sent (a shell's history), the draft comes
+    # back at the end, a password line is never kept, and the list is kept in a private file
+    tv, srv = chat_tv(opts)
+    c = Case(tv)
+    started(tv, c)
+    open_chat(tv, c, srv)
+    for line in ("first thing", "second thing", "/msg NickServ IDENTIFY hunter2xyz"):
+        tv.send(line, "Enter", settle=0.8)
+    c.check(tv.wait(lambda: srv.sent("PRIVMSG #e2e :second thing"), 3), "the lines were not sent")
+    tv.send("dra", settle=0.4)                    # a draft, not sent
+    tv.send("Up", settle=0.5)
+    c.check(input_row(tv) == "second thing", "Up did not recall the last line (%r)" % input_row(tv))
+    tv.send("Up", settle=0.5)
+    c.check(input_row(tv) == "first thing", "a second Up did not go further back (%r)" % input_row(tv))
+    tv.send("Up", settle=0.5)
+    c.check(input_row(tv) == "first thing", "Up past the oldest line changed it (%r)" % input_row(tv))
+    tv.send("Down", settle=0.5)
+    c.check(input_row(tv) == "second thing", "Down did not go forward (%r)" % input_row(tv))
+    tv.send("Down", settle=0.5)
+    c.check(input_row(tv) == "dra", "Down past the newest did not bring the draft back (%r)" % input_row(tv))
+    # Enter on a recalled line sends it again
+    tv.send("Up", "Enter", settle=0.8)
+    c.check(tv.wait(lambda: len(srv.sent("PRIVMSG #e2e :second thing")) >= 2, 3),
+            "a recalled line was not sent again")
+    path = tv.home / ".local" / "state" / "tvchat" / "input-history"
+    text = path.read_text() if path.exists() else ""
+    c.check(text.splitlines() == ["first thing", "second thing", "/msg NickServ IDENTIFY hunter2xyz"][:2],
+            "the history file is wrong (a password line must not be in it): %r" % text)
+    c.check("hunter2xyz" not in text, "a NickServ line was kept in the history file")
+    c.check((path.stat().st_mode & 0o077) == 0 or os.name != "posix", "the history file is not private")
+    return tv
+
+
 @case()
 def delta_invite_join_and_send(opts):
     # Delta Chat against tests/fake_deltachat_rpc.py: Chat > Invite shows the

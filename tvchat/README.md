@@ -115,6 +115,11 @@ reconnects after 2 s, 4 s, 8 s ... up to 5 minutes, rejoining its channels.
 What you send is paced (a burst of 5 lines, then 2 a second), so a long
 paste does not get you thrown off the server.
 
+**Input history:** in the input line, Up and Down recall what you sent before (Down comes back to
+what you were typing), across conversations and sessions - kept in `~/.local/state/tvchat/input-history`
+(500 lines, mode 600). A `/msg NickServ ...`, `/oper`, `/pass` or `/quote pass` line is never kept, nor is
+a line you start with a space. PgUp / PgDn and Shift-Up / Shift-Down scroll the log.
+
 Tab moves servers → conversations → input. As in tvmail, moving a highlight
 shows what it points at, and a conversation counts as read once the chat pane
 has the focus. Unsent text stays with its conversation; Alt-X asks before it
