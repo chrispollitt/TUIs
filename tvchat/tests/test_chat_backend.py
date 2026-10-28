@@ -1639,6 +1639,12 @@ class FakeMail:
             self.inbox.append({"uid": uid, "raw": raw, "deleted": False})
         return uid
 
+    def add_mail(self, raw):
+        with self.lock:
+            uid = len(self.inbox) + 1 + 100
+            self.inbox.append({"uid": uid, "raw": raw.replace("\n", "\r\n").encode(), "deleted": False})
+        return uid
+
     def live(self):
         with self.lock:
             return [m for m in self.inbox if not m["deleted"]]
@@ -1704,7 +1710,10 @@ class FakeMail:
                     sub, _, a2 = args.partition(" ")
                     sub = sub.upper()
                     if sub == "SEARCH":
-                        hits = [str(m["uid"]) for m in self.live() if b"X-Tvchat-Invite" in m["raw"]]
+                        if "UNSEEN" in a2:
+                            hits = [str(m["uid"]) for m in self.live() if not m.get("seen")]
+                        else:
+                            hits = [str(m["uid"]) for m in self.live() if b"X-Tvchat-Invite" in m["raw"]]
                         w("* SEARCH %s\r\n%s OK done\r\n" % (" ".join(hits), tag))
                     elif sub == "FETCH":
                         uid = int(a2.split(" ")[0])
@@ -1717,7 +1726,7 @@ class FakeMail:
                         with self.lock:
                             for m in self.inbox:
                                 if m["uid"] == uid:
-                                    m["deleted"] = True
+                                    m["seen" if "Seen" in a2 else "deleted"] = True
                         w("%s OK done\r\n" % tag)
                     else:
                         w("%s BAD\r\n" % tag)
@@ -2220,6 +2229,108 @@ class TestDeltaChat(DeltaBase):
         self.up()
         self.assertEqual(oct(os.stat(str(self.dir)).st_mode & 0o777), oct(0o700))
         self.assertEqual(oct(os.stat(str(self.dir.parent)).st_mode & 0o777), oct(0o700))
+
+
+class TestMailReplies(Base):
+    """The mail adapter: mail to the central Floyd is answered by mail."""
+
+    def setUp(self):
+        super().setUp()
+        self.mail = FakeMail()
+        self.addCleanup(self.mail.close)
+        os.environ["TVCHAT_PASS_MAIL"] = "pw"
+        self.addCleanup(os.environ.pop, "TVCHAT_PASS_MAIL", None)
+        self.conf("""\
+            [account:mail]
+            protocol      = mail
+            addr          = floyd@example.org
+            imap_server   = 127.0.0.1
+            imap_port     = %d
+            imap_security = plain
+            smtp_server   = 127.0.0.1
+            smtp_port     = %d
+            smtp_security = plain
+            poll          = 0.2
+
+            [account:floyd]
+            protocol = floyd
+            attach   = mail/*
+            tag      =
+            idle     = 0
+            admins   = alice@example.org
+            """ % (self.mail.imap_port, self.mail.smtp_port))
+        self.chat = cb._chat()
+        self.chat.daemon = True
+        self.addCleanup(self.chat.close)
+        self.chat.adapter(self.chat.by_id["mail"]).SETTLE = 0.3
+
+    def turn(self, pred, timeout=10):
+        loop = self.chat.loop
+        loop.running = True
+        deadline = time.time() + timeout
+        while not pred():
+            if time.time() > deadline:
+                self.fail("timed out; events: %r\nsent: %r" % (self.chat.events.items[-6:], self.mail.sent))
+            loop.run_once(0.05)
+
+    def settle(self, secs=1.0):
+        end = time.time() + secs
+        while time.time() < end:
+            self.chat.loop.run_once(0.05)
+
+    def up(self):
+        self.chat.connect(self.chat.by_id["floyd"])
+        self.chat.connect(self.chat.by_id["mail"])
+
+    def test_a_mail_gets_a_reply_in_the_same_thread(self):
+        self.mail.add_mail("From: Alice <alice@example.org>\nTo: floyd@example.org\nSubject: hello\n"
+                           "Message-ID: <m1@example.org>\n\n!8ball will it work\n\n> old\n-- \nAlice\n")
+        self.up()
+        self.turn(lambda: self.mail.sent)
+        import email
+        msg = email.message_from_bytes(self.mail.sent[0])
+        self.assertEqual((msg["To"], msg["From"], msg["Subject"], msg["In-Reply-To"],
+                          msg["Auto-Submitted"]),
+                         ("alice@example.org", "floyd@example.org", "Re: hello", "<m1@example.org>",
+                          "auto-replied"))
+        self.assertIn(msg.get_payload().strip(), cb.FloydMind.EIGHT_BALL)
+        self.settle()
+        self.assertEqual(len(self.mail.sent), 1)                       # read once, answered once
+
+    def test_robots_and_invitations_and_lists_are_not_answered(self):
+        for hdr in ("Auto-Submitted: auto-replied\n", "Precedence: bulk\n", "List-Id: <x.example.org>\n",
+                    "X-Tvchat-Invite: 1\n"):
+            self.mail.add_mail("From: bot@example.org\nSubject: hi\n%s\n!8ball x\n" % hdr)
+        self.mail.add_mail("From: noreply@example.org\nSubject: hi\n\n!8ball x\n")
+        self.mail.add_mail("From: floyd@example.org\nSubject: hi\n\n!8ball x\n")
+        self.mail.add_mail("From: carol@example.org\nSubject: ping\n\n!8ball last\n")
+        self.up()
+        self.turn(lambda: self.mail.sent)
+        self.settle()
+        import email
+        self.assertEqual([email.message_from_bytes(m)["To"] for m in self.mail.sent], ["carol@example.org"])
+
+    def test_the_sender_is_not_an_admin_whatever_the_from_line_says(self):
+        self.mail.add_mail("From: alice@example.org\nSubject: x\n\n!claude do things\n")
+        self.up()
+        self.turn(lambda: self.mail.sent)
+        self.assertIn(b"Only Floyd's admins", self.mail.sent[0])
+
+    def test_one_sender_gets_a_few_replies_an_hour(self):
+        self.chat.adapter(self.chat.by_id["mail"]).MAX_PER_SENDER = 1
+        self.mail.add_mail("From: dave@example.org\nSubject: a\n\n!8ball one\n")
+        self.up()
+        self.turn(lambda: len(self.mail.sent) == 1)
+        self.mail.add_mail("From: dave@example.org\nSubject: b\n\n!8ball two\n")
+        self.turn(lambda: all(m.get("seen") for m in self.mail.inbox))
+        self.settle(1.5)
+        self.assertEqual(len(self.mail.sent), 1)
+
+    def test_text_for_floyd(self):
+        f = cb.mail_text_for_floyd
+        self.assertEqual(f("Hi Floyd,\n\nwhat is 12*7?\n\n> quoted\n-- \nbye"), "Hi Floyd, what is 12*7?")
+        self.assertEqual(f("Hello\n!time in Tokyo\nthanks"), "!time in Tokyo")
+        self.assertEqual(f("", "Re: !coin"), "!coin")
 
 
 class TestDeltaInvitations(DeltaBase):

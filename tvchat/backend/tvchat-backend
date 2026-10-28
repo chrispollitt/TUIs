@@ -87,7 +87,7 @@ the user), 2 internal error (bad request, bug).
 """
 
 import sys, os, io, argparse, base64, configparser, heapq, re, selectors, shlex, socket
-import codecs, email, email.utils, imaplib, errno, json, logging, select, shutil, smtplib, ssl
+import codecs, email, email.header, email.utils, imaplib, errno, json, logging, select, shutil, smtplib, ssl
 import subprocess, threading, time, random, fnmatch, signal
 from email.message import EmailMessage
 from urllib.parse import unquote
@@ -134,7 +134,7 @@ def _load_tvfloyd():
 
 tvf = _load_tvfloyd()
 
-PROTOCOLS = ("irc", "deltachat", "talk", "floyd")
+PROTOCOLS = ("irc", "deltachat", "talk", "mail", "floyd")
 TALK_VIEWS = ("classic", "irc")
 STATES = ("disconnected", "connecting", "connected", "error")
 
@@ -840,7 +840,7 @@ for _n, (_al, _by) in COMMAND_TABLE.items():
     COMMAND_WORDS[_n] = _n
     for _a in _al:
         COMMAND_WORDS[_a] = _n
-PROTO_LABEL = {"irc": "IRC", "talk": "talk", "deltachat": "Delta Chat", "floyd": "Floyd"}
+PROTO_LABEL = {"irc": "IRC", "talk": "talk", "deltachat": "Delta Chat", "mail": "mail", "floyd": "Floyd"}
 
 
 def _variant(name, proto):
@@ -4975,8 +4975,317 @@ class FloydAdapter(CommandMixin):
         return lines
 
 
+# --------------------------------------------------------------------------
+# The mail adapter: an ordinary mailbox as a chat.  [account:NAME] protocol =
+# mail.  Each sender is a direct conversation; a mail from them is a message,
+# and what Floyd (attached to mail/*) says there goes back as one reply mail.
+# For the central Floyd: mail him, and he answers in mail.  Never a person's own
+# mailbox: it marks what it reads as seen and answers it.
+# --------------------------------------------------------------------------
+MAIL_NO_REPLY = re.compile(r"^(?:no-?reply|do-?not-?reply|mailer-daemon|postmaster|bounce[sd]?|"
+                           r"daemon|nobody)(?:[+._-].*)?$", re.I)
+
+
+def mail_is_automatic(msg, sender):
+    """True for mail a robot must never answer: bounces, lists, bulk, other
+    auto-replies (the loops start there)."""
+    if (msg.get("Auto-Submitted") or "no").strip().lower() != "no":
+        return True
+    if (msg.get("Precedence") or "").strip().lower() in ("bulk", "junk", "list", "auto_reply"):
+        return True
+    if any(msg.get(h) for h in ("List-Id", "List-Unsubscribe", "X-Autoreply", "X-Autorespond")):
+        return True
+    if (msg.get("Return-Path") or "").strip() == "<>":
+        return True
+    local = sender.partition("@")[0]
+    return not sender or "@" not in sender or bool(MAIL_NO_REPLY.match(local))
+
+
+def mail_text_for_floyd(text, subject=""):
+    """What Floyd is told: the new text of a mail, without the quoted reply
+    ("> ..."), the "On ... wrote:" line or the signature; a !command line if
+    there is one, else the lines run together."""
+    lines = []
+    for ln in text.replace("\r", "").split("\n"):
+        if ln.rstrip() == "--" or ln.startswith("-- "):
+            break
+        if ln.lstrip().startswith(">") or re.match(r"^On .+ wrote:\s*$", ln):
+            continue
+        if ln.strip():
+            lines.append(ln.strip())
+    for ln in lines:
+        if ln.startswith("!"):
+            return ln[:500]
+    body = " ".join(lines)[:500]
+    return body or re.sub(r"^(?:re|fw|fwd):\s*", "", subject.strip(), flags=re.I)[:200]
+
+
+def fetch_new_mail(p):
+    """[(uid, msgid, references, sender, display, subject, text, automatic, invite)] for
+    the unseen mail in the INBOX, marked seen as it is taken (a thread)."""
+    m = _imap_open(p)
+    out = []
+    try:
+        m.select("INBOX")
+        typ, data = m.uid("SEARCH", None, "UNSEEN")
+        for uid in (data[0] or b"").split()[:20]:
+            typ, d = m.uid("FETCH", uid, "(BODY.PEEK[])")
+            if typ != "OK" or not d or not isinstance(d[0], tuple):
+                continue
+            msg = email.message_from_bytes(d[0][1])
+            name, sender = email.utils.parseaddr(msg.get("From", ""))
+            sender = sender.strip().lower()
+            subj = str(email.header.make_header(email.header.decode_header(msg.get("Subject", ""))))
+            out.append((uid.decode(), (msg.get("Message-ID") or "").strip(),
+                        " ".join((msg.get("References") or "").split()), sender, name, subj,
+                        _text_of(msg), mail_is_automatic(msg, sender), bool(msg.get(INVITE_HEADER))))
+            m.uid("STORE", uid, "+FLAGS", "(\\Seen)")
+    finally:
+        try:
+            m.logout()
+        except Exception:
+            pass
+    return out
+
+
+def send_reply_mail(p, to, subject, in_reply_to, references, body, name=""):
+    """Mail the reply (a thread); the reason in the exception if it fails."""
+    msg = EmailMessage()
+    msg["From"] = email.utils.formataddr((name, p["addr"])) if name else p["addr"]
+    msg["To"] = to
+    msg["Subject"] = subject
+    msg["Date"] = email.utils.formatdate(localtime=True)
+    msg["Message-ID"] = email.utils.make_msgid(domain=p["addr"].rpartition("@")[2] or "localhost")
+    if in_reply_to:
+        msg["In-Reply-To"] = in_reply_to
+        msg["References"] = (references + " " + in_reply_to).strip()
+    msg["Auto-Submitted"] = "auto-replied"          # nobody's robot answers this one
+    msg["Precedence"] = "bulk"
+    msg.set_content(body)
+    ctx = _tls_context(p["verify"])
+    host, port = p["smtp_host"], p["smtp_port"]
+    for kw in ({"timeout": 20}, {}):
+        try:
+            if p["smtp_security"] == "ssl":
+                s_ = smtplib.SMTP_SSL(host, port, context=ctx, **kw)
+            else:
+                s_ = smtplib.SMTP(host, port, **kw)
+            break
+        except TypeError:
+            continue
+    try:
+        s_.ehlo()
+        if p["smtp_security"] == "starttls":
+            s_.starttls(context=ctx)
+            s_.ehlo()
+        s_.login(p["smtp_user"], p["password"])
+        s_.send_message(msg)
+    finally:
+        try:
+            s_.quit()
+        except Exception:
+            pass
+
+
+class MailAdapter(CommandMixin):
+    """[account:NAME] protocol = mail.  Options: addr= (the mailbox), the mail
+    server as for Delta Chat (imap_server= / imap_port= / imap_security= /
+    imap_user=, smtp_server= / smtp_port= / smtp_security= / smtp_user=, default
+    the address's domain, IMAPS 993 and submission 587), verify=, name= (the
+    name he writes under), poll= (seconds, default 30).  The password is found
+    as for any account ($TVCHAT_PASS_NAME, ~/.netrc).  Answers at most
+    MAX_PER_SENDER mails an hour to one address and MAX_TOTAL in all."""
+
+    POLL = 30
+    SETTLE = 6                           # seconds without a new line before the reply goes
+    MAX_PER_SENDER = 5
+    MAX_TOTAL = 60
+    SERVER_TEXT_REFUSAL = "the server window takes no messages - only /commands (/help lists them)"
+
+    def __init__(self, chat, account):
+        self.chat, self.account, self.loop = chat, account, chat.loop
+        o = account.opts
+        self.addr = (o.get("addr") or "").strip()
+        self.name = (o.get("name") or "").strip()
+        try:
+            self.poll = float(o.get("poll") or self.POLL)
+        except ValueError:
+            raise UserError("[account:%s] poll= must be a number of seconds" % account.id)
+        self.gen = 0
+        self._ids = 0
+        self.phase = "down"
+        self.timer = None
+        self.threads = {}                # conv id -> {"subject", "msgid", "refs"}
+        self.outbox = {}                 # conv id -> [lines] waiting for the reply mail
+        self.flush_timers = {}
+        self.sent = {}                   # address -> [times of replies]
+        self.sent_all = []
+
+    def local_id(self):
+        self._ids += 1
+        return "%s:%d" % (self.account.id, self._ids)
+
+    def need_up(self):
+        if self.phase != "up":
+            raise UserError("%s is not connected" % self.account.display)
+
+    def server_conv(self):
+        return self.chat.ensure_conv(self.account, "*", "server", self.account.display)
+
+    def system(self, conv, text):
+        self.chat.add_message(conv, Message(self.local_id(), conv.id, time.time(),
+                                            Contact(""), text, "n"), count=False)
+
+    def status_lines(self):
+        a = self.account
+        return ["%s (mail): %s%s" % (a.display, a.state, " - " + a.detail if a.detail else ""),
+                self.counts()]
+
+    def _params(self):
+        o = self.account.opts
+        if not self.addr or "@" not in self.addr:
+            raise UserError("[account:%s] addr= is missing" % self.account.id)
+        domain = self.addr.rpartition("@")[2]
+
+        def num(key, default):
+            try:
+                return int(o.get(key) or default)
+            except ValueError:
+                raise UserError("[account:%s] %s must be a number" % (self.account.id, key))
+        host = (o.get("imap_server") or "").strip() or domain
+        login = (o.get("imap_user") or "").strip() or self.addr
+        pw = find_delta_password(self.account.id, self.addr, host, login)[0]
+        if not pw:
+            raise UserError("no password for %s (set $TVCHAT_PASS_%s or ~/.netrc)" % (
+                self.addr, re.sub(r"[^A-Za-z0-9]", "_", self.account.id).upper()))
+        imap_port = num("imap_port", 993)
+        smtp_port = num("smtp_port", 587)
+        return {
+            "addr": self.addr, "password": pw, "verify": _bool(o.get("verify"), True),
+            "imap_host": host, "imap_port": imap_port, "imap_user": login,
+            "imap_security": (o.get("imap_security") or ("ssl" if imap_port == 993 else "starttls")).strip(),
+            "smtp_host": (o.get("smtp_server") or host).strip(), "smtp_port": smtp_port,
+            "smtp_user": (o.get("smtp_user") or login).strip(),
+            "smtp_security": (o.get("smtp_security") or ("ssl" if smtp_port == 465 else "starttls")).strip(),
+        }
+
+    # -- lifecycle ------------------------------------------------------------
+    def connect(self):
+        if self.phase == "up":
+            return
+        self._params()                   # a missing address or password is said now
+        self.server_conv()
+        self.phase = "up"
+        self.chat.set_state(self.account, "connected", self.addr)
+        self._poll()
+
+    def disconnect(self):
+        was = self.phase
+        self.gen += 1
+        self.phase = "down"
+        for t in [self.timer] + list(self.flush_timers.values()):
+            self.loop.cancel(t)
+        self.timer, self.flush_timers = None, {}
+        if was != "down":
+            self.chat.set_state(self.account, "disconnected", "")
+
+    def join(self, target):
+        raise UserError("a mail conversation starts when someone writes")
+
+    def part(self, conv):
+        if conv.kind == "server":
+            raise UserError("the server window cannot be left")
+        self.chat.remove_conv(conv)
+
+    def c_quit(self, conv, rest):
+        return (self.disconnect, ())
+
+    def c_me(self, conv, rest):
+        self._in_a_chat(conv, "/me")
+        return (self.speak, (conv, "* " + rest))
+
+    # -- coming in --------------------------------------------------------------
+    def _poll(self):
+        gen = self.gen
+        if self.phase != "up":
+            return
+        try:
+            p = self._params()
+        except UserError as e:
+            self.system(self.server_conv(), str(e))
+            self.timer = self.loop.call_later(self.poll * 10, self._poll)
+            return
+        self.loop.run_in_thread(lambda: fetch_new_mail(p),
+                                lambda res, err: gen == self.gen and self._fetched(res, err))
+
+    def _fetched(self, res, err):
+        if err is not None:
+            _log.debug("%s: reading the mailbox failed: %s", self.account.id, err)
+            self.system(self.server_conv(), "could not read the mailbox: %s" % err)
+        for uid, msgid, refs, sender, name, subject, text, automatic, invite in res or []:
+            if invite or automatic or sender == self.addr.lower():
+                continue                 # a Delta Chat invitation (its own adapter), a robot, ourselves
+            said = mail_text_for_floyd(text, subject)
+            if not said:
+                continue
+            conv = self.chat.ensure_conv(self.account, sender, "direct", name or sender)
+            self.threads[conv.id] = {"subject": subject, "msgid": msgid, "refs": refs}
+            self.chat.add_message(conv, Message(self.local_id(), conv.id, time.time(),
+                                                Contact(sender, name or sender), said, ""))
+        self.timer = self.loop.call_later(self.poll, self._poll)
+
+    # -- going out: what is said in a conversation is one reply mail --------------
+    def speak(self, conv, text):
+        self.need_up()
+        if conv.kind == "server":
+            raise UserError(self.SERVER_TEXT_REFUSAL)
+        self.outbox.setdefault(conv.id, []).append(text)
+        mid = self.local_id()
+        self.chat.add_message(conv, Message(mid, conv.id, time.time(), Contact(self.addr, "me"),
+                                            text, "s"), count=False)
+        self.loop.cancel(self.flush_timers.get(conv.id))
+        gen = self.gen
+        self.flush_timers[conv.id] = self.loop.call_later(
+            self.SETTLE, lambda: gen == self.gen and self._flush(conv))
+        return mid
+
+    def _flush(self, conv):
+        lines = self.outbox.pop(conv.id, [])
+        self.flush_timers.pop(conv.id, None)
+        if not lines:
+            return
+        now = self.loop.clock()
+        self.sent_all = [t for t in self.sent_all if now - t < 3600]
+        mine = self.sent[conv.target] = [t for t in self.sent.get(conv.target, []) if now - t < 3600]
+        if len(mine) >= self.MAX_PER_SENDER or len(self.sent_all) >= self.MAX_TOTAL:
+            _log.info("%s: not answering %s: too many mails this hour", self.account.id, conv.target)
+            return
+        mine.append(now)
+        self.sent_all.append(now)
+        th = self.threads.get(conv.id) or {}
+        subject = th.get("subject") or "Floyd"
+        if not re.match(r"^re:", subject, re.I):
+            subject = "Re: " + subject
+        try:
+            p = self._params()
+        except UserError as e:
+            self.system(self.server_conv(), str(e))
+            return
+        to, name, gen = conv.target, self.name, self.gen
+        body = "\n".join(lines) + "\n"
+
+        def done(res, err):
+            if gen != self.gen:
+                return
+            if err is not None:
+                self.system(conv, "could not mail the reply to %s: %s" % (to, err))
+        self.loop.run_in_thread(
+            lambda: send_reply_mail(p, to, subject, th.get("msgid", ""), th.get("refs", ""), body, name),
+            done)
+
+
 ADAPTERS = {"irc": IrcAdapter, "deltachat": DeltaChatAdapter, "talk": TalkAdapter,
-            "floyd": FloydAdapter}
+            "mail": MailAdapter, "floyd": FloydAdapter}
 
 
 # --------------------------------------------------------------------------
@@ -5025,6 +5334,9 @@ def check_config(path):
                 errors.append("[account:%s] seed= must be a whole number" % i)
             if (o.get("level") or "").strip() and tvf.parse_level(o.get("level")) is None:
                 errors.append("[account:%s] level= must be one of %s" % (i, ", ".join(tvf.LEVELS)))
+        elif a.protocol == "mail":
+            if not DeltaChatAdapter.ADDRESS.match((o.get("addr") or "").strip()):
+                errors.append("[account:%s] addr= must be the mailbox's email address" % i)
         elif a.protocol == "deltachat":
             addr = (o.get("addr") or "").strip()
             if not DeltaChatAdapter.ADDRESS.match(addr):
@@ -5806,7 +6118,7 @@ def cmd_floyd_daemon(a):
         signal.signal(sig, lambda *_: loop.stop())
     chat.start()
     for x in chat.accounts:                      # he is always on, with or without [chat] autoconnect
-        if x.protocol in ("irc", "deltachat", "floyd") and x.state == "disconnected":
+        if x.protocol in ("irc", "deltachat", "mail", "floyd") and x.state == "disconnected":
             try:
                 chat.connect(x)
             except UserError as e:
