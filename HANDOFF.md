@@ -102,7 +102,13 @@ tvchat/DESIGN.md "The central Floyd".
    `account-tag` to the daemon and that `claude -p` takes the prompt on stdin with
    `--tools/--allowedTools/--permission-mode dontAsk` there (flags checked only against
    `claude --help` on Windows; tests use a fake script).
-2. A script for those manual steps (chat-setup in the POSIX repo): not written.
+2. **Done (Oct 27, branches `floyd-service-user` in TUIs and `floyd-daemon-setup` in POSIX, unmerged):**
+   POSIX `chat-setup/scripts/configure-floyd.sh` now also writes `/etc/tvchat/floyd.conf`, installs
+   `tvchat-floyd.service` and starts it, and the service runs as the **floyd** user (not chris), so the
+   Claude consult only reads what floyd can. Chris must still log floyd in to Claude once:
+   `sudo -u floyd -H bash -l` then `claude` (floyd has no login shell). `--service-user chris` undoes it.
+   tvchat INSTALL.md "The central Floyd" rewritten (its old `install /dev/null floyd.env` step would have
+   emptied the script's file). Tests: chat-setup 124 (`--print-config` / `--print-unit`). Not run on cpbee yet.
 3. tvchat e2e case `chat_history_pgup` FAILED before this work too (a toast covers the log).
 4. tvmail's Floyd has no live clippy tips on message selection (only on window open and after a pull);
    no "draft a reply / summarise" (that would be the Claude CLI; tvchat's admin-only consult is the
