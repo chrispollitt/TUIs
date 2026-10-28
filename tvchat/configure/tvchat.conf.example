@@ -67,10 +67,13 @@ host      = cpbee
 # keystroke sent) or irc (the log, whole lines, "... is typing")
 talk_view = classic
 
-# Floyd, the robot from Infocom's Planetfall: no server, just company.  Remove
+# Floyd, the robot from Infocom's Planetfall.  He now lives on the LAN master as
+# a bot with his own IRC nick (configure/floyd.conf.example, INSTALL.md): talk to
+# Floyd there.  To run him inside this session anyway, add local = yes and remove
 # the leading # from these lines to have him in the Servers list.
 #[account:floyd]
 #protocol = floyd
+#local    = yes
 #display  = Floyd
 # what Floyd calls you (default: your login name)
 #nick     = yourname

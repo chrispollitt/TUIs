@@ -65,7 +65,16 @@ and `!fortune`, which asks the real `fortune(6)` when it is installed and has a 
 when it is not. What he remembers (seen, tells, karma, quotes, facts) is kept between sessions in
 `~/.local/share/tvchat/floyd/NAME.json` (`memory = PATH` moves it, `memory = none` keeps nothing).
 
-**Floyd in your other conversations.** In any IRC channel, talk call or Delta Chat chat, `/floyd`
+**The central Floyd.** Floyd now lives on the LAN master (cpbee), as a persistent bot with his own
+IRC nick: `tvchat-backend floyd-daemon`, run by systemd (INSTALL.md, `configure/floyd.conf.example`).
+`/msg Floyd hello`, or invite him to a channel, from tvchat or any IRC client; in a channel he
+answers `!commands`, `nick++` and `floyd: ...`. The `protocol = floyd` account in your own
+`tvchat.conf` refuses to start unless it has `local = yes`. **Admins** (`admins =` in his config:
+services accounts, `chris` for now) can send him orders: `!whoami` says who he thinks you are, and
+`!claude QUESTION` (or `claude QUESTION` in a private message) has him consult the Claude CLI, run
+as the service user with read-only tools; anyone else is politely refused.
+
+**Floyd in your other conversations** (only with `local = yes`). In any IRC channel, talk call or Delta Chat chat, `/floyd`
 (or `/floyd on`) has him listen there, switching his account on if it was off (and from then on
 he starts with tvchat); `/floyd off` sends him away, `/floyd status` says. He then answers `!commands`, `nick++` and `floyd: ...` (the
 errands, the games, the parser) and notes who says what for `!seen` and `!tell`; the rest of the

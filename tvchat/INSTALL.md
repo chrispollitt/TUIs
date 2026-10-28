@@ -129,6 +129,30 @@ The second script copies the server's CA, checks that TLS verifies, writes the
 account into `tvchat.conf`, stores the password in `~/.netrc`, and logs in once
 to prove it.
 
+## The central Floyd (on the server)
+
+Floyd runs on the LAN master as a bot with his own IRC nick, not inside each tvchat. On
+the master (cpbee), after `./build.sh && ./install.sh`:
+
+```sh
+# 1. register his nick with the IRC server (any IRC client: /nick Floyd, then
+#    /msg NickServ REGISTER <password> <email>)
+# 2. his configuration and password (edit admins = and claude_dir = first)
+sudo mkdir -p /etc/tvchat
+sudo cp configure/floyd.conf.example /etc/tvchat/floyd.conf
+sudo install -m 600 -o chris /dev/null /etc/tvchat/floyd.env     # one line: TVCHAT_PASS_CPBEE=PASSWORD
+# 3. run him
+sudo cp configure/tvchat-floyd.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now tvchat-floyd
+journalctl -u tvchat-floyd -f
+```
+
+`tvchat-backend check-config /etc/tvchat/floyd.conf` checks the file. The unit runs as the user
+whose `claude` login Floyd borrows (chris); an admin (`admins =`, a services account name) can
+then say `!claude QUESTION` to him in a channel, or `claude QUESTION` in a private message. The
+Claude CLI gets only Read, Grep and Glob (`claude_tools`), but Read is not confined to
+`claude_dir`: it can read anything that user can, so keep `admins` short.
+
 ## Over ssh from Windows Terminal
 
 If keys go missing or stray text such as `[68;32;100;1;0;1_` appears when you

@@ -2492,6 +2492,7 @@ class TestFloyd(Base):
 
             [account:floyd]
             protocol = floyd
+            local    = yes
             nick     = tester
             idle     = 60
             seed     = 7
@@ -2610,6 +2611,7 @@ class TestFloyd(Base):
         self.conf("""\
             [account:floyd]
             protocol = floyd
+            local    = yes
             idle     = 0
             """)
         cb._CHAT = None
@@ -2765,6 +2767,7 @@ class TestFloydAttached(Base):
         self.conf("""\
             [account:floyd]
             protocol = floyd
+            local    = yes
             idle     = 0
             seed     = 5
             memory   = none
@@ -2802,6 +2805,7 @@ class TestFloydAttached(Base):
         self.conf("""\
             [account:floyd]
             protocol = floyd
+            local    = yes
             memory   = %s
 
             [account:net]
@@ -2886,6 +2890,280 @@ class TestFloydAttached(Base):
         chat = cb.Chat(loop=cb.Loop(self.clk), clock=self.clk)
         with self.assertRaises(cb.UserError):
             chat.floyd()
+
+
+class TestFloydDaemon(Base):
+    """The central Floyd: a daemon on the server, admins, the Claude consult."""
+
+    Other = TestFloydAttached.Other
+
+    CONF = """\
+        [account:floyd]
+        protocol = floyd
+        idle     = 0
+        seed     = 5
+        memory   = none
+        tag      =
+        attach   = net/*
+        admins   = Chris, ops
+        claude   = %s
+        claude_lines = 4
+
+        [account:net]
+        protocol = irc
+        host     = irc.example.org
+        """
+
+    def start(self, claude="yes", daemon=True):
+        self.conf(self.CONF % claude)
+        self.clk = FakeClock(1000.0)
+        self.chat = cb.Chat(loop=cb.Loop(self.clk), clock=self.clk)
+        self.chat.daemon = daemon
+        self.net = self.chat.account("net")
+        self.other = self.chat.adapters["net"] = self.Other(self.chat, self.net)
+        self.conv = self.chat.ensure_conv(self.net, "#room", "channel")
+        self.dm = self.chat.ensure_conv(self.net, "bob", "direct")
+        self.floyd = self.chat.floyd()
+        if daemon:
+            self.chat.connect(self.chat.account("floyd"))
+        self.asked = []                  # (argv, prompt) of each consult
+        self.answer = lambda prompt: "four"
+
+        def run(fn, done):               # the thread, run in place
+            try:
+                res, err = fn(), None
+            except Exception as e:
+                res, err = None, e
+            done(res, err)
+        self.chat.loop.run_in_thread = run
+
+        def fake(argv, prompt):
+            self.asked.append((argv, prompt))
+            r = self.answer(prompt)
+            if isinstance(r, Exception):
+                raise r
+            return r
+        self.floyd._run_claude = fake
+
+    def hear(self, who, text, account=None, conv=None, flags=""):
+        conv = conv or self.conv
+        msg = cb.Message("m%d" % len(conv.history), conv.id, self.clk.t,
+                         cb.Contact(who, account=account), text, flags)
+        self.chat.add_message(conv, msg)
+        for _ in range(60):
+            self.clk.t += 0.25
+            self.chat.loop.run_due()
+
+    def test_an_admin_gets_an_answer(self):
+        self.start()
+        self.hear("chrissy", "!claude what is 2+2?", account="chris")
+        self.assertEqual([p for _, p in self.asked], ["what is 2+2?"])
+        self.assertIn("chrissy: Claude: four", self.other.said)
+
+    def test_the_account_match_ignores_case(self):
+        self.start()
+        self.hear("x", "floyd: claude hi", account="OPS")
+        self.assertEqual(len(self.asked), 1)
+
+    def test_a_private_message_needs_no_prefix(self):
+        self.start()
+        self.hear("bob", "ask claude what time is it", account="chris", conv=self.dm)
+        self.assertEqual([p for _, p in self.asked], ["what time is it"])
+        self.assertIn("Claude: four", self.other.said)
+
+    def test_a_non_admin_is_refused(self):
+        self.start()
+        self.hear("mallory", "!claude rm -rf /", account="mallory")
+        self.assertEqual(self.asked, [])
+        self.assertTrue(any("Only Floyd's admins" in t for t in self.other.said))
+
+    def test_a_nick_is_not_an_account(self):
+        self.start()
+        self.hear("chris", "!claude hi")                       # nobody vouches for this nick
+        self.hear("chris", "!claude hi", account="")
+        self.assertEqual(self.asked, [])
+
+    def test_plain_chat_in_a_channel_is_not_an_order(self):
+        self.start()
+        self.hear("chris", "claude is a fine name", account="chris")
+        self.assertEqual(self.asked, [])
+
+    def test_whoami(self):
+        self.start()
+        self.hear("a", "!whoami", account="chris")
+        self.hear("b", "!whoami", account="eve")
+        self.hear("c", "!whoami")
+        said = " | ".join(self.other.said)
+        self.assertIn("a as account chris, an admin", said)
+        self.assertIn("b as account eve, not an admin", said)
+        self.assertIn("not logged in to services", said)
+
+    def test_claude_off_in_the_config(self):
+        self.start(claude="no")
+        self.hear("chris", "!claude hi", account="chris")
+        self.assertEqual(self.asked, [])
+        self.assertTrue(any("Claude is asleep" in t for t in self.other.said))
+
+    def test_one_consult_at_a_time(self):
+        self.start()
+        self.chat.loop.run_in_thread = lambda fn, done: None   # never finishes
+        self.hear("chris", "!claude one", account="chris")
+        self.hear("chris", "!claude two", account="chris")
+        self.assertTrue(any("still waiting for Claude" in t for t in self.other.said))
+
+    def test_a_long_answer_is_cut(self):
+        self.start()
+        self.answer = lambda p: "\n".join("line %d" % i for i in range(30))
+        self.hear("chris", "!claude go", account="chris")
+        said = [t for t in self.other.said if "line" in t or "more lines" in t]
+        self.assertEqual(len(said), 5)
+        self.assertIn("... (26 more lines)", said[-1])
+        self.other.said.clear()
+        self.answer = lambda p: "x" * 4000
+        self.hear("chris", "!claude go", account="chris")
+        self.assertTrue(any("(cut short)" in t for t in self.other.said))
+        self.assertLess(sum(len(t) for t in self.other.said), 1700)
+
+    def test_a_failure_is_reported(self):
+        self.start()
+        self.answer = lambda p: RuntimeError("not logged in")
+        self.hear("chris", "!claude go", account="chris")
+        self.assertTrue(any("could not be reached (not logged in)" in t for t in self.other.said))
+        self.answer = lambda p: subprocess.TimeoutExpired("claude", 1)
+        self.hear("chris", "!claude again", account="chris")     # and he is free again
+        self.assertTrue(any("took too long" in t for t in self.other.said))
+
+    def test_control_characters_never_reach_the_channel(self):
+        self.start()
+        self.answer = lambda p: "ok\x01ACTION x\x00\x07"
+        self.hear("chris", "!claude go", account="chris")
+        self.assertFalse(any(c in t for t in self.other.said for c in "\x00\x01\x07"))
+
+    def test_the_command_line_is_read_only(self):
+        self.start()
+        argv = self.floyd._claude_argv()
+        self.assertEqual(argv[:3], ["claude", "-p", "--output-format"])
+        self.assertEqual(argv[argv.index("--tools") + 1], "Read,Grep,Glob")
+        self.assertEqual(argv[argv.index("--permission-mode") + 1], "dontAsk")
+        self.assertNotIn("Bash", " ".join(argv))
+
+    def test_the_prompt_goes_in_on_stdin(self):
+        self.start()
+        script = self.tmp / "fakeclaude"
+        script.write_text("#!/bin/sh\necho \"args: $*\" > %s/args\ncat\n" % self.tmp)
+        script.chmod(0o755)
+        ad = self.chat.adapters["floyd"]
+        del ad._run_claude                                     # the real one
+        self.assertEqual(ad._run_claude([str(script), "-p"], "-- hi there"), "-- hi there")
+        self.assertEqual((self.tmp / "args").read_text().strip(), "args: -p")
+
+    def test_a_dead_cli_is_an_error(self):
+        self.start()
+        script = self.tmp / "failclaude"
+        script.write_text("#!/bin/sh\necho 'please log in' >&2\nexit 1\n")
+        script.chmod(0o755)
+        ad = self.chat.adapters["floyd"]
+        del ad._run_claude
+        with self.assertRaisesRegex(RuntimeError, "please log in"):
+            ad._run_claude([str(script)], "hi")
+
+    def test_he_does_not_answer_himself(self):
+        self.start()
+        self.hear("Floyd", "!claude hi", account="chris", flags="s")
+        self.hear("Floyd", "!8ball ok", flags="s")
+        self.assertEqual(self.asked, [])
+        self.assertEqual(self.other.said, [])
+
+    def test_a_private_message_is_always_for_him(self):
+        self.start()
+        self.hear("bob", "hello there", conv=self.dm)
+        self.assertEqual(len(self.other.said), 1)
+        self.other.said.clear()
+        self.hear("bob", "hello there")                        # in the channel: not addressed
+        self.assertEqual(self.other.said, [])
+
+    def test_not_here_unless_local_or_the_daemon(self):
+        self.start(daemon=False)
+        with self.assertRaises(cb.UserError) as cm:
+            self.chat.connect(self.chat.account("floyd"))
+        self.assertIn("lives on the server", str(cm.exception))
+        self.assertEqual(self.chat.account("floyd").state, "error")
+
+    def test_the_daemon_wants_floyd_and_an_irc_account(self):
+        import argparse
+        self.conf("[account:net]\nprotocol = irc\nhost = h\n")
+        with self.assertRaisesRegex(cb.UserError, "protocol = floyd"):
+            cb.cmd_floyd_daemon(argparse.Namespace(conf=None))
+        cb._CHAT = None
+        self.conf("[account:f]\nprotocol = floyd\n")
+        with self.assertRaisesRegex(cb.UserError, "no IRC account"):
+            cb.cmd_floyd_daemon(argparse.Namespace(conf=None))
+
+
+class TestFloydDaemonProcess(IrcBase):
+    """`floyd-daemon` as a real process, against a fake IRC server."""
+
+    def test_an_admin_message_reaches_the_cli_and_the_answer_comes_back(self):
+        fake = self.tmp / "claude"
+        fake.write_text("#!/bin/sh\nprintf 'echo: '\ncat\n")
+        fake.chmod(0o755)
+        got = []
+
+        def script(srv):
+            srv.expect("CAP LS 302")
+            srv.send(":srv CAP * LS :account-tag")
+            srv.expect("CAP REQ")
+            srv.send(":srv CAP * ACK :account-tag")
+            srv.expect("CAP END")
+            srv.expect("USER ")
+            srv.send(":srv 001 Floyd :Welcome")
+            srv.expect("JOIN #lobby")
+            srv.send("@account=mallory :mal!m@h PRIVMSG #lobby :!claude hi")
+            srv.send("@account=chris :chris!c@h PRIVMSG #lobby :!claude say this")
+            got.append(srv.expect("PRIVMSG #lobby :chris: Claude: echo: say this"))
+            got.append(srv.expect("PRIVMSG #lobby :Floyd can't do that"))
+        srv = FakeIrc(script)
+        self.addCleanup(srv.close)
+        conf = self.tmp / "floyd.conf"
+        conf.write_text(textwrap.dedent("""\
+            [account:net]
+            protocol = irc
+            host     = 127.0.0.1
+            port     = %d
+            tls      = false
+            nick     = Floyd
+            channels = #lobby
+
+            [account:floyd]
+            protocol = floyd
+            idle     = 0
+            memory   = none
+            tag      =
+            attach   = net/*
+            admins   = chris
+            claude   = yes
+            claude_cmd = %s
+            claude_args = ""
+            """) % (srv.port, fake))
+        env = dict(os.environ, HOME=str(self.home))
+        p = subprocess.Popen([sys.executable, str(BACKEND), "floyd-daemon", "--conf", str(conf)],
+                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, env=env)
+        try:
+            deadline = time.time() + 20
+            while len(got) < 2 and time.time() < deadline and srv.error is None:
+                time.sleep(0.1)
+        finally:
+            p.terminate()
+            try:
+                p.wait(10)
+            except subprocess.TimeoutExpired:
+                p.kill()
+        err = p.stderr.read().decode("utf-8", "replace")
+        self.assertIsNone(srv.error, "%s %s" % (err, srv.got))
+        self.assertEqual(len(got), 2, err)
+        self.assertEqual(p.returncode, 0, err)
+        self.assertIn("refused claude", err)
 
 
 class TestVersions(unittest.TestCase):

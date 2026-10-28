@@ -1,5 +1,16 @@
 # tvchat history
 
+## Unreleased
+
+- **Floyd lives on the server.** `tvchat-backend floyd-daemon` runs him as a persistent, headless
+  IRC bot (his own nick, logged in to services; systemd unit and `configure/floyd.conf.example`
+  included); a Floyd account in a tvchat session now refuses to start unless it says
+  `local = yes`.
+- **Admins.** `admins = ACCOUNT, ...` on the Floyd account names the services accounts (the IRCv3
+  account tag, so a nick cannot fake it) allowed to give orders; `!whoami` says who he thinks you are.
+- **Floyd can ask Claude** for an admin (`claude = yes`): `!claude QUESTION`, or `claude QUESTION`
+  in a private message. The Claude CLI runs as the service user with read-only tools.
+
 ## 1.3.0 - October 2026
 
 tvmail and tvchat now share one version (`../VERSION`, set with `../version.sh`; a test fails if

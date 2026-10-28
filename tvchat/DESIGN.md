@@ -298,6 +298,28 @@ one answer per 2 s per conversation; a reply that starts with `/` is sent litera
 the tag, so a stored quote cannot run an IRC command. Tests: `TestFloyd`, `TestFloydBot`,
 `TestFloydAttached`.
 
+**The central Floyd.** Floyd lives on the LAN master as a process, not in each tvchat session:
+`tvchat-backend floyd-daemon` (`cmd_floyd_daemon`, run by `configure/tvchat-floyd.service`) loads a
+tvchat.conf of its own - an `irc` account that is his nick and a `floyd` account with `attach =
+ACCOUNT/*` and `tag =` - sets `Chat.daemon`, connects every irc and floyd account and runs the loop
+until SIGTERM. Nothing new speaks IRC: he is the ordinary `IrcAdapter` plus the attached
+`FloydAdapter`. `FloydAdapter.connect()` raises unless `Chat.daemon` or `local = yes`, so a tvchat
+session no longer runs him. In daemon mode `hear()` also skips lines flagged `s` (his own echo,
+since there is no tag to tell them by) and takes every `direct` conversation as addressed to him.
+
+*Admins.* `Contact.account` is the IRCv3 `account` tag (what services say the sender is logged in
+as; None if absent), set only by `IrcAdapter.on_PRIVMSG`. `FloydAdapter.is_admin()` compares it,
+lower-cased, with `admins =`; no other protocol sets it, so on talk and Delta Chat nobody is an
+admin. *The Claude consult.* An order (`CLAUDE_RX`: `!claude Q` anywhere, `claude Q` when
+addressed) from an admin runs `claude -p --output-format text --tools T --allowedTools T
+--permission-mode dontAsk` on a thread (`Loop.run_in_thread`; the prompt on stdin, so it can never
+be taken for an option; `cwd` = `claude_dir`; `claude_timeout`), one at a time. The answer is
+stripped of control characters (no CTCP, no escape sequences), cut to `CLAUDE_CHARS` and
+`claude_lines`, and sent back through `_out` like any of his lines. A valid order is exempt from the
+2-second gap (a bystander's `!8ball` must not swallow it); refusals and failures are logged at INFO.
+Tests: `TestFloydDaemon` (with `_run_claude` replaced, and with fake `claude` scripts) and
+`TestFloydDaemonProcess` (the real process against a fake IRC server that sends account tags).
+
 ## Delta Chat adapter
 
 `DeltaChatAdapter`: not a reimplementation - the official core,
