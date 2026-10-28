@@ -3296,6 +3296,7 @@ class TestFloydDaemonProcess(IrcBase):
             srv.expect("USER ")
             srv.send(":srv 001 Floyd :Welcome")
             srv.expect("JOIN #lobby")
+            srv.send(":srv 473 Floyd #closed :Cannot join channel (+i)")
             srv.send("@account=mallory :mal!m@h PRIVMSG #lobby :!claude hi")
             srv.send("@account=chris :chris!c@h PRIVMSG #lobby :!claude say this")
             got.append(srv.expect("PRIVMSG #lobby :chris: Claude: echo: say this"))
@@ -3342,6 +3343,9 @@ class TestFloydDaemonProcess(IrcBase):
         self.assertEqual(len(got), 2, err)
         self.assertEqual(p.returncode, 0, err)
         self.assertIn("refused claude", err)
+        self.assertIn("net: connected", err)                 # the journal says when he is on
+        self.assertIn("net: joined #lobby", err)
+        self.assertIn("net: server: #closed Cannot join channel (+i)", err)   # a refused JOIN is in the journal
 
 
 class TestVersions(unittest.TestCase):
