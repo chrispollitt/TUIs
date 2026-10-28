@@ -19,9 +19,7 @@ if(CYGWIN)
     add_compile_definitions(SA_NOCLDWAIT=0)
 endif()
 
-# POSIX shell the app runs its little helper scripts through.  /bin/sh is right
-# everywhere native; tvmail's mingw cross-build (build.sh --mingw) overrides it
-# with a Cygwin shell, since a native Windows .exe cannot exec a Unix /bin/sh.
+# POSIX shell the app runs its little helper scripts through.
 set(TV_SH "/bin/sh" CACHE STRING "shell used to run the helper scripts")
 
 # --- locate Turbo Vision (magiblot/tvision) -----------------------------
@@ -66,8 +64,4 @@ function(tvcommon_setup target)
     endif()
     target_include_directories(${target} PRIVATE src "${TVCOMMON_DIR}/src")
     target_compile_definitions(${target} PRIVATE TV_SH="${TV_SH}")
-    if(WIN32)
-        # self-contained .exe: no libstdc++-6/libgcc_s/libwinpthread next to it
-        target_link_options(${target} PRIVATE -static -static-libgcc -static-libstdc++)
-    endif()
 endfunction()

@@ -54,7 +54,7 @@ tvmail came together in layers, an evening or two each:
 5. drafts, an address book, a signature editor, `~/dead.letter` handling.
 
 Getting tvision to build on Cygwin took a few small patches (`FIONREAD`,
-`strupr` linkage, `_GNU_SOURCE`) — it targets Linux / macOS / MinGW, not
+`strupr` linkage, `_GNU_SOURCE`) — it targets Linux / macOS, not
 Cygwin — but nothing structural.
 
 ## One master, many clients

@@ -88,7 +88,7 @@ write_netrc() {   # write_netrc HOST USER - ask for the password, (re)place its 
 command -v cmake >/dev/null 2>&1 || die "cmake not found - run ./configure.sh first"
 
 os=$(uname -s 2>/dev/null || echo unknown)
-IS_CYGWIN=0; case "$os" in CYGWIN*|MSYS*|MINGW*) IS_CYGWIN=1 ;; esac
+IS_CYGWIN=0; case "$os" in CYGWIN*) IS_CYGWIN=1 ;; esac
 SUDO=""
 [ "$IS_CYGWIN" = 0 ] && [ "$(id -u)" != 0 ] && command -v sudo >/dev/null 2>&1 && SUDO=sudo
 

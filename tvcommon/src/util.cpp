@@ -131,7 +131,6 @@ void flashStatus(const std::string &msg)
 }
 
 // Put copied text on the desktop clipboard as well, for other programs.
-// Native Windows: tvision's Win32 call, which is instant.  Elsewhere
 // TClipboard::setText runs its helper in the foreground and freezes the UI
 // until it answers (under Cygwin's pty: the full 1.5 s timeout, and the text
 // never arrived), so do it without waiting:
@@ -143,9 +142,6 @@ void flashStatus(const std::string &msg)
 // The app's own clipboard (Shift-Ins in an editor) has it either way.
 void systemClipboard(const std::string &text)
 {
-#ifdef _WIN32
-    TClipboard::setText(text);
-#else
     static const char b64[] =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     std::string osc = "\x1b]52;c;";
@@ -217,5 +213,4 @@ void systemClipboard(const std::string &text)
         }
     else
         ::remove(f.c_str());
-#endif
 }

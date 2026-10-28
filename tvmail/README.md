@@ -119,7 +119,8 @@ kept beside it) and has the backend start afresh on it, **Ctrl-S** only saves.
 Builds and runs natively on **Linux** (including Raspberry Pi and WSL),
 **macOS** and the **BSDs**; the app is a normal ncurses program and the backend
 is pure‑stdlib Python 3. **Cygwin** works too, with a small tvision patch (see
-[INSTALL.md](INSTALL.md), section 5) — as a client only. Setting up the mail *master* (Postfix + Dovecot)
+[INSTALL.md](INSTALL.md), section 5) — as a client only, and it is the only way to
+run on Windows: there is no native (mingw) build. Setting up the mail *master* (Postfix + Dovecot)
 is Linux-only; the pullers and client setup are portable, and the app itself
 runs the same everywhere.
 
@@ -134,8 +135,8 @@ runs the same everywhere.
 You need `cmake`, a C++17 compiler, ncurses(w) headers, `git` and a Python 3
 (3.6 or newer), plus an MTA for sending (`sendmail`, `msmtp`, or `$SENDMAIL`).
 [INSTALL.md](INSTALL.md) has the whole walkthrough: picking a role for each
-machine, the prerequisites per system, the master and client steps, Cygwin and
-the native Windows build (`./build.sh --mingw`), updating, uninstalling
+machine, the prerequisites per system, the master and client steps, Cygwin,
+updating, uninstalling
 (`./uninstall.sh`), and troubleshooting.
 
 ## Run

@@ -10,7 +10,6 @@
 // when a signal ends it.
 #include "tvcommon.h"
 
-#ifndef _WIN32
 #include <sys/stat.h>
 
 namespace
@@ -93,13 +92,6 @@ void mesgRelease() { giveBack(); }
 
 void mesgRetake() { take(); }
 
-#else // the mingw build: a Windows console takes no talk or wall
-
-void mesgHold(bool) {}
-void mesgRelease() {}
-void mesgRetake() {}
-
-#endif
 
 // [section] key from an INI file the way configparser reads it (key = value
 // or key: value, keys case-blind, # and ; comment lines); "" if it isn't

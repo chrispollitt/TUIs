@@ -60,21 +60,14 @@
 #include <chrono>
 #include <functional>
 
-#ifdef _WIN32
-#include <windows.h>
-#define popen _popen
-#define pclose _pclose
-#else
 #include <unistd.h>
 #include <fcntl.h>
 #include <poll.h>
 #include <csignal>
 #include <cerrno>
 #include <sys/wait.h>
-#endif
 
-// The POSIX shell helper scripts run through (/bin/sh; the mingw build of
-// tvmail points it at a Cygwin shell).  Set by tvcommon.cmake.
+// The POSIX shell helper scripts run through (/bin/sh).  Set by tvcommon.cmake.
 #ifndef TV_SH
 #define TV_SH "/bin/sh"
 #endif

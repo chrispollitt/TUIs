@@ -34,8 +34,7 @@ Smaller things
   in an early live check, not since): send a line in a channel with
   `tvchat --debug` and read `debug.tvchat.backend.log`; the end-of-connection
   line says phase, error and bytes unsent.
-11 Check the native Windows (mingw) .exe on Windows: it cross-compiles and
-  links, with chat greyed out, but has not been run since the split.
+11 (dropped Oct 27) The native Windows (mingw) build: tvmail and tvchat support Cygwin only.
 
 12 tvmail and tvchat talking to each other - OPTIONAL. Done (Oct 25): tvmail's
    Message > Chat with sender and Open chat invite hand a request to tvchat

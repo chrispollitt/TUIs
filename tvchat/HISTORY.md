@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Cygwin is the only Windows** (tvchat never had a native build; the shared `_WIN32` branches in
+  tvcommon, and the mingw test and build option in tvmail, are gone).
+
 - **Floyd's levels** (`level = off | minimal | helpful | chatty | clippy`, `!level NAME` per
   conversation): from deaf to "full clippy mode", where he offers tips introduced "Floyd not
   clippy but ...". At *minimal* he only answers `!commands` and what is said to him; *helpful* adds

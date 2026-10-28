@@ -94,9 +94,8 @@ tvchat/DESIGN.md "The central Floyd".
 
 **Tests:** tvcommon `test_tvfloyd` 15; tvchat `chat_unit` 213 (`TestFloydDaemon`, `TestFloydLevels`,
 `TestFloydDaemonProcess`); tvmail `test_backend` 153 incl. `TestFloyd`; e2e case
-`floyd_window_answers_and_asks_before_deleting`; both `install_roundtrip` pass. tvmail `./test.sh` (Oct 27): 6 of 7 pass; `mingw_compile` FAILS, and not because of this work:
-`app.cpp` uses `pullPid` / `pullQuiet` in the `cmPullAuto` handler outside `#ifndef _WIN32` (from the
-Oct 25 periodic pull); `floydwin.cpp` compiles under mingw. Fix that next (guard the case).
+`floyd_window_answers_and_asks_before_deleting`; both `install_roundtrip` pass. (tvmail's
+`mingw_compile` failure seen then is moot: the mingw build was dropped, see below.)
 
 **Not verified / to do:**
 1. Live on cpbee: register the `Floyd` NickServ account, install the unit (INSTALL.md), check Ergo sends
@@ -122,6 +121,16 @@ Env notes: Git Bash has no `python3`; use
 unless `newline=""`. In Bash tool commands a doubled backslash arrives as one, and a raw ESC can end
 up in a file: write scripts with the Write tool. e2e `-k` takes a bug number or the full case name.
 `git` root is `TUIs/`.
+
+## Oct 27: native Windows (mingw) support dropped (branch `drop-mingw`)
+
+Chris: "for chat and mail, drop support for direct Windows/mingw and only support Cygwin." Removed:
+every `#ifdef/#ifndef _WIN32` branch (tvcommon, tvchat, tvmail; resolved as if `_WIN32` were never
+defined), `tvmail/build.sh --mingw`, `tvmail/tests/mingw_compile.sh` and its ctest entry, the
+`WIN32` static-link block in `tvcommon.cmake`, the `MINGW*|MSYS*` shell-script detection (only
+`CYGWIN*` counts), and the docs for it. Both CMakeLists refuse a `WIN32` target. Kept: Cygwin
+handling, WSL, and mentions of Windows Terminal / the Windows build of the Delta Chat core (that is
+the core's own build, run under Cygwin).
 
 ## Versions
 
@@ -213,8 +222,9 @@ name to fetch (`git clone --branch v1.3.0 --depth 1 <repo>`). Oct 25: both are 1
 - **Builds and tests run under Cygwin** (`D:\cygwin\bin\bash.exe -lc 'cd
   /home/chris/github/chrispollitt/TUIs/<worktree>/tvchat && ./test.sh'`); the
   pty tests need Cygwin's python3 + pyte. `./build.sh`, `./test.sh`,
-  `./install.sh` in each app. Linux, the Pi, macOS and Cygwin build; mingw
-  compiles with chat disabled (`mingw_compile`).
+  `./install.sh` in each app. Linux, the Pi, macOS and Cygwin build. **There is no native
+  Windows/mingw build** (Chris, Oct 27): Cygwin is the only Windows; no `_WIN32` code, no
+  `build.sh --mingw`, no `mingw_compile` test.
 - **A branch per task; stop for Chris's review;** Chris tests by hand and
   pushes himself. Commits end with the `Co-Authored-By` trailer.
 - **Every squashed bug gets a BUGS.md row and a regression case.** A flaky

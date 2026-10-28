@@ -289,11 +289,10 @@ refused" instead means managesieve is not running (`ss -ltn | grep 4190`).
   the next build fetches and patches it again.
 - GNU Mailutils is a normal Cygwin package (`mailutils`); `configure.sh`
   installs it through Cygwin's `setup-x86_64.exe`.
-- `./build.sh --mingw` cross-compiles a static native `tvmail.exe` for a
-  real Windows console (needs `mingw64-x86_64-gcc-g++`). A normal Cygwin
-  build is for mintty and other Unix terminals.
+- Cygwin is the only way to run tvmail on Windows: there is no native
+  (mingw) build any more. Use it from mintty or another Unix-style terminal.
 - Run the scripts from a Cygwin shell (mintty or `bash -l`). Git Bash/MSYS
-  hasn't been tested and lacks pieces like `python3`.
+  is not supported.
 - **`CMake Error: Could not find CMAKE_ROOT ... /share/cmake-4.4.4`** (note
   the missing `/usr`) means cmake was launched as `/bin/cmake`. `/bin` and
   `/usr/bin` are the same Windows directory, but `/usr/bin` is a separate
@@ -338,7 +337,7 @@ refused" instead means managesieve is not running (`ss -ltn | grep 4190`).
 |---|---|---|
 | `configure.sh` | once per machine, before building | build tools, then mail-setup's wizard (`--role`, `--puller`, `-y`, `--assume-no`) |
 | `../tvcommon/third_party.sh` | run for you by build/configure | clones `../tvcommon/third_party/tvision` (and patches it) and `../tvcommon/third_party/POSIX` (mail-setup and chat-setup only), both shared with tvchat; `--update` pulls both |
-| `build.sh` | after every change / update | third_party, Cygwin patch, cmake build (`--mingw` on Cygwin) |
+| `build.sh` | after every change / update | third_party, Cygwin patch, cmake build |
 | `test.sh` | optional | build + ctest: backend_unit, backend_pipe, e2e_tui, install_roundtrip, mail_setup |
 | `setup.sh` | once, then after rebuilds | install (asks the prefix, or `--prefix`), write tvmail.conf, smoke tests |
 | `install.sh` | quick reinstall | `cmake --install` into `/usr/local` (sudo if needed), no questions |

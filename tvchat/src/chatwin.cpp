@@ -139,11 +139,7 @@ std::string localHHMM(const std::string &iso)
     long doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     time_t t = (time_t)(era * 146097 + doe - 719468) * 86400 + h * 3600 + m * 60 + s;
     struct tm tm = {};
-#ifdef _WIN32
-    localtime_s(&tm, &t);
-#else
     localtime_r(&t, &tm);
-#endif
     char b[8];
     std::snprintf(b, sizeof b, "%02d:%02d", tm.tm_hour % 100, tm.tm_min % 100);
     return b;
@@ -153,11 +149,7 @@ std::string nowHHMM()
 {
     time_t t = std::time(nullptr);
     struct tm tm = {};
-#ifdef _WIN32
-    localtime_s(&tm, &t);
-#else
     localtime_r(&t, &tm);
-#endif
     char b[8];
     std::snprintf(b, sizeof b, "%02d:%02d", tm.tm_hour % 100, tm.tm_min % 100);
     return b;
@@ -1931,13 +1923,9 @@ TMenuItem *gChatItem = nullptr; // the menu bar's Chat entry: its subMenu is reb
 
 std::string offReason()
 {
-#ifdef _WIN32
-    return "(chat needs a POSIX build)";
-#else
     if (!ChatClient::configured())
         return "(no chat: no tvchat.conf)";
     return "(chat: tvchat-backend is down)";
-#endif
 }
 
 TMenu *buildChatMenu()

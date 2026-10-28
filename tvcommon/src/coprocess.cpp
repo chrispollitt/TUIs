@@ -9,7 +9,6 @@ std::string CoProcess::command(const std::string &args) const
     return program + (diagTag ? backendFlags(diagTag) : std::string()) + " " + args;
 }
 
-#ifndef _WIN32
 CoProcess::CoProcess(const char *prog, const char *env, const char *diag)
     : program(prog), logEnv(env), diagTag(diag)
 {
@@ -277,9 +276,3 @@ bool CoProcess::readFrame(std::string &body, int &status)
     return true;
 }
 
-#else // _WIN32: no fork(); every call uses the one-shot shell path.
-CoProcess::CoProcess(const char *prog, const char *env, const char *diag)
-    : program(prog), logEnv(env), diagTag(diag) {}
-bool CoProcess::call(const std::string &, std::string &, int &) { return false; }
-void CoProcess::stop() {}
-#endif

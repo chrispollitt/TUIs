@@ -5,7 +5,7 @@
 
 // -------------------------------------------------------- shell plumbing ----
 // Everything a helper needs runs inside one small POSIX-sh script (one
-// script per call keeps us clear of cmd.exe quoting on tvmail's mingw build).
+// script per call keeps the quoting in one place).
 // The preamble widens PATH so the helper is found wherever it was installed.
 const char *const kPreamble =
     "export PATH=\"$HOME/bin:$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin"
@@ -119,23 +119,13 @@ std::string backendFlags(const char *tag)
 
 std::string tempDir()
 {
-#ifdef _WIN32
-    char b[MAX_PATH];
-    DWORD n = GetTempPathA(MAX_PATH, b);
-    return std::string(b, n);
-#else
     const char *t = getenv("TMPDIR");
     return (t && *t) ? std::string(t) + "/" : std::string("/tmp/");
-#endif
 }
 
 long procId()
 {
-#ifdef _WIN32
-    return (long)GetCurrentProcessId();
-#else
     return (long)getpid();
-#endif
 }
 
 static std::string writeScript(const std::string &body)

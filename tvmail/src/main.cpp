@@ -1,13 +1,12 @@
 // main.cpp - command line, --selftest, and the run of the app.
 // tvmail - a Turbo Vision front-end for a local mbox + the tvmail-backend helper.
 //
-// Portable: builds natively on Linux (incl. Raspberry Pi / WSL), macOS and the
-// BSDs.  On Cygwin, build.sh first patches tvision for the missing FIONREAD &c;
-// `build.sh --mingw` makes a static native .exe for a real Windows console.
+// POSIX only: builds on Linux (incl. Raspberry Pi / WSL), macOS, the BSDs and
+// Cygwin (build.sh first patches tvision for the missing FIONREAD &c there).
+// There is no native Windows build; on Windows use Cygwin.
 //
 // Every mail operation is emitted as a tiny POSIX-sh script and run via the
-// shell in TV_SH (default /bin/sh; the mingw build points it at a Cygwin
-// shell).  The C++ side just orchestrates windows.
+// shell in TV_SH (default /bin/sh).  The C++ side just orchestrates windows.
 //
 // Build: ../build.sh
 
@@ -48,7 +47,6 @@ int main(int argc, char **argv)
         std::fprintf(stderr, "selftest: served=%d status=%d bytes=%zu\n",
                      (int)ok, st, body.size());
         std::fwrite(body.data(), 1, body.size(), stdout);
-#ifndef _WIN32
         std::string log = tempDir() + "tvmail_selftest.log";
         pid_t p = mailBackend().spawnLogged("ping", log);
         int wst = 0;
@@ -60,7 +58,6 @@ int main(int argc, char **argv)
                      (long)p, (p > 0 && WIFEXITED(wst)) ? WEXITSTATUS(wst) : -1,
                      slurp(log).c_str());
         ::remove(log.c_str());
-#endif
         mailBackend().stop();
 
         traceSpan("selftest", selftestStarted);

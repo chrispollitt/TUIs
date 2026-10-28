@@ -131,7 +131,7 @@ fixed.
     change resets every menu item's `disabled` flag, so `TVChatMenuBar` sets the
     chat items' flags before and after each event it sees, and `chatCommand()`
     checks again (Enter can still pick a greyed item). With no `tvchat.conf` (or
-    a mingw build, or a backend that stopped answering) the chat items are
+    or a backend that stopped answering) the chat items are
     greyed with a note saying why.
   - *Menus and key line* come from tvcommon's builders (`tvapp.cpp`), shared
     with tvmail: File (Reload F5, Exit), Chat (Alt-C), Edit, View, Window, Help.
@@ -141,10 +141,9 @@ fixed.
     `TTalkView` (you on top, a rule "name - connected", them below; every key
     goes out through `keys`). Hiding the input line made tvision move the focus
     to the server pane; `applyView` puts it back.
-- **Windows (mingw) build** has no `fork()`: `CoProcess::call()` returns false,
-  `ChatClient::configured()` is false, and the chat items are greyed. The
-  `mingw_compile` test layer syntax-checks every source with the mingw-w64
-  cross g++.
+- **No native Windows build** (mingw) of either app: both need `fork()`, a POSIX
+  shell and ncurses, so on Windows they run under Cygwin. (The `_WIN32` branches,
+  `build.sh --mingw` and the `mingw_compile` test were removed Oct 27.)
 
 ## IRC adapter
 

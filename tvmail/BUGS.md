@@ -6,7 +6,7 @@ note that says "#14" means the same thing everywhere; bugs found later get
 the next free number.  The **Test** column says what guards a fix against
 coming back: `unit` (tests/test_backend.py), `e2e` (tests/e2e_regress.py,
 one case per bug; tests/e2e_tui.py is the older smoke test), `build`
-(tests/mingw_compile.sh, the mingw cross-compile), or `manual` (checked on
+(the mingw cross-compile test, removed with the mingw build on Oct 27), or `manual` (checked on
 screen, no automated test yet - the gaps a TUI regression suite should
 close).
 

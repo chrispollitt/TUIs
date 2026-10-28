@@ -1,13 +1,11 @@
 #!/usr/bin/env sh
 # Build tvmail.
 #
-#   ./build.sh            native build.  On Cygwin it first applies a small
-#                         tvision compatibility patch (FIONREAD &c); on Linux
-#                         (incl. Raspberry Pi / WSL), macOS and the BSDs it
-#                         just builds against the system ncurses.
-#   ./build.sh --mingw    on Cygwin only: cross-compile a static native
-#                         tvmail.exe (needs the mingw64 g++), for use from a
-#                         real Windows console rather than a Unix terminal.
+#   ./build.sh            On Cygwin it first applies a small tvision
+#                         compatibility patch (FIONREAD &c); on Linux (incl.
+#                         Raspberry Pi / WSL), macOS and the BSDs it just
+#                         builds against the system ncurses.  There is no
+#                         native Windows build: on Windows use Cygwin.
 #
 # Needs: cmake, a C++17 compiler, ncurses(w) headers, git, python3.
 set -eu
@@ -20,16 +18,12 @@ here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 # Turbo Vision lives there too, one checkout for both apps
 common="$here/tvcommon"; [ -d "$common" ] || common="$here/../tvcommon"
 tv="$common/third_party/tvision"
-mode=native
-[ "${1:-}" = "--mingw" ] && mode=mingw
 
 need() { command -v "$1" >/dev/null 2>&1 || { echo "build.sh: '$1' not found" >&2; exit 1; }; }
 need cmake
 need git
 
 os=$(uname -s 2>/dev/null || echo unknown)
-is_cygwin=0
-case "$os" in CYGWIN*|MINGW*|MSYS*) is_cygwin=1 ;; esac
 
 # CPU count, portably
 jobs=$( (nproc 2>/dev/null) || (sysctl -n hw.ncpu 2>/dev/null) \
@@ -45,18 +39,7 @@ sh "$common/third_party.sh" posix \
 
 set -- -S "$here" -B "$here/build" -DCMAKE_BUILD_TYPE=Release -DTVISION_DIR="$tv"
 
-if [ "$is_cygwin" = 1 ] && [ "$mode" = mingw ]; then
-  need x86_64-w64-mingw32-g++
-  echo ">> cross-compiling for mingw-w64 (static .exe)"
-  set -- "$@" \
-    -DCMAKE_SYSTEM_NAME=Windows \
-    -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc \
-    -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-g++ \
-    -DCMAKE_RC_COMPILER=x86_64-w64-mingw32-windres \
-    -DTV_SH="$(cygpath -m /bin/bash.exe)"
-else
-  echo ">> native build ($os)"
-fi
+echo ">> build ($os)"
 
 cmake "$@"
 cmake --build "$here/build" -j"$jobs"

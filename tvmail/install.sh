@@ -10,7 +10,7 @@ PREFIX="/usr/local"
 BUILD="$here/build"
 
 os=$(uname -s 2>/dev/null || echo unknown)
-IS_CYGWIN=0; case "$os" in CYGWIN*|MSYS*|MINGW*) IS_CYGWIN=1 ;; esac
+IS_CYGWIN=0; case "$os" in CYGWIN*) IS_CYGWIN=1 ;; esac
 SUDO=""
 [ "$IS_CYGWIN" = 0 ] && [ "$(id -u)" != 0 ] && command -v sudo >/dev/null 2>&1 && SUDO=sudo
 
