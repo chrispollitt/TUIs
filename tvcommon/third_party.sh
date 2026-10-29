@@ -7,8 +7,10 @@
 #   tvcommon/third_party.sh tvision           magiblot/tvision -> third_party/tvision,
 #                                             then patched (below); both apps
 #                                             need it to compile
-#   tvcommon/third_party.sh posix             chrispollitt/POSIX, just mail-setup/
-#                                             and chat-setup/ (sparse clone)
+#   tvcommon/third_party.sh posix             chrispollitt/POSIX, just mail-setup/,
+#                                             chat-setup/ and net-utils/ (sparse clone;
+#                                             net-utils/lan-port is how their setup
+#                                             scripts open firewall ports)
 #                                             -> third_party/POSIX
 #                                             ("mail-setup" is the old name for it)
 #   tvcommon/third_party.sh --update [...]    git pull the existing checkouts
@@ -109,9 +111,10 @@ patch_tvision() {
   esac
 }
 
-# chrispollitt/POSIX, sparse: mail-setup (tvmail's mail system) and
+# chrispollitt/POSIX, sparse: mail-setup (tvmail's mail system),
 # chat-setup (an IRC server for tvchat, and the script that points tvchat
-# at it)
+# at it) and net-utils (lan-port, which both use to open their firewall ports
+# - they look for it at ../../net-utils/lan-port, so it must sit beside them)
 fetch_posix() {
   if [ -n "${MAIL_SETUP_DIR:-}" ]; then
     [ -f "$MAIL_SETUP_DIR/mail-setup.sh" ] && return 0
@@ -120,20 +123,20 @@ fetch_posix() {
   fi
   d="$tp/POSIX"
   if [ -f "$d/mail-setup/mail-setup.sh" ]; then
-    # an older checkout had mail-setup only
-    if [ ! -d "$d/chat-setup" ] && git -C "$d" sparse-checkout list >/dev/null 2>&1; then
-      git -C "$d" sparse-checkout set mail-setup chat-setup ||
-        echo "third_party.sh: couldn't add chat-setup to $d" >&2
+    # an older checkout had mail-setup only, or no net-utils
+    if { [ ! -d "$d/chat-setup" ] || [ ! -d "$d/net-utils" ]; } && git -C "$d" sparse-checkout list >/dev/null 2>&1; then
+      git -C "$d" sparse-checkout set mail-setup chat-setup net-utils ||
+        echo "third_party.sh: couldn't add chat-setup and net-utils to $d" >&2
     fi
     [ "$update" = 1 ] && pull "$d"
     return 0
   fi
-  echo ">> cloning $POSIX_REPO (mail-setup and chat-setup only) ..."
+  echo ">> cloning $POSIX_REPO (mail-setup, chat-setup and net-utils only) ..."
   rm -rf "$d"
-  # sparse + blobless: just the two folders; plain shallow clone if the
+  # sparse + blobless: just the three folders; plain shallow clone if the
   # local git or the server can't do that
   if git clone --depth 1 --filter=blob:none --sparse "$POSIX_REPO" "$d" \
-     && git -C "$d" sparse-checkout set mail-setup chat-setup; then
+     && git -C "$d" sparse-checkout set mail-setup chat-setup net-utils; then
     :
   else
     rm -rf "$d"

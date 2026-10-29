@@ -31,7 +31,7 @@ so one raised while a dialog is open still goes away on time. An app's own `idle
 | `src/configwin.cpp` | the config editor window both apps open from File > Edit configuration...: F9 verify, F8 save + apply, driven by a `ConfigSpec` (the file, the checker, the apply step) |
 | `src/dialogs.cpp`, `textwin.cpp` | the Find / Replace dialogs; the read-only text window (Help) |
 | `tvcommon.cmake` | locates Turbo Vision, sets the Cygwin defines and the shell the helper scripts run through |
-| `third_party.sh` | fetches Turbo Vision (patched by `patches/`) and chrispollitt/POSIX's `mail-setup` + `chat-setup` once into `third_party/`, for both apps |
+| `third_party.sh` | fetches Turbo Vision (patched by `patches/`) and chrispollitt/POSIX's `mail-setup` + `chat-setup` (+ `net-utils/lan-port`, which they open firewall ports with) once into `third_party/`, for both apps |
 | `TERMINAL-HISTORY.md` | an essay on how Unix and Windows terminals diverged and met, ending with the ssh-from-Windows-Terminal case study (section 7) |
 | `tests/tvscreen.py` | the pty + [pyte](https://pypi.org/project/pyte/) test harness: `Tv` runs an app in a pty on its own temp HOME and reads its screen into a model you can check cell by cell (columns and colours), `Case`, key names, contrast scoring, and `render_png` for the README screenshots |
 
