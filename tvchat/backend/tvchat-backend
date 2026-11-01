@@ -5762,36 +5762,40 @@ class MailAdapter(CommandMixin):
             return False
         acct, code = found
         conv = self.server_conv()
+
+        def note(text):                  # in his server window, and in the journal where it can be found
+            self.system(conv, text)
+            _log.info("%s: %s", self.account.id, text)
         ident = self.chat.by_id.get(self.verify_nick)
         ad = self.chat.adapter(ident) if ident is not None else None    # (made if not yet)
         mine = {(ident.opts.get("sasl") or "").strip().lower(), (ident.opts.get("nick") or "").strip().lower()}             if ident is not None else set()
         mine.discard("")
         if self.verify_dkim and not verified:
-            self.system(conv, "a NickServ mail for %s came, but its signature was not verified: not confirming" % acct)
+            note( "a NickServ mail for %s came, but its signature was not verified: not confirming" % acct)
         elif acct.lower() not in mine:
-            self.system(conv, "a NickServ mail for %s is not for %s: not confirming" % (acct, self.verify_nick))
+            note( "a NickServ mail for %s is not for %s: not confirming" % (acct, self.verify_nick))
         elif code in self.verified_codes:
             pass
         elif not isinstance(ad, IrcAdapter):
-            self.system(conv, "a NickServ mail for %s came, but %s is not an IRC account" % (acct, self.verify_nick))
+            note( "a NickServ mail for %s came, but %s is not an IRC account" % (acct, self.verify_nick))
         elif ad.phase != "up":
             # the account may not be able to log in until it is confirmed: use a connection of its own
             self.verified_codes.add(code)
-            self.system(conv, "confirming %s with NickServ on %s (a short connection of its own) ..." % (acct, ad.account.display))
+            note( "confirming %s with NickServ on %s (a short connection of its own) ..." % (acct, ad.account.display))
             command = "VERIFY REGISTER %s %s" % (acct, code)
 
             def done(res, err):
                 if err is not None:
                     self.verified_codes.discard(code)        # tried again with the next mail scan
-                    self.system(conv, "could not confirm %s: %s" % (acct, err))
+                    note( "could not confirm %s: %s" % (acct, err))
                 else:
-                    self.system(conv, "NickServ: %s" % (res or "(no answer)"))
+                    note( "NickServ: %s" % (res or "(no answer)"))
             self.loop.run_in_thread(
                 lambda: irc_nickserv_once(ad.host, ad.port, ad.tls, ad.verify, ad.cafile, command), done)
         else:
             self.verified_codes.add(code)
             ad.send_raw("PRIVMSG NickServ :VERIFY REGISTER %s %s" % (acct, code), secret=True)
-            self.system(conv, "confirmed %s with NickServ on %s" % (acct, ad.account.display))
+            note( "confirmed %s with NickServ on %s" % (acct, ad.account.display))
         return True
 
     # -- going out: what is said in a conversation is one reply mail --------------
