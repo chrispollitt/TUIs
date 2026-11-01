@@ -10,6 +10,11 @@
   #lobby on Libera") and joins; `join_invites = yes` accepts at once. New backend verb `invite-send`,
   `invite` takes a channel, `invites` lines may carry a third field.
 
+- **Invite is easier in a channel:** with a channel shown, Chat > Invite... starts with that
+  channel filled in and, after OK, asks which user in the channel to send the invitation to (Skip
+  shows the link instead). **Copy link** puts the link on the clipboard, in the dialog and in the one
+  that shows it. New backend verb `invitees CONV`.
+
 - **A nick joining table:** a `[people]` section in tvchat.conf (`carol = libera:cpollitt,
   oftc:carol_, delta:carol@example.org`) says who is who across servers. Inviting someone who is in
   the table to a server they are on now invites their nick there (IRC INVITE, or a Delta Chat chat /

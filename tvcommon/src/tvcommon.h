@@ -209,6 +209,9 @@ void notifyAlert(const std::string &text, NoteLevel level = noteInfo);
 void inputSeen();
 int idleSeconds();
 void systemClipboard(const std::string &text);
+// What the desktop's clipboard holds now ("" when none can be read): tvision's own
+// request never answers under Cygwin's pty, so Edit > Paste in a field reads it here.
+std::string systemClipboardText();
 
 // ---------------------------------------------------- the config editor ---
 // configwin.cpp: an editor window for the app's configuration file, with Verify

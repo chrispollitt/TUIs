@@ -56,12 +56,12 @@ class Tv(tvscreen.Tv):
             self.env["TVCHAT_CONF"] = str(self.tmp / "no-tvchat.conf")
 
 
-def chat_tv(opts):
+def chat_tv(opts, env=None):
     from fake_irc import FakeIrcd
     srv = FakeIrcd()
     srv.start()
     try:
-        tv = Tv(opts, srv)
+        tv = Tv(opts, srv, env=env)
     except Exception:
         srv.stop()
         raise
@@ -223,6 +223,59 @@ def chat_join_and_leave(opts):
                     not re.search(r"│ ?#Other\b", tv.text()), 4),
             "the channel left is still shown or listed")
     c.check(tv.alive(), "tvchat exited")
+    return tv
+
+
+@case()
+def chat_invite_to_the_channel_shown(opts):
+    # Chat > Invite... with a channel shown: the channel is the default, the
+    # people in it are offered to send the invitation to, and the link can be had
+    # (and copied) when none is picked
+    tv, srv = chat_tv(opts)
+    c = Case(tv)
+    started(tv, c)
+    open_chat(tv, c, srv)
+    tv.send(alt("c"), "i", settle=0.8)
+    c.check(tv.wait("Channel to invite to", 3), "Chat > Invite... did not ask for a channel")
+    c.check(tv.has("Copy link"), "the Invite dialog has no button to copy the link")
+    tv.send("Enter", settle=0.8)                  # OK, with #e2e filled in
+    c.check(tv.wait("which user", 3), "no question about which user to send the invitation to")
+    c.check(tv.has("alice") and not tv.has("tester <"), "the people offered are not the others in the channel")
+    tv.send("Enter", settle=0.8)                  # Send, to alice
+    c.check(tv.wait(lambda: srv.sent("INVITE alice #e2e"), 4),
+            "the user picked was not invited to the channel (the default one)")
+    # Skip: the link is shown instead, with a button to copy it
+    tv.send(alt("c"), "i", settle=0.8)
+    tv.send("Enter", settle=0.8)
+    c.check(tv.wait("which user", 3), "the second Invite did not ask which user")
+    tv.send("\x1b", settle=0.8)
+    c.check(tv.wait("Give this link", 3) and tv.has("irc://127.0.0.1:") and tv.has("#e2e"),
+            "skipping the user did not show the link")
+    tv.send("Enter", settle=0.6)
+    c.check(tv.alive() and not tv.has("Give this link"), "the link dialog did not close")
+    return tv
+
+
+@case()
+def chat_edit_paste_menu(opts):
+    # Edit > Paste puts the clipboard in the input at the cursor, one line (tvision's own
+    # request is never answered under Cygwin's pty; Shift-Ins is the terminal's doing).
+    # $TV_CLIPBOARD_FILE stands in for the desktop clipboard
+    import tempfile
+    clip = tempfile.NamedTemporaryFile("w", suffix=".clip", delete=False, encoding="utf-8")
+    clip.write("pasted\nfrom the menu\n")
+    clip.close()
+    tv, srv = chat_tv(opts, env={"TV_CLIPBOARD_FILE": clip.name})
+    tv.cleanups.append(lambda: os.unlink(clip.name))
+    c = Case(tv)
+    started(tv, c)
+    open_chat(tv, c, srv)
+    tv.send("abc ", settle=0.3)
+    tv.send(alt("e"), "p", settle=0.8)
+    c.check(tv.wait(lambda: input_row(tv) == "abc pasted from the menu", 3),
+            "Edit > Paste did not put the clipboard in the input: %r" % input_row(tv))
+    tv.send("!", settle=0.4)                      # typing goes on after it
+    c.check(input_row(tv) == "abc pasted from the menu!", "typing after Paste: %r" % input_row(tv))
     return tv
 
 

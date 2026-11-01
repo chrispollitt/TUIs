@@ -214,3 +214,46 @@ void systemClipboard(const std::string &text)
     else
         ::remove(f.c_str());
 }
+
+// The other way: the desktop's clipboard as text, read at once (Cygwin's
+// /dev/clipboard, else Wayland, X11, macOS), "" if none can be read.  Shift-Ins
+// never needed it - the terminal pastes that itself - but the Paste menu item asks
+// tvision, whose request to the terminal goes unanswered here.
+std::string systemClipboardText()
+{
+    static const size_t kMax = 1 << 20;
+    std::string out;
+    char buf[4096];
+    // $TV_CLIPBOARD_FILE: a file to read instead, so tests need not touch the real one
+    const char *file = ::getenv("TV_CLIPBOARD_FILE");
+    int fd = ::open(file && *file ? file : "/dev/clipboard", O_RDONLY);
+    if (fd >= 0)
+    {
+        ssize_t n;
+        while (out.size() < kMax && (n = ::read(fd, buf, sizeof buf)) != 0)
+        {
+            if (n < 0 && errno == EINTR)
+                continue;
+            if (n < 0)
+                break;
+            out.append(buf, (size_t)n);
+        }
+        ::close(fd);
+        return out;
+    }
+    const char *sc =
+        "if [ -n \"$WAYLAND_DISPLAY\" ] && command -v wl-paste >/dev/null; then wl-paste -n\n"
+        "elif [ -n \"$DISPLAY\" ] && command -v xclip >/dev/null; then xclip -o -selection clipboard\n"
+        "elif [ -n \"$DISPLAY\" ] && command -v xsel >/dev/null; then xsel --output --clipboard\n"
+        "elif command -v pbpaste >/dev/null; then pbpaste\n"
+        "fi 2>/dev/null\n";
+    std::string cmd = std::string(TV_SH) + " -c '" + sc + "'";
+    if (FILE *f = ::popen(cmd.c_str(), "r"))
+    {
+        size_t n;
+        while (out.size() < kMax && (n = ::fread(buf, 1, sizeof buf, f)) > 0)
+            out.append(buf, n);
+        ::pclose(f);
+    }
+    return out;
+}

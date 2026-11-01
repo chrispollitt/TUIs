@@ -932,6 +932,23 @@ class TestIrcInvitations(IrcBase):
         self.verb("disconnect", "libera")
         self.chat.close()
 
+    def test_invitees_are_the_others_in_the_channel(self):
+        def script(srv):
+            welcome(srv)
+            srv.expect("JOIN #Test")
+            srv.send(":tester!u@h JOIN #Test")
+            srv.send(":srv 353 tester = #Test :@alice tester +bob")
+            srv.send(":srv 366 tester #Test :End of /NAMES list.")
+            srv.expect("QUIT")
+
+        self.setup_irc(script)
+        self.verb("connect", "libera")
+        self.turn(lambda: len(getattr(self.chat.account("libera").convs.get("libera/#test"), "members", ())) == 3)
+        self.assertEqual(self.verb("invitees", "libera/#test"),
+                         (0, b"alice\talice\top\nbob\tbob\tvoice\n"))
+        self.verb("disconnect", "libera")
+        self.chat.close()
+
     def test_delta_chat_link_without_an_account(self):
         def script(srv):
             welcome(srv)

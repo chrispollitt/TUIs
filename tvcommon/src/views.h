@@ -681,6 +681,53 @@ class TFieldLine : public TInputLine
 {
 public:
     TFieldLine(const TRect &b, int lim) : TInputLine(b, lim) {}
+
+    // Edit > Paste: tvision asks the terminal for the clipboard and nothing comes
+    // back under Cygwin's pty (Shift-Ins works only because the terminal pastes
+    // by itself), so read it here and put it in at the cursor, as one line.
+    void handleEvent(TEvent &e) override
+    {
+        if (e.what == evCommand && e.message.command == cmPaste)
+        {
+            std::string t = systemClipboardText();
+            while (!t.empty() && (t.back() == '\n' || t.back() == '\r'))
+                t.pop_back();
+            if (!t.empty())
+            {
+                paste(t);
+                clearEvent(e);
+                return;
+            }
+        }
+        TInputLine::handleEvent(e);
+    }
+
+    void paste(std::string t)
+    {
+        for (char &c : t)
+            if (c == '\n' || c == '\r' || c == '\t')
+                c = ' ';
+        if (selStart < selEnd) // what is selected is replaced
+        {
+            memmove(data + selStart, data + selEnd, strlen(data + selEnd) + 1);
+            curPos = selStart;
+        }
+        selStart = selEnd = 0;
+        size_t len = strlen(data), room = maxLen > len ? maxLen - len : 0;
+        if (t.size() > room) // what fits, not cut inside a character
+        {
+            size_t cut = room;
+            while (cut > 0 && ((uchar)t[cut] & 0xC0) == 0x80)
+                --cut;
+            t.resize(cut);
+        }
+        memmove(data + curPos + t.size(), data + curPos, len - curPos + 1);
+        memcpy(data + curPos, t.data(), t.size());
+        curPos += (int)t.size();
+        firstPos = std::max(0, (int)TText::width(TStringView(data, curPos)) - size.x + 2);
+        drawView();
+    }
+
     TColorAttr mapColor(uchar index) override
     {
         switch (index)

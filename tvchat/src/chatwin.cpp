@@ -1688,14 +1688,103 @@ void joinDialog()
         showChatWindow(std::string(), conv);
 }
 
+// A scrolling list of plain rows in a dialog; Enter or a double click presses OK.
+class TPickList : public TListViewer
+{
+    const std::vector<std::string> &rows;
+
+public:
+    TPickList(const TRect &b, TScrollBar *vsb, const std::vector<std::string> &r)
+        : TListViewer(b, 1, nullptr, vsb), rows(r)
+    {
+        setRange((short)r.size());
+    }
+    void getText(char *dest, short item, short maxLen) override
+    {
+        putText(dest, item >= 0 && item < (short)rows.size() ? rows[item] : std::string(), maxLen);
+    }
+    void selectItem(short) override
+    {
+        if (owner)
+            message(owner, evCommand, cmOK, this);
+    }
+};
+
+// Pick one of `rows` (a few shown, the rest scrolled to); -1 = cancelled.
+int pickFromList(const char *title, const std::string &prompt, const std::vector<std::string> &rows,
+                 const char *ok, const char *cancel)
+{
+    int n = std::min((int)rows.size(), 10);
+    TDialog *d = new TDialog(TRect(0, 0, 52, n + 9), title);
+    d->options |= ofCentered;
+    d->insert(new TStaticText(TRect(3, 2, 49, 3), prompt.c_str()));
+    TScrollBar *sb = new TScrollBar(TRect(48, 4, 49, 4 + n));
+    d->insert(sb);
+    TPickList *lb = new TPickList(TRect(3, 4, 48, 4 + n), sb, rows);
+    d->insert(lb);
+    d->insert(new TButton(TRect(11, 5 + n, 25, 7 + n), ok, cmOK, bfDefault));
+    d->insert(new TButton(TRect(27, 5 + n, 41, 7 + n), cancel, cmCancel, bfNormal));
+    lb->select();
+    ushort r = TProgram::deskTop->execView(d);
+    int sel = r == cmCancel ? -1 : lb->focused;
+    TObject::destroy(d);
+    return sel;
+}
+
+void copyLink(const std::string &link)
+{
+    systemClipboard(link);
+    flashStatus("Link copied to the clipboard");
+}
+
+// The link to hand over, with a button that copies it.
+void showLink(const std::string &link)
+{
+    TDialog *d = new TDialog(TRect(0, 0, 70, 13), "Invite link");
+    d->options |= ofCentered;
+    d->insert(new TStaticText(TRect(3, 2, 67, 3), "Give this link to whoever should join:"));
+    d->insert(new TStaticText(TRect(3, 4, 67, 8), link.c_str()));
+    d->insert(new TButton(TRect(22, 9, 36, 11), "Cop~y~ link", cmYes, bfNormal));
+    d->insert(new TButton(TRect(38, 9, 50, 11), "O~K~", cmOK, bfDefault));
+    d->selectNext(False);
+    if (TProgram::deskTop->execView(d) == cmYes)
+        copyLink(link);
+    TObject::destroy(d);
+}
+
+// The people in a channel or group, but us: rows of address, name, role.
+std::vector<std::vector<std::string>> inviteesOf(const std::string &cv)
+{
+    std::vector<std::vector<std::string>> out;
+    std::string body, err;
+    if (!ask("invitees " + shq(cv), body, err))
+        return out;
+    for (size_t at = 0; at < body.size();)
+    {
+        size_t nl = body.find('\n', at);
+        if (nl == std::string::npos)
+            nl = body.size();
+        if (nl > at)
+        {
+            std::vector<std::string> f = chatFields(body.substr(at, nl - at));
+            if (!f.empty())
+                out.push_back(f);
+        }
+        at = nl + 1;
+    }
+    return out;
+}
+
 // Invite...: invite someone to a connected Delta Chat or IRC account (a
 // "server").  Delta Chat: the invite link - whoever joins it (Chat > Join...
 // on their side) swaps keys with us, which the core needs before anyone can
 // write.  IRC: irc://host[:port][/#channel] for a channel, which they can
-// open with Accept invite...  When the chat shown is with a person or group on
-// IRC or Delta Chat (any account), the invitation can be sent right there as a
-// message; on the same IRC network it is a plain INVITE.  The backend also
-// puts the link in the account's server window, where it can be copied.
+// open with Accept invite...  The link can be copied to the clipboard.  The
+// invitation can be sent as a message: in the chat shown, when it is with a
+// person or group on IRC or Delta Chat (any account); or, when a channel is
+// shown, to a user picked from the people in it.  On the same IRC network it
+// is a plain INVITE.  The backend also puts the link in the account's server
+// window, where it can be copied.
 void inviteDialog()
 {
     std::vector<int> cand;
@@ -1712,8 +1801,10 @@ void inviteDialog()
     if (i < 0)
         return;
     bool irc = as[i].protocol == "irc";
-    // The chat shown, when an invitation can be sent there.
-    std::string toConv, toName;
+    // The chat shown: a person or group the invitation can be sent to right
+    // there, or a channel whose people can be picked from.
+    std::string toConv, toName, chanConv, chanDefault;
+    std::vector<std::vector<std::string>> others;
     if (chatInFront() && !gChatWin->showingServer())
     {
         const ChatConv *c = convOf(gChatWin->convId());
@@ -1723,6 +1814,14 @@ void inviteDialog()
         {
             toConv = c->id;
             toName = c->title;
+        }
+        else if (c && ca && c->kind == "channel" && ca->protocol == "irc")
+        {
+            others = inviteesOf(c->id);
+            if (!others.empty())
+                chanConv = c->id;
+            if (ca->id == as[i].id)
+                chanDefault = c->title; // inviting to the channel we are in
         }
     }
     std::string body, err, link, yes;
@@ -1738,7 +1837,7 @@ void inviteDialog()
         // If tvmail is installed: a box to mail the link through tvmail's account.
         tvmail = ask("has-tvmail", yes, err) && trimmed(yes) == "yes";
     }
-    int h = 5 + (irc ? 3 : 4) + (toConv.empty() ? 0 : 2) + (tvmail ? 3 : 0) + 4;
+    int h = 5 + (irc ? 3 : 4) + (toConv.empty() ? 0 : 2) + (chanConv.empty() ? 0 : 1) + (tvmail ? 3 : 0) + 4;
     TDialog *d = new TDialog(TRect(0, 0, 70, h), "Invite");
     d->options |= ofCentered;
     int y = 2;
@@ -1754,12 +1853,20 @@ void inviteDialog()
         chan = new TInputLine(TRect(3, y + 1, 67, y + 2), 200);
         d->insert(chan);
         d->insert(new TLabel(TRect(2, y, 67, y + 1), "~C~hannel to invite to (blank = just the server)", chan));
+        char buf[201] = {0};
+        putText(buf, chanDefault, 200);
+        chan->setData(buf);
         y += 3;
     }
     else
     {
         d->insert(new TStaticText(TRect(3, y, 67, y + 3), link.c_str()));
         y += 4;
+    }
+    if (!chanConv.empty())
+    {
+        d->insert(new TStaticText(TRect(3, y - 1, 67, y), "Next you can pick a user in this channel to send it to."));
+        y += 1;
     }
     TCheckBoxes *send = nullptr;
     if (!toConv.empty())
@@ -1778,8 +1885,9 @@ void inviteDialog()
         d->insert(new TLabel(TRect(2, y, 67, y + 1), "Also ~m~ail it to (through tvmail; blank = no)", mail));
         y += 3;
     }
-    d->insert(new TButton(TRect(22, y, 34, y + 2), "O~K~", cmOK, bfDefault));
-    d->insert(new TButton(TRect(36, y, 48, y + 2), "Cancel", cmCancel, bfNormal));
+    d->insert(new TButton(TRect(14, y, 26, y + 2), "O~K~", cmOK, bfDefault));
+    d->insert(new TButton(TRect(28, y, 42, y + 2), "Cop~y~ link", cmYes, bfNormal));
+    d->insert(new TButton(TRect(44, y, 56, y + 2), "Cancel", cmCancel, bfNormal));
     d->selectNext(False);
     if (chan)
         chan->select();
@@ -1794,19 +1902,55 @@ void inviteDialog()
     TObject::destroy(d);
     if (r == cmCancel)
         return;
+    bool copy = r == cmYes, sent = false;
     if (!toConv.empty() && (sendOn & 1))
     {
+        sent = true;
         if (!ask("invite-send " + shq(as[i].id) + " " + shq(toConv) + " " + shq(channel), body, err))
             notify(err, noteError);
         else
             notify(trimmed(body), noteInfo);
     }
-    else if (irc)
+    else if (!chanConv.empty())
     {
-        if (!ask("invite " + shq(as[i].id) + " " + shq(channel), body, err))
-            notify(err, noteError);
-        else
-            messageBox(mfInformation | mfOKButton, "Give this link to whoever should join:\n\n%s", trimmed(body).c_str());
+        // a user in the channel shown, to send it to
+        std::vector<std::string> rows;
+        for (const auto &f : others)
+            rows.push_back(f.size() > 1 && !f[1].empty() && f[1] != f[0] ? f[1] + " <" + f[0] + ">" : f[0]);
+        int k = pickFromList("Invite", "Send the invitation to which user?", rows, "~S~end", "S~k~ip");
+        if (k >= 0 && k < (int)others.size())
+        {
+            std::string dm;
+            if (!ask("join " + shq(accountIdOf(chanConv)) + " " + shq(others[k][0]), dm, err) ||
+                !ask("invite-send " + shq(as[i].id) + " " + shq(trimmed(dm)) + " " + shq(channel), body, err))
+                notify(err, noteError);
+            else
+            {
+                sent = true;
+                notify(trimmed(body), noteInfo);
+            }
+        }
+    }
+    if (copy || (irc && !sent))
+    {
+        std::string l = link;
+        if (irc)
+        {
+            if (!ask("invite " + shq(as[i].id) + " " + shq(channel), body, err))
+            {
+                notify(err, noteError);
+                l.clear();
+            }
+            else
+                l = trimmed(body);
+        }
+        if (!l.empty())
+        {
+            if (copy)
+                copyLink(l);
+            else
+                showLink(l);
+        }
     }
     if (!to.empty() && !ask("invite-mail " + shq(as[i].id) + " " + shq(to), body, err))
         notify(err, noteError);

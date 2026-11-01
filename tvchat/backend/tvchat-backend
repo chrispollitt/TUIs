@@ -5679,9 +5679,9 @@ class Chat:
         (Chat > Accept invite...), from whoever sent it.  Only what people say
         to us or a group: not ours, not a channel's chatter (a link there is
         for everyone), not a server window's notices, not mail or Floyd."""
-        if "s" in msg.flags or conv.kind not in ("direct", "group") \
+        if "s" in msg.flags or "n" in msg.flags or conv.kind not in ("direct", "group") \
                 or conv.account.protocol in ("mail", "floyd"):
-            return
+            return                       # (n: notices and our own notes - not what a person said)
         text = msg.text or ""
         who = msg.sender.display or msg.sender.address
         who = self.who_is(conv.account, who)     # "carol (cpollitt)" if the [people] table knows them
@@ -5702,7 +5702,7 @@ class Chat:
             if ad is None:
                 self.adapter(conv.account).system(conv, "%s sent a Delta Chat invitation; connect "
                                                   "a Delta Chat account to accept it" % who)
-            else:
+            elif invite_names(link.group(1)):    # a link that names no address is no invitation
                 ad.add_invite(link.group(1))
 
     def invite_for(self, account, channel=""):
@@ -6185,6 +6185,19 @@ def cmd_members(a):
     return 0
 
 
+def cmd_invitees(a):
+    """invitees CONV: the people in a channel or group an invitation could be sent
+    to - its members but us - as `members` gives them."""
+    chat = _chat()
+    conv = chat.conv(a.conv)
+    ad = chat.adapter(conv.account)
+    for addr, disp, role in sorted(conv.members.values(),
+                                   key=lambda e: (ROLE_RANK.get(e[2], 9), e[0].lower())):
+        if not (hasattr(ad, "is_me") and ad.is_me(addr)):
+            sys.stdout.write(line(addr, disp, role))
+    return 0
+
+
 def cmd_mark_read(a):
     chat = _chat()
     chat.mark_read(chat.conv(a.conv), a.msgid)
@@ -6503,6 +6516,7 @@ def build_parser():
     p = sub.add_parser("history"); p.add_argument("conv"); p.add_argument("--before")
     p.add_argument("--limit", type=int, default=50); p.set_defaults(fn=cmd_history)
     p = sub.add_parser("members"); p.add_argument("conv"); p.set_defaults(fn=cmd_members)
+    p = sub.add_parser("invitees"); p.add_argument("conv"); p.set_defaults(fn=cmd_invitees)
     p = sub.add_parser("mark-read"); p.add_argument("conv"); p.add_argument("msgid", nargs="?")
     p.set_defaults(fn=cmd_mark_read)
     p = sub.add_parser("events"); p.add_argument("--after", type=int); p.set_defaults(fn=cmd_events)
