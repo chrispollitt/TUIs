@@ -28,7 +28,7 @@ running as a co-process. The two apps share their common C++ in
   `/nick`, `/topic`, `/quote`; the server messages take commands only.
 
 Typed **/commands** are the same words for IRC, talk and Delta Chat - `/help` lists them,
-`/status`, `/me`, `/join`, `/query`, `/msg`, `/leave`, `/names`, `/whois`, `/ping`, `/clear`,
+`/status`, `/whoami`, `/me`, `/join`, `/query`, `/msg`, `/leave`, `/names`, `/whois`, `/ping`, `/clear`,
 `/quit` and more - so the three feel alike; `//text` sends a line that starts with `/`.
 
 **talk(1)** too (`protocol = talk`): through the one talkd on the LAN master

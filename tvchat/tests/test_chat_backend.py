@@ -1659,6 +1659,16 @@ class TestIrcHardening(IrcBase):
         text = "\n".join(notes("libera/*"))
         self.assertIn("(irc): connected", text)
         self.assertIn("you are tester on 127.0.0.1:", text)
+        # /whoami
+        say("libera/*", "/whoami")
+        text = "\n".join(notes("libera/*"))
+        self.assertIn("you are tester on 127.0.0.1", text)
+        self.assertIn("not logged in to services", text)
+        say("libera/#test", "/whoami")
+        self.assertIn("in #Test you are", "\n".join(notes("libera/#test")))
+        self.acct and setattr(self.chat.adapter(self.acct), "services_account", "chrisp")
+        say("libera/*", "/whoami")
+        self.assertIn("logged in to services as chrisp", "\n".join(notes("libera/*")))
         # a query opened with and without text
         self.assertEqual(say("libera/#test", "/query Eve hello eve")[0], 0)
         self.assertEqual(say("libera/#test", "/q Frank")[0], 0)
@@ -2640,6 +2650,8 @@ class TestDeltaChat(DeltaBase):
         self.assertEqual((st, b"/topic is not available for Delta Chat" in body), (1, True))
         st, body = say("delta/10", "/bogus")
         self.assertEqual((st, b"unknown command /bogus" in body), (1, True))
+        say("delta/*", "/whoami")
+        self.assertIn("you are me@example.org", "\n".join(notes("delta/*")))
         # /status
         say("delta/*", "/status")
         text = "\n".join(notes("delta/*"))

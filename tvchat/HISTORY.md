@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **`/whoami`:** who the network knows you as in this account: your nick or address, on IRC the services
+  account you are logged in to (what Floyd's `admins =` is matched against, or "not logged in") and your role
+  in the channel; on talk and mail, the user and address.
+
 - **Floyd trusts encrypted Delta Chat messages from named addresses:** `trust = chris@cpbee.cmnet` in a
   `[account:delta]` section makes an end-to-end encrypted message from that address count as sent by the services
   account named like its user part (`chris`), so `admins =` applies. A plain From line never counts.

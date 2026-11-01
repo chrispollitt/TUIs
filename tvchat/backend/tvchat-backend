@@ -868,12 +868,13 @@ _PREFIX_ROLE = {"~": "owner", "&": "admin", "@": "op", "%": "halfop", "+": "voic
 # that starts with // is sent as a line starting with a single /.
 #   name: (aliases, {protocol or "*": (usage, what it does)})
 # --------------------------------------------------------------------------
-COMMAND_ORDER = ("help", "status", "me", "shrug", "join", "query", "msg", "leave", "invite", "names",
+COMMAND_ORDER = ("help", "status", "whoami", "me", "shrug", "join", "query", "msg", "leave", "invite", "names",
                  "whois", "nick", "name", "topic", "away", "ping", "floyd", "play", "look", "inventory", "take", "drop", "clear", "quit",
                  "quote")
 COMMAND_TABLE = {
     "help": (("?",), {"*": ("/help [COMMAND]", "list the commands, or explain one")}),
     "status": ((), {"*": ("/status", "state, who you are, what is open")}),
+    "whoami": ((), {"*": ("/whoami", "who the network knows you as here")}),
     "me": ((), {"*": ("/me ACTION", "say it in the third person")}),
     "shrug": ((), {"*": ("/shrug [TEXT]", "send TEXT with a shrug after it")}),
     "join": (("j",), {
@@ -1042,6 +1043,12 @@ class CommandMixin(object):
     def c_status(self, conv, rest):
         return (self._notes, (conv, self.status_lines()))
 
+    def c_whoami(self, conv, rest):
+        return (self._notes, (conv, self.whoami_lines(conv)))
+
+    def whoami_lines(self, conv):
+        return self.status_lines()[1:2] or ["not connected"]
+
     def c_shrug(self, conv, rest):
         self._in_a_chat(conv, "/shrug")
         return (self.speak, (conv, (rest + " " if rest else "") + "\xaf\\_(\u30c4)_/\xaf"))
@@ -1124,6 +1131,7 @@ class IrcAdapter(CommandMixin):
             "%s - a bot, run by %s" % (self.want_nick, o["contact"].strip())
             if _bool(o.get("bot"), False) and (o.get("contact") or "").strip() else self.want_nick)
         self.sasl_user = (o.get("sasl") or "").strip()
+        self.services_account = ""       # who the server says we are logged in as (numeric 900)
         self.channels = [c.strip() for c in (o.get("channels") or "").split(",")
                          if c.strip()]
         self.invites = {}                # lower-case sender -> {"from", "channel"}: irc:// links sent to us
@@ -1672,6 +1680,7 @@ class IrcAdapter(CommandMixin):
             self.vet_invite(p[1], self.vetting.pop(self.lower(p[1])), "")
         elif n in ("333", "329", "315", "352", "900", "901"):
             if n == "900":
+                self.services_account = p[2] if len(p) > 3 else ""
                 self.system(self.server_conv(), p[-1])
         else:                            # MOTD, errors &c: the server window
             self.system(self.server_conv(), " ".join(p[1:]),
@@ -2224,6 +2233,17 @@ class IrcAdapter(CommandMixin):
     def c_quit(self, conv, rest):
         return (self.disconnect, (rest or "tvchat",))
 
+    def whoami_lines(self, conv):
+        if self.phase != "up":
+            return ["not connected"]
+        lines = ["you are %s on %s" % (self.nick, self.host)]
+        lines.append("logged in to services as %s%s" % (self.services_account, " (an account Floyd can know you by)")
+                     if self.services_account else
+                     "not logged in to services: nobody can tell who you are, Floyd's admins = cannot apply")
+        if conv.kind == "channel":
+            lines.append("in %s you are %s" % (conv.title, self.my_role(conv) or "a plain member"))
+        return lines
+
     def status_lines(self):
         a = self.account
         lines = ["%s (irc): %s%s" % (a.display, a.state, " - " + a.detail if a.detail else "")]
@@ -2717,6 +2737,13 @@ class TalkAdapter(CommandMixin):
 
     def c_quit(self, conv, rest):
         return (self.disconnect, ())
+
+    def whoami_lines(self, conv):
+        if self.phase != "up":
+            return ["not connected"]
+        return ["you are %s, through talkd on %s" % (self.user, self.host),
+                "talk proves nothing: the other side takes your word for it"
+                " (Floyd treats you as an admin only if his talk account has trust = naming you)"]
 
     def status_lines(self):
         a = self.account
@@ -3967,6 +3994,10 @@ class DeltaChatAdapter(CommandMixin):
 
     def c_quit(self, conv, rest):
         return (self.disconnect, ())
+
+    def whoami_lines(self, conv):
+        return ["you are %s" % self.addr,
+                "people see you under that address; end-to-end encrypted messages carry your key's proof of it"]
 
     def status_lines(self):
         a = self.account
@@ -5755,6 +5786,9 @@ class MailAdapter(CommandMixin):
     def system(self, conv, text):
         self.chat.add_message(conv, Message(self.local_id(), conv.id, time.time(),
                                             Contact(""), text, "n"), count=False)
+
+    def whoami_lines(self, conv):
+        return ["you are %s (by mail)" % self.addr]
 
     def status_lines(self):
         a = self.account
