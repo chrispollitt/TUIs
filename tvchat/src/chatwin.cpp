@@ -481,6 +481,13 @@ public:
             send.assign(e.keyDown.text, e.keyDown.textLength);
             cur += send;
         }
+        else if (k == kbLeft || k == kbRight)
+        {
+            // talk sends characters, not cursor moves; say so rather than ignore
+            flashStatus("Talk can't move the cursor - Ctrl-T for IRC view, where arrow keys edit");
+            clearEvent(e);
+            return;
+        }
         else
             return; // not ours: scrolling keys, menus, Tab ...
         if (!live || !live())
