@@ -182,16 +182,18 @@ def chat_history_pgup(opts):
     c.check(tv.wait(lambda: new_count(tv).endswith("80 new"), 6),
             "the backlog did not arrive")
     open_chat(tv, c, srv)
-    c.check(tv.has("backlog 79") and not tv.has("backlog 05"),
+    # the log's rows only: the toast that announced the backlog ("#e2e: alice:
+    # backlog 00", up for 4 s) says the same words
+    c.check(tv.has("<alice> backlog 79") and not tv.has("<alice> backlog 05"),
             "the chat pane did not open on the newest messages")
     for _ in range(16):                           # page up, past the top
-        if tv.has("backlog 00"):
+        if tv.has("<alice> backlog 00"):
             break
         tv.send("PgUp", settle=0.3)
-    c.check(tv.has("backlog 00"),
+    c.check(tv.has("<alice> backlog 00"),
             "PgUp past the top did not fetch the older messages")
     # the first page fetched lands where it belongs: oldest at the top, in order
-    rows = [l for l in tv.lines() if "backlog" in l]
+    rows = [l for l in tv.lines() if "<alice> backlog" in l]
     nums = [int(re.search(r"backlog (\d\d)", l).group(1)) for l in rows]
     c.check(nums == sorted(nums) and nums[0] == 0,
             "older messages are out of order: %s" % nums)
