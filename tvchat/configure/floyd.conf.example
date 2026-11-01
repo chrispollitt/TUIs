@@ -10,7 +10,7 @@
 # NO PASSWORDS HERE.  Floyd's NickServ password goes in /etc/tvchat/floyd.env
 # (chmod 600) as
 #   TVCHAT_PASS_CPBEE=...
-# or in the service user's ~/.netrc:  machine cpbee  login Floyd  password ...
+# or in the service user's ~/.netrc:  machine cpbee  login floyd-bot  password ...
 # configure-floyd.sh registers the nick and writes that file.
 
 [account:cpbee]
@@ -20,10 +20,10 @@ host     = cpbee
 port     = 6697
 tls      = true
 cafile   = /opt/ergo/ca.pem
-nick     = Floyd
+nick     = floyd-bot
 realname = Floyd, B-19-7 (a robot)
 # his services account; the password is looked up as above
-sasl     = Floyd
+sasl     = floyd-bot
 # joined on every start; anyone can also /invite him (he joins at once) or /msg him
 channels = #test
 
@@ -40,8 +40,8 @@ channels = #test
 #host     = irc.libera.chat
 #port     = 6697
 #tls      = true
-#nick     = Floyd
-#sasl     = Floyd
+#nick     = floyd-bot
+#sasl     = floyd-bot
 ## a bot account: joins only when invited by invite_from (default: admins = below), by the
 ## services account the server vouches for; says what he is on joining; sends him away on
 ## !leave from the channel's operators; never goes back where he was kicked; and answers a
@@ -97,6 +97,17 @@ channels = #test
 # who he talks to by mail: name=address, comma-separated.  Mail from anyone else is
 # dropped without a word, and he never mails anyone else (mail from his own mailbox's
 # domain is still answered).  Empty = no limit.
+# NickServ's registration mail confirms itself: when the network (verify_from, default
+# libera.chat) mails "/msg NickServ VERIFY REGISTER ACCOUNT CODE" for the IRC account named
+# here whose nick or sasl = is ACCOUNT, and the receiving server verified its DKIM signature
+# (SpamAssassin's DKIM_VALID_AU; verify_dkim = no to act without), he sends exactly that VERIFY
+# to NickServ through that IRC account - which has to be connected - and says so in this
+# account's server window.  Nothing else in a mail is ever acted on.  Register the nick with
+#   /msg NickServ REGISTER PASSWORD floyd@cpbee.cmnet   (from a connection as floyd-bot)   # allowlist secret
+# and give this mailbox as the address.
+#verify_nick = libera
+#verify_from = libera.chat
+#verify_dkim = yes
 #known       = michelle=michelle.houle@gmail.com, chris=chris.pollitt@gmail.com
 # the master's own mail server, if the address's domain is not it:
 #imap_server = localhost

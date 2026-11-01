@@ -4797,7 +4797,7 @@ class FloydAdapter(CommandMixin):
         mind.nick = who
         now = self.chat.loop.clock()
         lvl = self.level_of(conv)
-        m = re.match(r"^@?floyd\s*[:,]\s*(.*)$", text, re.I)
+        m = re.match(r"^@?floyd(?:-bot)?\s*[:,]\s*(.*)$", text, re.I)
         # on the server, a private message is always meant for him
         to_him = bool(m) or (self.chat.daemon and conv.kind == "direct")
         body = m.group(1) if m else text
@@ -5391,6 +5391,16 @@ def mail_dkim_verified(msg):
     return False
 
 
+NICKSERV_VERIFY = re.compile(r"/msg\s+NickServ\s+VERIFY\s+REGISTER\s+([^\s<>\"']{1,40})\s+([A-Za-z0-9]{6,40})", re.I)
+
+
+def nickserv_verification(text):
+    """(account, code) from a NickServ registration mail ("/msg NickServ VERIFY REGISTER account
+    code", as Atheme - Libera.Chat - words it), or None."""
+    m = NICKSERV_VERIFY.search(text or "")
+    return (m.group(1), m.group(2)) if m else None
+
+
 def parse_known(text):
     """known = michelle=michelle@example.org, chris=chris@example.org: the
     addresses he talks to by mail, lower-cased, with the name he calls each.  A
@@ -5511,6 +5521,13 @@ class MailAdapter(CommandMixin):
         self.flush_timers = {}
         self.sent = {}                   # address -> [times of replies]
         self.sent_all = []
+        # NickServ's registration mail confirms itself (verify_nick = the IRC account to confirm
+        # through, verify_from = the network's mail domain, default libera.chat; verify_dkim = no
+        # to act on mail whose signature the server did not check)
+        self.verify_nick = (o.get("verify_nick") or "").strip()
+        self.verify_from = (o.get("verify_from") or "libera.chat").strip().lower()
+        self.verify_dkim = _bool(o.get("verify_dkim"), True)
+        self.verified_codes = set()
 
     def allowed(self, address):
         """known= lists who he talks to by mail (mail from, and replies to, anyone
@@ -5622,6 +5639,8 @@ class MailAdapter(CommandMixin):
             _log.debug("%s: reading the mailbox failed: %s", self.account.id, err)
             self.system(self.server_conv(), "could not read the mailbox: %s" % err)
         for uid, msgid, refs, sender, name, subject, text, automatic, invite, verified in res or []:
+            if self.verify_nick and self.nickserv_mail(sender, subject, text, verified):
+                continue                 # a registration to confirm: not a conversation
             if invite or automatic or sender == self.addr.lower():
                 continue                 # a Delta Chat invitation (its own adapter), a robot, ourselves
             if not self.allowed(sender):
@@ -5639,6 +5658,36 @@ class MailAdapter(CommandMixin):
             self.chat.add_message(conv, Message(self.local_id(), conv.id, time.time(),
                                                 Contact(sender, name, account), said, ""))
         self.timer = self.loop.call_later(self.poll, self._poll)
+
+    def nickserv_mail(self, sender, subject, text, verified):
+        """The network's mail to confirm a NickServ registration: when it comes from the
+        network's domain with a signature the server checked, and names the account of the IRC
+        account verify_nick = points at, send NickServ the VERIFY it asks for.  True when the mail
+        was one (whether or not it was acted on), so it is not treated as a message."""
+        found = nickserv_verification(text)
+        domain = sender.rpartition("@")[2]
+        if not found or not (domain == self.verify_from or domain.endswith("." + self.verify_from)):
+            return False
+        acct, code = found
+        conv = self.server_conv()
+        ident = self.chat.by_id.get(self.verify_nick)
+        ad = self.chat.adapters.get(self.verify_nick)
+        mine = {(ident.opts.get("sasl") or "").strip().lower(), (ident.opts.get("nick") or "").strip().lower()}             if ident is not None else set()
+        mine.discard("")
+        if self.verify_dkim and not verified:
+            self.system(conv, "a NickServ mail for %s came, but its signature was not verified: not confirming" % acct)
+        elif acct.lower() not in mine:
+            self.system(conv, "a NickServ mail for %s is not for %s: not confirming" % (acct, self.verify_nick))
+        elif code in self.verified_codes:
+            pass
+        elif not isinstance(ad, IrcAdapter) or ad.phase != "up":
+            self.system(conv, "a NickServ mail for %s came, but %s is not connected: connect it, then "
+                        "/msg NickServ VERIFY REGISTER %s CODE (the code is in the mail)" % (acct, self.verify_nick, acct))
+        else:
+            self.verified_codes.add(code)
+            ad.send_raw("PRIVMSG NickServ :VERIFY REGISTER %s %s" % (acct, code), secret=True)
+            self.system(conv, "confirmed %s with NickServ on %s" % (acct, ad.account.display))
+        return True
 
     # -- going out: what is said in a conversation is one reply mail --------------
     def speak(self, conv, text):

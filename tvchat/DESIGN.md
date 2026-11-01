@@ -359,6 +359,14 @@ is for his admins and for the channel's operators - by the role the server gave 
 and his own `level =` in `level_of()`. Tests: `TestBotOnAPublicNetwork` (against a fake server),
 `TestFloydPublic`.
 
+**His registration mail.** `MailAdapter.nickserv_mail()` runs first on every mail when `verify_nick =` is
+set: `nickserv_verification()` finds the "/msg NickServ VERIFY REGISTER account code" Atheme prints; the
+sender's domain must be `verify_from` (or below it), `mail_dkim_verified` must hold (`verify_dkim = no` skips
+it), the account must be the nick or `sasl =` of the named IRC account, and that account must be up; then
+`PRIVMSG NickServ :VERIFY REGISTER account code` goes out (`secret`, so it is not in the raw log), once per
+code, and the mail is not a conversation. Anything else in the mail is ignored. Test:
+`TestNickServVerification`.
+
 **Our own role.** `IrcAdapter.my_role()` reads our entry in `conv.members` (filled by NAMES, refreshed by
 `on_MODE`, which asks for NAMES again); `role_check()` (at the end of NAMES, on JOIN, PART and KICK) pushes
 `role CONV ROLE` when it changes and `Conversation.role` keeps it; `roles` lists it for a UI that was

@@ -4189,6 +4189,10 @@ class TestFloydPublic(Base):
         self.assertTrue(any("a bot" in s and "run by chris-pollitt" in s and "!leave" in s
                             for s in self.other.said), self.other.said)
 
+    def test_he_answers_to_floyd_bot_too(self):
+        self.hear("bob", "floyd-bot: !about")
+        self.assertTrue(any("a bot" in s for s in self.other.said), self.other.said)
+
     def test_an_operator_or_an_admin_can_send_him_away(self):
         self.hear("vera", "!leave")                                  # only voiced: no
         self.hear("bob", "floyd: leave")
@@ -4212,6 +4216,73 @@ class TestFloydPublic(Base):
 
     def test_the_account_sets_his_level(self):
         self.assertEqual(self.floyd.level_of(self.conv), "minimal")
+
+
+class TestNickServVerification(IrcBase):
+    """Floyd's mailbox confirms the network's NickServ registration mail by itself."""
+
+    MAIL = "To complete your registration, use this command:\n\n/msg NickServ VERIFY REGISTER floyd-bot AbC123xyz9\n"
+
+    def setup_nv(self, script):
+        srv = FakeIrc(script)
+        self.addCleanup(srv.close)
+        self.srv = srv
+        self.conf("""\
+            [account:libera]
+            protocol = irc
+            display  = Libera
+            host     = 127.0.0.1
+            port     = %d
+            tls      = false
+            nick     = floyd-bot
+            sasl     = floyd-bot
+            [account:fmail]
+            protocol    = mail
+            addr        = floyd@example.org
+            verify_nick = libera
+            """ % srv.port)
+        os.environ["TVCHAT_PASS_LIBERA"] = "pw"
+        self.chat = cb._chat()
+        self.acct = self.chat.by_id["libera"]
+        self.mail = self.chat.adapter(self.chat.by_id["fmail"])
+
+    def said(self):
+        return [m.text for m in self.chat.by_id["fmail"].convs["fmail/*"].history]
+
+    def test_the_mail_is_confirmed_once(self):
+        got = {}
+
+        def script(srv):
+            welcome(srv, "floyd-bot")
+            got["verify"] = srv.expect("PRIVMSG NickServ :")
+            srv.expect("QUIT")
+
+        self.setup_nv(script)
+        # not connected yet: told how to do it by hand, nothing sent
+        self.assertTrue(self.mail.nickserv_mail("noreply@libera.chat", "x", self.MAIL, True))
+        self.assertTrue(any("is not connected" in t for t in self.said()))
+        self.verb("connect", "libera")
+        self.turn(lambda: self.acct.state == "connected")
+        # a stranger's domain is no NickServ mail; a missing signature, another account: refused
+        self.assertFalse(self.mail.nickserv_mail("x@evil.example", "x", self.MAIL, True))
+        self.mail.nickserv_mail("noreply@libera.chat", "x", self.MAIL, False)
+        self.mail.nickserv_mail("noreply@libera.chat", "x", self.MAIL.replace("floyd-bot", "other"), True)
+        self.assertTrue(any("signature was not verified" in t for t in self.said()))
+        self.assertTrue(any("is not for libera" in t for t in self.said()))
+        self.assertNotIn("verify", got)
+        # the real one: sent to NickServ, once
+        self.assertTrue(self.mail.nickserv_mail("noreply@mail.libera.chat", "x", self.MAIL, True))
+        self.mail.nickserv_mail("noreply@libera.chat", "x", self.MAIL, True)
+        self.turn(lambda: "verify" in got)
+        self.assertEqual(got["verify"], "PRIVMSG NickServ :VERIFY REGISTER floyd-bot AbC123xyz9")
+        self.assertEqual([t for t in self.said() if t.startswith("confirmed")],
+                         ["confirmed floyd-bot with NickServ on Libera"])
+        self.verb("disconnect", "libera")
+        self.chat.close()
+
+    def test_the_parser(self):
+        self.assertEqual(cb.nickserv_verification(self.MAIL), ("floyd-bot", "AbC123xyz9"))
+        self.assertIsNone(cb.nickserv_verification("please /msg NickServ IDENTIFY hunter2"))
 
 
 class TestVersions(unittest.TestCase):

@@ -18,6 +18,14 @@
   an IRC command. New backend verbs `shares`, `share-send`, `share-drop`; the requests directory is now
   read whenever tvchat runs, not only with a Delta Chat account.
 
+- **Floyd confirms NickServ's registration mail himself, and is `floyd-bot`:** a mail account with
+  `verify_nick = ACCOUNT` (his IRC account) reads the network's "/msg NickServ VERIFY REGISTER account
+  code" mail and sends that one command to NickServ, only when it comes from `verify_from` (default
+  libera.chat), carries a signature the mail server verified (`verify_dkim = no` relaxes that), and
+  names the nick or `sasl =` of that IRC account; each code once. The nick defaults in the example
+  configs, `configure-floyd.sh` (POSIX) and its test are now `floyd-bot` (Libera has a Floyd), and he answers
+  to `floyd-bot:` as well as `floyd:` in a channel.
+
 - **tvchat knows when you are a channel operator:** the conversation list and the heading show `@`
   in front of a channel you operate (`%` half-op, `+` voice), and a note says when it changes (new
   `role` event, `roles` verb; it follows NAMES and mode changes).
