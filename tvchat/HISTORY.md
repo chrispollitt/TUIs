@@ -18,6 +18,12 @@
   an IRC command. New backend verbs `shares`, `share-send`, `share-drop`; the requests directory is now
   read whenever tvchat runs, not only with a Delta Chat account.
 
+- **What Floyd mails is filed in his Sent folder:** after the SMTP send, a copy goes to the mailbox with
+  IMAP APPEND (marked read) - the folder the server marks as Sent, else `Sent` / `INBOX.Sent` / `Sent Items`,
+  else one is made. `save_sent = no` turns it off, `sent_folder = NAME` names the folder. A copy that cannot
+  be filed is only logged: the mail has gone. Also, a NickServ confirmation now works through a short
+  connection of its own when his IRC account is not up (an unconfirmed Libera account may not log in).
+
 - **Floyd confirms NickServ's registration mail himself, and is `floyd-bot`:** a mail account with
   `verify_nick = ACCOUNT` (his IRC account) reads the network's "/msg NickServ VERIFY REGISTER account
   code" mail and sends that one command to NickServ, only when it comes from `verify_from` (default

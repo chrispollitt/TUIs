@@ -5401,6 +5401,48 @@ def nickserv_verification(text):
     return (m.group(1), m.group(2)) if m else None
 
 
+def irc_nickserv_once(host, port, tls, verify, cafile, command):
+    """On a thread: a short connection of its own (a made-up nick, no login) that sends NickServ one
+    command and returns what NickServ said.  For a registration that must be confirmed before
+    the account can log in at all, so the bot's own connection may not exist yet."""
+    import random
+    ctx = _tls_context(verify) if tls else None
+    if ctx is not None and cafile:
+        ctx.load_verify_locations(cafile)
+    raw = socket.create_connection((host, port), timeout=30)
+    s = ctx.wrap_socket(raw, server_hostname=host) if ctx else raw
+    s.settimeout(5)
+    nick = "tv%d" % random.randint(10000, 99999)
+    s.sendall(("NICK %s\r\nUSER %s 0 * :tvchat confirming a registration\r\n" % (nick, nick)).encode())
+    buf, sent, said, end = b"", False, [], time.time() + 45
+    try:
+        while time.time() < end:
+            try:
+                data = s.recv(4096)
+            except socket.timeout:
+                data = b"?"
+            if not data:
+                break
+            if data != b"?":
+                buf += data
+            while b"\r\n" in buf:
+                ln, buf = buf.split(b"\r\n", 1)
+                parts = ln.decode("utf-8", "replace").split(" ")
+                if parts[0] == "PING":
+                    s.sendall(("PONG " + " ".join(parts[1:]) + "\r\n").encode())
+                elif len(parts) > 1 and parts[1] == "001" and not sent:
+                    s.sendall(("PRIVMSG NickServ :%s\r\n" % command).encode())
+                    sent = True
+                    end = min(end, time.time() + 15)
+                elif parts[0].lower().startswith(":nickserv!") and len(parts) > 3:
+                    said.append(" ".join(parts[3:]).lstrip(":"))
+                    end = min(end, time.time() + 2)      # a moment for the rest of its answer
+        s.sendall(b"QUIT :done\r\n")
+    finally:
+        s.close()
+    return " ".join(said)
+
+
 def parse_known(text):
     """known = michelle=michelle@example.org, chris=chris@example.org: the
     addresses he talks to by mail, lower-cased, with the name he calls each.  A
@@ -5448,6 +5490,49 @@ def fetch_new_mail(p):
     return out
 
 
+def sent_folder_of(m):
+    """The folder a mail we sent is filed in: the one the server marks \\Sent, else a usual name,
+    else one made (INBOX.Sent where the server keeps its folders under INBOX.)."""
+    typ, data = m.list()
+    names = []
+    for raw in data or []:
+        if not isinstance(raw, bytes):
+            continue
+        mt = re.match(r'\((?P<attrs>[^)]*)\)\s+(?:"[^"]*"|NIL)\s+(?P<name>.+)$', raw.decode("utf-8", "replace"))
+        if not mt:
+            continue
+        name = mt.group("name").strip().strip('"')
+        if "\\sent" in mt.group("attrs").lower():
+            return name
+        names.append(name)
+    for cand in ("Sent", "INBOX.Sent", "Sent Items", "INBOX.Sent Items", "Sent Messages"):
+        if cand in names:
+            return cand
+    folder = ("INBOX." if any(n.startswith("INBOX.") for n in names) else "") + "Sent"
+    m.create(folder)
+    try:
+        m.subscribe(folder)
+    except Exception:
+        pass
+    return folder
+
+
+def save_sent_copy(p, msg):
+    """File a copy of the mail we just sent in the Sent folder (IMAP APPEND, marked read), as a mail
+    program does - SMTP alone leaves no trace in the mailbox.  Raises if it cannot."""
+    m = _imap_open(p)
+    try:
+        folder = (p.get("sent_folder") or "").strip() or sent_folder_of(m)
+        typ, data = m.append(folder, "(\\Seen)", imaplib.Time2Internaldate(time.time()), msg.as_bytes())
+        if typ != "OK":
+            raise RuntimeError("the server refused the copy for %s: %r" % (folder, data))
+    finally:
+        try:
+            m.logout()
+        except Exception:
+            pass
+
+
 def send_reply_mail(p, to, subject, in_reply_to, references, body, name=""):
     """Mail the reply (a thread); the reason in the exception if it fails."""
     msg = EmailMessage()
@@ -5485,6 +5570,11 @@ def send_reply_mail(p, to, subject, in_reply_to, references, body, name=""):
             s_.quit()
         except Exception:
             pass
+    if p.get("save_sent", True):         # sent: the reply is out whatever happens to the copy
+        try:
+            save_sent_copy(p, msg)
+        except Exception as e:
+            _log.info("mail: the reply to %s was sent, but not filed in Sent: %s", to, e)
 
 
 class MailAdapter(CommandMixin):
@@ -5583,6 +5673,8 @@ class MailAdapter(CommandMixin):
             "smtp_host": (o.get("smtp_server") or host).strip(), "smtp_port": smtp_port,
             "smtp_user": (o.get("smtp_user") or login).strip(),
             "smtp_security": (o.get("smtp_security") or ("ssl" if smtp_port == 465 else "starttls")).strip(),
+            "save_sent": _bool(o.get("save_sent"), True),
+            "sent_folder": (o.get("sent_folder") or "").strip(),
         }
 
     # -- lifecycle ------------------------------------------------------------
@@ -5671,7 +5763,7 @@ class MailAdapter(CommandMixin):
         acct, code = found
         conv = self.server_conv()
         ident = self.chat.by_id.get(self.verify_nick)
-        ad = self.chat.adapters.get(self.verify_nick)
+        ad = self.chat.adapter(ident) if ident is not None else None    # (made if not yet)
         mine = {(ident.opts.get("sasl") or "").strip().lower(), (ident.opts.get("nick") or "").strip().lower()}             if ident is not None else set()
         mine.discard("")
         if self.verify_dkim and not verified:
@@ -5680,9 +5772,22 @@ class MailAdapter(CommandMixin):
             self.system(conv, "a NickServ mail for %s is not for %s: not confirming" % (acct, self.verify_nick))
         elif code in self.verified_codes:
             pass
-        elif not isinstance(ad, IrcAdapter) or ad.phase != "up":
-            self.system(conv, "a NickServ mail for %s came, but %s is not connected: connect it, then "
-                        "/msg NickServ VERIFY REGISTER %s CODE (the code is in the mail)" % (acct, self.verify_nick, acct))
+        elif not isinstance(ad, IrcAdapter):
+            self.system(conv, "a NickServ mail for %s came, but %s is not an IRC account" % (acct, self.verify_nick))
+        elif ad.phase != "up":
+            # the account may not be able to log in until it is confirmed: use a connection of its own
+            self.verified_codes.add(code)
+            self.system(conv, "confirming %s with NickServ on %s (a short connection of its own) ..." % (acct, ad.account.display))
+            command = "VERIFY REGISTER %s %s" % (acct, code)
+
+            def done(res, err):
+                if err is not None:
+                    self.verified_codes.discard(code)        # tried again with the next mail scan
+                    self.system(conv, "could not confirm %s: %s" % (acct, err))
+                else:
+                    self.system(conv, "NickServ: %s" % (res or "(no answer)"))
+            self.loop.run_in_thread(
+                lambda: irc_nickserv_once(ad.host, ad.port, ad.tls, ad.verify, ad.cafile, command), done)
         else:
             self.verified_codes.add(code)
             ad.send_raw("PRIVMSG NickServ :VERIFY REGISTER %s %s" % (acct, code), secret=True)

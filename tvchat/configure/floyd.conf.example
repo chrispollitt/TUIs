@@ -106,6 +106,10 @@ channels = #test
 #   /msg NickServ REGISTER PASSWORD floyd@cpbee.cmnet   (from a connection as floyd-bot)   # allowlist secret
 # and give this mailbox as the address.
 #verify_nick = libera
+# What he mails is also filed in the mailbox's Sent folder (found by the server's \Sent mark, else Sent,
+# INBOX.Sent ...; made if none).  save_sent = no stops it; sent_folder = NAME names the folder.
+#save_sent   = yes
+#sent_folder =
 #verify_from = libera.chat
 #verify_dkim = yes
 #known       = michelle=michelle.houle@gmail.com, chris=chris.pollitt@gmail.com

@@ -2122,6 +2122,8 @@ class FakeMail:
     def __init__(self):
         self.sent = []
         self.inbox = []
+        self.filed = []                  # (folder, raw) of what was APPENDed
+        self.sent_folders = []           # folders made by CREATE
         self.lock = threading.Lock()
         self.socks = []
         self.threads = []
@@ -2261,6 +2263,22 @@ class FakeMail:
                         w("%s BAD\r\n" % tag)
                 elif cmd == "EXPUNGE":
                     w("%s OK done\r\n" % tag)
+                elif cmd == "LIST":
+                    w('* LIST (\\HasNoChildren) "." "INBOX"\r\n* LIST (\\HasNoChildren) "." "Drafts"\r\n' +
+                      ('* LIST (\\HasNoChildren) "." "INBOX.Sent"\r\n' if self.sent_folders else "") +
+                      "%s OK done\r\n" % tag)
+                elif cmd in ("CREATE", "SUBSCRIBE"):
+                    if cmd == "CREATE":
+                        self.sent_folders.append(args.strip('"'))
+                    w("%s OK done\r\n" % tag)
+                elif cmd == "APPEND":
+                    n = int(args.rsplit("{", 1)[1].rstrip("}"))
+                    w("+ go\r\n")
+                    raw = f.read(n)
+                    f.readline()
+                    with self.lock:
+                        self.filed.append((args.split(" ", 1)[0].strip('"'), raw))
+                    w("%s OK [APPENDUID 1 1] done\r\n" % tag)
                 elif cmd == "LOGOUT":
                     w("* BYE\r\n%s OK done\r\n" % tag)
                     return
@@ -2810,6 +2828,18 @@ class TestMailReplies(Base):
     def up(self):
         self.chat.connect(self.chat.by_id["floyd"])
         self.chat.connect(self.chat.by_id["mail"])
+
+    def test_what_he_sends_is_filed_in_sent(self):
+        self.mail.add_mail("From: Alice <alice@example.org>\nTo: floyd@example.org\nSubject: hi\n"
+                           "Message-ID: <m9@example.org>\n\n!8ball ok\n")
+        self.up()
+        self.turn(lambda: self.mail.sent and self.mail.filed)
+        import email
+        folder, raw = self.mail.filed[0]
+        self.assertEqual(folder, "Sent")                              # no INBOX.* folders here: made as Sent
+        self.assertEqual(email.message_from_bytes(raw)["Subject"], "Re: hi")
+        self.assertEqual(email.message_from_bytes(raw)["Message-ID"],
+                         email.message_from_bytes(self.mail.sent[0])["Message-ID"])
 
     def test_a_mail_gets_a_reply_in_the_same_thread(self):
         self.mail.add_mail("From: Alice <alice@example.org>\nTo: floyd@example.org\nSubject: hello\n"
@@ -4258,9 +4288,6 @@ class TestNickServVerification(IrcBase):
             srv.expect("QUIT")
 
         self.setup_nv(script)
-        # not connected yet: told how to do it by hand, nothing sent
-        self.assertTrue(self.mail.nickserv_mail("noreply@libera.chat", "x", self.MAIL, True))
-        self.assertTrue(any("is not connected" in t for t in self.said()))
         self.verb("connect", "libera")
         self.turn(lambda: self.acct.state == "connected")
         # a stranger's domain is no NickServ mail; a missing signature, another account: refused
@@ -4278,6 +4305,25 @@ class TestNickServVerification(IrcBase):
         self.assertEqual([t for t in self.said() if t.startswith("confirmed")],
                          ["confirmed floyd-bot with NickServ on Libera"])
         self.verb("disconnect", "libera")
+        self.chat.close()
+
+    def test_a_connection_of_its_own_when_the_account_is_not_up(self):
+        got = []
+
+        def script(srv):                 # a connection nobody logged in on: any nick, no SASL
+            srv.expect("NICK tv")
+            srv.expect("USER ")
+            srv.send(":srv 001 tv00000 :Welcome")
+            got.append(srv.expect("PRIVMSG NickServ :"))
+            srv.send(":NickServ!NickServ@services. NOTICE tv00000 :floyd-bot has now been verified.")
+            srv.expect("QUIT")
+
+        self.setup_nv(script)
+        self.assertTrue(self.mail.nickserv_mail("noreply@libera.chat", "x", self.MAIL, True))
+        self.turn(lambda: any("has now been verified" in t for t in self.said()))
+        self.assertEqual(got, ["PRIVMSG NickServ :VERIFY REGISTER floyd-bot AbC123xyz9"])
+        self.assertTrue(any("a short connection of its own" in t for t in self.said()))
+        self.mail.nickserv_mail("noreply@libera.chat", "x", self.MAIL, True)     # the same code: not again
         self.chat.close()
 
     def test_the_parser(self):

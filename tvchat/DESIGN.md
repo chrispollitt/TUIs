@@ -359,12 +359,19 @@ is for his admins and for the channel's operators - by the role the server gave 
 and his own `level =` in `level_of()`. Tests: `TestBotOnAPublicNetwork` (against a fake server),
 `TestFloydPublic`.
 
+**His sent mail.** `send_reply_mail` ends with `save_sent_copy()`: `IMAP APPEND` of the same message (so the
+Message-ID matches) flagged `\Seen` into `sent_folder =`, else the folder the server's LIST marks `\Sent`
+(`sent_folder_of`), else a usual name, else a new `Sent` (`INBOX.Sent` when the server's folders live under
+INBOX.). A failure is logged at INFO and does not undo the send. Test: `TestMailReplies`.
+
 **His registration mail.** `MailAdapter.nickserv_mail()` runs first on every mail when `verify_nick =` is
 set: `nickserv_verification()` finds the "/msg NickServ VERIFY REGISTER account code" Atheme prints; the
 sender's domain must be `verify_from` (or below it), `mail_dkim_verified` must hold (`verify_dkim = no` skips
 it), the account must be the nick or `sasl =` of the named IRC account, and that account must be up; then
 `PRIVMSG NickServ :VERIFY REGISTER account code` goes out (`secret`, so it is not in the raw log), once per
-code, and the mail is not a conversation. Anything else in the mail is ignored. Test:
+code, and the mail is not a conversation. Anything else in the mail is ignored. When that IRC account is not up (a Libera
+account may not log in until it is confirmed) the VERIFY goes out on a short connection of its
+own (`irc_nickserv_once`: a made-up nick, no login, a thread). Test:
 `TestNickServVerification`.
 
 **Our own role.** `IrcAdapter.my_role()` reads our entry in `conv.members` (filled by NAMES, refreshed by
