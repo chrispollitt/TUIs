@@ -145,6 +145,20 @@ prints a Delta Chat invite link; the other side passes it to
 .B join
 (which otherwise takes an email address), and the two exchange the keys the
 core needs before it will send.
+For an IRC account it takes an optional channel and prints
+.BI irc:// host [: port ][/ #channel ]
+instead, and
+.B invite-send
+.I ACCOUNT CONV
+.RI [ #CHANNEL ]
+invites the person or group in CONV (a chat on any IRC or Delta Chat account) to ACCOUNT by a
+message with that link; on the same IRC network it is an INVITE.  Such a link in a message
+to us becomes an invitation like a mailed one: see
+.B invites
+(a third field says where to, for IRC),
+.B accept-invite
+and
+.BR decline-invite .
 Events:
 .B talk
 .I CONV STATE DETAIL
@@ -195,6 +209,19 @@ after a value is part of the value.
 connects those accounts when
 .B serve
 starts.
+.PP
+.B [people]
+is the nick joining table, for people who go by different names on different servers:
+.I name
+.B =
+.I account:handle, ...
+(an IRC nick, a Delta Chat address; the account is a section name).
+.B invite-send
+uses it to find someone's nick on the account they are invited to, and
+.B invites
+names the sender by it (\(lqcarol (cpollitt)\(rq).
+.B people
+prints it.
 .PP
 .BI [account: NAME ]
 \(em

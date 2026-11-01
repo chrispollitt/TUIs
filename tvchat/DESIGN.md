@@ -437,6 +437,34 @@ names were checked against `--openrpc` and the `deltachat-rpc-client` source).
   tvmail offers Message > Open chat invite. `has-tvmail` says whether it can be
   used; the Invite dialog shows its "mail it to" field only then. The result is
   told in the server window.
+- **Inviting to another server** (Chat > Invite..., any account to any account): the
+  invitation for an IRC or Delta Chat account is a link - the Delta Chat invite
+  link, or `irc://host[:port][/#channel]` (`ircs://` for TLS; `Chat.invite_for`) -
+  and `invite-send ACCOUNT CONV [#CHANNEL]` sends it as a message ("Join me on ...")
+  to the person or group in CONV, which can be a chat on any IRC or Delta Chat
+  account; on the same IRC network with a channel it is a plain `/invite` instead.
+  `Chat.find_invites`, run on every message added, looks in what is said to us in
+  a direct chat or group (not ours, not in channels, server windows, mail or
+  Floyd) for such a link: an `irc://` one goes to the IRC account whose host and
+  port it names (`IrcAdapter.add_invite_url`; none: a note in the chat, no URL in
+  it), a Delta Chat one to the first connected Delta Chat account
+  (`add_invite`). Either way it is the same `invite ACCOUNT SENDER` event, and
+  `invites` / `accept-invite` / `decline-invite` work unchanged; `invites` lines
+  gain a third field, where to ("to #lobby on Libera"), only for IRC. Accepting
+  joins the channel (or connects, for a bare server; the channel is then joined
+  when registered). `join_invites = yes` (and the central Floyd) accept at once.
+  `invite ACCOUNT [#CHANNEL]` prints the link for copying.
+- **The nick joining table** (`[people]` in tvchat.conf; `People`, `parse_people`):
+  people go by different names on different servers, so `name = account:handle, ...`
+  says who is who (a bad account name or a handle given to two people is a config
+  error, also for `check-config`; `reload-config` re-reads it; the `people` verb
+  prints it). `Chat.handle_of(conv)` is the other side of a direct chat as its account
+  knows them (an IRC nick, or the Delta Chat address they last wrote from); with
+  the table `send_invite` looks up that person's handle on the target account
+  and invites them *there* - an IRC `/invite` to their nick on that network, or
+  `join` of their Delta Chat address (a chat, or an invitation by mail) - and only
+  falls back to the link message when they have none. `who_is` names an invitation's
+  sender as "carol (cpollitt)". Only invitations use it so far.
 - **Leave:** `part` on a Delta Chat conversation leaves a group (`leave_group`; the
   others are told) and then `delete_chat`s it, and removes the conversation. The
   UI asks first (Yes / No), since the history goes.

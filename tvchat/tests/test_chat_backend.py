@@ -872,6 +872,197 @@ class TestIrcSession(IrcBase):
                          "** state libera connected srv")
 
 
+class TestIrcInvitations(IrcBase):
+    """Chat > Invite... to another server: an irc:// link in a message becomes an
+    invitation for the IRC account on that server (and a link for a server we
+    have no account on is only said so); Accept invite... joins it."""
+
+    def test_links(self):
+        self.assertEqual(cb.irc_invite_url("irc.example.org", 6697, True, "#lobby"),
+                         "ircs://irc.example.org/#lobby")
+        self.assertEqual(cb.irc_invite_url("irc.example.org", 6667, False), "irc://irc.example.org")
+        self.assertEqual(cb.irc_invite_url("h", 7000, False, "#c"), "irc://h:7000/#c")
+        f = cb.irc_invite_in
+        self.assertEqual(f("come to ircs://Irc.Example.org/lobby."), ("irc.example.org", 6697, "#lobby"))
+        self.assertEqual(f("irc://h:7000/%23c,isnick, ok"), ("h", 7000, "#c"))
+        self.assertEqual(f("see irc://h"), ("h", 6667, ""))
+        self.assertIsNone(f("no link here, nor http://h/x"))
+        self.assertIsNone(f("irc://h:99999/x"))
+
+    def test_invitation_in_a_message(self):
+        got = {}
+
+        def script(srv):
+            welcome(srv)
+            srv.expect("JOIN #Test")
+            srv.send(":carol!c@h PRIVMSG tester :come to irc://127.0.0.1:%d/lobby." % srv.port)
+            srv.send(":dave!d@h PRIVMSG tester :try irc://other.example.org/#x")
+            srv.send(":zed!z@h PRIVMSG #Test :irc://127.0.0.1:%d/#noisy" % srv.port)  # a channel: not an invitation
+            srv.send(":frank!f@h PRIVMSG tester :irc://127.0.0.1:%d/#nope" % srv.port)
+            srv.send(":frank!f@h PRIVMSG tester :end")
+            got["join"] = srv.expect("JOIN #lobby")
+            got["invite"] = srv.expect("INVITE carol #lobby")
+            srv.expect("QUIT")
+
+        self.setup_irc(script)
+        self.verb("connect", "libera")
+        self.turn(lambda: any(m[6] == "end" for m in self.msgs()))
+        what = "to #lobby on FakeNet"
+        self.assertEqual(self.verb("invites"), (0, ("libera\tcarol\t%s\nlibera\tfrank\tto #nope on FakeNet\n"
+                                                    % what).encode()))
+        self.assertIn(("invite", "libera", "carol"), self.events())
+        # declined: gone, and never joined
+        self.assertEqual(self.verb("decline-invite", "libera", "frank"), (0, b""))
+        self.assertEqual(self.verb("invites"), (0, ("libera\tcarol\t%s\n" % what).encode()))
+        said = [m[6] for m in self.msgs() if m[1] == "libera/dave"]
+        self.assertTrue(any("none of your accounts connects there" in s for s in said), said)
+        # accepting joins the channel
+        self.assertEqual(self.verb("accept-invite", "libera", "carol"), (0, b"libera/#lobby\n"))
+        self.assertEqual(self.verb("invites"), (0, b""))
+        self.assertEqual(self.verb("accept-invite", "libera", "carol")[0], 1)
+        # our own link, and an invitation sent to someone on the same network
+        self.assertEqual(self.verb("invite", "libera", "#lobby"),
+                         (0, ("irc://127.0.0.1:%d/#lobby\n" % self.srv.port).encode()))
+        self.assertEqual(self.verb("invite", "libera", "lobby")[0], 1)
+        self.assertEqual(self.verb("invite-send", "libera", "libera/carol", "#lobby"),
+                         (0, b"invited carol to #lobby\n"))
+        self.assertEqual(self.verb("invite-send", "libera", "libera/carol")[0], 1)   # they are here already
+        self.assertEqual(self.verb("invite-send", "libera", "libera/#test", "#lobby")[0], 1)  # not a person
+        self.turn(lambda: "invite" in got)
+        self.verb("disconnect", "libera")
+        self.chat.close()
+
+    def test_delta_chat_link_without_an_account(self):
+        def script(srv):
+            welcome(srv)
+            srv.expect("JOIN #Test")
+            srv.send(":carol!c@h PRIVMSG tester :https://i.delta.chat/#ABCD&a=carol%40example.org")
+            srv.expect("QUIT")
+
+        self.setup_irc(script)
+        self.verb("connect", "libera")
+        self.turn(lambda: any("Delta Chat invitation" in m[6] for m in self.msgs()))
+        self.assertEqual(self.verb("invites"), (0, b""))
+        self.verb("disconnect", "libera")
+        self.chat.close()
+
+    def test_join_invites_takes_them_at_once(self):
+        got = {}
+
+        def script(srv):
+            welcome(srv)
+            srv.expect("JOIN #Test")
+            srv.send(":carol!c@h PRIVMSG tester :irc://127.0.0.1:%d/#one" % srv.port)
+            got["one"] = srv.expect("JOIN #one")
+            srv.expect("QUIT")
+
+        self.setup_irc(script, "join_invites = yes")
+        self.verb("connect", "libera")
+        self.turn(lambda: "one" in got)
+        self.assertEqual(self.verb("invites"), (0, b""))          # nothing left to ask
+        self.verb("disconnect", "libera")
+        self.chat.close()
+
+
+class TestPeople(IrcBase):
+    """The nick joining table ([people]): one person, a different name on each server."""
+
+    def two_networks(self, script_a, script_b, people):
+        a, b = FakeIrc(script_a), FakeIrc(script_b)
+        self.addCleanup(a.close)
+        self.addCleanup(b.close)
+        self.conf("""\
+            [account:libera]
+            protocol = irc
+            display  = FakeNet
+            host     = 127.0.0.1
+            port     = %d
+            tls      = false
+            nick     = tester
+            [account:oftc]
+            protocol = irc
+            display  = OFTC
+            host     = 127.0.0.1
+            port     = %d
+            tls      = false
+            nick     = tester2
+            [people]
+            %s
+            """ % (a.port, b.port, people))
+        self.chat = cb._chat()
+        self.srv, self.srv2 = a, b
+        self.verb("connect", "libera")
+        self.verb("connect", "oftc")
+        return a, b
+
+    def test_table_parses(self):
+        self.conf("""\
+            [account:libera]
+            protocol = irc
+            host = h
+            [account:delta]
+            protocol = deltachat
+            addr = c@example.org
+            [people]
+            Carol = libera:cpollitt, delta:carol@example.org
+            Dave  = libera:dave_
+            """)
+        chat = cb._chat()
+        self.assertEqual(self.verb("people"), (0, (
+            "Carol\tlibera\tcpollitt\nCarol\tdelta\tcarol@example.org\nDave\tlibera\tdave_\n").encode()))
+        self.assertEqual(chat.people.name_of("libera", "CPollitt"), "Carol")
+        self.assertIsNone(chat.people.name_of("delta", "cpollitt"))
+        self.assertEqual(chat.who_is(chat.by_id["libera"], "dave_"), "Dave (dave_)")
+        self.assertEqual(chat.who_is(chat.by_id["libera"], "Dave"), "Dave")
+
+    def test_bad_table_is_refused(self):
+        for entry, word in (("Carol = nowhere:carol", "no [account:nowhere]"),
+                            ("Carol = libera", "not account:handle"),
+                            ("Carol = libera:x\n            Dave = libera:X", "both")):
+            self.conf("""\
+                [account:libera]
+                protocol = irc
+                host = h
+                [people]
+                %s
+                """ % entry)
+            errors = cb.check_config(os.environ["TVCHAT_CONF"])[0]
+            self.assertTrue(errors and word in errors[0], (entry, errors))
+
+    def test_invite_finds_their_nick_on_the_other_server(self):
+        got = {}
+
+        def libera(srv):
+            welcome(srv)
+            srv.send(":carol!c@h PRIVMSG tester :hi")
+            srv.send(":dave!d@h PRIVMSG tester :hi")
+            got["msg"] = srv.expect("PRIVMSG dave :Join me on")
+            srv.expect("QUIT")
+
+        def oftc(srv):
+            welcome(srv, "tester2")
+            got["invite"] = srv.expect("INVITE ")
+            srv.expect("QUIT")
+
+        self.two_networks(libera, oftc, "carol = libera:carol, oftc:cpollitt")
+        self.turn(lambda: self.chat.account("libera").state == "connected" and
+                  self.chat.account("oftc").state == "connected" and
+                  "libera/dave" in self.chat.account("libera").convs)
+        # carol is cpollitt over there: an ordinary INVITE to that nick
+        self.assertEqual(self.verb("invite-send", "oftc", "libera/carol", "#club"),
+                         (0, b"invited carol (cpollitt) to #club\n"))
+        # dave is not in the table: the link goes to him in the chat he is in
+        self.assertEqual(self.verb("invite-send", "oftc", "libera/dave", "#club"),
+                         (0, b"invitation sent to dave\n"))
+        self.turn(lambda: "msg" in got and "invite" in got)
+        self.assertEqual(got["invite"], "INVITE cpollitt #club")
+        self.assertEqual(got["msg"], "PRIVMSG dave :Join me on #club on OFTC: irc://127.0.0.1:%d/#club"
+                         % self.srv2.port)
+        self.verb("disconnect", "libera")
+        self.verb("disconnect", "oftc")
+        self.chat.close()
+
+
 class TestIrcHardening(IrcBase):
     def test_a_missing_cafile_is_said_in_words_and_tilde_is_home(self):
         srv = FakeIrc(lambda s: None)

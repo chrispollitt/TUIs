@@ -462,6 +462,7 @@ class Loop:
 #   [chat]           autoconnect = libera, delta   (section names, comma-separated)
 #   [account:NAME]   protocol = irc | deltachat,  display = (default: NAME)
 #                    ...plus the protocol's own keys (host, port, nick, addr ...)
+#   [people]         NAME = account:handle, account:handle   (the nick joining table)
 #
 # Passwords are NEVER in this file - see the module docstring.
 # --------------------------------------------------------------------------
@@ -515,6 +516,81 @@ def load_config(path=None):
             raise UserError("%s: [chat] autoconnect names %r, but there is no "
                             "[account:%s] section" % (path, x, x))
     return accounts, auto
+
+
+# The nick joining table: people go by different names on different servers
+# (carol is cpollitt on one IRC network, carol_ on another, carol@example.org on
+# Delta Chat).  A [people] section says who is who - one person per line, their
+# handles as account:handle -
+#
+#   [people]
+#   carol = libera:cpollitt, oftc:carol_, delta:carol@example.org
+#
+# and an invitation to one account can then find the person there (or ask them
+# through the chat they are in now).
+class People:
+    def __init__(self, table=None):
+        self.table = table or {}         # name -> {account id: [handles]}
+        self.back = {}                   # (account id, lower-case handle) -> name
+        for name, accts in self.table.items():
+            for acct, handles in accts.items():
+                for h in handles:
+                    self.back[(acct, h.lower())] = name
+
+    def name_of(self, account_id, handle):
+        """Who the handle is on that account, or None."""
+        return self.back.get((account_id, (handle or "").lower()))
+
+    def handles(self, name, account_id):
+        return list(self.table.get(name, {}).get(account_id, []))
+
+    def lines(self):
+        for name in sorted(self.table, key=str.lower):
+            for acct, handles in self.table[name].items():
+                for h in handles:
+                    yield name, acct, h
+
+
+def parse_people(items, account_ids, path="tvchat.conf"):
+    """The [people] entries ((name, "account:handle, ...") pairs) as a People;
+    a UserError names what is wrong.  A handle is one person's on one account."""
+    table, seen = {}, {}
+    for name, value in items:
+        name = name.strip()
+        if not name or any(ch in name for ch in "\t\n"):
+            raise UserError("%s: [people] a name may not be empty" % path)
+        accts = {}
+        for part in value.replace("\n", ",").split(","):
+            part = part.strip()
+            if not part:
+                continue
+            acct, colon, handle = part.partition(":")
+            acct, handle = acct.strip(), handle.strip()
+            if not colon or not handle or " " in handle:
+                raise UserError("%s: [people] %s: %r is not account:handle" % (path, name, part))
+            if acct not in account_ids:
+                raise UserError("%s: [people] %s: there is no [account:%s] section" % (path, name, acct))
+            key = (acct, handle.lower())
+            if key in seen and seen[key] != name:
+                raise UserError("%s: [people] %s is both %s and %s on %s"
+                                % (path, handle, seen[key], name, acct))
+            seen[key] = name
+            accts.setdefault(acct, []).append(handle)
+        table[name] = accts
+    return People(table)
+
+
+def load_people(accounts, path=None):
+    """The [people] table of the config file (an empty one when there is none)."""
+    path = path or _conf_path()
+    c = configparser.ConfigParser(interpolation=None)
+    c.optionxform = str                  # names keep their case
+    try:
+        c.read(path, encoding="utf-8")
+    except configparser.Error as e:
+        raise UserError("%s: %s" % (path, str(e).splitlines()[0]))
+    items = c.items("people") if c.has_section("people") else []
+    return parse_people(items, set(a.id for a in accounts), path)
 
 
 # --------------------------------------------------------------------------
@@ -1041,6 +1117,7 @@ class IrcAdapter(CommandMixin):
         self.sasl_user = (o.get("sasl") or "").strip()
         self.channels = [c.strip() for c in (o.get("channels") or "").split(",")
                          if c.strip()]
+        self.invites = {}                # lower-case sender -> {"from", "channel"}: irc:// links sent to us
         self.gen = 0                     # bumped on close: stale callbacks no-op
         self._ids = 0
         self.raw_tap = None              # irc-tail --raw: fn(direction, line)
@@ -1840,6 +1917,61 @@ class IrcAdapter(CommandMixin):
             self.fetch_history(conv, "latest")
         return conv
 
+    # -- invitations that came as an irc:// link in a message ------------------------
+    def invite_url(self, channel=""):
+        """What to give someone who has an account on this server: irc://host[:port][/#chan]."""
+        channel = channel.strip()
+        if channel and not self.is_channel(channel):
+            raise UserError("%s is not a channel name" % channel)
+        return irc_invite_url(self.host, self.port, self.tls, channel)
+
+    def serves(self, host, port):
+        return host == self.host.lower() and port == self.port
+
+    def add_invite_url(self, sender, channel):
+        key = sender.lower()
+        inv = self.invites.get(key)
+        if inv is not None and inv["channel"] == channel:
+            return
+        self.invites[key] = {"from": sender, "channel": channel}
+        self.system(self.server_conv(), "%s invites you to %s - Chat > Accept invite..."
+                    % (sender, channel or self.account.display))
+        self.chat.events.push("invite", self.account.id, sender)
+        if self.chat.daemon or _bool(self.account.opts.get("join_invites"), False):
+            try:
+                self.accept_invite(sender)
+            except UserError as e:
+                self.system(self.server_conv(), "could not accept the invitation from %s: %s" % (sender, e))
+                self.invites.pop(key, None)
+
+    def pending_invites(self):
+        return [inv["from"] for inv in self.invites.values()]
+
+    def invite_what(self, sender):
+        inv = self.invites.get((sender or "").strip().lower())
+        return "to %s on %s" % (inv["channel"], self.account.display) if inv and inv["channel"] \
+            else "to %s" % self.account.display
+
+    def accept_invite(self, sender):
+        """Join the invited channel (or just connect, for a bare server); returns
+        the conversation to show."""
+        inv = self.invites.get((sender or "").strip().lower())
+        if inv is None:
+            raise UserError("no invitation from %s" % sender)
+        if self.phase != "up":           # connect; the channel is joined once registered
+            if inv["channel"] and inv["channel"] not in self.channels:
+                self.channels.append(inv["channel"])
+            self.chat.connect(self.account)
+            self.invites.pop(inv["from"].lower(), None)
+            return self.server_conv()
+        conv = self.join(inv["channel"]) if inv["channel"] else self.server_conv()
+        self.invites.pop(inv["from"].lower(), None)
+        return conv
+
+    def decline_invite(self, sender):
+        if self.invites.pop((sender or "").strip().lower(), None) is None:
+            raise UserError("no invitation from %s" % sender)
+
     def part(self, conv):
         if conv.kind == "server":
             raise UserError("the server window cannot be left - disconnect instead")
@@ -2499,6 +2631,36 @@ def invite_ok(sender, link):
     """An invitation counts only from the address it names."""
     named = invite_names(link)
     return bool(named) and named.lower() == (sender or "").strip().lower()
+
+
+# An invitation can also travel as a message in any other chat (Chat > Invite...
+# sends it): a Delta Chat link as above, or an irc:// / ircs:// link naming the
+# server and, for a channel, the channel.  The reader is asked, as with mail.
+IRC_LINK = re.compile(r"\b(ircs?)://([^\s/:<>\"]+)(?::(\d+))?(?:/([^\s<>\"]*))?", re.I)
+
+
+def irc_invite_url(host, port, tls, channel=""):
+    """irc://HOST[:PORT][/#CHANNEL] (ircs:// for TLS; the port only when not the usual one)."""
+    url = "%s://%s" % ("ircs" if tls else "irc", host)
+    if port != (6697 if tls else 6667):
+        url += ":%d" % port
+    return url + ("/" + channel if channel else "")
+
+
+def irc_invite_in(text):
+    """(host, port, channel) of the first irc:// link in text, or None; the
+    host is lower-cased, the channel '' for a bare server."""
+    m = IRC_LINK.search(text or "")
+    if not m:
+        return None
+    tls = m.group(1).lower() == "ircs"
+    port = int(m.group(3)) if m.group(3) else (6697 if tls else 6667)
+    chan = unquote((m.group(4) or "").rstrip(".,;:!?)")).split(",")[0]
+    if chan and chan[0] not in "#&+!":
+        chan = "#" + chan                    # irc://host/chan means #chan
+    if not 0 < port < 65536 or len(chan) > 200:
+        return None
+    return m.group(2).lower(), port, chan
 
 
 def _tls_context(verify):
@@ -5355,6 +5517,7 @@ def check_config(path):
     errors, warnings = [], []
     try:
         accounts, auto = load_config(path)
+        load_people(accounts, path)
     except UserError as e:
         return [str(e)], [], ""
     for a in accounts:
@@ -5429,9 +5592,11 @@ class Chat:
         self.conf_error = None
         try:
             self.accounts, self.autoconnect = load_config()
+            self.people = load_people(self.accounts)
         except UserError as e:
             self.conf_error = e
             self.accounts, self.autoconnect = [], []
+            self.people = People()
         self.by_id = dict((a.id, a) for a in self.accounts)
         self.adapters = {}
         # set by `floyd-daemon`: this process is the central Floyd, a headless
@@ -5503,6 +5668,101 @@ class Chat:
                     ad.hear(conv, msg)
                 except Exception:
                     _log.exception("floyd: hearing %s failed", conv.id)
+        try:
+            self.find_invites(conv, msg)
+        except Exception:
+            _log.exception("looking for an invitation in %s failed", conv.id)
+
+    def find_invites(self, conv, msg):
+        """A message that carries an invitation - an irc:// link for the IRC
+        account on that server, or a Delta Chat link - becomes one to answer
+        (Chat > Accept invite...), from whoever sent it.  Only what people say
+        to us or a group: not ours, not a channel's chatter (a link there is
+        for everyone), not a server window's notices, not mail or Floyd."""
+        if "s" in msg.flags or conv.kind not in ("direct", "group") \
+                or conv.account.protocol in ("mail", "floyd"):
+            return
+        text = msg.text or ""
+        who = msg.sender.display or msg.sender.address
+        who = self.who_is(conv.account, who)     # "carol (cpollitt)" if the [people] table knows them
+        irc = irc_invite_in(text)
+        if irc:
+            host, port, chan = irc
+            for acct in self.accounts:
+                if acct.protocol == "irc" and self.adapter(acct).serves(host, port):
+                    self.adapter(acct).add_invite_url(who, chan)
+                    break
+            else:                        # (no URL in the note: it would be found again)
+                self.adapter(conv.account).system(conv, "%s invites you to %s, but none of your "
+                                                  "accounts connects there" % (who, chan or host))
+        link = INVITE_LINK.search(text)
+        if link:
+            ad = next((a for a in self.adapters.values()
+                       if isinstance(a, DeltaChatAdapter) and a.phase == "up"), None)
+            if ad is None:
+                self.adapter(conv.account).system(conv, "%s sent a Delta Chat invitation; connect "
+                                                  "a Delta Chat account to accept it" % who)
+            else:
+                ad.add_invite(link.group(1))
+
+    def invite_for(self, account, channel=""):
+        """(link, what) for an invitation to this account: its Delta Chat invite
+        link, or irc://host[:port][/#channel]."""
+        ad = self.adapter(account)
+        if account.protocol == "deltachat":
+            return ad.invite(), "Delta Chat"
+        if account.protocol == "irc":
+            return ad.invite_url(channel), (channel + " on " if channel else "") + account.display
+        raise UserError("%s accounts have nothing to be invited to" % PROTO_LABEL.get(account.protocol, account.protocol))
+
+    def handle_of(self, conv):
+        """The other side of a direct chat as its account knows them: the nick
+        on IRC, the address on Delta Chat (from what they last said); None if unknown."""
+        if conv.kind != "direct":
+            return None
+        if conv.account.protocol == "irc":
+            return conv.title
+        for m in reversed(conv.history):
+            if "s" not in m.flags and "n" not in m.flags and "@" in (m.sender.address or ""):
+                return m.sender.address
+        return conv.title if "@" in conv.title else None
+
+    def who_is(self, account, handle):
+        """'name' for a handle in the [people] table, else the handle; 'name (handle)'
+        when they differ."""
+        name = self.people.name_of(account.id, handle)
+        return handle if not name or name.lower() == handle.lower() else "%s (%s)" % (name, handle)
+
+    def send_invite(self, account, conv, channel=""):
+        """Invite the person in `conv` (a chat on any IRC or Delta Chat account)
+        to `account`.  With the [people] table: if they have a handle on `account`
+        the invitation goes there - an IRC INVITE to their nick on that network, a
+        chat (or invitation by mail) with their Delta Chat address; otherwise, or
+        without the table, it is a message with the link in this chat, which their
+        tvchat offers under Accept invite..."""
+        cad = self.adapter(conv.account)
+        if conv.kind not in ("direct", "group") or conv.account.protocol not in ("irc", "deltachat"):
+            raise UserError("an invitation is sent to a person or group on IRC or Delta Chat")
+        handle = self.handle_of(conv)
+        name = self.people.name_of(conv.account.id, handle) if handle else None
+        there = self.people.handles(name, account.id) if name else []
+        if conv.account is account and account.protocol == "irc" and not there:
+            there = [conv.title]         # the nick they are talking to us as
+        if there and account.protocol == "irc":
+            if not channel:
+                raise UserError("%s is on %s already - name a channel to invite them to"
+                                % (name or conv.title, account.display))
+            tad = self.adapter(account)
+            tad.send(tad.server_conv(), "/invite %s %s" % (there[0], channel))
+            return "invited %s to %s" % (self.who_is(account, there[0]), channel)
+        if there and account.protocol == "deltachat":
+            if conv.account is account:
+                raise UserError("%s is on %s already" % (name, account.display))
+            c = self.adapter(account).join(there[0])      # a chat, or an invitation by mail
+            return "%s: chat with %s opened" % (account.display, c.title)
+        link, what = self.invite_for(account, channel)
+        cad.send(conv, "Join me on %s: %s" % (what, link))
+        return "invitation sent to %s" % (self.who_is(conv.account, handle) if handle else conv.title)
 
     def floyd(self):
         """The Floyd account's adapter, or a UserError saying how to have one."""
@@ -5560,7 +5820,9 @@ class Chat:
         are added (and connected if [chat] autoconnect names them).  A file that does
         not load changes nothing.  Returns a one-line summary."""
         accounts, auto = load_config()                  # a UserError leaves everything as it was
+        people = load_people(accounts)
         self.conf_error = None
+        self.people = people
         old = dict((a.id, a) for a in self.accounts)
         new = dict((a.id, a) for a in accounts)
         removed = [i for i in old if i not in new]
@@ -5720,16 +5982,32 @@ def cmd_convs(a):
 
 
 def cmd_invite(a):
-    """invite ACCOUNT: the Delta Chat invite link that lets someone start an
-    encrypted chat with this account (they join it; the core needs a key
-    exchange before it will send anything)."""
+    """invite ACCOUNT [#CHANNEL]: the link that lets someone in - a Delta Chat
+    invite (they join it; the core needs a key exchange before it will send
+    anything) or irc://host[:port][/#channel] for an IRC account."""
     chat = _chat()
-    ad = chat.adapter(chat.account(a.account))
-    if not hasattr(ad, "invite"):
-        raise UserError("%s has no invite links" % a.account)
-    link = ad.invite()
+    acct = chat.account(a.account)
+    link = chat.invite_for(acct, a.channel)[0]
+    ad = chat.adapter(acct)
     ad.system(ad.server_conv(), "invite link: " + link)   # to copy from the log
     sys.stdout.write(link + "\n")
+    return 0
+
+
+def cmd_people(a):
+    """people: the [people] table, `name<TAB>account<TAB>handle` lines."""
+    chat = _chat()
+    chat.check_config()
+    for name, acct, handle in chat.people.lines():
+        sys.stdout.write(line(name, acct, handle))
+    return 0
+
+
+def cmd_invite_send(a):
+    """invite-send ACCOUNT CONV [#CHANNEL]: invite the person in chat CONV to
+    ACCOUNT (and the channel) by a message; prints what was done."""
+    chat = _chat()
+    sys.stdout.write(chat.send_invite(chat.account(a.account), chat.conv(a.conv), a.channel) + "\n")
     return 0
 
 
@@ -5741,13 +6019,15 @@ def _delta(chat, ident):
 
 
 def cmd_invites(a):
-    """invites: the invitations waiting for an answer, `account<TAB>sender` lines."""
+    """invites: the invitations waiting for an answer, `account<TAB>sender<TAB>what`
+    lines (what: where to, e.g. "to #lobby on Libera"; "" for Delta Chat)."""
     chat = _chat()
     chat.check_config()
     for acct in chat.accounts:
         ad = chat.adapters.get(acct.id)
         for sender in (ad.pending_invites() if hasattr(ad, "pending_invites") else []):
-            sys.stdout.write(line(acct.id, sender))
+            what = ad.invite_what(sender) if hasattr(ad, "invite_what") else ""
+            sys.stdout.write(line(acct.id, sender, *([what] if what else [])))
     return 0
 
 
@@ -6202,7 +6482,9 @@ def build_parser():
     p = sub.add_parser("disconnect"); p.add_argument("account"); p.set_defaults(fn=cmd_disconnect)
     p = sub.add_parser("convs"); p.add_argument("account", nargs="?"); p.set_defaults(fn=cmd_convs)
     p = sub.add_parser("join"); p.add_argument("account"); p.add_argument("target"); p.set_defaults(fn=cmd_join)
-    p = sub.add_parser("invite"); p.add_argument("account"); p.set_defaults(fn=cmd_invite)
+    p = sub.add_parser("invite"); p.add_argument("account"); p.add_argument("channel", nargs="?", default=""); p.set_defaults(fn=cmd_invite)
+    p = sub.add_parser("people"); p.set_defaults(fn=cmd_people)
+    p = sub.add_parser("invite-send"); p.add_argument("account"); p.add_argument("conv"); p.add_argument("channel", nargs="?", default=""); p.set_defaults(fn=cmd_invite_send)
     p = sub.add_parser("invites"); p.set_defaults(fn=cmd_invites)
     p = sub.add_parser("check-config"); p.add_argument("file"); p.set_defaults(fn=cmd_check_config)
     p = sub.add_parser("reload-config"); p.set_defaults(fn=cmd_reload_config)

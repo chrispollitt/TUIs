@@ -13,6 +13,13 @@
 # connect these accounts when tvchat starts (comma-separated section names)
 autoconnect = libera
 
+# Who is who: people go by different names on different servers.  One person
+# per line, their handles as account:handle (the account is a section name
+# below).  Chat > Invite... uses it to find someone's nick on the server you
+# invite them to, and says "carol (cpollitt)" for an invitation from them.
+#[people]
+#carol = libera:cpollitt, oftc:carol_, delta:carol@example.org
+
 # The terminal while tvchat runs (read by tvchat itself).
 [ui]
 # n (the default): no talk(1) requests or write / wall messages from ordinary

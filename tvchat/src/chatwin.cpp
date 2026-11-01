@@ -1688,64 +1688,137 @@ void joinDialog()
         showChatWindow(std::string(), conv);
 }
 
-// Invite...: the invite link of a connected Delta Chat account.  Whoever
-// joins it (Chat > Join... on their side) swaps keys with us, which the
-// Delta Chat core needs before anyone can write.  The backend also puts the
-// link in the account's server window, where it can be selected and copied.
+// Invite...: invite someone to a connected Delta Chat or IRC account (a
+// "server").  Delta Chat: the invite link - whoever joins it (Chat > Join...
+// on their side) swaps keys with us, which the core needs before anyone can
+// write.  IRC: irc://host[:port][/#channel] for a channel, which they can
+// open with Accept invite...  When the chat shown is with a person or group on
+// IRC or Delta Chat (any account), the invitation can be sent right there as a
+// message; on the same IRC network it is a plain INVITE.  The backend also
+// puts the link in the account's server window, where it can be copied.
 void inviteDialog()
 {
     std::vector<int> cand;
     const auto &as = chat().accounts();
     for (int i : accountsWhere(true))
-        if (as[i].protocol == "deltachat")
+        if (as[i].protocol == "deltachat" || as[i].protocol == "irc")
             cand.push_back(i);
     if (cand.empty())
     {
-        notify("Connect a Delta Chat account first (Chat > Connect...).", noteInfo);
+        notify("Connect a Delta Chat or IRC account first (Chat > Connect...).", noteInfo);
         return;
     }
-    int i = pickAccount("Invite", cand);
+    int i = pickAccount("Invite to", cand);
     if (i < 0)
         return;
-    std::string body, err;
-    if (!ask("invite " + shq(as[i].id), body, err))
+    bool irc = as[i].protocol == "irc";
+    // The chat shown, when an invitation can be sent there.
+    std::string toConv, toName;
+    if (chatInFront() && !gChatWin->showingServer())
     {
-        notify(err, noteError);
-        return;
+        const ChatConv *c = convOf(gChatWin->convId());
+        const ChatAccount *ca = c ? findAccount(accountIdOf(c->id)) : nullptr;
+        if (c && ca && (c->kind == "direct" || c->kind == "group") &&
+            (ca->protocol == "irc" || ca->protocol == "deltachat"))
+        {
+            toConv = c->id;
+            toName = c->title;
+        }
     }
-    // The link, and - if tvmail is installed - a box to mail it through tvmail's account.
-    std::string link = trimmed(body), yes;
-    bool tvmail = ask("has-tvmail", yes, err) && trimmed(yes) == "yes";
-    TDialog *d = new TDialog(TRect(0, 0, 70, tvmail ? 17 : 13), "Invite");
+    std::string body, err, link, yes;
+    bool tvmail = false;
+    if (!irc)
+    {
+        if (!ask("invite " + shq(as[i].id), body, err))
+        {
+            notify(err, noteError);
+            return;
+        }
+        link = trimmed(body);
+        // If tvmail is installed: a box to mail the link through tvmail's account.
+        tvmail = ask("has-tvmail", yes, err) && trimmed(yes) == "yes";
+    }
+    int h = 5 + (irc ? 3 : 4) + (toConv.empty() ? 0 : 2) + (tvmail ? 3 : 0) + 4;
+    TDialog *d = new TDialog(TRect(0, 0, 70, h), "Invite");
     d->options |= ofCentered;
-    d->insert(new TStaticText(TRect(3, 2, 67, 4), "Give this link to the person you want to write to;\nthey use Chat > Join..."));
-    d->insert(new TStaticText(TRect(3, 5, 67, 8), link.c_str()));
-    TInputLine *il = nullptr;
-    int by = 9;
+    int y = 2;
+    if (irc)
+        d->insert(new TStaticText(TRect(3, y, 67, y + 2), ("Invite someone to " + menuSafe(as[i].display) +
+                                                           "; they can open the\nlink with Chat > Accept invite...").c_str()));
+    else
+        d->insert(new TStaticText(TRect(3, y, 67, y + 2), "Give this link to the person you want to write to;\nthey use Chat > Join..."));
+    y += 3;
+    TInputLine *chan = nullptr, *mail = nullptr;
+    if (irc)
+    {
+        chan = new TInputLine(TRect(3, y + 1, 67, y + 2), 200);
+        d->insert(chan);
+        d->insert(new TLabel(TRect(2, y, 67, y + 1), "~C~hannel to invite to (blank = just the server)", chan));
+        y += 3;
+    }
+    else
+    {
+        d->insert(new TStaticText(TRect(3, y, 67, y + 3), link.c_str()));
+        y += 4;
+    }
+    TCheckBoxes *send = nullptr;
+    if (!toConv.empty())
+    {
+        send = new TCheckBoxes(TRect(3, y, 67, y + 1),
+                               new TSItem(("~S~end it to " + menuSafe(fitCols(toName, 30)) + " in the chat shown").c_str(), 0));
+        ushort on = 1;
+        send->setData(&on);
+        d->insert(send);
+        y += 2;
+    }
     if (tvmail)
     {
-        il = new TInputLine(TRect(3, 11, 67, 12), 200);
-        d->insert(il);
-        d->insert(new TLabel(TRect(2, 10, 67, 11), "Also ~m~ail it to (through tvmail; blank = no)", il));
-        by = 13;
+        mail = new TInputLine(TRect(3, y + 1, 67, y + 2), 200);
+        d->insert(mail);
+        d->insert(new TLabel(TRect(2, y, 67, y + 1), "Also ~m~ail it to (through tvmail; blank = no)", mail));
+        y += 3;
     }
-    d->insert(new TStaticText(TRect(3, by - 1, 67, by), ""));
-    d->insert(new TButton(TRect(29, by, 41, by + 2), "O~K~", cmOK, bfDefault));
+    d->insert(new TButton(TRect(22, y, 34, y + 2), "O~K~", cmOK, bfDefault));
+    d->insert(new TButton(TRect(36, y, 48, y + 2), "Cancel", cmCancel, bfNormal));
     d->selectNext(False);
-    if (il)
-        il->select();
-    TProgram::deskTop->execView(d);
-    std::string to = il && il->data ? trimmed(il->data) : std::string();
+    if (chan)
+        chan->select();
+    else if (mail)
+        mail->select();
+    ushort r = TProgram::deskTop->execView(d);
+    std::string channel = chan && chan->data ? trimmed(chan->data) : std::string();
+    std::string to = mail && mail->data ? trimmed(mail->data) : std::string();
+    ushort sendOn = 0;
+    if (send)
+        send->getData(&sendOn);
     TObject::destroy(d);
+    if (r == cmCancel)
+        return;
+    if (!toConv.empty() && (sendOn & 1))
+    {
+        if (!ask("invite-send " + shq(as[i].id) + " " + shq(toConv) + " " + shq(channel), body, err))
+            notify(err, noteError);
+        else
+            notify(trimmed(body), noteInfo);
+    }
+    else if (irc)
+    {
+        if (!ask("invite " + shq(as[i].id) + " " + shq(channel), body, err))
+            notify(err, noteError);
+        else
+            messageBox(mfInformation | mfOKButton, "Give this link to whoever should join:\n\n%s", trimmed(body).c_str());
+    }
     if (!to.empty() && !ask("invite-mail " + shq(as[i].id) + " " + shq(to), body, err))
         notify(err, noteError);
     pollNow();
 }
 
-// Accept invite...: the Delta Chat invitations that came by mail (the backend
-// finds them in the mailbox and says `invite` once each), one question per
-// sender.  Yes joins the link - the chat opens here - No removes the mail,
-// Cancel leaves the rest for later.  Also posted when a new one arrives.
+// Accept invite...: the invitations that came by mail, or as a message in
+// another chat (the backend finds them and says `invite` once each), one
+// question per sender - Delta Chat links, and irc:// links to a channel on an
+// IRC account of ours.  Yes joins - the chat opens here - No drops it (a
+// Delta Chat one also removes the mail), Cancel leaves the rest for later.
+// Also posted when a new one arrives.
 void acceptInviteDialog()
 {
     std::string body, err;
@@ -1774,9 +1847,13 @@ void acceptInviteDialog()
         std::vector<std::string> f = chatFields(l);
         if (f.size() < 2)
             continue;
-        ushort r = messageBox(mfConfirmation | mfYesButton | mfNoButton | mfCancelButton,
-                              "%s invites you to chat (Delta Chat, end-to-end encrypted).\n\nAccept?",
-                              f[1].c_str());
+        // f[2], when there is one: where to ("to #lobby on Libera"); none = a Delta Chat invitation
+        bool toServer = f.size() > 2 && !f[2].empty();
+        ushort r = toServer ? messageBox(mfConfirmation | mfYesButton | mfNoButton | mfCancelButton,
+                                         "%s invites you %s.\n\nAccept?", f[1].c_str(), f[2].c_str())
+                            : messageBox(mfConfirmation | mfYesButton | mfNoButton | mfCancelButton,
+                                         "%s invites you to chat (Delta Chat, end-to-end encrypted).\n\nAccept?",
+                                         f[1].c_str());
         if (r == cmCancel)
             break;
         if (r == cmYes)

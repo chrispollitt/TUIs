@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- **Invite people (or bots) to another server:** Chat > Invite... now takes an IRC account as well as
+  a Delta Chat one (a channel is optional), and when the chat shown is with a person or group on any
+  IRC or Delta Chat account it can send the invitation right there (`irc://host[:port][/#channel]` or
+  the Delta Chat link; on the same network with a channel it is an ordinary `/invite`). The other
+  tvchat spots the link in what it is told and Chat > Accept invite... offers it ("carol invites you to
+  #lobby on Libera") and joins; `join_invites = yes` accepts at once. New backend verb `invite-send`,
+  `invite` takes a channel, `invites` lines may carry a third field.
+
+- **A nick joining table:** a `[people]` section in tvchat.conf (`carol = libera:cpollitt,
+  oftc:carol_, delta:carol@example.org`) says who is who across servers. Inviting someone who is in
+  the table to a server they are on now invites their nick there (IRC INVITE, or a Delta Chat chat /
+  mailed invitation) instead of sending a link; an invitation from them is shown as "carol (cpollitt)".
+  `check-config` and `reload-config` know the section; new verb `people`.
+
+- **Classic talk says why the arrow keys do nothing:** Left / Right flash a hint (talk sends
+  characters, not cursor moves; Ctrl-T for the IRC view, where arrow keys edit) instead of being
+  ignored.
+
 - **Admins can give orders by mail:** a mail counts as from an admin only when the sender is in
   `known =` and the receiving mail server verified their DKIM signature for the From domain
   (`DKIM_VALID_AU` in the topmost `X-Spam-Report` / `X-Ham-Report`); the sender's `known =` name is

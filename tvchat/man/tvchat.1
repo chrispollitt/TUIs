@@ -96,6 +96,22 @@ Chat > Invite... can also mail the link through tvmail (when it is installed) to
 someone's ordinary address.  tvmail can hand tvchat a request (Message > Chat with sender, Message > Open
 chat invite): one-line files in
 .IR ~/.local/state/tvchat/requests/ .
+.SH "INVITING TO ANOTHER SERVER"
+Chat > Invite... works for an IRC account as well as a Delta Chat one: pick the
+account (the \(lqserver\(rq to invite to) and, for IRC, a channel.  The invitation is a link
+\(em the Delta Chat invite link, or
+.BI irc:// host [: port ][/ #channel ]
+(\fBircs://\fR for TLS).  When the chat shown is with a person or group on any IRC or Delta Chat
+account, a box offers to send it there as a message; on the same IRC network, with a channel,
+it is an ordinary INVITE.  The other tvchat finds the link in what it is told and
+Chat > Accept invite... asks (a link to a server none of their accounts uses is only
+mentioned); Yes joins the channel.
+People go by different names on different servers: a
+.B [people]
+section in tvchat.conf (\fIcarol = libera:cpollitt, oftc:carol_, delta:carol@example.org\fR)
+says who is who, and an invitation to a server someone is on already goes to their nick there.
+.B join_invites = yes
+on the IRC account accepts at once.
 .SH COMMANDS
 A line typed in the input line may be a command; the server messages take
 nothing else.  The words are the same for IRC, talk and Delta Chat, so the
