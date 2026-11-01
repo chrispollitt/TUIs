@@ -121,6 +121,10 @@ channels = #test
 # INBOX.Sent ...; made if none).  save_sent = no stops it; sent_folder = NAME names the folder.
 #save_sent   = yes
 #sent_folder =
+# Each mail he has taken is moved from the INBOX to the saved folder (found by the server's \Archive mark,
+# else saved, INBOX.saved ...; made if none) so the inbox stays empty.  archive = no stops it.
+#archive      = yes
+#saved_folder =
 #verify_from = libera.chat
 #verify_dkim = yes
 #known       = michelle=michelle.houle@gmail.com, chris=chris.pollitt@gmail.com

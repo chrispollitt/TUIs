@@ -5531,9 +5531,11 @@ def parse_known(text):
 
 def fetch_new_mail(p):
     """[(uid, msgid, references, sender, display, subject, text, automatic, invite, verified)] for
-    the unseen mail in the INBOX, marked seen as it is taken (a thread)."""
+    the unseen mail in the INBOX, marked seen as it is taken, and - with p["archive"] - moved to the
+    saved folder (a Delta Chat invitation stays: its adapter finds it in the INBOX) (a thread)."""
     m = _imap_open(p)
     out = []
+    taken = []
     try:
         m.select("INBOX")
         typ, data = m.uid("SEARCH", None, "UNSEEN")
@@ -5550,6 +5552,13 @@ def fetch_new_mail(p):
                         _text_of(msg), mail_is_automatic(msg, sender), bool(msg.get(INVITE_HEADER)),
                         mail_dkim_verified(msg)))
             m.uid("STORE", uid, "+FLAGS", "(\\Seen)")
+            if p.get("archive") and not out[-1][8]:
+                taken.append(uid)
+        if taken:
+            try:
+                archive_mails(m, taken, (p.get("saved_folder") or "").strip())
+            except Exception as e:
+                _log.warning("could not move %d mail(s) to the saved folder: %s", len(taken), e)
     finally:
         try:
             m.logout()
@@ -5558,9 +5567,23 @@ def fetch_new_mail(p):
     return out
 
 
-def sent_folder_of(m):
-    """The folder a mail we sent is filed in: the one the server marks \\Sent, else a usual name,
-    else one made (INBOX.Sent where the server keeps its folders under INBOX.)."""
+def archive_mails(m, uids, folder=""):
+    """Move those INBOX mails (UIDs) to the saved folder: copy, then delete the original.  m has the
+    INBOX selected; a failed copy leaves the mail where it is."""
+    folder = folder or folder_of(m, "archive", ("saved", "INBOX.saved", "Saved", "INBOX.Saved",
+                                                "Archive", "INBOX.Archive"), "saved")
+    for uid in uids:
+        typ, data = m.uid("COPY", uid, '"%s"' % folder)
+        if typ != "OK":
+            raise RuntimeError("the server refused to copy to %s: %r" % (folder, data))
+        m.uid("STORE", uid, "+FLAGS", "(\\Deleted)")
+    m.expunge()
+
+
+def folder_of(m, special, usual, make):
+    """The folder kept for a purpose: the one the server marks with that special-use attribute (special is
+    its name without the backslash: sent, archive), else the first of usual that exists, else make,
+    created (under INBOX. where the server keeps its folders there)."""
     typ, data = m.list()
     names = []
     for raw in data or []:
@@ -5570,19 +5593,25 @@ def sent_folder_of(m):
         if not mt:
             continue
         name = mt.group("name").strip().strip('"')
-        if "\\sent" in mt.group("attrs").lower():
+        if "\\" + special in mt.group("attrs").lower():
             return name
         names.append(name)
-    for cand in ("Sent", "INBOX.Sent", "Sent Items", "INBOX.Sent Items", "Sent Messages"):
+    for cand in usual:
         if cand in names:
             return cand
-    folder = ("INBOX." if any(n.startswith("INBOX.") for n in names) else "") + "Sent"
+    folder = ("INBOX." if any(n.startswith("INBOX.") for n in names) else "") + make
     m.create(folder)
     try:
         m.subscribe(folder)
     except Exception:
         pass
     return folder
+
+
+def sent_folder_of(m):
+    """The folder a mail we sent is filed in: the one the server marks \\Sent, else a usual name,
+    else one made (INBOX.Sent where the server keeps its folders under INBOX.)."""
+    return folder_of(m, "sent", ("Sent", "INBOX.Sent", "Sent Items", "INBOX.Sent Items", "Sent Messages"), "Sent")
 
 
 def save_sent_copy(p, msg):
@@ -5743,6 +5772,8 @@ class MailAdapter(CommandMixin):
             "smtp_security": (o.get("smtp_security") or ("ssl" if smtp_port == 465 else "starttls")).strip(),
             "save_sent": _bool(o.get("save_sent"), True),
             "sent_folder": (o.get("sent_folder") or "").strip(),
+            "archive": _bool(o.get("archive"), self.chat.daemon),
+            "saved_folder": (o.get("saved_folder") or "").strip(),
         }
 
     # -- lifecycle ------------------------------------------------------------

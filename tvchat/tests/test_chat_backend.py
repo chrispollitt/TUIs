@@ -2152,6 +2152,7 @@ class FakeMail:
         self.sent = []
         self.inbox = []
         self.filed = []                  # (folder, raw) of what was APPENDed
+        self.copied = []                 # (folder, raw) of what was COPYed
         self.sent_folders = []           # folders made by CREATE
         self.lock = threading.Lock()
         self.socks = []
@@ -2288,13 +2289,20 @@ class FakeMail:
                                 if m["uid"] == uid:
                                     m["seen" if "Seen" in a2 else "deleted"] = True
                         w("%s OK done\r\n" % tag)
+                    elif sub == "COPY":
+                        uid, _, dest = a2.partition(" ")
+                        with self.lock:
+                            for m in self.inbox:
+                                if m["uid"] == int(uid):
+                                    self.copied.append((dest.strip('"'), m["raw"]))
+                        w("%s OK done\r\n" % tag)
                     else:
                         w("%s BAD\r\n" % tag)
                 elif cmd == "EXPUNGE":
                     w("%s OK done\r\n" % tag)
                 elif cmd == "LIST":
                     w('* LIST (\\HasNoChildren) "." "INBOX"\r\n* LIST (\\HasNoChildren) "." "Drafts"\r\n' +
-                      ('* LIST (\\HasNoChildren) "." "INBOX.Sent"\r\n' if self.sent_folders else "") +
+                      "".join('* LIST (\\HasNoChildren) "." "%s"\r\n' % f for f in self.sent_folders) +
                       "%s OK done\r\n" % tag)
                 elif cmd in ("CREATE", "SUBSCRIBE"):
                     if cmd == "CREATE":
@@ -2869,6 +2877,28 @@ class TestMailReplies(Base):
         self.assertEqual(email.message_from_bytes(raw)["Subject"], "Re: hi")
         self.assertEqual(email.message_from_bytes(raw)["Message-ID"],
                          email.message_from_bytes(self.mail.sent[0])["Message-ID"])
+
+    def test_a_handled_mail_is_moved_to_saved(self):
+        self.mail.add_mail("From: Alice <alice@example.org>\nTo: floyd@example.org\nSubject: hi\n"
+                           "Message-ID: <m9@example.org>\n\n!8ball ok\n")
+        self.mail.add_mail("From: bot@example.org\nSubject: invite\nX-Tvchat-Invite: 1\n\nlink\n")
+        self.up()
+        self.turn(lambda: self.mail.sent and self.mail.copied)
+        self.settle()
+        self.assertEqual([f for f, _ in self.mail.copied], ["saved"])    # no INBOX.* folders here: made as saved
+        self.assertIn(b"Subject: hi", self.mail.copied[0][1])
+        self.assertEqual([m.get("deleted") for m in self.mail.inbox if b"Subject: hi" in m["raw"]], [True])
+        self.assertFalse(any(m.get("deleted") for m in self.mail.inbox if b"X-Tvchat-Invite" in m["raw"]))
+
+    def test_archive_no_leaves_the_mail_in_the_inbox(self):
+        self.chat.by_id["mail"].opts["archive"] = "no"
+        self.mail.add_mail("From: Alice <alice@example.org>\nTo: floyd@example.org\nSubject: hi\n"
+                           "Message-ID: <m9@example.org>\n\n!8ball ok\n")
+        self.up()
+        self.turn(lambda: self.mail.sent)
+        self.settle()
+        self.assertEqual(self.mail.copied, [])
+        self.assertFalse(any(m.get("deleted") for m in self.mail.inbox))
 
     def test_a_mail_gets_a_reply_in_the_same_thread(self):
         self.mail.add_mail("From: Alice <alice@example.org>\nTo: floyd@example.org\nSubject: hello\n"

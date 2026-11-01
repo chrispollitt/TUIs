@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Floyd keeps his inbox tidy:** the daemon's mail account moves each mail it has taken (not a Delta Chat
+  invitation) from the INBOX to the saved folder (`archive = no` to stop that; `saved_folder = NAME` to name
+  it; else the server's \Archive folder, `saved`, `INBOX.saved` ..., made if none). tvchat sessions leave
+  their mail alone unless they ask with `archive = yes`. A server-side copy left by the puller is a separate
+  matter: it is the getmail `delete = true` line.
+
 - **Floyd answers talk(1) calls, and finds the real fortune:** the central Floyd now connects
   `protocol = talk` accounts, picks up an incoming call by himself (`auto_answer = no` to stop that;
   tvchat sessions still wait for you) and says hello (`greeting = TEXT`, empty for none); give him

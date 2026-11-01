@@ -364,6 +364,12 @@ Message-ID matches) flagged `\Seen` into `sent_folder =`, else the folder the se
 (`sent_folder_of`), else a usual name, else a new `Sent` (`INBOX.Sent` when the server's folders live under
 INBOX.). A failure is logged at INFO and does not undo the send. Test: `TestMailReplies`.
 
+**His inbox.** With `archive` (on in the daemon) `fetch_new_mail` copies each mail it took to the saved
+folder (`saved_folder =`, else \Archive, `saved`, `INBOX.saved`, `Saved`, `Archive`, else a new `saved`:
+`folder_of`, shared with the Sent lookup) and deletes the original, in the same connection that marked it
+\Seen. Delta Chat invitations stay: their adapter finds them in the INBOX by UID. A failed move is logged
+and leaves the mail where it was. Test: `TestMailReplies`.
+
 **His registration mail.** `MailAdapter.nickserv_mail()` runs first on every mail when `verify_nick =` is
 set: `nickserv_verification()` finds the "/msg NickServ VERIFY REGISTER account code" Atheme prints; the
 sender's domain must be `verify_from` (or below it), `mail_dkim_verified` must hold (`verify_dkim = no` skips
