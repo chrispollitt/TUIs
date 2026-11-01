@@ -31,6 +31,9 @@ if(NOT TARGET tvision)
     if(EXISTS "${TVISION_DIR}/CMakeLists.txt")
         message(STATUS "${PROJECT_NAME}: building bundled Turbo Vision from ${TVISION_DIR}")
         set(TV_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+        # gpm is the bare Linux console mouse server; without it tvision only
+        # warns. xterm/ssh/tmux/Cygwin get the mouse via the terminal instead.
+        set(TV_BUILD_USING_GPM OFF CACHE BOOL "" FORCE)
         add_subdirectory("${TVISION_DIR}" tvision-build EXCLUDE_FROM_ALL)
     else()
         message(FATAL_ERROR
