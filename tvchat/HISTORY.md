@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Floyd trusts encrypted Delta Chat messages from named addresses:** `trust = chris@cpbee.cmnet` in a
+  `[account:delta]` section makes an end-to-end encrypted message from that address count as sent by the services
+  account named like its user part (`chris`), so `admins =` applies. A plain From line never counts.
+
 - **Floyd can trust callers on talk:** a talk call proves nothing about who it is from, so nobody was an admin
   there. `trust = chris@*, ...` in the `[account:talk]` section (user@host as the call names it; `*` for any
   host; a caller on talkd's own host is just `user`) makes those callers count as that services account, so

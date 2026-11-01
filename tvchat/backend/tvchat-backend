@@ -3018,6 +3018,10 @@ class DeltaChatAdapter(CommandMixin):
         o = account.opts
         self.addr = (o.get("addr") or "").strip()
         self.rpc_server = (o.get("rpc_server") or "deltachat-rpc-server").strip()
+        # trust = chris@cpbee.cmnet, ...: an END-TO-END ENCRYPTED message (the core's padlock) from those addresses counts
+        # as sent by the services account named like the address's user part, so Floyd's admins = applies; the key the
+        # core pinned for the address vouches for it, a From line alone never does
+        self.trust = set(x.strip().lower() for x in (o.get("trust") or "").split(",") if x.strip())
         self.gen = 0
         self._ids = 0
         self.attempt = 0
@@ -3479,6 +3483,8 @@ class DeltaChatAdapter(CommandMixin):
             text = what + (" " + text if text else "")
         who = m.get("sender") or {}
         sender = Contact(who.get("address") or "", who.get("displayName") or None)
+        if m.get("showPadlock") and not mine and sender.address.lower() in self.trust:
+            sender.account = sender.address.partition("@")[0].lower()
         if m.get("isInfo"):
             sender = Contact("")
         return Message("%s:%d" % (self.account.id, m["id"]), conv.id,

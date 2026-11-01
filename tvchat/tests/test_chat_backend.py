@@ -2797,6 +2797,21 @@ class TestDeltaChat(DeltaBase):
         self.assertEqual(self.acct.state, "disconnected")
         self.assertIsNone(self.ad.proc)
 
+    def test_trust_vouches_only_for_encrypted_messages_from_named_addresses(self):
+        w = {"contacts": DC_WORLD["contacts"],
+             "chats": {"10": DC_WORLD["chats"]["10"]},
+             "messages": {"1": {"chatId": 10, "fromId": 20, "text": "sealed", "state": 16, "showPadlock": True,
+                                "sortTimestamp": 1700000001, "sender": {"address": "Alice@example.org"}},
+                          "2": {"chatId": 10, "fromId": 20, "text": "plain", "state": 16, "showPadlock": False,
+                                "sortTimestamp": 1700000002, "sender": {"address": "alice@example.org"}},
+                          "3": {"chatId": 10, "fromId": 21, "text": "other", "state": 16, "showPadlock": True,
+                                "sortTimestamp": 1700000003, "sender": {"address": "bob@example.org"}}}}
+        self.setup_dc(world=w, extra="trust = alice@example.org")
+        conv = types.SimpleNamespace(id="delta/10")
+        got = dict((m["text"], self.ad._to_message(conv, dict(m, id=int(i))).sender.account)
+                   for i, m in w["messages"].items())
+        self.assertEqual(got, {"sealed": "alice", "plain": None, "other": None})
+
     def test_older_history_comes_from_the_core(self):
         w = {"contacts": DC_WORLD["contacts"],
              "chats": {"10": DC_WORLD["chats"]["10"]},
