@@ -68,6 +68,9 @@ channels = #test
 #host     = 127.0.0.1
 #port     = 518
 #user     = floyd
+# talk proves nothing about who calls; name the callers who count as an account for admins= (user@host as
+# the call names it, * for any host): LAN only.
+#trust    = chris@*
 
 
 # Delta Chat (optional): Floyd's own mailbox, so people can /invite floyd@HOST from

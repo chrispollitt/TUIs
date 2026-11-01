@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Floyd can trust callers on talk:** a talk call proves nothing about who it is from, so nobody was an admin
+  there. `trust = chris@*, ...` in the `[account:talk]` section (user@host as the call names it; `*` for any
+  host; a caller on talkd's own host is just `user`) makes those callers count as that services account, so
+  `admins =` applies: `!claude`, `!level`, `!leave`. Only for a talkd your own LAN can reach.
+
 - **Floyd keeps his inbox tidy:** the daemon's mail account moves each mail it has taken (not a Delta Chat
   invitation) from the INBOX to the saved folder (`archive = no` to stop that; `saved_folder = NAME` to name
   it; else the server's \Archive folder, `saved`, `INBOX.saved` ..., made if none). tvchat sessions leave

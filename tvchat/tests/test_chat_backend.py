@@ -18,6 +18,7 @@ import tempfile
 import textwrap
 import threading
 import time
+import types
 import unittest
 import unittest.mock
 import base64
@@ -2007,6 +2008,17 @@ class TestTalk(TalkBase):
         self.verb("connect", "talk")
         self.turn(lambda: "hello" in got)
         self.assertTrue(got["hello"].endswith(b"Hi there, I am a bot\n"), got["hello"])
+        self.chat.close()
+
+    def test_trust_names_the_callers_who_count_as_an_account(self):
+        self.setup_talk(lambda srv: self.hello(srv), "trust = Alice@cmlaptop, michelle, carol@*")
+        ad = self.chat.adapter(self.acct)
+        call = lambda title: types.SimpleNamespace(conv=types.SimpleNamespace(title=title))
+        self.assertEqual(ad.contact_of(call("alice@cmlaptop")).account, "alice")
+        self.assertEqual(ad.contact_of(call("michelle")).account, "michelle")      # a caller on talkd's own host
+        self.assertIsNone(ad.contact_of(call("alice@elsewhere")).account)          # same name, not named host
+        self.assertIsNone(ad.contact_of(call("bob@cmlaptop")).account)
+        self.assertEqual(ad.contact_of(call("carol@anywhere")).account, "carol")   # user@* : any host
         self.chat.close()
 
     def test_a_session_does_not_answer_by_itself(self):

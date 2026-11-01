@@ -2310,6 +2310,11 @@ class TalkAdapter(CommandMixin):
         # (greeting = TEXT, or none with an empty one)
         self.auto_answer = _bool(o.get("auto_answer"), chat.daemon)
         self.greeting = o["greeting"].strip() if "greeting" in o else None
+        # talk proves nothing about who calls (talkd takes the caller's word), so Floyd takes nobody for an admin
+        # unless this account says so: trust = chris@laptop, chris@* (user@host as the call names them, * for any host;
+        # a caller on talkd's own host is just the user) lets those callers count as the services account "chris" -
+        # for a talkd only your own LAN can reach
+        self.trust = set(x.strip().lower() for x in (o.get("trust") or "").split(",") if x.strip())
         self.gen = 0
         self._ids = 0
         self.calls = {}                  # tid -> TalkCall
@@ -2501,6 +2506,12 @@ class TalkAdapter(CommandMixin):
         p = self.peer(who)
         return self.chat.ensure_conv(self.account, p.lower(), "direct", p)
 
+    def contact_of(self, call):
+        """The caller as a contact: with trust = naming them, their user name stands for a services account."""
+        title = call.conv.title
+        user = title.split("@")[0].lower()
+        return Contact(title, None, user if title.lower() in self.trust or user + "@*" in self.trust else None)
+
     def call_of(self, conv):
         for call in self.calls.values():
             if call.conv is conv and not call.done:
@@ -2630,7 +2641,7 @@ class TalkAdapter(CommandMixin):
             if done:
                 self.chat.add_message(call.conv, Message(
                     self.local_id(), call.conv.id, time.time(),
-                    Contact(call.conv.title), done, ""))
+                    self.contact_of(call), done, ""))
         if call.theirs != before:
             self.chat.typing(call.conv, call.theirs)
 
@@ -2640,7 +2651,7 @@ class TalkAdapter(CommandMixin):
         call.done = True
         if call.theirs:                  # what they had typed still counts
             self.chat.add_message(call.conv, Message(
-                self.local_id(), call.conv.id, time.time(), Contact(call.conv.title),
+                self.local_id(), call.conv.id, time.time(), self.contact_of(call),
                 call.theirs, ""))
             call.theirs = ""
             self.chat.typing(call.conv, "")
