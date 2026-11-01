@@ -2306,6 +2306,10 @@ class TalkAdapter(CommandMixin):
         self.host = (o.get("host") or "").strip()
         self.port = int(o.get("port") or 518)
         self.user = (o.get("user") or "").strip() or _me()
+        # the central Floyd has nobody to press Answer: he picks up (auto_answer = no to stop him) and says hello
+        # (greeting = TEXT, or none with an empty one)
+        self.auto_answer = _bool(o.get("auto_answer"), chat.daemon)
+        self.greeting = o["greeting"].strip() if "greeting" in o else None
         self.gen = 0
         self._ids = 0
         self.calls = {}                  # tid -> TalkCall
@@ -2534,6 +2538,11 @@ class TalkAdapter(CommandMixin):
         self.chat.set_call(conv, "incoming", who)
         self.chat.add_message(conv, Message(self.local_id(), conv.id, time.time(),
                                             Contact(who), "%s wants to talk" % who, "n"))
+        if self.auto_answer:
+            try:
+                self.answer(conv)
+            except UserError as e:
+                _log.info("%s: could not answer %s: %s", self.account.id, who, e)
 
     def answer(self, conv):
         self.need_up()
@@ -2571,6 +2580,13 @@ class TalkAdapter(CommandMixin):
         self.chat.set_call(call.conv, "connected", "")
         self.system(call.conv, "connected")
         self._rewatch_data(call)
+        if self.auto_answer and not call.outgoing:
+            text = self.greeting if self.greeting is not None else (
+                "Hello, %s! Floyd here - a bot. Type a line and press Enter. !help says what I do; hang up when you like."
+                % call.conv.title.split("@")[0])
+            if text:
+                gen = self.gen
+                self.loop.call_later(0.5, lambda: gen == self.gen and not call.done and self.speak(call.conv, text))
 
     def _rewatch_data(self, call):
         if call.data is not None:
@@ -4266,7 +4282,8 @@ class FloydMind(object):
         self.clock = clock
         self.memory = memory or FloydMemory()
         # where fortune(6) is, looked for when asked (or a path, or None for none)
-        self.fortune_prog = lambda: shutil.which("fortune")
+        self.fortune_prog = lambda: (shutil.which("fortune") or
+                                     shutil.which("fortune", path="/usr/games:/usr/local/games"))
         self.game = None                 # None, "hide" (you hide), "seek" (Floyd does)
         self.guesses = 0
         self.rules = [(re.compile(rx, re.I), rs) for rx, rs in self.RULES]
@@ -7096,7 +7113,7 @@ def cmd_floyd_daemon(a):
         signal.signal(sig, lambda *_: loop.stop())
     chat.start()
     for x in chat.accounts:                      # he is always on, with or without [chat] autoconnect
-        if x.protocol in ("irc", "deltachat", "mail", "floyd") and x.state == "disconnected":
+        if x.protocol in ("irc", "talk", "deltachat", "mail", "floyd") and x.state == "disconnected":
             try:
                 chat.connect(x)
             except UserError as e:

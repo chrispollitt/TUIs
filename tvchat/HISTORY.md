@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Floyd answers talk(1) calls, and finds the real fortune:** the central Floyd now connects
+  `protocol = talk` accounts, picks up an incoming call by himself (`auto_answer = no` to stop that;
+  tvchat sessions still wait for you) and says hello (`greeting = TEXT`, empty for none); give him
+  `[account:talk]` with `host = 127.0.0.1`, `user = floyd` and `talk/*` in `attach =`, then
+  `talk floyd@cpbee`. `!fortune` looks in `/usr/games` as well as the PATH: Debian's fortune-mod
+  installs there, which a systemd service's PATH does not include, so he had been using his own few.
+
 - **`!status` for Floyd:** at every level, five short lines - his version, how long he has been up (the
   daemon's process) and on which networks, his level in that conversation, whether Claude is available
   to the asker (and if not, why: the network does not allow language models, `claude = no`, not on the

@@ -374,6 +374,12 @@ account may not log in until it is confirmed) the VERIFY goes out on a short con
 own (`irc_nickserv_once`: a made-up nick, no login, a thread). Test:
 `TestNickServVerification`.
 
+**Talk and fortune in the daemon.** `floyd-daemon` connects `talk` accounts like the others; `TalkAdapter.auto_answer`
+(default: `Chat.daemon`) makes `_incoming` call `answer()` at once and `_attach` say a greeting 0.5 s later, so a
+`talk floyd@cpbee` needs nobody at a keyboard (the talk conversation is `direct`, so he takes every line as addressed
+to him, as in a private message). `FloydMind.fortune_prog` looks in `/usr/games:/usr/local/games` after the PATH.
+Tests: `TestTalk` (auto-answer and the session that does not), `TestFloydPublic` (the fortune lookup).
+
 **Our own role.** `IrcAdapter.my_role()` reads our entry in `conv.members` (filled by NAMES, refreshed by
 `on_MODE`, which asks for NAMES again); `role_check()` (at the end of NAMES, on JOIN, PART and KICK) pushes
 `role CONV ROLE` when it changes and `Conversation.role` keeps it; `roles` lists it for a UI that was

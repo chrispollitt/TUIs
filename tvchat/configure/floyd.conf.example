@@ -59,6 +59,17 @@ channels = #test
 #channels =
 
 
+# talk(1) (optional): so  talk floyd@cpbee  rings him.  He picks up by himself and says hello
+# (greeting = TEXT, or empty for none; auto_answer = no to leave the call ringing).  Needs the
+# talkd of chat-setup on the same host, and talk/* in attach = below.
+#[account:talk]
+#protocol = talk
+#display  = talk
+#host     = 127.0.0.1
+#port     = 518
+#user     = floyd
+
+
 # Delta Chat (optional): Floyd's own mailbox, so people can /invite floyd@HOST from
 # a Delta Chat account.  He reads his INBOX for invitations every 30 s and accepts
 # every one (as on IRC), then answers in the chat like anywhere else.  Needs

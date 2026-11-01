@@ -1987,6 +1987,35 @@ class TestTalk(TalkBase):
         self.assertEqual(self.verb("answer", "talk/alice@cmlaptop")[0], 1)
         self.chat.close()
 
+    def test_the_central_floyd_answers_a_call_and_says_hello(self):
+        got = {}
+
+        def script(srv):
+            self.hello(srv)
+            srv.send("RING t1 alice@cmlaptop")
+            srv.expect("ACCEPT t1")                  # nobody pressed Answer
+            srv.send("CONNECT t1 tok7")
+            s, _ = srv.data("tok7")
+            s.sendall(bytes([0x7f, 0x15, 0x17]))       # their three edit characters
+            s.settimeout(5)
+            got["hello"] = s.recv(200)
+            srv.expect("QUIT-never")
+
+        self.setup_talk(script, "greeting = Hi there, I am a bot")
+        self.chat.daemon = True                      # as in floyd-daemon (set before the adapter is made)
+        self.chat.adapters.pop("talk", None)
+        self.verb("connect", "talk")
+        self.turn(lambda: "hello" in got)
+        self.assertTrue(got["hello"].endswith(b"Hi there, I am a bot\n"), got["hello"])
+        self.chat.close()
+
+    def test_a_session_does_not_answer_by_itself(self):
+        self.setup_talk(lambda srv: (self.hello(srv), srv.send("RING t1 alice@cmlaptop"), srv.expect("QUIT-never")))
+        self.verb("connect", "talk")
+        self.turn(lambda: "talk/alice@cmlaptop" in self.acct.convs)
+        self.assertEqual(self.acct.convs["talk/alice@cmlaptop"].state, "incoming")     # waits for a person
+        self.chat.close()
+
     def test_the_shared_commands_in_talk(self):
         stage = {}
 
@@ -4242,6 +4271,18 @@ class TestFloydPublic(Base):
         self.assertIn("Fortunes:", said)
         self.assertIn("listening in", said)
         self.assertIn("run by chris-pollitt", said)
+
+    def test_the_real_fortune_is_found_in_usr_games(self):
+        import unittest.mock
+        mind = self.floyd._new_mind("bob")
+        calls = []
+
+        def which(name, path=None):
+            calls.append(path)
+            return "/usr/games/fortune" if path and "/usr/games" in path else None
+        with unittest.mock.patch.object(cb.shutil, "which", which):
+            self.assertEqual(mind.fortune_prog(), "/usr/games/fortune")
+        self.assertEqual(calls, [None, "/usr/games:/usr/local/games"])      # the service's PATH first, then the games dirs
 
     def test_he_answers_to_floyd_bot_too(self):
         self.hear("bob", "floyd-bot: !about")
