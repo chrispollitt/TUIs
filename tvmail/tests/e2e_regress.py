@@ -231,6 +231,19 @@ def chat_with_sender_leaves_a_request(opts):
 
 
 @case()
+def share_in_chat_leaves_a_request(opts):
+    # Message > Share in chat asks tvchat to say sender and subject (never the body); tvchat asks you
+    tv = chat_link_tv(opts)
+    c = Case(tv)
+    started(tv, c)
+    tv.send(alt("m"), "h", settle=0.8)
+    c.check(tv.wait("Asked tvchat to share", 5), "Message > Share in chat did not say it asked tvchat")
+    c.check(requests_of(tv) == ["share tvmail: Bob - SUBJ2 plain"],
+            "the request file is wrong: %r" % requests_of(tv))
+    return tv
+
+
+@case()
 def toast_appears_goes_away_and_is_kept(opts):
     # a message that needs no answer is a toast at the bottom right, not a box: it takes no
     # key, goes away by itself, and stays in Window > Notification history

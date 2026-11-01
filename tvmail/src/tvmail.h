@@ -53,6 +53,7 @@ const ushort cmClearFilter = 2040;  // drop the type-to-filter text
 const ushort cmFilterChanged = 2041; // broadcast: list view rebuilt (title refresh)
 const ushort cmChatWith = 2050;     // Message > Chat with sender (asks tvchat, if installed)
 const ushort cmChatInvite = 2051;   // Message > Open chat invite (hands a Delta Chat link to tvchat)
+const ushort cmShareChat = 2054;    // Message > Share in chat (asks tvchat to say sender and subject in its channel, on your yes there)
 const ushort cmOutOfOffice = 2042;  // File > Out of office... (Sieve vacation reply)
 const ushort cmFloyd = 2053;        // File > Floyd... (the assistant)
 

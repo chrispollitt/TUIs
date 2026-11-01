@@ -174,6 +174,8 @@ void TVChatApp::chatEvents()
     for (const ChatEvent &ev : evs)
     {
         accounts = accounts || ev.fields[0] == "state";
+        if (ev.fields[0] == "share" && ev.fields.size() > 2) // tvmail asks to say something in chat
+            notify("tvmail wants to share \"" + ev.fields[2].substr(0, 60) + "\" in chat - Chat > Share from tvmail...");
         if (ev.fields[0] == "invite" && ev.fields.size() > 2) // an invitation to answer in tvchat
             spoolSend(noteInfo, ev.fields[2] + " invites you - tvchat: Chat > Accept invite...", 3600, true);
         invited = invited || ev.fields[0] == "invite";

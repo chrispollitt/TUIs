@@ -1212,6 +1212,93 @@ class TestOutOfOffice(IrcBase):
         self.assertIsNone(cb.ooo_wanted(tvmail))
 
 
+class TestShare(IrcBase):
+    """tvmail asks to share a message in chat: queued, and said only when the user agrees."""
+
+    def setup_share(self, script, share_to="libera:#tvmail"):
+        srv = FakeIrc(script)
+        self.addCleanup(srv.close)
+        self.srv = srv
+        self.conf("""\
+            [chat]
+            %s
+            [account:libera]
+            protocol = irc
+            display  = FakeNet
+            host     = 127.0.0.1
+            port     = %d
+            tls      = false
+            nick     = tester
+            """ % (("share_to = " + share_to) if share_to else "", srv.port))
+        self.reqs = self.tmp / "requests"
+        self.reqs.mkdir()
+        os.environ["TVCHAT_REQUESTS"] = str(self.reqs)
+        self.addCleanup(os.environ.pop, "TVCHAT_REQUESTS", None)
+        self.chat = cb._chat()
+        self.acct = self.chat.by_id["libera"]
+
+    def ask(self, line, age=0):
+        """Leave a request as tvmail does, and let the backend read it."""
+        f = self.reqs / ("1-1-%d.req" % len(list(self.reqs.iterdir())))
+        f.write_text(line + "\n")
+        if age:
+            old = time.time() - age
+            os.utime(str(f), (old, old))
+        self.chat._requests_once()
+
+    def test_clean_text(self):
+        self.assertEqual(cb.Chat.share_clean("a\r\nQUIT :bye\x07 b\t c"), "a QUIT :bye b c")
+        self.assertEqual(len(cb.Chat.share_clean("x" * 900)), 400)
+
+    def test_queued_edited_and_said(self):
+        got = {}
+
+        def script(srv):
+            welcome(srv)
+            got["join"] = srv.expect("JOIN #tvmail")
+            srv.send(":tester!u@h JOIN #tvmail")
+            got["said"] = srv.expect("PRIVMSG #tvmail :")
+            got["slash"] = srv.expect("PRIVMSG #tvmail :")
+            srv.expect("QUIT")
+
+        self.setup_share(script)
+        self.ask("share tvmail: Bob - hello\x07 world\x01 and more")
+        self.assertEqual([f[1:] for f in self.events("share")], [("1", "tvmail: Bob - hello world and more")])
+        self.assertEqual(self.verb("shares"), (0, b"1\ttvmail: Bob - hello world and more\t#tvmail on FakeNet\n"))
+        # nothing is said until the user agrees - and the channel needs a connection
+        self.assertEqual(self.verb("share-send", "1", "x")[0], 1)
+        self.verb("connect", "libera")
+        self.turn(lambda: self.acct.state == "connected")
+        self.assertEqual(self.verb("share-send", "1", "tvmail: Bob - hello (edited)"),
+                         (0, b"#tvmail on FakeNet\n"))
+        self.assertEqual(self.verb("shares"), (0, b""))              # spent
+        self.assertEqual(self.verb("share-send", "1", "again")[0], 1)
+        # a text that starts with / is said, not run
+        self.ask("share /quit now")
+        self.assertEqual(self.verb("share-send", "2", "/quit now")[0], 0)
+        self.turn(lambda: "slash" in got)
+        self.assertEqual(got["said"], "PRIVMSG #tvmail :tvmail: Bob - hello (edited)")
+        self.assertEqual(got["slash"], "PRIVMSG #tvmail :/quit now")
+        self.verb("disconnect", "libera")
+        self.chat.close()
+
+    def test_discard_and_old_requests(self):
+        self.setup_share(lambda srv: None)
+        self.ask("share one")
+        self.assertEqual(self.verb("share-drop", "1"), (0, b""))
+        self.assertEqual(self.verb("shares"), (0, b""))
+        self.ask("share too late", age=3600)
+        self.assertEqual(self.verb("shares"), (0, b""))
+        self.assertTrue(any("it was left 60 minutes ago" in f[1] for f in self.events("notice")))
+        self.assertEqual(list(self.reqs.iterdir()), [])               # the files are gone either way
+
+    def test_without_share_to_it_says_how_to_set_it(self):
+        self.setup_share(lambda srv: None, share_to="")
+        self.ask("share hello")
+        self.assertEqual(self.events("share"), [])
+        self.assertTrue(any("set [chat] share_to = ACCOUNT:#channel" in f[1] for f in self.events("notice")))
+
+
 class TestIrcHardening(IrcBase):
     def test_a_missing_cafile_is_said_in_words_and_tilde_is_home(self):
         srv = FakeIrc(lambda s: None)

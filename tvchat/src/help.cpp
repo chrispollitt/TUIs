@@ -76,6 +76,8 @@ static const char *kHelpText =
     "  Ctrl-Ins (Edit > Copy) copies them - everything, when nothing is\n"
     "  selected.  Long lines wrap; View > Wrap long lines turns that off.\n"
     "  Chat > Mail selection... emails the selected lines through tvmail.\n"
+    "  Chat > Share from tvmail... says a mail tvmail offered (sender and subject)\n"
+    "  in the [chat] share_to channel, after you have seen it and agreed.\n"
     "\n"
     "NOTIFICATIONS\n"
     "  Messages that need no answer are toasts at the bottom right: no key to press,\n"

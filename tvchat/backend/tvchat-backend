@@ -5990,6 +5990,83 @@ class Chat:
         base = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
         return os.path.join(base, "tvchat", "requests")
 
+    # -- tvmail asks to share a message in chat ------------------------------------------
+    SHARE_MAX_AGE = 600                  # a request left longer than this is dropped unseen
+    SHARE_KEEP = 1800                    # a queued one is forgotten after this
+    SHARE_MAX = 20
+
+    def share_target(self):
+        """(account, channel) from [chat] share_to = ACCOUNT:#channel, or a UserError
+        saying how to set it."""
+        c = configparser.ConfigParser(interpolation=None)
+        try:
+            c.read(_conf_path(), encoding="utf-8")
+        except configparser.Error:
+            pass
+        spec = c.get("chat", "share_to", fallback="").strip()
+        ident, colon, chan = spec.partition(":")
+        if not colon or ident.strip() not in self.by_id or self.by_id[ident.strip()].protocol != "irc":
+            raise UserError("set [chat] share_to = ACCOUNT:#channel (an IRC account) in tvchat.conf")
+        if not chan.strip():
+            raise UserError("[chat] share_to names no channel")
+        return self.by_id[ident.strip()], chan.strip()
+
+    @staticmethod
+    def share_clean(text):
+        """One line, no control characters: what is shared is typed into IRC, where a newline
+        would start a command of its own."""
+        return " ".join(re.sub(r"[\x00-\x1f\x7f]", " ", text).split())[:400]
+
+    def add_share(self, text, age=0):
+        """A request from tvmail: queue the text to be shared (nothing is said until the user
+        agrees, in tvchat); returns the note to tell."""
+        if age > self.SHARE_MAX_AGE:
+            return "dropped a request from tvmail to share a message: it was left %d minutes ago" % (age // 60)
+        try:
+            acct, chan = self.share_target()
+        except UserError as e:
+            return "tvmail asked to share a message in chat, but %s" % e
+        text = self.share_clean(text)
+        if not text:
+            return "dropped an empty request to share"
+        self.shares = [s for s in getattr(self, "shares", []) if time.time() - s["when"] < self.SHARE_KEEP]
+        if len(self.shares) >= self.SHARE_MAX:
+            return "too many shares are waiting - Chat > Share from tvmail..."
+        self._share_ids = getattr(self, "_share_ids", 0) + 1
+        self.shares.append({"id": str(self._share_ids), "text": text, "when": time.time()})
+        self.events.push("share", str(self._share_ids), text)
+        return "tvmail wants to share a message in %s on %s - Chat > Share from tvmail..." % (chan, acct.display)
+
+    def pending_shares(self):
+        """[(id, text, where)] still waiting, oldest first."""
+        now = time.time()
+        self.shares = [s for s in getattr(self, "shares", []) if now - s["when"] < self.SHARE_KEEP]
+        try:
+            acct, chan = self.share_target()
+            where = "%s on %s" % (chan, acct.display)
+        except UserError:
+            where = ""
+        return [(s["id"], s["text"], where) for s in self.shares]
+
+    def share_send(self, ident, text):
+        """Say text (as edited) in the configured channel, joining it first; the entry is spent."""
+        entry = next((s for s in getattr(self, "shares", []) if s["id"] == ident), None)
+        if entry is None:
+            raise UserError("no share waiting under %s" % ident)
+        acct, chan = self.share_target()
+        text = self.share_clean(text)
+        if not text:
+            raise UserError("nothing to say")
+        ad = self.adapter(acct)
+        ad.need_up()
+        conv = ad.join(chan)
+        ad.speak(conv, text)                # not send(): a text starting with / is no command here
+        self.shares.remove(entry)
+        return "%s on %s" % (chan, acct.display)
+
+    def share_drop(self, ident):
+        self.shares = [s for s in getattr(self, "shares", []) if s["id"] != ident]
+
     def requests_tick(self):
         """Act on the requests waiting in the directory, then look again:
           chat ADDRESS   open the chat with ADDRESS (or invite them by mail)
@@ -6018,8 +6095,14 @@ class Chat:
                 continue
             kind, _, arg = text.partition(" ")
             arg = arg.strip()
-            if kind not in ("chat", "invite") or not arg or len(arg) > 2000:
+            if kind not in ("chat", "invite", "share") or not arg or len(arg) > 2000:
                 note = "ignored a request I do not understand"
+            elif kind == "share":                  # needs no Delta Chat account
+                try:
+                    age = time.time() - os.path.getmtime(path)
+                except OSError:
+                    age = 0
+                note = self.add_share(arg, age)
             elif ad is None:
                 continue                 # no Delta Chat account is up yet: it waits
             else:
@@ -6042,8 +6125,7 @@ class Chat:
 
     def start(self):
         """Connect the [chat] autoconnect accounts; a failure is an event."""
-        if any(a.protocol == "deltachat" for a in self.accounts):
-            self.loop.call_later(self.REQUEST_POLL, self.requests_tick)
+        self.loop.call_later(self.REQUEST_POLL, self.requests_tick)
         self.ooo_start()
         for ident in self.autoconnect:
             try:
@@ -6131,6 +6213,28 @@ def cmd_mail_chat(a):
     tvmail; the outcome comes as a `notice` event."""
     chat = _chat()
     chat.mail_text(chat.conv(a.conv), a.address, a.subject, unesc(a.text))
+    return 0
+
+
+def cmd_shares(a):
+    """shares: what tvmail asked to share and nobody has answered, `id<TAB>text<TAB>where` lines
+    (where: "#channel on Account", empty when [chat] share_to is not set)."""
+    chat = _chat()
+    chat.check_config()
+    for ident, text, where in chat.pending_shares():
+        sys.stdout.write(line(ident, text, where))
+    return 0
+
+
+def cmd_share_send(a):
+    """share-send ID TEXT: say TEXT (the share as the user edited it) in the channel; prints where."""
+    chat = _chat()
+    sys.stdout.write(chat.share_send(a.id, a.text) + "\n")
+    return 0
+
+
+def cmd_share_drop(a):
+    _chat().share_drop(a.id)
     return 0
 
 
@@ -6637,6 +6741,9 @@ def build_parser():
     p = sub.add_parser("join"); p.add_argument("account"); p.add_argument("target"); p.set_defaults(fn=cmd_join)
     p = sub.add_parser("invite"); p.add_argument("account"); p.add_argument("channel", nargs="?", default=""); p.set_defaults(fn=cmd_invite)
     p = sub.add_parser("people"); p.set_defaults(fn=cmd_people)
+    p = sub.add_parser("shares"); p.set_defaults(fn=cmd_shares)
+    p = sub.add_parser("share-send"); p.add_argument("id"); p.add_argument("text"); p.set_defaults(fn=cmd_share_send)
+    p = sub.add_parser("share-drop"); p.add_argument("id"); p.set_defaults(fn=cmd_share_drop)
     p = sub.add_parser("mail-address"); p.add_argument("conv"); p.set_defaults(fn=cmd_mail_address)
     p = sub.add_parser("mail-chat"); p.add_argument("conv"); p.add_argument("address"); p.add_argument("subject"); p.add_argument("text"); p.set_defaults(fn=cmd_mail_chat)
     p = sub.add_parser("invite-send"); p.add_argument("account"); p.add_argument("conv"); p.add_argument("channel", nargs="?", default=""); p.set_defaults(fn=cmd_invite_send)

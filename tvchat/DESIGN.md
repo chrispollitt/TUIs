@@ -474,6 +474,14 @@ names were checked against `--openrpc` and the `deltachat-rpc-client` source).
   `app.cpp`; tvmail does it for new mail. What came in is not sent on. Not done: a count of what is
   waiting over there in the status line, and a list of questions (the dialogs stay where they are,
   e.g. Accept invite...; the toast says where to answer).
+- **Sharing a tvmail message in chat** (`share` in the requests directory; tvmail's Message > Share
+  in chat): `Chat.add_share` queues the one-line text (control characters removed, 400 characters,
+  dropped when the file is over `SHARE_MAX_AGE` = 10 min old, forgotten after `SHARE_KEEP` = 30 min, 20
+  at most) and pushes a `share ID TEXT` event (a toast in the UI); nothing is said by itself. `shares`
+  lists them, `share-send ID TEXT` says the text as the user edited it in the `[chat] share_to`
+  channel (`join`, then `speak` - not `send`, so a text starting with / is no command) and `share-drop`
+  forgets one. The target must be an IRC account; without it the request is answered with how to set it.
+  The queue is in memory: a restarted backend has none.
 - **Mailing chat lines** (optional, needs tvmail): Chat > Mail selection... takes the rows
   selected in the log (`TMailText::selectedText`) and runs `mail-chat CONV ADDRESS SUBJECT TEXT`
   (TEXT escaped as `keys` takes it), which hands it to `tvmail-backend send` in a thread

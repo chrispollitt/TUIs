@@ -96,6 +96,11 @@ Chat > Invite... can also mail the link through tvmail (when it is installed) to
 someone's ordinary address.  tvmail can hand tvchat a request (Message > Chat with sender, Message > Open
 chat invite): one-line files in
 .IR ~/.local/state/tvchat/requests/ .
+.SH "SHARING A MAIL"
+tvmail's Message > Share in chat leaves a request; tvchat shows a toast, and Chat > Share from
+tvmail... shows the text (sender and subject, never the body), which you can change, before
+Send says it as you in the channel \fB[chat] share_to\fR names (an IRC account, a colon and the
+channel).  Discard forgets it; Later keeps it for half an hour.
 .SH "MAIL"
 With tvmail installed, Chat > Mail selection... sends the lines selected in the log (Shift-Up /
 Shift-Down, or a mouse drag) as one email through tvmail's account.  It asks for the address,

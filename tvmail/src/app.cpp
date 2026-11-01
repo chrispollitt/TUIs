@@ -49,6 +49,7 @@ TMenuBar *TVMailApp::initMenuBar(TRect r)
                             newLine() +
                             *new TMenuItem("Cha~t~ with sender", cmChatWith, kbNoKey, hcNoContext) +
                             *new TMenuItem("Open chat ~i~nvite", cmChatInvite, kbNoKey, hcNoContext) +
+                            *new TMenuItem("S~h~are in chat", cmShareChat, kbNoKey, hcNoContext) +
                             *new TSubMenu("~E~dit", kbAltE) +
                             *new TMenuItem("~U~ndo", cmUndo, kbNoKey, hcNoContext) +
                             newLine() +
@@ -428,6 +429,35 @@ void TVMailApp::openChatInvite(int row)
     else
         notify("Handed the invitation to tvchat. It asks whether to accept - in tvchat, if it is "
                "running, or when you next start it.");
+}
+
+// Message > Share in chat: tvchat says "tvmail: <sender> - <subject>" in the channel its
+// [chat] share_to names - only after you agree there (Chat > Share from tvmail...), where the text
+// can be changed first.  Only sender and subject go: nothing of the body.
+void TVMailApp::shareInChat(int row)
+{
+    if (row < 0 || !needTvchat())
+        return;
+    const MsgRow &m = gRows[row];
+    std::string who = m.from;
+    size_t lt = who.find('<');
+    if (lt != std::string::npos && lt > 0)
+        who = who.substr(0, lt);
+    who = stripped(who);
+    if (who.empty())
+        who = addressOf(m.from);
+    std::string text = "tvmail: " + who + " - " + stripped(m.subj);
+    for (char &c : text)
+        if (c == '\n' || c == '\r' || c == '\t')
+            c = ' ';
+    if (text.size() > 300)
+        text.resize(300);
+    std::string err;
+    if (!writeChatRequest("share " + text, err))
+        notify(err, noteError);
+    else
+        notify("Asked tvchat to share this message in chat. You say yes there (Chat > Share from tvmail...), "
+               "within 10 minutes; only sender and subject go.");
 }
 
 // File > Save message as...: the raw RFC822 message (headers, attachments and
@@ -1034,6 +1064,9 @@ void TVMailApp::handleEvent(TEvent &e)
         break;
     case cmChatInvite:
         openChatInvite(currentRow());
+        break;
+    case cmShareChat:
+        shareInChat(currentRow());
         break;
     case cmOutOfOffice:
         outOfOffice();

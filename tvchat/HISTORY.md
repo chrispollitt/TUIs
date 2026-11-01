@@ -10,6 +10,14 @@
   #lobby on Libera") and joins; `join_invites = yes` accepts at once. New backend verb `invite-send`,
   `invite` takes a channel, `invites` lines may carry a third field.
 
+- **tvmail messages in the LAN channel, on your yes:** tvmail's Message > Share in chat asks tvchat to
+  say "tvmail: <sender> - <subject>" (never the body) in the channel `[chat] share_to = ACCOUNT:#channel`
+  names. tvchat only queues it and shows a toast; Chat > Share from tvmail... shows the text, which you
+  can change, and Send says it as you (Discard forgets it, Later keeps it, up to 30 minutes; a request
+  left more than 10 minutes is dropped). Control characters are removed, so a subject cannot start
+  an IRC command. New backend verbs `shares`, `share-send`, `share-drop`; the requests directory is now
+  read whenever tvchat runs, not only with a Delta Chat account.
+
 - **Notes between tvmail and tvchat:** the two are full-screen apps, so one is usually out of
   sight. Errors, and what you would want to know anyway (a message written to you, an invitation to
   answer, new mail in tvmail), are left for the other app as small files (`tvcommon/src/spool.cpp`,

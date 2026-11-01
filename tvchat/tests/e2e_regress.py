@@ -56,12 +56,12 @@ class Tv(tvscreen.Tv):
             self.env["TVCHAT_CONF"] = str(self.tmp / "no-tvchat.conf")
 
 
-def chat_tv(opts, env=None):
+def chat_tv(opts, env=None, setup=None):
     from fake_irc import FakeIrcd
     srv = FakeIrcd()
     srv.start()
     try:
-        tv = Tv(opts, srv, env=env)
+        tv = Tv(opts, srv, env=env, setup=setup)
     except Exception:
         srv.stop()
         raise
@@ -322,6 +322,36 @@ def chat_spool_sends_direct_messages_to_tvmail(opts):
     notes = [p.read_text() for p in sorted(out.glob("*.note"))]
     c.check(len(notes) == 1 and notes[0].startswith("1\ttvchat\tinfo\talice: are you there?"),
             "what was left for tvmail is not just that message: %r" % notes)
+    return tv
+
+
+@case()
+def chat_share_from_tvmail(opts):
+    # tvmail asks (a request file) to share a message in chat: a toast says so, nothing is said
+    # until you agree in Chat > Share from tvmail..., where the text can be changed first
+    reqs = []
+
+    def setup(t):
+        reqs.append(t.tmp / "requests")
+        reqs[0].mkdir()
+        t.env["TVCHAT_REQUESTS"] = str(reqs[0])
+        conf = t.tmp / "tvchat.conf"
+        conf.write_text(conf.read_text().replace("autoconnect = fake\n", "autoconnect = fake\nshare_to = fake:#share\n"))
+    tv, srv = chat_tv(opts, setup=setup)
+    c = Case(tv)
+    started(tv, c)
+    open_chat(tv, c, srv)
+    (reqs[0] / ".tmp").write_text("share tvmail: Bob - hello\n")
+    os.rename(reqs[0] / ".tmp", reqs[0] / "1-1-1.req")
+    c.check(tv.wait("tvmail wants to share", 6), "no toast about what tvmail wants to share")
+    c.check(not srv.sent("PRIVMSG #share"), "it was said before anyone agreed")
+    tv.send(alt("c"), "h", settle=0.8)
+    c.check(tv.wait("Share from tvmail", 3) and tv.has("#share on Fake") and tv.has("tvmail: Bob - hello"),
+            "Chat > Share from tvmail... did not show the text and where it goes")
+    tv.send("End", " (ok)", settle=0.4)
+    tv.send("Enter", settle=1.0)
+    c.check(tv.wait(lambda: srv.sent("PRIVMSG #share :tvmail: Bob - hello (ok)"), 5),
+            "the edited share was not said in the channel")
     return tv
 
 

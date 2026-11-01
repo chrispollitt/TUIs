@@ -2088,6 +2088,80 @@ void mailSelectionDialog()
         flashStatus("Mailing to " + address + "...");
 }
 
+// Share from tvmail...: what tvmail asked to be said in chat (Message > Share in chat).
+// Nothing is said until you agree here: the text can be changed first, and it goes out
+// as you, in the channel [chat] share_to names.  Send says it, Discard forgets it,
+// Later leaves the rest for another time.
+void sharesDialog()
+{
+    std::string body, err;
+    if (!ask("shares", body, err))
+    {
+        notify(err, noteError);
+        return;
+    }
+    std::vector<std::vector<std::string>> waiting;
+    for (size_t at = 0; at < body.size();)
+    {
+        size_t nl = body.find('\n', at);
+        if (nl == std::string::npos)
+            nl = body.size();
+        if (nl > at)
+        {
+            std::vector<std::string> f = chatFields(body.substr(at, nl - at));
+            if (f.size() >= 2)
+                waiting.push_back(f);
+        }
+        at = nl + 1;
+    }
+    if (waiting.empty())
+    {
+        notify("Nothing from tvmail is waiting to be shared.", noteInfo);
+        return;
+    }
+    for (const auto &w : waiting)
+    {
+        std::string where = w.size() > 2 ? w[2] : std::string();
+        if (where.empty())
+        {
+            notify("Set [chat] share_to = ACCOUNT:#channel in tvchat.conf (File > Edit configuration...) "
+                   "to say where tvmail's messages are shared.",
+                   noteWarn);
+            return;
+        }
+        TDialog *d = new TDialog(TRect(0, 0, 76, 12), "Share from tvmail");
+        d->options |= ofCentered;
+        d->insert(new TStaticText(TRect(3, 2, 73, 4), ("Say this in " + menuSafe(where) + ", as you?\nChange it first if you like.").c_str()));
+        TInputLine *il = new TInputLine(TRect(3, 5, 73, 6), 400);
+        d->insert(il);
+        char buf[401] = {0};
+        putText(buf, w[1], 400);
+        il->setData(buf);
+        d->insert(new TButton(TRect(10, 8, 22, 10), "~S~end", cmOK, bfDefault));
+        d->insert(new TButton(TRect(24, 8, 38, 10), "~D~iscard", cmNo, bfNormal));
+        d->insert(new TButton(TRect(40, 8, 52, 10), "~L~ater", cmCancel, bfNormal));
+        d->selectNext(False);
+        il->select();
+        ushort r = TProgram::deskTop->execView(d);
+        std::string text = il->data ? trimmed(il->data) : std::string();
+        TObject::destroy(d);
+        if (r == cmCancel)
+            break;
+        if (r == cmNo)
+        {
+            if (!ask("share-drop " + shq(w[0]), body, err))
+                notify(err, noteError);
+        }
+        else if (text.empty())
+            notify("Nothing to say: the share was kept.", noteInfo);
+        else if (!ask("share-send " + shq(w[0]) + " " + shq(text), body, err))
+            notify(err, noteError);
+        else
+            notify("Said in " + trimmed(body) + ".", noteInfo);
+    }
+    pollNow();
+}
+
 // ---- Delta Chat groups -------------------------------------------------------
 // The conversation shown, when it is a Delta Chat group (else empty).
 std::string deltaGroupShown()
@@ -2331,6 +2405,7 @@ TMenu *buildChatMenu()
     add(new TMenuItem("~A~nswer", cmChatAnswer, kbNoKey, hcNoContext));
     add(new TMenuItem("~L~eave", cmChatLeave, kbNoKey, hcNoContext));
     add(new TMenuItem("~M~ail selection...", cmChatMailSelection, kbNoKey, hcNoContext));
+    add(new TMenuItem("S~h~are from tvmail...", cmChatShares, kbNoKey, hcNoContext));
     add(&newLine());
     add(new TMenuItem("New ~g~roup...", cmChatNewGroup, kbNoKey, hcNoContext));
     add(new TMenuItem("Add m~e~mber...", cmChatGroupAdd, kbNoKey, hcNoContext));
@@ -2402,7 +2477,7 @@ void chatMenuGrey()
 
 bool chatCommand(ushort command)
 {
-    if (!(command >= cmChatInvite && command <= cmChatMailSelection) &&
+    if (!(command >= cmChatInvite && command <= cmChatShares) &&
         (command < cmChatConnect || command >= cmChatAccount + kChatMaxAccounts))
         return false;
     if (command == cmChatOff)
@@ -2446,6 +2521,9 @@ bool chatCommand(ushort command)
         break;
     case cmChatMailSelection:
         mailSelectionDialog();
+        break;
+    case cmChatShares:
+        sharesDialog();
         break;
     case cmChatAnswer:
     case cmChatTalkView:

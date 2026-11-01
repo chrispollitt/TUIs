@@ -45,6 +45,7 @@ private:
     void editConfig(); // File > Edit configuration...
     void chatWithSender(int row);
     void openChatInvite(int row);
+    void shareInChat(int row);
     void outOfOffice();
     void moveMsg(int row);
     void viewParts(int row);

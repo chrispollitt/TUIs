@@ -15,6 +15,9 @@ autoconnect = libera
 # With tvmail installed: while its out-of-office reply is on (and inside its dates),
 # the connected IRC accounts are marked away with the reply's text.  Default no.
 #ooo_away = yes
+# Where tvmail's Message > Share in chat is said (tvchat asks you first): an IRC account's
+# section name, a colon and the channel.
+#share_to = lan:#tvmail
 
 # Who is who: people go by different names on different servers.  One person
 # per line, their handles as account:handle (the account is a section name

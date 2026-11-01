@@ -5,6 +5,10 @@ Releases are tagged `tvmail-vX.Y.Z`; `git log` has the rest.
 
 ## Unreleased
 
+- **Message > Share in chat:** asks tvchat to say the sender and subject (not the body) of the message
+  in its LAN channel (`[chat] share_to` in tvchat.conf). tvchat shows it and says it only when you
+  agree there, where you can change the text first.
+
 - **Toasts from tvchat, and yours for it:** errors, and new mail in the inbox, are left for tvchat as
   small files (`tvcommon/src/spool.cpp`); tvchat's errors, messages written to you and invitations
   show here as a toast "tvchat: ...". `[ui] share = error | warn | info | off` (default `error`) in

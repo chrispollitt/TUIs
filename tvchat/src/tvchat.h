@@ -34,6 +34,7 @@ const ushort cmChatGroupAdd = 2145;    // Chat > Add member...: to the Delta Cha
 const ushort cmChatGroupRemove = 2146; // Chat > Remove member...
 const ushort cmChatGroupRename = 2147; // Chat > Rename group...
 const ushort cmChatMailSelection = 2148; // Chat > Mail selection...: the lines selected in the log, as an email
+const ushort cmChatShares = 2149;        // Chat > Share from tvmail...: a message tvmail asked to share, said only on your yes
 const ushort cmChatAcctPicked = 2140; // broadcast: the chat window's server pane moved
 const ushort cmChatConvPicked = 2141; // broadcast: its conversation pane moved
 
