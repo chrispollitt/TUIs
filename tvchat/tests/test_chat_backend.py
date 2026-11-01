@@ -1035,6 +1035,7 @@ class TestPeople(IrcBase):
     def test_bad_table_is_refused(self):
         for entry, word in (("Carol = nowhere:carol", "no [account:nowhere]"),
                             ("Carol = libera", "not account:handle"),
+                            ("Carol = email:nope", "not an email address"),
                             ("Carol = libera:x\n            Dave = libera:X", "both")):
             self.conf("""\
                 [account:libera]
@@ -1045,6 +1046,49 @@ class TestPeople(IrcBase):
                 """ % entry)
             errors = cb.check_config(os.environ["TVCHAT_CONF"])[0]
             self.assertTrue(errors and word in errors[0], (entry, errors))
+
+    def test_mail_selected_chat_lines_through_tvmail(self):
+        def libera(srv):
+            welcome(srv)
+            srv.send(":carol!c@h PRIVMSG tester :hello")
+            srv.send(":dave!d@h PRIVMSG tester :hello")
+            srv.expect("QUIT")
+
+        def oftc(srv):
+            welcome(srv, "tester2")
+            srv.expect("QUIT")
+
+        self.two_networks(libera, oftc, "carol = libera:carol, email:carol@example.org")
+        self.turn(lambda: "libera/dave" in self.chat.account("libera").convs)
+        # the person's email handle in the table; nobody known: blank
+        self.assertEqual(self.verb("mail-address", "libera/carol"), (0, b"carol@example.org\n"))
+        self.assertEqual(self.verb("mail-address", "libera/dave"), (0, b"\n"))
+        d = self.tmp / "bin"
+        d.mkdir()
+        log, fail = self.tmp / "tvmail.log", self.tmp / "fail"
+        stub = d / "tvmail-backend"
+        stub.write_text("#!/bin/sh\necho \"$@\" >> %s\ncat >> %s\n"
+                        "[ -e %s ] && { echo 'SMTP server said no'; exit 1; }\nexit 0\n" % (log, log, fail))
+        stub.chmod(0o755)
+        path = os.environ["PATH"]
+        os.environ["PATH"] = str(d) + os.pathsep + path
+        self.addCleanup(os.environ.__setitem__, "PATH", path)
+        self.assertEqual(self.verb("mail-chat", "libera/carol", "carol@example.org", "Hi  there",
+                                   "line one\\nline two"), (0, b""))
+        self.turn(lambda: any("mailed to carol@example.org" in f[1] for f in self.events("notice")))
+        text = log.read_text()
+        self.assertIn("send --to carol@example.org --subject Hi there", text)
+        self.assertIn("From the chat carol (FakeNet):\n\nline one\nline two\n", text)
+        # tvmail refuses: said as a notice
+        fail.write_text("")
+        self.verb("mail-chat", "libera/carol", "carol@example.org", "", "x")
+        self.turn(lambda: any("tvmail could not mail carol@example.org: SMTP server said no" in f[1]
+                              for f in self.events("notice")))
+        self.assertEqual(self.verb("mail-chat", "libera/carol", "nobody", "s", "x")[0], 1)
+        self.assertEqual(self.verb("mail-chat", "libera/carol", "carol@example.org", "s", " ")[0], 1)
+        self.verb("disconnect", "libera")
+        self.verb("disconnect", "oftc")
+        self.chat.close()
 
     def test_invite_finds_their_nick_on_the_other_server(self):
         got = {}
@@ -1078,6 +1122,94 @@ class TestPeople(IrcBase):
         self.verb("disconnect", "libera")
         self.verb("disconnect", "oftc")
         self.chat.close()
+
+
+class TestOutOfOffice(IrcBase):
+    """[chat] ooo_away = yes: tvmail's out-of-office reply shows as the IRC away message."""
+
+    def stub_tvmail(self, state):
+        """A tvmail-backend that answers `vacation status` with the file `state`."""
+        d = self.tmp / "bin"
+        d.mkdir(exist_ok=True)
+        stub = d / "tvmail-backend"
+        stub.write_text('#!/bin/sh\n[ "$1 $2" = "vacation status" ] && cat %s\n' % state)
+        stub.chmod(0o755)
+        path = os.environ["PATH"]
+        os.environ["PATH"] = str(d) + os.pathsep + path
+        self.addCleanup(os.environ.__setitem__, "PATH", path)
+        return stub
+
+    def test_away_follows_the_out_of_office_reply(self):
+        got = {}
+
+        def script(srv):
+            welcome(srv)
+            got["on"] = srv.expect("AWAY :")
+            got["off"] = srv.expect("AWAY")
+            srv.expect("QUIT")
+
+        srv = FakeIrc(script)
+        self.addCleanup(srv.close)
+        self.srv = srv
+        self.conf("""\
+            [chat]
+            ooo_away = yes
+            [account:libera]
+            protocol = irc
+            display  = FakeNet
+            host     = 127.0.0.1
+            port     = %d
+            tls      = false
+            nick     = tester
+            """ % srv.port)
+        state = self.tmp / "vacation.txt"
+        state.write_text("state: on\nsubject: Away\ndays: 7\nstart: \nend: \n\nBack on the\n 3rd, thanks.\n")
+        self.stub_tvmail(state)
+        self.chat = cb._chat()
+        self.acct = self.chat.by_id["libera"]
+        self.chat.OOO_FIRST, self.chat.OOO_POLL = 0.1, 0.5
+        self.verb("connect", "libera")
+        self.chat.ooo_start()
+        self.turn(lambda: "on" in got)
+        self.assertEqual(got["on"], "AWAY :Out of office: Back on the 3rd, thanks.")
+        self.turn(lambda: any("away set on 1 IRC account" in f[1] for f in self.events("notice")))
+        # the reply is switched off (or its dates are past): we are back
+        state.write_text("state: off\nsubject: Away\n")
+        self.turn(lambda: "off" in got)
+        self.assertEqual(got["off"], "AWAY")
+        self.verb("disconnect", "libera")
+        self.chat.close()
+
+    def test_without_the_option_nothing_is_asked(self):
+        srv = FakeIrc(lambda s: (welcome(s), s.expect("QUIT")))
+        self.addCleanup(srv.close)
+        self.srv = srv
+        self.conf("""\
+            [account:libera]
+            protocol = irc
+            host     = 127.0.0.1
+            port     = %d
+            tls      = false
+            nick     = tester
+            """ % srv.port)
+        self.chat = cb._chat()
+        self.assertFalse(self.chat.ooo_away)
+        self.chat.ooo_start()
+        self.assertFalse(self.chat._ooo_timer)
+
+    def test_dates_and_states(self):
+        v = self.tmp / "v.txt"
+        tvmail = str(self.stub_tvmail(v))
+        v.write_text("state: on\nstart: 2999-01-01\nend: \n\nlater\n")
+        self.assertIsNone(cb.ooo_wanted(tvmail))                  # not yet
+        v.write_text("state: on\nstart: \nend: 2000-01-01\n\nlate\n")
+        self.assertIsNone(cb.ooo_wanted(tvmail))                  # over
+        v.write_text("state: on\nstart: 2000-01-01\nend: 2999-01-01\n\nhere\n")
+        self.assertEqual(cb.ooo_wanted(tvmail), "Out of office: here")
+        v.write_text("state: on\n\n")
+        self.assertEqual(cb.ooo_wanted(tvmail), "Out of office: Out of office")
+        v.write_text("state: none\n")
+        self.assertIsNone(cb.ooo_wanted(tvmail))
 
 
 class TestIrcHardening(IrcBase):

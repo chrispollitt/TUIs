@@ -12,13 +12,17 @@
 [chat]
 # connect these accounts when tvchat starts (comma-separated section names)
 autoconnect = libera
+# With tvmail installed: while its out-of-office reply is on (and inside its dates),
+# the connected IRC accounts are marked away with the reply's text.  Default no.
+#ooo_away = yes
 
 # Who is who: people go by different names on different servers.  One person
 # per line, their handles as account:handle (the account is a section name
 # below).  Chat > Invite... uses it to find someone's nick on the server you
 # invite them to, and says "carol (cpollitt)" for an invitation from them.
 #[people]
-#carol = libera:cpollitt, oftc:carol_, delta:carol@example.org
+#carol = libera:cpollitt, oftc:carol_, delta:carol@example.org, email:carol@example.com
+# (email: is not an account: it is where Chat > Mail selection... sends for them)
 
 # The terminal while tvchat runs (read by tvchat itself).
 [ui]

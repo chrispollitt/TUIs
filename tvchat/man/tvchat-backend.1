@@ -209,13 +209,27 @@ after a value is part of the value.
 connects those accounts when
 .B serve
 starts.
+.B ooo_away = yes
+(default no), with tvmail installed, shows its out-of-office reply as the away message on the
+connected IRC accounts: it is asked every 5 minutes (\fBtvmail-backend vacation status\fR), the
+away text is the reply's text, and only the reply's dates count; it is cleared when the reply goes off.
 .PP
 .B [people]
 is the nick joining table, for people who go by different names on different servers:
 .I name
 .B =
 .I account:handle, ...
-(an IRC nick, a Delta Chat address; the account is a section name).
+(an IRC nick, a Delta Chat address; the account is a section name; \fBemail:\fR\fIaddress\fR is
+where
+.B mail-address
+sends mail for them).
+.B mail-chat
+.I CONV ADDRESS SUBJECT TEXT
+mails TEXT (escaped as
+.B keys
+takes it) through tvmail; the result comes as a
+.B notice
+event.
 .B invite-send
 uses it to find someone's nick on the account they are invited to, and
 .B invites

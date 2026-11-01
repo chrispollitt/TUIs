@@ -280,6 +280,37 @@ def chat_edit_paste_menu(opts):
 
 
 @case()
+def chat_mail_selection(opts):
+    # Chat > Mail selection... mails the lines selected in the log through tvmail
+    # (a stub here); with nothing selected it says how to select
+    tv, srv = chat_tv(opts)
+    c = Case(tv)
+    started(tv, c)
+    srv.say(":alice!a@h PRIVMSG #e2e :first line", ":alice!a@h PRIVMSG #e2e :second line",
+            ":alice!a@h PRIVMSG #e2e :third line")
+    tv.pump(1.0)
+    open_chat(tv, c, srv)
+    sent = tv.bindir.parent / "tvmail.log"
+    stub = tv.bindir / "tvmail-backend"
+    stub.write_text("#!/bin/sh\necho \"$@\" >> %s\ncat >> %s\nexit 0\n" % (sent, sent))
+    stub.chmod(0o755)
+    tv.send(alt("c"), "m", settle=0.5)
+    c.check(tv.wait("Select lines in the log first", 2), "no hint to select lines first")
+    (r1, c1), (r3, c3) = tv.find("first line"), tv.find("third line")
+    tv.send("\x1b[<0;%d;%dM" % (c1 + 1, r1 + 1), "\x1b[<32;%d;%dM" % (c3 + 1, r3 + 1),
+            "\x1b[<0;%d;%dm" % (c3 + 1, r3 + 1), settle=0.5)     # a mouse drag over the three lines
+    tv.send(alt("c"), "m", settle=0.8)
+    c.check(tv.wait("3 lines from #e2e", 3), "Chat > Mail selection... did not ask where to mail the 3 lines")
+    tv.send("bob@example.org", "Enter", settle=1.5)
+    c.check(tv.wait(lambda: sent.exists() and "third line" in sent.read_text(), 5),
+            "the selection was not handed to tvmail")
+    text = sent.read_text()
+    c.check("send --to bob@example.org --subject tvchat: #e2e" in text and "<alice> first line" in text and
+            "<alice> second line" in text, "the mail is not the selected lines to bob: %r" % text)
+    return tv
+
+
+@case()
 def chat_typed_commands(opts):
     tv, srv = chat_tv(opts)
     c = Case(tv)

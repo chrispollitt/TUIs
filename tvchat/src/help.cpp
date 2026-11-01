@@ -75,6 +75,7 @@ static const char *kHelpText =
     "  Shift-arrows / Shift-PgUp / PgDn or a mouse drag select whole lines;\n"
     "  Ctrl-Ins (Edit > Copy) copies them - everything, when nothing is\n"
     "  selected.  Long lines wrap; View > Wrap long lines turns that off.\n"
+    "  Chat > Mail selection... emails the selected lines through tvmail.\n"
     "\n"
     "NOTIFICATIONS\n"
     "  Messages that need no answer are toasts at the bottom right: no key to press,\n"

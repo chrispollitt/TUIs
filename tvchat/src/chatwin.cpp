@@ -1324,6 +1324,8 @@ public:
     const std::string &accountId() const { return acct; } // the Servers pane's pick
     const std::string &convId() const { return conv; }
     bool showingServer() const { return isServer(); }
+    // the lines selected in the log ("" when none) and how many
+    std::string logSelection(int &lines) const { return log ? log->selectedText(lines) : std::string(); }
     bool showingCall() const { return isTalk(conv) && callState() == "incoming"; }
 
     // Chat > Answer
@@ -2019,6 +2021,73 @@ void acceptInviteDialog()
     pollNow();
 }
 
+// Mail selection...: the lines selected in the log (Shift-arrows or a drag), as
+// one email through tvmail's account - to the person's `email:` address in the
+// [people] table (or their Delta Chat address) if known, else one you type.
+void mailSelectionDialog()
+{
+    if (!chatInFront() || gChatWin->showingServer())
+    {
+        flashStatus("Mail selection: show a conversation first");
+        return;
+    }
+    int lines = 0;
+    std::string text = gChatWin->logSelection(lines);
+    if (text.empty())
+    {
+        flashStatus("Select lines in the log first (Shift-Up / Shift-Down, or drag), then Chat > Mail selection...");
+        return;
+    }
+    std::string cv = gChatWin->convId(), body, err, yes;
+    if (!(ask("has-tvmail", yes, err) && trimmed(yes) == "yes"))
+    {
+        notify("tvmail is not installed: it would send the mail.", noteInfo);
+        return;
+    }
+    std::string name = convName(cv), addr;
+    if (ask("mail-address " + shq(cv), body, err))
+        addr = trimmed(body);
+    TDialog *d = new TDialog(TRect(0, 0, 70, 14), "Mail selection");
+    d->options |= ofCentered;
+    d->insert(new TStaticText(TRect(3, 2, 67, 3), (std::to_string(lines) + (lines == 1 ? " line" : " lines") +
+                                                   " from " + menuSafe(name) + ", sent through tvmail.").c_str()));
+    TInputLine *to = new TInputLine(TRect(3, 5, 67, 6), 200);
+    d->insert(to);
+    d->insert(new TLabel(TRect(2, 4, 67, 5), "~T~o (an email address)", to));
+    TInputLine *subj = new TInputLine(TRect(3, 8, 67, 9), 200);
+    d->insert(subj);
+    d->insert(new TLabel(TRect(2, 7, 67, 8), "~S~ubject", subj));
+    d->insert(new TButton(TRect(22, 10, 34, 12), "~M~ail", cmOK, bfDefault));
+    d->insert(new TButton(TRect(36, 10, 48, 12), "Cancel", cmCancel, bfNormal));
+    char buf[201] = {0};
+    putText(buf, addr, 200);
+    to->setData(buf);
+    std::memset(buf, 0, sizeof buf);
+    putText(buf, "tvchat: " + name, 200);
+    subj->setData(buf);
+    d->selectNext(False);
+    (addr.empty() ? to : subj)->select();
+    ushort r = TProgram::deskTop->execView(d);
+    std::string address = to->data ? trimmed(to->data) : std::string();
+    std::string subject = subj->data ? trimmed(subj->data) : std::string();
+    TObject::destroy(d);
+    if (r == cmCancel)
+        return;
+    if (address.empty())
+    {
+        notify("Mail selection: no address given.", noteWarn);
+        return;
+    }
+    // a request is one line: newline, CR, TAB and backslash go escaped (the backend undoes it)
+    std::string esc;
+    for (char ch : text)
+        esc += ch == '\n' ? "\\n" : ch == '\r' ? "\\r" : ch == '\t' ? "\\t" : ch == '\\' ? "\\\\" : std::string(1, ch);
+    if (!ask("mail-chat " + shq(cv) + " " + shq(address) + " " + shq(subject) + " " + shq(esc), body, err))
+        notify(err, noteError);
+    else
+        flashStatus("Mailing to " + address + "...");
+}
+
 // ---- Delta Chat groups -------------------------------------------------------
 // The conversation shown, when it is a Delta Chat group (else empty).
 std::string deltaGroupShown()
@@ -2261,6 +2330,7 @@ TMenu *buildChatMenu()
     add(new TMenuItem("Accept in~v~ite...", cmChatAcceptInvite, kbNoKey, hcNoContext));
     add(new TMenuItem("~A~nswer", cmChatAnswer, kbNoKey, hcNoContext));
     add(new TMenuItem("~L~eave", cmChatLeave, kbNoKey, hcNoContext));
+    add(new TMenuItem("~M~ail selection...", cmChatMailSelection, kbNoKey, hcNoContext));
     add(&newLine());
     add(new TMenuItem("New ~g~roup...", cmChatNewGroup, kbNoKey, hcNoContext));
     add(new TMenuItem("Add m~e~mber...", cmChatGroupAdd, kbNoKey, hcNoContext));
@@ -2324,7 +2394,7 @@ void chatMenuGrey()
     for (TMenuItem *p = gChatItem->subMenu->items; p; p = p->next)
         if (p->name && p->command)
             p->disabled = Boolean(!on || p->command == cmChatOff ||
-                                  (p->command == cmChatLeave && !inChat) ||
+                                  ((p->command == cmChatLeave || p->command == cmChatMailSelection) && !inChat) ||
                                   (p->command == cmChatAnswer && !call) ||
                                   ((p->command == cmChatGroupAdd || p->command == cmChatGroupRemove ||
                                     p->command == cmChatGroupRename) && deltaGroupShown().empty()));
@@ -2332,7 +2402,7 @@ void chatMenuGrey()
 
 bool chatCommand(ushort command)
 {
-    if (!(command >= cmChatInvite && command <= cmChatGroupRename) &&
+    if (!(command >= cmChatInvite && command <= cmChatMailSelection) &&
         (command < cmChatConnect || command >= cmChatAccount + kChatMaxAccounts))
         return false;
     if (command == cmChatOff)
@@ -2373,6 +2443,9 @@ bool chatCommand(ushort command)
         break;
     case cmChatLeave:
         leaveShown();
+        break;
+    case cmChatMailSelection:
+        mailSelectionDialog();
         break;
     case cmChatAnswer:
     case cmChatTalkView:

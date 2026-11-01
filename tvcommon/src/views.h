@@ -146,14 +146,9 @@ class TMailText : public TScroller
         }
     }
 
-    void copy()
+    // The text of rows a..b (either way round), a line to a line.
+    std::string rowsText(int a, int b) const
     {
-        int a = selA, b = selB;
-        if (a < 0)
-        {
-            a = 0;
-            b = (int)segs.size() - 1;
-        }
         if (a > b)
             std::swap(a, b);
         std::string out;
@@ -164,7 +159,33 @@ class TMailText : public TScroller
                 out += '\n';
             out.append(src[g.line], g.off, g.len);
         }
-        out += '\n';
+        return out + '\n';
+    }
+
+public:
+    // What is selected ("" when nothing is) and how many lines that is.
+    std::string selectedText(int &lines) const
+    {
+        lines = 0;
+        if (selA < 0 || segs.empty())
+            return std::string();
+        for (int r = std::min(selA, selB); r <= std::max(selA, selB); ++r)
+            lines += !segs[r].cont;
+        return rowsText(selA, selB);
+    }
+
+private:
+    void copy()
+    {
+        int a = selA, b = selB;
+        if (a < 0)
+        {
+            a = 0;
+            b = (int)segs.size() - 1;
+        }
+        if (a > b)
+            std::swap(a, b);
+        std::string out = rowsText(a, b);
         // the app's own clipboard: what Shift-Ins pastes into an editor
         if (TEditor::clipboard && out.size() < TEditor::clipboard->bufSize)
             TEditor::clipboard->insertText(out.data(), (uint)out.size(), True);

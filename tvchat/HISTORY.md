@@ -10,6 +10,13 @@
   #lobby on Libera") and joins; `join_invites = yes` accepts at once. New backend verb `invite-send`,
   `invite` takes a channel, `invites` lines may carry a third field.
 
+- **tvchat and tvmail, more of each other:** Chat > Mail selection... mails the lines selected in the
+  log (Shift-arrows or a drag) through tvmail's account, to the person's address if it is known (an
+  `email:` handle in `[people]`, or their Delta Chat address), else one you type; the outcome is a
+  toast. With `[chat] ooo_away = yes`, tvmail's out-of-office reply also shows as the away message
+  on the connected IRC accounts (checked every 5 minutes, only inside the reply's dates, cleared when
+  it goes off). New backend verbs `mail-address` and `mail-chat`.
+
 - **Invite is easier in a channel:** with a channel shown, Chat > Invite... starts with that
   channel filled in and, after OK, asks which user in the channel to send the invitation to (Skip
   shows the link instead). **Copy link** puts the link on the clipboard, in the dialog and in the one

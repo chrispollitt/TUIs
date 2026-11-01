@@ -464,7 +464,18 @@ names were checked against `--openrpc` and the `deltachat-rpc-client` source).
   and invites them *there* - an IRC `/invite` to their nick on that network, or
   `join` of their Delta Chat address (a chat, or an invitation by mail) - and only
   falls back to the link message when they have none. `who_is` names an invitation's
-  sender as "carol (cpollitt)". Only invitations use it so far.
+  sender as "carol (cpollitt)". Also `email:ADDRESS` in an entry (not an account: `EMAIL_HANDLE`)
+  is where `Chat.mail_address_for` mails for them.
+- **Mailing chat lines** (optional, needs tvmail): Chat > Mail selection... takes the rows
+  selected in the log (`TMailText::selectedText`) and runs `mail-chat CONV ADDRESS SUBJECT TEXT`
+  (TEXT escaped as `keys` takes it), which hands it to `tvmail-backend send` in a thread
+  (`mail_text_through_tvmail`, also what mails invitations) and says how it went as a `notice`
+  event. `mail-address CONV` prefills the address.
+- **tvmail's out-of-office as IRC away** (`[chat] ooo_away = yes`): `Chat.ooo_tick` every
+  `OOO_POLL` = 300 s (first after 20 s) asks `tvmail-backend vacation status` in a thread
+  (`ooo_wanted`: on, and today inside start..end) and `ooo_apply` sends `AWAY :text` / `AWAY` to each
+  connected IRC adapter whose `ooo_sent` differs; a registration re-applies it. One way only:
+  `/away` in tvchat never touches the mail reply. Not run by `floyd-daemon`.
 - **Leave:** `part` on a Delta Chat conversation leaves a group (`leave_group`; the
   others are told) and then `delete_chat`s it, and removes the conversation. The
   UI asks first (Yes / No), since the history goes.

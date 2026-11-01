@@ -528,6 +528,8 @@ def load_config(path=None):
 #
 # and an invitation to one account can then find the person there (or ask them
 # through the chat they are in now).
+EMAIL_HANDLE = "email"                   # [people]: email:carol@example.org - not an account
+
 class People:
     def __init__(self, table=None):
         self.table = table or {}         # name -> {account id: [handles]}
@@ -568,7 +570,10 @@ def parse_people(items, account_ids, path="tvchat.conf"):
             acct, handle = acct.strip(), handle.strip()
             if not colon or not handle or " " in handle:
                 raise UserError("%s: [people] %s: %r is not account:handle" % (path, name, part))
-            if acct not in account_ids:
+            if acct == EMAIL_HANDLE and acct not in account_ids:
+                if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", handle):
+                    raise UserError("%s: [people] %s: %r is not an email address" % (path, name, handle))
+            elif acct not in account_ids:
                 raise UserError("%s: [people] %s: there is no [account:%s] section" % (path, name, acct))
             key = (acct, handle.lower())
             if key in seen and seen[key] != name:
@@ -1133,6 +1138,7 @@ class IrcAdapter(CommandMixin):
         self.rbuf = b""                  # registering, up
         self.wbuf = b""
         self.pings = {}                  # /ping tokens -> (sent, conv id, nick)
+        self.ooo_sent = None             # the away text we set from tvmail's out-of-office
         self.outq = deque()              # encoded lines waiting for flood control
         self.tokens = float(self.BURST)
         self.t_tok = None
@@ -1669,6 +1675,7 @@ class IrcAdapter(CommandMixin):
         self._keepalive()
         self.chat.set_state(self.account, "connected", self.server)
         self.system(self.server_conv(), " ".join(m.params[1:]))
+        self.chat.ooo_apply(self)
         # the configured channels, plus any still open from before a reconnect
         want = list(self.channels)
         for conv in self.account.convs.values():
@@ -2791,11 +2798,36 @@ def mail_through_tvmail(tvmail, to, sender, link):
     body = ("%s invites you to chat, end-to-end encrypted, with Delta Chat.\n\n"
             "In tvchat: Chat > Join... and paste this link (or, in tvmail, Message > Open\n"
             "chat invite).  In another Delta Chat app, open it:\n\n%s\n" % (sender, link))
-    p = subprocess.run([tvmail, "send", "--to", to, "--subject", "Chat invitation from %s" % sender],
+    mail_text_through_tvmail(tvmail, to, "Chat invitation from %s" % sender, body)
+
+
+def mail_text_through_tvmail(tvmail, to, subject, body):
+    """Send body as an ordinary mail through tvmail's own account (a thread);
+    the reason in the exception if tvmail refuses."""
+    p = subprocess.run([tvmail, "send", "--to", to, "--subject", subject],
                        input=body.encode("utf-8"), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                        timeout=90)
     if p.returncode != 0:
         raise RuntimeError((p.stdout.decode("utf-8", "replace").strip() or "tvmail-backend send failed")[:300])
+
+
+def ooo_wanted(tvmail):
+    """The out-of-office text to show as an IRC away message, or None: tvmail's
+    reply is switched on and today is inside its dates (a thread: it asks the mail
+    server)."""
+    p = subprocess.run([tvmail, "vacation", "status"], stdout=subprocess.PIPE,
+                       stderr=subprocess.DEVNULL, timeout=60)
+    if p.returncode != 0:
+        raise RuntimeError("tvmail-backend vacation status failed")
+    head, _, message = p.stdout.decode("utf-8", "replace").partition("\n\n")
+    info = dict((k, v) for k, _, v in (ln.partition(": ") for ln in head.splitlines()) if v)
+    if info.get("state") != "on":
+        return None
+    today = time.strftime("%Y-%m-%d")
+    if (info.get("start") and today < info["start"]) or (info.get("end") and today > info["end"]):
+        return None
+    text = " ".join(message.split()) or info.get("subject") or "Out of office"
+    return "Out of office: " + text[:150]
 
 
 class RpcError(Exception):
@@ -5599,6 +5631,9 @@ class Chat:
             self.people = People()
         self.by_id = dict((a.id, a) for a in self.accounts)
         self.adapters = {}
+        self.ooo_away = self._ooo_option()      # [chat] ooo_away = yes: tvmail's out-of-office shows as IRC away
+        self.ooo_text = None                    # the away text wanted now (None: none)
+        self._ooo_timer = False
         # set by `floyd-daemon`: this process is the central Floyd, a headless
         # bot on the server, not a tvchat session
         self.daemon = False
@@ -5733,6 +5768,90 @@ class Chat:
         name = self.people.name_of(account.id, handle)
         return handle if not name or name.lower() == handle.lower() else "%s (%s)" % (name, handle)
 
+    # -- tvmail's out-of-office as the away message on the IRC accounts --------------
+    OOO_FIRST = 20
+    OOO_POLL = 300
+
+    @staticmethod
+    def _ooo_option():
+        c = configparser.ConfigParser(interpolation=None)
+        try:
+            c.read(_conf_path(), encoding="utf-8")
+        except configparser.Error:
+            return False
+        return _bool(c.get("chat", "ooo_away", fallback=""), False)
+
+    def ooo_start(self):
+        if self.ooo_away and not self.daemon and not self._ooo_timer:
+            self._ooo_timer = True
+            self.loop.call_later(self.OOO_FIRST, self.ooo_tick)
+
+    def ooo_tick(self):
+        irc = [a for a in self.adapters.values() if isinstance(a, IrcAdapter) and a.phase == "up"]
+        tvmail = find_tvmail_backend() if self.ooo_away else None
+        if tvmail and irc:
+            self.loop.run_in_thread(lambda: ooo_wanted(tvmail), self._ooo_done)
+        self.loop.call_later(self.OOO_POLL, self.ooo_tick)
+
+    def _ooo_done(self, res, err):
+        if err is not None:
+            _log.debug("out-of-office: %s", err)
+            return
+        changed = res != self.ooo_text
+        self.ooo_text = res
+        done = [a for a in list(self.adapters.values()) if isinstance(a, IrcAdapter) and a.phase == "up"
+                and self.ooo_apply(a)]
+        if changed and done:
+            self.events.push("notice", "out of office: %s on %d IRC account%s" % (
+                "away set" if res else "back", len(done), "" if len(done) == 1 else "s"))
+
+    def ooo_apply(self, ad):
+        """Make one IRC adapter's away status match; True if it sent something."""
+        want = self.ooo_text if self.ooo_away else None
+        if want and ad.ooo_sent != want:
+            ad.send_raw("AWAY :%s" % want)
+            ad.ooo_sent = want
+            return True
+        if not want and ad.ooo_sent:
+            ad.send_raw("AWAY")
+            ad.ooo_sent = None
+            return True
+        return False
+
+    def mail_address_for(self, conv):
+        """Where to mail what is said in this chat: the person's `email:` handle in
+        the [people] table, else (Delta Chat) their address; '' when unknown."""
+        handle = self.handle_of(conv)
+        if not handle:
+            return ""
+        name = self.people.name_of(conv.account.id, handle)
+        there = self.people.handles(name, EMAIL_HANDLE) if name else []
+        if there:
+            return there[0]
+        return handle if conv.account.protocol == "deltachat" and "@" in handle else ""
+
+    def mail_text(self, conv, to, subject, text):
+        """Mail text (lines picked from a chat) through tvmail - its account, its SMTP;
+        optional, only when tvmail is installed.  Returns at once: how it went comes
+        later as a `notice` event."""
+        to = to.strip()
+        if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", to):
+            raise UserError("%r is not an email address" % to)
+        if not text.strip():
+            raise UserError("nothing to mail")
+        tvmail = find_tvmail_backend()
+        if tvmail is None:
+            raise UserError("tvmail is not installed (it would send the mail)")
+        subject = " ".join(subject.split()) or "From %s" % (conv.title or conv.id)
+        body = "From the chat %s (%s):\n\n%s\n\n-- \nsent from tvchat\n" % (
+            conv.title, conv.account.display, text.rstrip("\n"))
+        events = self.events
+
+        def done(res, err):
+            events.push("notice", ("tvmail could not mail %s: %s" % (to, err)) if err is not None
+                        else "mailed to %s through tvmail" % to)
+        self.loop.run_in_thread(lambda: mail_text_through_tvmail(tvmail, to, subject, body), done)
+
     def send_invite(self, account, conv, channel=""):
         """Invite the person in `conv` (a chat on any IRC or Delta Chat account)
         to `account`.  With the [people] table: if they have a handle on `account`
@@ -5823,6 +5942,11 @@ class Chat:
         people = load_people(accounts)
         self.conf_error = None
         self.people = people
+        self.ooo_away = self._ooo_option()
+        self.ooo_start()
+        for ad in list(self.adapters.values()):         # switched off: the away text goes too
+            if isinstance(ad, IrcAdapter) and ad.phase == "up":
+                self.ooo_apply(ad)
         old = dict((a.id, a) for a in self.accounts)
         new = dict((a.id, a) for a in accounts)
         removed = [i for i in old if i not in new]
@@ -5920,6 +6044,7 @@ class Chat:
         """Connect the [chat] autoconnect accounts; a failure is an event."""
         if any(a.protocol == "deltachat" for a in self.accounts):
             self.loop.call_later(self.REQUEST_POLL, self.requests_tick)
+        self.ooo_start()
         for ident in self.autoconnect:
             try:
                 self.connect(self.by_id[ident])
@@ -5991,6 +6116,21 @@ def cmd_invite(a):
     ad = chat.adapter(acct)
     ad.system(ad.server_conv(), "invite link: " + link)   # to copy from the log
     sys.stdout.write(link + "\n")
+    return 0
+
+
+def cmd_mail_address(a):
+    """mail-address CONV: where to mail this chat's person ('' = unknown)."""
+    chat = _chat()
+    sys.stdout.write(chat.mail_address_for(chat.conv(a.conv)) + "\n")
+    return 0
+
+
+def cmd_mail_chat(a):
+    """mail-chat CONV ADDRESS SUBJECT TEXT: mail TEXT (escaped as `keys` takes it) through
+    tvmail; the outcome comes as a `notice` event."""
+    chat = _chat()
+    chat.mail_text(chat.conv(a.conv), a.address, a.subject, unesc(a.text))
     return 0
 
 
@@ -6497,6 +6637,8 @@ def build_parser():
     p = sub.add_parser("join"); p.add_argument("account"); p.add_argument("target"); p.set_defaults(fn=cmd_join)
     p = sub.add_parser("invite"); p.add_argument("account"); p.add_argument("channel", nargs="?", default=""); p.set_defaults(fn=cmd_invite)
     p = sub.add_parser("people"); p.set_defaults(fn=cmd_people)
+    p = sub.add_parser("mail-address"); p.add_argument("conv"); p.set_defaults(fn=cmd_mail_address)
+    p = sub.add_parser("mail-chat"); p.add_argument("conv"); p.add_argument("address"); p.add_argument("subject"); p.add_argument("text"); p.set_defaults(fn=cmd_mail_chat)
     p = sub.add_parser("invite-send"); p.add_argument("account"); p.add_argument("conv"); p.add_argument("channel", nargs="?", default=""); p.set_defaults(fn=cmd_invite_send)
     p = sub.add_parser("invites"); p.set_defaults(fn=cmd_invites)
     p = sub.add_parser("check-config"); p.add_argument("file"); p.set_defaults(fn=cmd_check_config)
