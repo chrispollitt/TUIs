@@ -3735,6 +3735,20 @@ class TestFloydDaemon(Base):
         self.hear("x", "floyd: claude hi", account="OPS")
         self.assertEqual(len(self.asked), 1)
 
+    def test_status_tells_an_admin_that_claude_is_there(self):
+        self.start()
+        self.floyd.claude_cmd = "/bin/sh"                       # a program that exists
+        self.hear("chrissy", "!status", account="chris")
+        said = " | ".join(self.other.said)
+        self.assertIn("Claude: yes - you are an admin, so ask with !claude QUESTION", said)
+        self.other.said.clear()
+        self.hear("bob", "!status")
+        self.assertIn("only his admins can ask (you are not one here)", " | ".join(self.other.said))
+        self.other.said.clear()
+        self.floyd.claude_cmd = "/nonexistent/claude"
+        self.hear("bob", "floyd: status")
+        self.assertIn("no - the program /nonexistent/claude was not found", " | ".join(self.other.said))
+
     def test_a_private_message_needs_no_prefix(self):
         self.start()
         self.hear("bob", "ask claude what time is it", account="chris", conv=self.dm)
@@ -4218,6 +4232,16 @@ class TestFloydPublic(Base):
         self.hear("bob", "!about")
         self.assertTrue(any("a bot" in s and "run by chris-pollitt" in s and "!leave" in s
                             for s in self.other.said), self.other.said)
+
+    def test_status_says_how_he_is(self):
+        self.hear("bob", "!status")
+        said = " | ".join(self.other.said)
+        self.assertIn("has been up", said)
+        self.assertIn("Level here: minimal", said)
+        self.assertIn("Claude: no - this network does not want bots that use language models", said)
+        self.assertIn("Fortunes:", said)
+        self.assertIn("listening in", said)
+        self.assertIn("run by chris-pollitt", said)
 
     def test_he_answers_to_floyd_bot_too(self):
         self.hear("bob", "floyd-bot: !about")

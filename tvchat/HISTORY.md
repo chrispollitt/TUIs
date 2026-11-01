@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **`!status` for Floyd:** at every level, five short lines - his version, how long he has been up (the
+  daemon's process) and on which networks, his level in that conversation, whether Claude is available
+  to the asker (and if not, why: the network does not allow language models, `claude = no`, not on the
+  server, program not found, admins only), whether he has the system `fortune` program or only his own,
+  and what he remembers (quotes, facts, tells waiting, people seen, conversations he listens in), plus
+  who runs him.
+
 - **Invite people (or bots) to another server:** Chat > Invite... now takes an IRC account as well as
   a Delta Chat one (a channel is optional), and when the chat shown is with a person or group on any
   IRC or Delta Chat account it can send the invitation right there (`irc://host[:port][/#channel]` or

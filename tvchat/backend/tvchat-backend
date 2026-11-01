@@ -4577,7 +4577,7 @@ class FloydMind(object):
             return self._say([(0.8, "Floyd forgot %s. Floyd forgets quickly. It was easy." % arg)])
         if cmd == "help":
             return self._say([
-                (0.8, "Floyd knows: !seen NICK, !tell NICK MESSAGE, !quote [N], !addquote TEXT, !karma [THING], someone++ / someone--, !8ball QUESTION, !fortune, !about (what he is), !leave (operators)."),
+                (0.8, "Floyd knows: !seen NICK, !tell NICK MESSAGE, !quote [N], !addquote TEXT, !karma [THING], someone++ / someone--, !8ball QUESTION, !fortune, !status (how he is), !about (what he is), !leave (operators)."),
                 (1.8, "Also !learn THING is WHAT, !forget THING, !THING, !time, !date, !coin, !roll [N], !count N, !remind 5 minutes to X. Say 'floyd: play' for Hider and Seeker."),
                 (2.8, "Useful: !calc 12*7, !convert 5 km to mi, !time in Tokyo, !todo [add X|done N], !note X / !notes, !catchup, !level [off|minimal|helpful|chatty|clippy].")])
         if cmd == "roll":
@@ -4810,6 +4810,8 @@ class FloydAdapter(CommandMixin):
             plan = self._level_cmd(conv, mind, msg, who, lm.group(1))
         elif direct and self.ABOUT_RX.match(low):    # what he is: said at every level too
             plan = mind._say([(0.8, self._about(conv))])
+        elif direct and self.STATUS_RX.match(low):   # how he is doing: also at every level
+            plan = self._status(conv, msg, mind)
         elif direct and self.LEAVE_RX.match(low):    # an operator can always send him away
             plan = self._leave(conv, msg, who, mind)
         elif lvl == "off":
@@ -4912,6 +4914,55 @@ class FloydAdapter(CommandMixin):
         return ("Floyd is a bot (tvchat's Floyd)%s. He answers !commands and when he is spoken to by name. "
                 "Channel operators: !leave sends him away, !level off keeps him quiet." %
                 (", run by %s" % who if who else ""))
+
+    STATUS_RX = re.compile(r"^!?\s*status\W*$", re.I)
+
+    @staticmethod
+    def _span(secs):
+        """3d 4h, 2h 5m, 7m, 40s: how long, roughly."""
+        secs = int(max(secs, 0))
+        d, rest = divmod(secs, 86400)
+        h, rest = divmod(rest, 3600)
+        m, sec = divmod(rest, 60)
+        if d:
+            return "%dd %dh" % (d, h)
+        if h:
+            return "%dh %dm" % (h, m)
+        return "%dm" % m if m else "%ds" % sec
+
+    def _claude_state(self, conv, sender):
+        """Can he ask Claude here, and may this asker?  One short sentence."""
+        if not _bool(conv.account.opts.get("llm"), True):
+            return "no - this network does not want bots that use language models"
+        if not self.claude:
+            return "no - it is off in his configuration"
+        if not self.chat.daemon:
+            return "no - he is not running on the server"
+        cmd = self.claude_cmd
+        if not (shutil.which(cmd) or (os.path.isfile(cmd) and os.access(cmd, os.X_OK))):
+            return "no - the program %s was not found" % cmd
+        who = "you are an admin, so ask with !claude QUESTION" if self.is_admin(sender) else             "only his admins can ask (you are not one here)"
+        return "yes%s - %s" % (", busy with a question" if self.claude_busy else "", who)
+
+    def _status(self, conv, msg, mind):
+        """!status: level, Claude, fortunes, uptime and what else is worth knowing, in five lines."""
+        lvl = self.level_of(conv)
+        up = self._span(time.time() - getattr(self.chat, "started", time.time()))
+        nets = [a.display for a in self.chat.accounts
+                if a.protocol in ("irc", "mail", "deltachat") and a.state == "connected"]
+        fort = mind.fortune_prog()
+        d = self.memory.data
+        return mind._say([
+            (0.8, "Floyd %s has been up %s%s. Level here: %s (%s)." % (
+                __version__, up, " on " + ", ".join(nets) if nets else "", lvl, tvf.LEVEL_BLURB[lvl])),
+            (1.6, "Claude: %s." % self._claude_state(conv, msg.sender)),
+            (2.4, "Fortunes: %s." % ("the system's fortune program (%s)" % fort if fort
+                                     else "his own, built in - no fortune program is installed")),
+            (3.2, "He remembers %d quotes, %d facts, %d tells waiting, %d people seen; listening in %d conversations." % (
+                len(d["quotes"]), len(d["facts"]), len(d["tells"]), len(d["seen"]),
+                sum(1 for a in self.chat.accounts for c in a.convs.values() if self.attached(c)))),
+            (4.0, "He is a bot%s. !about says more, !help lists his commands." % (
+                (", run by " + self._contact(conv)) if self._contact(conv) else ""))])
 
     OPS = frozenset(("owner", "admin", "op"))
 
@@ -5941,6 +5992,7 @@ def check_config(path):
 class Chat:
     def __init__(self, loop=None, clock=time.time):
         self.loop = loop or Loop()
+        self.started = time.time()       # for Floyd's !status
         self.events = EventQueue(clock)
         # A broken tvchat.conf must not kill the co-process before its banner
         # (tvchat would just see a dead backend); keep the complaint and give

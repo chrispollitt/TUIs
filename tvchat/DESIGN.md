@@ -352,7 +352,7 @@ bot, run by `contact =`, `!leave`, `!level off`); the CTCP VERSION answer and th
 same. `on_KICK` of us and `part()` call `forget_channel()`: the conversation and the autojoin entry go, so
 a reconnect does not take him back.
 
-In `FloydAdapter`: `!about` and `!leave` are heard at every level (like `!level`). `!leave` (channels only)
+In `FloydAdapter`: `!about`, `!status` (`_status`: five lines from `level_of`, `_claude_state`, `mind.fortune_prog()`, the memory counts and `Chat.started`) and `!leave` are heard at every level (like `!level`). `!leave` (channels only)
 is for his admins and for the channel's operators - by the role the server gave them in NAMES
 (`_is_chan_op`), not by anything said; it parts after 3 s. `llm = no` on the account makes `_order` refuse
 `!claude` before looking at who asks, and `level =` on the account sits between a conversation's `!level`
