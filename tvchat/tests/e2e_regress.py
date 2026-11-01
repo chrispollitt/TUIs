@@ -326,6 +326,23 @@ def chat_spool_sends_direct_messages_to_tvmail(opts):
 
 
 @case()
+def chat_shows_when_you_are_an_op(opts):
+    # the server says we hold @ in the channel (NAMES): the list and the heading show it; -o takes it away
+    tv, srv = chat_tv(opts)
+    c = Case(tv)
+    started(tv, c)
+    open_chat(tv, c, srv)
+    c.check(not tv.has("@#e2e"), "a plain member is shown as an operator")
+    srv.say(":srv 005 tester PREFIX=(ov)@+ CHANTYPES=# :are supported",
+            ":srv 353 tester = #e2e :@tester alice", ":srv 366 tester #e2e :End of NAMES")
+    c.check(tv.wait("@#e2e", 5), "the list does not mark the channel we operate")
+    c.check(tv.wait(lambda: chat_heading(tv, "@#e2e " + chr(0x2014) + " Fake") is not None, 3), "the heading does not show that we are an op")
+    srv.say(":srv 353 tester = #e2e :tester alice", ":srv 366 tester #e2e :End of NAMES")
+    c.check(tv.wait(lambda: not tv.has("@#e2e"), 5), "the mark stayed after we lost operator status")
+    return tv
+
+
+@case()
 def chat_share_from_tvmail(opts):
     # tvmail asks (a request file) to share a message in chat: a toast says so, nothing is said
     # until you agree in Chat > Share from tvmail..., where the text can be changed first

@@ -50,6 +50,15 @@ std::string menuSafe(std::string s)
     return s;
 }
 
+// "@" for a channel we operate (owner, admin or op), "%" half-op, "+" voiced: the IRC marks, in front of
+// the name; nothing for a plain member or anything that is not a channel.
+std::string roleMark(const ChatConv &c)
+{
+    if (c.role == "owner" || c.role == "admin" || c.role == "op")
+        return "@";
+    return c.role == "halfop" ? "%" : c.role == "voice" ? "+" : std::string();
+}
+
 // What a conversation is called: "#channel — Libera", a contact's name for
 // a query, "Libera (server)" for the network's own window.  Empty when the
 // model no longer has it (left, or the backend lost it).
@@ -65,7 +74,7 @@ std::string convName(const std::string &conv)
         return acct + " (server)";
     if (it->second.kind == "direct")
         return it->second.title;
-    return it->second.title + " \xE2\x80\x94 " + acct; // em dash
+    return roleMark(it->second) + it->second.title + " \xE2\x80\x94 " + acct; // em dash
 }
 
 const ChatConv *convOf(const std::string &conv)
@@ -658,7 +667,7 @@ public:
             return;
         }
         const ChatConv &c = it->second;
-        std::string t = c.kind == "server" ? std::string("* server messages") : c.title;
+        std::string t = c.kind == "server" ? std::string("* server messages") : roleMark(c) + c.title;
         if (c.kind != "server" && c.unread > 0)
             t += " (" + std::to_string(c.unread) + ")";
         if (c.state == "incoming")
@@ -1206,6 +1215,19 @@ class TChatMainWindow : public TWindow
         }
         else if (t == "typing" && f.size() >= 3 && f[1] == conv)
             render(log->atBottom() ? -1 : log->firstShownLine(), true);
+        // our standing in a channel changed (@ op, % half-op, + voice): the list and the heading show it
+        else if (t == "role" && f.size() >= 3)
+        {
+            convs->drawView();
+            if (f[1] == conv)
+            {
+                updateTitles();
+                const char *what = f[2] == "owner" || f[2] == "admin" || f[2] == "op" ? "you are an operator here"
+                                   : f[2] == "halfop" ? "you are a half-operator here"
+                                   : f[2] == "voice"  ? "you have voice here" : "you are a plain member here";
+                note(what);
+            }
+        }
         // the server's own history (IRCv3 chathistory) was merged in:
         // "latest" on joining - read it all again; "before" - what PgUp
         // at the top asked the server for has come

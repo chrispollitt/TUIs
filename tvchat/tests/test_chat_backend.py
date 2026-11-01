@@ -1299,6 +1299,108 @@ class TestShare(IrcBase):
         self.assertTrue(any("set [chat] share_to = ACCOUNT:#channel" in f[1] for f in self.events("notice")))
 
 
+class TestChannelRole(IrcBase):
+    """tvchat knows when we are an operator (or voiced) in a channel."""
+
+    def test_role_follows_names_and_modes(self):
+        def script(srv):
+            welcome(srv)
+            srv.expect("JOIN #Test")
+            srv.send(":tester!u@h JOIN #Test")
+            srv.send(":srv 353 tester = #Test :@tester alice")
+            srv.send(":srv 366 tester #Test :End of /NAMES list.")
+            srv.send(":alice!a@h MODE #Test -o tester")
+            srv.expect("NAMES #Test")
+            srv.send(":srv 353 tester = #Test :+tester alice")
+            srv.send(":srv 366 tester #Test :End of /NAMES list.")
+            srv.expect("QUIT")
+
+        self.setup_irc(script)
+        self.verb("connect", "libera")
+        roles = lambda: [f[1:] for f in self.events("role")]
+        self.turn(lambda: ("libera/#test", "op") in roles())
+        self.assertEqual(self.verb("roles"), (0, b"libera/#test\top\n"))
+        # -o: the role is asked again and comes back as voice
+        self.turn(lambda: ("libera/#test", "voice") in roles())
+        self.assertEqual(self.verb("roles"), (0, b"libera/#test\tvoice\n"))
+        self.verb("disconnect", "libera")
+        self.chat.close()
+
+
+class TestBotOnAPublicNetwork(IrcBase):
+    """bot = yes: joins only when its administrators invite it, says what it is, and does not
+    come back where it was kicked."""
+
+    def test_invitations_labels_and_kicks(self):
+        got = {}
+
+        def script(srv):
+            srv.expect("CAP LS 302")
+            srv.send(":srv CAP * LS :")
+            srv.expect("CAP END")
+            got["user"] = srv.expect("USER ")
+            srv.send(":srv 001 tester :Welcome")
+            srv.send(":srv 005 tester CASEMAPPING=rfc1459 CHANTYPES=# PREFIX=(ov)@+ :are supported")
+            # an administrator's invitation, vouched for by the account tag: joined, greeted once
+            srv.send("@account=Chris-Pollitt :chris!c@h INVITE tester #tvmail-test")
+            got["join"] = srv.expect("JOIN #tvmail-test")
+            srv.send(":tester!u@h JOIN #tvmail-test")
+            got["hello"] = srv.expect("PRIVMSG #tvmail-test :")
+            # a stranger's: not joined, told why
+            srv.send("@account=mallory :mal!m@h INVITE tester #nope")
+            got["sorry"] = srv.expect("NOTICE mal :")
+            # no account tag: the server is asked who they are
+            srv.send(":bob!b@h INVITE tester #viawhois")
+            srv.expect("WHOIS bob")
+            srv.send(":srv 330 tester bob Chris-Pollitt :is logged in as")
+            srv.send(":srv 318 tester bob :End of /WHOIS list.")
+            got["whois"] = srv.expect("JOIN #viawhois")
+            srv.send(":eve!e@h INVITE tester #anon")
+            srv.expect("WHOIS eve")
+            srv.send(":srv 318 tester eve :End of /WHOIS list.")
+            got["anon"] = srv.expect("NOTICE eve :")
+            # asked who it is
+            srv.send(":x!x@h PRIVMSG tester :\x01VERSION\x01")
+            got["version"] = srv.expect("NOTICE x :")
+            # kicked: gone for good
+            srv.send(":chris!c@h KICK #tvmail-test tester :bye")
+            srv.expect("QUIT")
+
+        self.setup_irc(script, """bot = yes
+            contact = chris-pollitt
+            invite_from = chris-pollitt""")
+        self.verb("connect", "libera")
+        self.turn(lambda: "version" in got)
+        self.assertIn("tester - a bot, run by chris-pollitt", got["user"])
+        self.assertTrue(got["hello"].partition(" :")[2].startswith("Hello! I'm tester, a bot run by chris-pollitt."),
+                        got["hello"])
+        self.assertIn("I join a channel only when my administrators invite me (chris-pollitt)", got["sorry"])
+        self.assertNotIn("JOIN #nope", self.srv.got)
+        self.assertIn("I join a channel only when my administrators invite me", got["anon"])
+        self.assertNotIn("JOIN #anon", self.srv.got)
+        self.assertIn("a bot (tvchat", got["version"])
+        self.assertIn("run by chris-pollitt", got["version"])
+        ad = self.chat.adapter(self.acct)
+        self.turn(lambda: "libera/#tvmail-test" not in self.acct.convs)
+        self.assertNotIn("#tvmail-test", ad.channels)          # not rejoined at the next connect
+        self.verb("disconnect", "libera")
+        self.chat.close()
+
+    def test_policy_defaults(self):
+        self.setup_irc(lambda srv: None)
+        ad = self.chat.adapter(self.acct)
+        self.assertEqual(ad.invite_policy(), "no")                       # a session: a note
+        self.chat.daemon = True
+        self.assertEqual(ad.invite_policy(), "any")                      # the LAN's Floyd
+        ad.bot = True
+        self.assertEqual(ad.invite_policy(), "ops")                      # a bot account
+        self.acct.opts["join_invites"] = "yes"
+        self.assertEqual(ad.invite_policy(), "any")
+        self.acct.opts["join_invites"] = "ops"
+        ad.bot = False
+        self.assertEqual(ad.invite_policy(), "ops")
+
+
 class TestIrcHardening(IrcBase):
     def test_a_missing_cafile_is_said_in_words_and_tilde_is_home(self):
         srv = FakeIrc(lambda s: None)
@@ -4020,6 +4122,96 @@ class TestFloydDaemonProcess(IrcBase):
         self.assertIn("net: connected", err)                 # the journal says when he is on
         self.assertIn("net: joined #lobby", err)
         self.assertIn("net: server: #closed Cannot join channel (+i)", err)   # a refused JOIN is in the journal
+
+
+class TestFloydPublic(Base):
+    """Floyd on a public network: says what he is, is sent away by operators, no language model."""
+
+    CONF = """\
+        [account:floyd]
+        protocol = floyd
+        idle     = 0
+        seed     = 5
+        memory   = none
+        tag      =
+        attach   = net/*
+        admins   = chris
+        claude   = yes
+        level    = chatty
+
+        [account:net]
+        protocol = irc
+        host     = irc.example.org
+        contact  = chris-pollitt
+        llm      = no
+        level    = minimal
+        """
+
+    class Other(TestFloydAttached.Other):
+        def __init__(self, chat, account):
+            TestFloydAttached.Other.__init__(self, chat, account)
+            self.parted = []
+
+        def lower(self, s):
+            return s.lower()
+
+        def part(self, conv):
+            self.parted.append(conv.id)
+
+    def setUp(self):
+        Base.setUp(self)
+        self.conf(self.CONF)
+        self.clk = FakeClock(1000.0)
+        self.chat = cb.Chat(loop=cb.Loop(self.clk), clock=self.clk)
+        self.chat.daemon = True
+        self.net = self.chat.account("net")
+        self.other = self.chat.adapters["net"] = self.Other(self.chat, self.net)
+        self.conv = self.chat.ensure_conv(self.net, "#room", "channel")
+        self.dm = self.chat.ensure_conv(self.net, "bob", "direct")
+        self.conv.members["opal"] = ("opal", "opal", "op")
+        self.conv.members["vera"] = ("vera", "vera", "voice")
+        self.floyd = self.chat.floyd()
+        self.chat.connect(self.chat.account("floyd"))
+        self.asked = []
+        self.floyd._run_claude = lambda argv, prompt: self.asked.append(prompt) or "four"
+
+    def hear(self, who, text, account=None, conv=None):
+        conv = conv or self.conv
+        msg = cb.Message("m%d" % len(conv.history), conv.id, self.clk.t,
+                         cb.Contact(who, account=account), text, "")
+        self.chat.add_message(conv, msg)
+        for _ in range(60):
+            self.clk.t += 0.25
+            self.chat.loop.run_due()
+
+    def test_he_says_what_he_is_at_any_level(self):
+        self.hear("bob", "!about")
+        self.assertTrue(any("a bot" in s and "run by chris-pollitt" in s and "!leave" in s
+                            for s in self.other.said), self.other.said)
+
+    def test_an_operator_or_an_admin_can_send_him_away(self):
+        self.hear("vera", "!leave")                                  # only voiced: no
+        self.hear("bob", "floyd: leave")
+        self.assertEqual(self.other.parted, [])
+        self.assertTrue(any("Only this channel's operators" in s for s in self.other.said))
+        self.hear("opal", "!leave")                                  # an operator: yes
+        self.assertEqual(self.other.parted, ["net/#room"])
+        self.other.parted.clear()
+        self.hear("somebody", "!leave", account="chris")             # his admin, by the server's word
+        self.assertEqual(self.other.parted, ["net/#room"])
+
+    def test_leave_means_a_channel(self):
+        self.hear("bob", "!leave", conv=self.dm)
+        self.assertEqual(self.other.parted, [])
+        self.assertTrue(any("only leave channels" in s for s in self.other.said))
+
+    def test_no_language_model_where_the_account_says_no(self):
+        self.hear("chrissy", "!claude what is 2+2?", account="chris")
+        self.assertEqual(self.asked, [])
+        self.assertTrue(any("can't ask Claude here" in s for s in self.other.said), self.other.said)
+
+    def test_the_account_sets_his_level(self):
+        self.assertEqual(self.floyd.level_of(self.conv), "minimal")
 
 
 class TestVersions(unittest.TestCase):

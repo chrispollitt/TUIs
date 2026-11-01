@@ -338,6 +338,33 @@ so the command line carries `--strict-mcp-config --mcp-config '{"mcpServers":{}}
 Claude offered to use Google Drive). Tests: `TestFloydDaemon` (with `_run_claude` replaced, and with fake `claude` scripts) and
 `TestFloydDaemonProcess` (the real process against a fake IRC server that sends account tags).
 
+## Floyd as a bot on a public network
+
+`bot = yes` on an `irc` account (Floyd on Libera.Chat, whose bot policy asks for permission, a label and
+an accountable administrator). `invite_policy()` is `any` (the LAN's daemon: join every invitation),
+`no` (a session) or `ops` (a bot: the default for `bot = yes`; or `join_invites = ops`). Under `ops`
+`on_INVITE` reads the IRCv3 account tag; with none (a server that does not tag INVITE) it sends `WHOIS`
+and decides on the `330` (logged in as) / `318` (end) that comes back - `vetting` holds the nick and
+channel meanwhile. `vet_invite` joins when the account is in `invite_accounts()` (`invite_from =`, else
+the admins of every `floyd` account) and otherwise sends the inviter a NOTICE saying why not; nothing
+is joined to look. A channel joined by invitation is greeted once (`join_notice()`, 2 s after the JOIN: a
+bot, run by `contact =`, `!leave`, `!level off`); the CTCP VERSION answer and the default realname say the
+same. `on_KICK` of us and `part()` call `forget_channel()`: the conversation and the autojoin entry go, so
+a reconnect does not take him back.
+
+In `FloydAdapter`: `!about` and `!leave` are heard at every level (like `!level`). `!leave` (channels only)
+is for his admins and for the channel's operators - by the role the server gave them in NAMES
+(`_is_chan_op`), not by anything said; it parts after 3 s. `llm = no` on the account makes `_order` refuse
+`!claude` before looking at who asks, and `level =` on the account sits between a conversation's `!level`
+and his own `level =` in `level_of()`. Tests: `TestBotOnAPublicNetwork` (against a fake server),
+`TestFloydPublic`.
+
+**Our own role.** `IrcAdapter.my_role()` reads our entry in `conv.members` (filled by NAMES, refreshed by
+`on_MODE`, which asks for NAMES again); `role_check()` (at the end of NAMES, on JOIN, PART and KICK) pushes
+`role CONV ROLE` when it changes and `Conversation.role` keeps it; `roles` lists it for a UI that was
+restarted. The UI (`ChatConv.role`) marks the conversation list and the heading with `roleMark()`: `@`
+owner/admin/op, `%` halfop, `+` voice.
+
 ## Delta Chat adapter
 
 `DeltaChatAdapter`: not a reimplementation - the official core,

@@ -117,6 +117,14 @@ bool ChatClient::sync()
                 convMap[f[0]] = {f[0], f[1], f[3], std::atoi(f[2].c_str()), "",
                                  f.size() > 4 ? f[4] : "", ""};
         }
+    if (request("roles", body, st) && st == 0)   // our standing in each channel (events keep it up to date)
+        for (const std::string &ln : splitLines(body))
+        {
+            std::vector<std::string> f = chatFields(ln);
+            auto it = f.size() >= 2 ? convMap.find(f[0]) : convMap.end();
+            if (it != convMap.end())
+                it->second.role = f[1];
+        }
     // the generation is read last: a restart during the calls above shows up
     // as a mismatch on the next poll and the model is read again
     gen = chatBackend().generation();
@@ -220,6 +228,12 @@ void ChatClient::apply(const ChatEvent &ev)
     }
     else if (t == "conv-gone" && f.size() >= 2)
         convMap.erase(f[1]);
+    else if (t == "role" && f.size() >= 3)
+    {
+        auto it = convMap.find(f[1]);
+        if (it != convMap.end())
+            it->second.role = f[2];
+    }
     else if (t == "topic" && f.size() >= 3)
     {
         auto it = convMap.find(f[1]);

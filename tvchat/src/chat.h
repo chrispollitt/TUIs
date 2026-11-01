@@ -19,6 +19,7 @@ struct ChatConv
     std::string topic;  // from `topic` events only: `convs` does not carry it
     std::string state;  // a talk call: calling, ringing, incoming, connected, ended
     std::string typing; // a talk call: the other side's unfinished line
+    std::string role;   // IRC channel: our standing - owner, admin, op, halfop, voice; empty for none
 };
 
 // One event from `events`: its sequence number and its fields, unescaped.

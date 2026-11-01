@@ -18,6 +18,21 @@
   an IRC command. New backend verbs `shares`, `share-send`, `share-drop`; the requests directory is now
   read whenever tvchat runs, not only with a Delta Chat account.
 
+- **tvchat knows when you are a channel operator:** the conversation list and the heading show `@`
+  in front of a channel you operate (`%` half-op, `+` voice), and a note says when it changes (new
+  `role` event, `roles` verb; it follows NAMES and mode changes).
+
+- **Floyd on a public network, by its rules (Libera.Chat):** an IRC account with `bot = yes` joins a
+  channel only when one of his administrators invites him (`invite_from =`, default the admins of the
+  Floyd account), checked by the services account the server vouches for (the IRCv3 account tag, else
+  a WHOIS), and refuses anyone else politely; says what he is on joining (a bot, who runs it, `!leave`,
+  `!level off`); answers CTCP VERSION and carries a realname as a bot run by `contact =`; goes away on `!leave`
+  from the channel's operators (or his admins) and never comes back where he was kicked or sent away.
+  `llm = no` on the account keeps `!claude` off there (Libera does not want bots that use language
+  models); `level =` on the account sets how much he does there. New for everyone: `!about` says what
+  Floyd is, and his old "not allowed on the real servers" line now says he goes only where his people ask
+  and the channel's people say yes. `join_invites = ops` is the policy by itself.
+
 - **Notes between tvmail and tvchat:** the two are full-screen apps, so one is usually out of
   sight. Errors, and what you would want to know anyway (a message written to you, an invitation to
   answer, new mail in tvmail), are left for the other app as small files (`tvcommon/src/spool.cpp`,

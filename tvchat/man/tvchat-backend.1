@@ -209,6 +209,25 @@ after a value is part of the value.
 connects those accounts when
 .B serve
 starts.
+.B bot = yes
+on an IRC account is for a bot on a public network: it joins a channel only when one of
+.B invite_from =
+(default: the admins of the Floyd account) invites it, as the server vouches (account tag or WHOIS),
+says what it is on joining, answers CTCP VERSION as a bot run by
+.BR contact = ,
+and never returns where it was kicked or sent away.
+.B llm = no
+keeps Floyd's !claude off that account's conversations and
+.B level =
+sets how much he does there.
+.B join_invites = yes | no | ops
+chooses what an INVITE does; the invitation, the greeting (\fBjoin_notice =\fR) and the label are as above.
+.B roles
+prints our standing (owner, admin, op, halfop, voice) in each channel, one
+.IR "conv role" ;
+the
+.B role
+event says when it changes.
 .B share_to =
 .I ACCOUNT:#channel
 is where tvmail's \(lqShare in chat\(rq is said, once you agree in tvchat (\fBshares\fR lists what waits,

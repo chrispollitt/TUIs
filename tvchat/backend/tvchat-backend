@@ -244,6 +244,8 @@ class Conversation:
         # a talk call's state (talk accounts only): calling, ringing (them),
         # incoming (us), connected, ended - "" when there has been no call
         self.state = ""
+        # our own standing in a channel (IRC): owner, admin, op, halfop, voice - "" for none
+        self.role = ""
 
     def wire(self):
         return line(*self.fields())
@@ -1118,11 +1120,19 @@ class IrcAdapter(CommandMixin):
         self.cafile = os.path.expanduser((o.get("cafile") or "").strip()) or None
         self.want_nick = (o.get("nick") or "").strip() or _me()
         self.username = (o.get("username") or "").strip() or self.want_nick
-        self.realname = (o.get("realname") or "").strip() or self.want_nick
+        self.realname = (o.get("realname") or "").strip() or (
+            "%s - a bot, run by %s" % (self.want_nick, o["contact"].strip())
+            if _bool(o.get("bot"), False) and (o.get("contact") or "").strip() else self.want_nick)
         self.sasl_user = (o.get("sasl") or "").strip()
         self.channels = [c.strip() for c in (o.get("channels") or "").split(",")
                          if c.strip()]
         self.invites = {}                # lower-case sender -> {"from", "channel"}: irc:// links sent to us
+        # a bot account (bot = yes, like Floyd on a public network) takes care: it joins only when its
+        # administrators invite it, says what it is on joining, and never goes back where it was kicked
+        self.bot = _bool(o.get("bot"), False)
+        self.contact = (o.get("contact") or "").strip()      # who runs it, for the label
+        self.invited_to = {}             # lower-case channel -> who invited us (greeted once on joining)
+        self.vetting = {}                # lower-case nick -> channel: an invitation awaiting WHOIS
         self.gen = 0                     # bumped on close: stale callbacks no-op
         self._ids = 0
         self.raw_tap = None              # irc-tail --raw: fn(direction, line)
@@ -1653,6 +1663,13 @@ class IrcAdapter(CommandMixin):
             conv = self.find_conv(p[1])
             if conv is not None:
                 self.chat.events.push("members", conv.id)
+                self.role_check(conv)
+        elif n == "330" and len(p) >= 3 and self.lower(p[1]) in self.vetting:
+            # WHOIS for an invitation we are weighing: "NICK is logged in as ACCOUNT"
+            self.vet_invite(p[1], self.vetting.pop(self.lower(p[1])), p[2])
+        elif n == "318" and len(p) >= 2 and self.lower(p[1]) in self.vetting:
+            # end of that WHOIS and no 330 came: not logged in to services
+            self.vet_invite(p[1], self.vetting.pop(self.lower(p[1])), "")
         elif n in ("333", "329", "315", "352", "900", "901"):
             if n == "900":
                 self.system(self.server_conv(), p[-1])
@@ -1708,7 +1725,13 @@ class IrcAdapter(CommandMixin):
             conv = self.conv_for(chan, "channel")
             conv.title = chan
             conv.members.clear()
+            self.role_check(conv)
             self.fetch_history(conv, "latest")   # what was said before (or while away)
+            inviter = self.invited_to.pop(self.lower(chan), None)
+            if inviter and self.bot:             # invited: say what we are, once
+                gen = self.gen
+                self.loop.call_later(2.0, lambda: gen == self.gen and self.phase == "up" and
+                                     self._say(conv, self.join_notice(inviter)))
         else:
             conv = self.find_conv(chan)
             if conv is None:
@@ -1717,25 +1740,101 @@ class IrcAdapter(CommandMixin):
             self.chat.events.push("members", conv.id)
         self.system(conv, "%s has joined %s" % (m.nick, chan), self.when(m))
 
+    def invite_policy(self):
+        """What to do with an INVITE to us: 'any' (join), 'no' (a note; /join accepts) or
+        'ops' (a bot's care: join only when one of its administrators invites).
+        join_invites = yes | no | ops; unset: a bot account is 'ops', the central
+        Floyd 'any' (as on the LAN), a session 'no'."""
+        v = (self.account.opts.get("join_invites") or "").strip().lower()
+        if v == "ops":
+            return "ops"
+        if v:
+            return "any" if _bool(v, False) else "no"
+        if self.bot:
+            return "ops"
+        return "any" if self.chat.daemon else "no"
+
+    def invite_accounts(self):
+        """The services accounts whose invitation counts under 'ops': invite_from =, else
+        the admins of the Floyd accounts (the people who answer for the bot)."""
+        def names(s):
+            return set(x.strip().lower() for x in (s or "").split(",") if x.strip())
+        explicit = names(self.account.opts.get("invite_from"))
+        if explicit:
+            return explicit
+        out = set()
+        for a in self.chat.accounts:
+            if a.protocol == "floyd":
+                out |= names(a.opts.get("admins"))
+        return out
+
     def on_INVITE(self, m):
         # INVITE <target> <channel>: only ours matter.  The central Floyd takes
-        # every invitation (that is how he is asked into a new channel); in a
-        # session it is a note, unless join_invites = yes.
+        # every invitation on the LAN (that is how he is asked into a new channel); a
+        # bot on a public network only from its administrators (checked by the services
+        # account the server vouches for - the IRCv3 account tag, else a WHOIS);
+        # in a session it is a note, unless join_invites = yes.
         if len(m.params) < 2 or not self.is_me(m.params[0]):
             return
         chan = m.params[1]
-        join = self.chat.daemon or _bool(self.account.opts.get("join_invites"), False)
+        policy = self.invite_policy()
+        if policy == "ops":
+            acct = (m.tags.get("account") or "").strip()
+            if acct or not self.invite_accounts():
+                self.vet_invite(m.nick, chan, acct)
+            else:
+                self.vetting[self.lower(m.nick)] = chan
+                self.send_raw("WHOIS %s" % m.nick)
+            return
+        join = policy == "any"
         self.system(self.server_conv(), "%s invites you to %s%s" % (
             m.nick, chan, " - joining" if join else " (/join %s to accept)" % chan),
             self.when(m))
         if join and self.find_conv(chan) is None:
             self.send_raw("JOIN %s" % chan)
 
+    def vet_invite(self, nick, chan, account):
+        """A bot's invitation, once we know who the server says the inviter is."""
+        if account and account.lower() in self.invite_accounts():
+            self.system(self.server_conv(), "%s (account %s) invites you to %s - joining" % (nick, account, chan))
+            self.invited_to[self.lower(chan)] = nick
+            if self.find_conv(chan) is None:
+                self.send_raw("JOIN %s" % chan)
+            return
+        self.system(self.server_conv(), "%s%s invites you to %s - not joining: I join only when my administrators "
+                    "invite me" % (nick, " (account %s)" % account if account else " (not logged in)", chan))
+        self.send_raw("NOTICE %s :Sorry, I join a channel only when my administrators invite me%s."
+                      % (nick, " (%s)" % self.contact if self.contact else ""))
+
+    def join_notice(self, inviter):
+        """What a bot says on joining a channel it was invited to: what it is, who answers for it,
+        and how an operator quiets it or sends it away (the network asks bots to say so)."""
+        mine = (self.account.opts.get("join_notice") or "").strip()
+        if mine:
+            return mine
+        return ("Hello! I'm %s, a bot%s. I answer !commands and when I'm spoken to by name. Channel "
+                "operators: say !leave and I go, or !level off and I stay quiet." % (
+                    self.nick, " run by %s" % self.contact if self.contact else ""))
+
+    def my_role(self, conv):
+        """Our own standing in a channel: owner, admin, op, halfop, voice - or '' (a plain member)."""
+        ent = conv.members.get(self.lower(self.nick))
+        return ent[2] if ent and ent[2] != "member" else ""
+
+    def role_check(self, conv):
+        """Tell the UI when our role in the channel has changed ('role CONV ROLE')."""
+        role = self.my_role(conv)
+        if role != conv.role:
+            conv.role = role
+            self.chat.events.push("role", conv.id, role)
+
     def on_PART(self, m):
         conv = self.find_conv(m.params[0]) if m.params else None
         if conv is None:
             return
         if self.is_me(m.nick):
+            conv.members.clear()
+            self.role_check(conv)
             self.chat.remove_conv(conv)
             return
         conv.members.pop(self.lower(m.nick), None)
@@ -1752,9 +1851,20 @@ class IrcAdapter(CommandMixin):
         conv.members.pop(self.lower(victim), None)
         if self.is_me(victim):
             conv.members.clear()
+            self.role_check(conv)
         self.chat.events.push("members", conv.id)
         self.system(conv, "%s was kicked by %s (%s)" % (victim, m.nick, why),
                     self.when(m))
+        if self.is_me(victim) and self.bot:      # a bot takes the hint: never back unless invited again
+            self.forget_channel(conv)
+            self.system(self.server_conv(), "kicked from %s by %s (%s): not going back unless invited again"
+                        % (conv.title, m.nick, why))
+
+    def forget_channel(self, conv):
+        """Leave no trace that would take us back: the conversation and the autojoin entry."""
+        low = self.lower(conv.title)
+        self.channels = [c for c in self.channels if self.lower(c) != low]
+        self.chat.remove_conv(conv)
 
     def on_QUIT(self, m):
         why = m.params[0] if m.params else ""
@@ -1877,8 +1987,10 @@ class IrcAdapter(CommandMixin):
             if verb.upper() != "ACTION":
                 if verb.upper() == "VERSION" and not notice and not self.is_me(m.nick) \
                         and into is None:
-                    self.send_raw("NOTICE %s :\x01VERSION tvchat %s\x01"
-                                  % (m.nick, __version__))
+                    self.send_raw("NOTICE %s :\x01VERSION %s\x01" % (m.nick, (
+                        "%s - a bot (tvchat %s)%s" % (self.nick, __version__,
+                                                      ", run by %s" % self.contact if self.contact else "")
+                        if self.bot else "tvchat %s" % __version__)))
                 return
             text, flags = rest, flags + "a"
         mine = self.is_me(m.nick)
@@ -1984,6 +2096,8 @@ class IrcAdapter(CommandMixin):
             raise UserError("the server window cannot be left - disconnect instead")
         if conv.kind == "channel" and self.phase == "up":
             self.send_raw("PART %s" % conv.title)
+        if self.bot:
+            self.forget_channel(conv)    # sent away: not back at the next connect
         self.chat.remove_conv(conv)
 
     def speak(self, conv, text):
@@ -4069,7 +4183,7 @@ class FloydMind(object):
             "Floyd remembers a lot of things. Floyd is a good guy. Floyd would do anything for a friend. Anything.",
             "That is a long story. Floyd doesn't like the ending much. Let's play hider and seeker instead.")),
         (r"\b(chat|irc|server|channel|network|tvchat)\b", (
-            "Floyd likes chat! Everybody talks and nobody has to be in the same room. Floyd is not allowed on the real servers. Floyd is only allowed here.",)),
+            "Floyd likes chat! Everybody talks and nobody has to be in the same room. Floyd goes to a real server only when his people ask him, and the people who run the channel have to say yes. Floyd is polite about that.",)),
         (r"\b(help|stuck|confused|don'?t know)\b", (
             "Floyd will help! Floyd doesn't know how, but Floyd will help anyway. That's what friends do.",)),
         (r"\b(bye|goodbye|good ?night|see you|gotta go|later)\b", (
@@ -4463,7 +4577,7 @@ class FloydMind(object):
             return self._say([(0.8, "Floyd forgot %s. Floyd forgets quickly. It was easy." % arg)])
         if cmd == "help":
             return self._say([
-                (0.8, "Floyd knows: !seen NICK, !tell NICK MESSAGE, !quote [N], !addquote TEXT, !karma [THING], someone++ / someone--, !8ball QUESTION, !fortune."),
+                (0.8, "Floyd knows: !seen NICK, !tell NICK MESSAGE, !quote [N], !addquote TEXT, !karma [THING], someone++ / someone--, !8ball QUESTION, !fortune, !about (what he is), !leave (operators)."),
                 (1.8, "Also !learn THING is WHAT, !forget THING, !THING, !time, !date, !coin, !roll [N], !count N, !remind 5 minutes to X. Say 'floyd: play' for Hider and Seeker."),
                 (2.8, "Useful: !calc 12*7, !convert 5 km to mi, !time in Tokyo, !todo [add X|done N], !note X / !notes, !catchup, !level [off|minimal|helpful|chatty|clippy].")])
         if cmd == "roll":
@@ -4694,6 +4808,10 @@ class FloydAdapter(CommandMixin):
         lm = self.LEVEL_RX.match(body) if direct else None
         if lm:                           # heard at every level, off included
             plan = self._level_cmd(conv, mind, msg, who, lm.group(1))
+        elif direct and self.ABOUT_RX.match(low):    # what he is: said at every level too
+            plan = mind._say([(0.8, self._about(conv))])
+        elif direct and self.LEAVE_RX.match(low):    # an operator can always send him away
+            plan = self._leave(conv, msg, who, mind)
         elif lvl == "off":
             return
         else:
@@ -4752,7 +4870,11 @@ class FloydAdapter(CommandMixin):
         return mind._say([(0.8, "Floyd doesn't know !%s. Floyd looked everywhere. Try !help." % m.group(1))])
 
     def level_of(self, conv):
-        return tvf.parse_level(self.memory.data["levels"].get(conv.id), None) or self.level
+        """His level here: this conversation's own (!level), else its account's level = (so he can be
+        quieter on a public network than at home), else his."""
+        mine = conv.account.opts.get("level")
+        return (tvf.parse_level(self.memory.data["levels"].get(conv.id), None)
+                or tvf.parse_level(mine, None) or self.level)
 
     def _level_cmd(self, conv, mind, msg, who, arg):
         """!level [NAME|default]: say, or (admins; in a session of your own, you) set."""
@@ -4776,6 +4898,46 @@ class FloydAdapter(CommandMixin):
         _log.info("floyd: level of %s is now %s (by %s)", conv.id, new, who)
         wake = "" if new != "off" else " Say !level NAME to wake him."
         return mind._say([(0.8, "Floyd is now at level %s. %s%s" % (new, tvf.LEVEL_BLURB[new], wake))])
+
+    ABOUT_RX = re.compile(r"^!?\s*(?:about|bot|who are you)\W*$", re.I)
+    LEAVE_RX = re.compile(r"^!?\s*(?:leave|part|go away)\W*$", re.I)
+
+    def _contact(self, conv):
+        return ((conv.account.opts.get("contact") or "").strip() or
+                (self.account.opts.get("contact") or "").strip())
+
+    def _about(self, conv):
+        """The bot's label: what he is and who answers for him."""
+        who = self._contact(conv)
+        return ("Floyd is a bot (tvchat's Floyd)%s. He answers !commands and when he is spoken to by name. "
+                "Channel operators: !leave sends him away, !level off keeps him quiet." %
+                (", run by %s" % who if who else ""))
+
+    OPS = frozenset(("owner", "admin", "op"))
+
+    def _is_chan_op(self, conv, nick):
+        """Is this nick an operator of the channel, by what the server told us (not by what it says)?"""
+        ad = self.chat.adapters.get(conv.account.id)
+        key = ad.lower(nick) if hasattr(ad, "lower") else nick.lower()
+        ent = conv.members.get(key)
+        return bool(ent) and ent[2] in self.OPS
+
+    def _leave(self, conv, msg, who, mind):
+        """!leave: the channel's operators, and his admins, can send him away; he goes for good (a bot
+        account does not come back at the next connect)."""
+        if conv.kind != "channel":
+            return mind._say([(0.8, "Floyd can only leave channels. In a private chat he just waits.")])
+        if not (self.is_admin(msg.sender) or self._is_chan_op(conv, who)):
+            return mind._say([(0.8, "Only this channel's operators or Floyd's admins can send Floyd away, %s. "
+                                    "Floyd would go if they asked." % who)])
+        ad = self.chat.adapter(conv.account)
+        _log.info("floyd: leaving %s at the word of %s", conv.id, who)
+        att = self.memory.data["attached"]
+        if conv.id in att:
+            att.remove(conv.id)
+            self.memory.save()
+        self._later(3.0, lambda: ad.part(conv))
+        return mind._say([(0.8, "Okay, %s. Floyd is going now. Bye, everybody! Floyd will wait outside." % who)])
 
     def _talk(self, mind, body, who, lvl):
         """Something said to him that is not a !command or a tool."""
@@ -4892,6 +5054,10 @@ class FloydAdapter(CommandMixin):
 
     def _order(self, conv, sender, who, prompt):
         """Consult the Claude CLI for an admin; the plan to say meanwhile."""
+        if not _bool(conv.account.opts.get("llm"), True):
+            _log.info("floyd: claude refused in %s (llm = no on that account)", conv.id)
+            return self.mind._say([(0.8, "Floyd can't ask Claude here, %s. This network does not want bots that use "
+                                    "language models. Floyd checked the rules. Floyd follows rules." % who)])
         if not self.is_admin(sender):
             _log.info("floyd: refused claude for %s (account %s) in %s", who,
                       getattr(sender, "account", None), conv.id)
@@ -6216,6 +6382,18 @@ def cmd_mail_chat(a):
     return 0
 
 
+def cmd_roles(a):
+    """roles: our standing in each channel we hold one in, `conv<TAB>role` lines (role: owner,
+    admin, op, halfop, voice); the `role` event says when it changes."""
+    chat = _chat()
+    chat.check_config()
+    for acct in chat.accounts:
+        for conv in acct.convs.values():
+            if conv.role:
+                sys.stdout.write(line(conv.id, conv.role))
+    return 0
+
+
 def cmd_shares(a):
     """shares: what tvmail asked to share and nobody has answered, `id<TAB>text<TAB>where` lines
     (where: "#channel on Account", empty when [chat] share_to is not set)."""
@@ -6741,6 +6919,7 @@ def build_parser():
     p = sub.add_parser("join"); p.add_argument("account"); p.add_argument("target"); p.set_defaults(fn=cmd_join)
     p = sub.add_parser("invite"); p.add_argument("account"); p.add_argument("channel", nargs="?", default=""); p.set_defaults(fn=cmd_invite)
     p = sub.add_parser("people"); p.set_defaults(fn=cmd_people)
+    p = sub.add_parser("roles"); p.set_defaults(fn=cmd_roles)
     p = sub.add_parser("shares"); p.set_defaults(fn=cmd_shares)
     p = sub.add_parser("share-send"); p.add_argument("id"); p.add_argument("text"); p.set_defaults(fn=cmd_share_send)
     p = sub.add_parser("share-drop"); p.add_argument("id"); p.set_defaults(fn=cmd_share_drop)

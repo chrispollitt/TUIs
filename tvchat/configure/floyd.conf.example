@@ -28,6 +28,37 @@ sasl     = Floyd
 channels = #test
 
 
+# Libera.Chat (optional): Floyd on a public network, as a bot that follows its rules
+# (https://libera.chat/guides/bots).  Register his nick there first (/msg NickServ
+# REGISTER ...; a verified email address is needed) and put its password in floyd.env
+# as TVCHAT_PASS_LIBERA (the account's name, upper case).  Then uncomment this, add
+# libera/* to attach = below, and have an operator of the channel, who must be one of
+# your admins, invite him:  /invite Floyd #channel
+#[account:libera]
+#protocol = irc
+#display  = Libera
+#host     = irc.libera.chat
+#port     = 6697
+#tls      = true
+#nick     = Floyd
+#sasl     = Floyd
+## a bot account: joins only when invited by invite_from (default: admins = below), by the
+## services account the server vouches for; says what he is on joining; sends him away on
+## !leave from the channel's operators; never goes back where he was kicked; and answers a
+## CTCP VERSION as a bot, run by contact.  His realname says so too.
+#bot      = yes
+## who answers for him: a nick, an address or a channel the network can reach you on
+#contact  = chris-pollitt
+## Libera does not want bots that use language models: no !claude on this account
+#llm      = no
+## quieter than at home: off | minimal | helpful | chatty | clippy (!level changes it per channel)
+#level    = minimal
+## (the default is your admins' accounts below; names a smaller or other list)
+#invite_from = chris-pollitt
+## nothing is joined by itself: channels is empty, he comes when invited
+#channels =
+
+
 # Delta Chat (optional): Floyd's own mailbox, so people can /invite floyd@HOST from
 # a Delta Chat account.  He reads his INBOX for invitations every 30 s and accepts
 # every one (as on IRC), then answers in the chat like anywhere else.  Needs
@@ -80,6 +111,7 @@ protocol = floyd
 # he listens in every conversation of that account, private messages included
 # add delta/* and mail/* once those accounts above are on:  attach   = cpbee/*, delta/*, mail/*
 attach   = cpbee/*
+# add libera/* here once [account:libera] above is on:  attach   = cpbee/*, libera/*
 # speaks as himself, so no "[Floyd] " tag
 tag      =
 # no wandering about in his own empty conversation
@@ -99,6 +131,7 @@ idle     = 0
 # server vouches for the account on every line (IRCv3 account-tag); a nick, or
 # a name inside a message, counts for nothing.  "!whoami" tells anyone what
 # Floyd knows of them.
+# (one list for every network: add your account name on each, e.g.  admins = chris, chris-pollitt)
 admins   = chris
 # Floyd can ask the Claude CLI for an admin: "!claude QUESTION" in a channel,
 # or "claude QUESTION" in a private message.  The CLI runs as the service user
