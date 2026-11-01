@@ -466,6 +466,14 @@ names were checked against `--openrpc` and the `deltachat-rpc-client` source).
   falls back to the link message when they have none. `who_is` names an invitation's
   sender as "carol (cpollitt)". Also `email:ADDRESS` in an entry (not an account: `EMAIL_HANDLE`)
   is where `Chat.mail_address_for` mails for them.
+- **Notes between tvchat and tvmail** (`tvcommon/src/spool.cpp`; also tvcommon's README): a one-line
+  file per note in the other app's inbox (`$TV_SPOOL_DIR`, else `~/.local/state/tvcommon/spool/<app>/`),
+  shown there as a toast and deleted; expiry in the file name, so nothing needs the other app to be
+  running. `notify()` sends errors on by itself (`[ui] share`), `spoolSend(..., always=true)` is for what
+  is worth seeing at any level: `toastNewMessage` (direct chats only) and the `invite` event in
+  `app.cpp`; tvmail does it for new mail. What came in is not sent on. Not done: a count of what is
+  waiting over there in the status line, and a list of questions (the dialogs stay where they are,
+  e.g. Accept invite...; the toast says where to answer).
 - **Mailing chat lines** (optional, needs tvmail): Chat > Mail selection... takes the rows
   selected in the log (`TMailText::selectedText`) and runs `mail-chat CONV ADDRESS SUBJECT TEXT`
   (TEXT escaped as `keys` takes it), which hands it to `tvmail-backend send` in a thread

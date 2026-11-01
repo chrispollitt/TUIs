@@ -252,6 +252,27 @@ def toast_appears_goes_away_and_is_kept(opts):
 
 
 @case()
+def spool_shows_tvchats_notes_as_toasts(opts):
+    # tvchat leaves a note in tvmail's inbox of the shared spool (an invitation, a message
+    # to answer): it is a toast here, "tvchat: ...", and the file is gone once read
+    def setup(t):
+        t.spool = t.tmp / "spool"
+        (t.spool / "tvmail").mkdir(parents=True)
+        t.env["TV_SPOOL_DIR"] = str(t.spool)
+    tv = Tv(opts, setup=setup)
+    c = Case(tv)
+    started(tv, c)
+    name = "%d-1-1.note" % (int(time.time()) + 600)
+    tmp = tv.spool / "tvmail" / (".tmp-" + name)
+    tmp.write_text("1\ttvchat\tinfo\tcarol invites you - tvchat: Chat > Accept invite...\n")
+    os.rename(tmp, tv.spool / "tvmail" / name)
+    c.check(tv.wait("tvchat: carol invites you", 6), "a note from tvchat did not show as a toast")
+    c.check(tv.wait(lambda: not list((tv.spool / "tvmail").glob("*.note")), 3),
+            "the note was not removed once read")
+    return tv
+
+
+@case()
 def chat_invite_in_a_message_goes_to_tvchat(opts):
     tv = chat_link_tv(opts, INVITE_FIXTURE)
     c = Case(tv)

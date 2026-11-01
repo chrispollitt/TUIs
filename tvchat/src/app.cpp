@@ -152,7 +152,11 @@ static void toastNewMessage(const ChatClient &cc, const ChatEvent &ev)
     auto c = cc.convs().find(conv);
     std::string title = c != cc.convs().end() && !c->second.title.empty() ? c->second.title : conv;
     std::string who = f[5].empty() ? f[4] : f[5];
-    notifyAlert(title + ": " + (who.empty() || who == title ? std::string() : who + ": ") + f[7]);
+    std::string said = title + ": " + (who.empty() || who == title ? std::string() : who + ": ") + f[7];
+    notifyAlert(said);
+    // someone writing to you, not a channel's chatter: tvmail's user may be looking there
+    if (c != cc.convs().end() && c->second.kind == "direct")
+        spoolSend(noteInfo, said, 600, true);
 }
 
 // Poll tvchat-backend and hand each event to every window as a broadcast;
@@ -170,6 +174,8 @@ void TVChatApp::chatEvents()
     for (const ChatEvent &ev : evs)
     {
         accounts = accounts || ev.fields[0] == "state";
+        if (ev.fields[0] == "invite" && ev.fields.size() > 2) // an invitation to answer in tvchat
+            spoolSend(noteInfo, ev.fields[2] + " invites you - tvchat: Chat > Accept invite...", 3600, true);
         invited = invited || ev.fields[0] == "invite";
         if (ev.fields[0] == "notice" && ev.fields.size() > 1) // e.g. tvmail asked for a chat
             notify(ev.fields[1]);

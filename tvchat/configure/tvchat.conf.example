@@ -39,6 +39,10 @@ autoconnect = libera
 # beep = y: also send a BEL with the toast (a terminal beeps or flashes its
 #   window).  Default n.
 #beep = n
+# share = error | warn | info | off: which toasts are also left for tvmail (default
+#   error; mail and chat messages, and invitations, are left whatever this says,
+#   unless it is off).  A note waits for tvmail if it is not running, 15 minutes.
+#share = error
 
 # One section per account, [account:NAME].  NAME is the account's id in the
 # UI and in conversation ids, so no '/', '\' or spaces in it.

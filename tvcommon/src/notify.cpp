@@ -190,6 +190,7 @@ void notify(const std::string &text, NoteLevel level)
     if (flat.empty())
         return;
     record(flat, level);
+    spoolSend(level, flat); // an error is sent to the other app too (a toast there)
     if (!TProgram::application || !TProgram::deskTop)
         return;
     int maxw = std::min(50, TProgram::deskTop->size.x - 8);

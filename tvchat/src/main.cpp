@@ -57,6 +57,7 @@ int main(int argc, char **argv)
 
     mesgFromConf(ChatClient::confPath());
     beepFromConf(ChatClient::confPath());
+    spoolFromConf(ChatClient::confPath(), "tvchat", "tvmail");
     TVChatApp app;
     long long tuiStarted = gTraceLog ? traceMicros() : 0;
     app.run();

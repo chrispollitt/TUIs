@@ -10,6 +10,13 @@
   #lobby on Libera") and joins; `join_invites = yes` accepts at once. New backend verb `invite-send`,
   `invite` takes a channel, `invites` lines may carry a third field.
 
+- **Notes between tvmail and tvchat:** the two are full-screen apps, so one is usually out of
+  sight. Errors, and what you would want to know anyway (a message written to you, an invitation to
+  answer, new mail in tvmail), are left for the other app as small files (`tvcommon/src/spool.cpp`,
+  `~/.local/state/tvcommon/spool/`) and show there as a toast "tvchat: carol invites you ..." - also
+  if that app starts later, within 15 minutes. `[ui] share = error | warn | info | off` in either
+  app's conf (default `error`) sets how much goes on its own.
+
 - **tvchat and tvmail, more of each other:** Chat > Mail selection... mails the lines selected in the
   log (Shift-arrows or a drag) through tvmail's account, to the person's address if it is known (an
   `email:` handle in `[people]`, or their Delta Chat address), else one you type; the outcome is a

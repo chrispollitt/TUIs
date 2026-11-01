@@ -266,6 +266,7 @@ void TTvApp::idle()
 {
     TApplication::idle();
     notifyTick();
+    spoolTick();
 }
 
 TSubMenu &tvWindowMenu()

@@ -945,7 +945,9 @@ void TVMailApp::pullFinished()
     lastUnread = now;
     if (fresh > 0) // spam was filed by the pull itself, so it is not counted
     {
-        notifyAlert(std::to_string(fresh) + " new message" + (fresh == 1 ? "" : "s") + " in the inbox");
+        std::string fresh_text = std::to_string(fresh) + " new message" + (fresh == 1 ? "" : "s") + " in the inbox";
+        notifyAlert(fresh_text);
+        spoolSend(noteInfo, fresh_text, 900, true); // and tvchat, if you are over there
         floydTips(); // nothing unless Floyd is at the clippy level
     }
     if (quiet && pullExit < 2)

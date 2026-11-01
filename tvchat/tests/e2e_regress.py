@@ -280,6 +280,52 @@ def chat_edit_paste_menu(opts):
 
 
 @case()
+def chat_spool_receives_tvmails_notes(opts):
+    # a note in tvchat's inbox of the shared spool is shown as a toast "tvmail: ..." and
+    # deleted; one past its time is dropped unseen
+    import tempfile
+    d = Path(tempfile.mkdtemp(prefix="tvchat-spool-"))
+    inbox = d / "tvchat"
+    inbox.mkdir()
+    tv, srv = chat_tv(opts, env={"TV_SPOOL_DIR": str(d)})
+    tv.cleanups.append(lambda: shutil.rmtree(d, ignore_errors=True))
+    c = Case(tv)
+    started(tv, c)
+    now = int(time.time())
+    for name, text in ((str(now - 5) + "-1-1.note", "1\ttvmail\tinfo\tstale news"),
+                       (str(now + 600) + "-1-2.note", "1\ttvmail\tinfo\t3 new messages in the inbox")):
+        (inbox / (".tmp-" + name)).write_text(text + "\n")
+        os.rename(inbox / (".tmp-" + name), inbox / name)
+    c.check(tv.wait("tvmail: 3 new messages in the inbox", 6), "a note from tvmail did not show as a toast")
+    c.check(not tv.has("stale news"), "a note past its time was shown")
+    c.check(tv.wait(lambda: not list(inbox.glob("*.note")), 3), "the notes were not removed once read")
+    return tv
+
+
+@case()
+def chat_spool_sends_direct_messages_to_tvmail(opts):
+    # someone writing to you is left for tvmail too (a toast there); a channel's chatter
+    # is not; share = off sends nothing
+    import tempfile
+    d = Path(tempfile.mkdtemp(prefix="tvchat-spool-"))
+    tv, srv = chat_tv(opts, env={"TV_SPOOL_DIR": str(d)})
+    tv.cleanups.append(lambda: shutil.rmtree(d, ignore_errors=True))
+    c = Case(tv)
+    started(tv, c)
+    c.check(srv.wait_joined("#e2e"), "the chat backend never joined #e2e")
+    srv.say(":bob!b@h PRIVMSG #e2e :chatter in the channel")
+    srv.say(":alice!a@h PRIVMSG tester :are you there?")
+    out = d / "tvmail"
+    c.check(tv.wait(lambda: any(out.glob("*.note")) if out.exists() else False, 6),
+            "a message written to you was not left for tvmail")
+    tv.pump(1.0)
+    notes = [p.read_text() for p in sorted(out.glob("*.note"))]
+    c.check(len(notes) == 1 and notes[0].startswith("1\ttvchat\tinfo\talice: are you there?"),
+            "what was left for tvmail is not just that message: %r" % notes)
+    return tv
+
+
+@case()
 def chat_mail_selection(opts):
     # Chat > Mail selection... mails the lines selected in the log through tvmail
     # (a stub here); with nothing selected it says how to select

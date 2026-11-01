@@ -134,3 +134,7 @@ subject = ***SPAM***
 # beep = y: also send a BEL with that toast (a terminal beeps or flashes its
 #   window).  Default n.
 #beep = n
+# share = error | warn | info | off: which toasts are also left for tvchat (default
+#   error; mail and chat messages, and invitations, are left whatever this says,
+#   unless it is off).  A note waits for tvchat if it is not running, 15 minutes.
+#share = error

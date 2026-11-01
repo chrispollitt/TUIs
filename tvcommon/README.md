@@ -16,6 +16,18 @@ and dialogs, and expire from `idle()` (`TTvApp::idle` calls `notifyTick`), not f
 so one raised while a dialog is open still goes away on time. An app's own `idle()` must call
 `TTvApp::idle()`.
 
+### Toasts for the other app (spool.cpp)
+
+tvmail and tvchat are full-screen apps, so one is usually out of sight. A note worth a
+glance in the other is a one-line file in the other's inbox - `$TV_SPOOL_DIR`, else
+`~/.local/state/tvcommon/spool/<app>/<expires>-<pid>-<n>.note`, `1 TAB from TAB level TAB text`,
+written under a temp name and renamed - and `spoolTick` (from `idle()`, every 2 s) shows each
+as a toast "from: text" and deletes it. One past its time is dropped; nothing needs the other
+app to be running (a note waits, 15 minutes by default). What goes: errors (`[ui] share = error`
+by default; `warn`, `info`, `off`), and what an app marks with `spoolSend(..., always)` - tvchat's
+direct messages and invitations, tvmail's new mail. A note that came in is never sent on, and the
+same text goes once per 30 s; an inbox holds 50.
+
 ## What is in it
 
 | path | what |

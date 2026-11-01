@@ -5,6 +5,11 @@ Releases are tagged `tvmail-vX.Y.Z`; `git log` has the rest.
 
 ## Unreleased
 
+- **Toasts from tvchat, and yours for it:** errors, and new mail in the inbox, are left for tvchat as
+  small files (`tvcommon/src/spool.cpp`); tvchat's errors, messages written to you and invitations
+  show here as a toast "tvchat: ...". `[ui] share = error | warn | info | off` (default `error`) in
+  tvmail.conf says how much goes on its own.
+
 - **Cygwin is the only Windows.** The native (mingw) build is gone: `build.sh --mingw`, the
   `mingw_compile` test and every `_WIN32` branch (in tvcommon too) are removed; CMake refuses a
   Windows target and says to use Cygwin. That also ended the failing periodic-pull code in
