@@ -4749,6 +4749,84 @@ class FloydMind(object):
         return self._say([(0.0, self._one(self.CHATTER))])
 
 
+# --------------------------------------------------------------------------
+# Floyd-pro: a Floyd account with faq = FILE answers visitors from that file alone, word for word, and
+# says so when nothing fits.  No commands, no memory, no language model: nothing to invent or to talk
+# round.  The file: "Q:" starts an entry, "A:" its answer, "K:" extra words that should find it; Hello:,
+# Fallback: and Thanks: are his stock lines; "#" lines are notes.  See configure/faq.example.txt.
+# --------------------------------------------------------------------------
+FAQ_STOP = frozenset((
+    "a an the and or of to in on at for from with about is are was were be been am do does did can could would "
+    "should will may might i you we they it this that these those my your our me us what who whom how when where "
+    "why which if so as by not no yes please there here have has had any some tell").split())
+
+
+def faq_stems(text):
+    """The words of a text that carry meaning, cut to a stem (laughing, laughter -> laugh)."""
+    out = []
+    for w in re.findall(r"[a-z0-9]+", text.lower().replace("'", "")):
+        if w in FAQ_STOP or len(w) < 2:
+            continue
+        for suf in ("ing", "ed", "s"):
+            if len(w) > len(suf) + 2 and w.endswith(suf):
+                w = w[:-len(suf)]
+                break
+        out.append(w[:5])
+    return out
+
+
+def parse_faq(text):
+    faq = {"hello": "", "fallback": "", "thanks": "", "entries": []}
+    cur = None
+    for line in text.splitlines():
+        s = line.strip()
+        if s.startswith("#"):
+            continue
+        m = re.match(r"^(Q|A|K|Hello|Fallback|Thanks)\s*:\s*(.*)$", s)
+        if m:
+            tag, rest = m.group(1), m.group(2)
+            if tag == "Q":
+                e = {"q": rest, "a": "", "k": ""}
+                faq["entries"].append(e)
+                cur = (e, "q")
+            elif tag in ("A", "K"):
+                if not faq["entries"]:
+                    cur = None
+                    continue
+                cur = (faq["entries"][-1], tag.lower())
+                cur[0][cur[1]] = rest
+            else:
+                cur = (faq, tag.lower())
+                faq[cur[1]] = rest
+        elif s and cur:
+            cur[0][cur[1]] += "\n" + s
+    faq["entries"] = [e for e in faq["entries"] if e["q"].strip() and e["a"].strip()]
+    return faq
+
+
+def faq_rank(faq, text):
+    """[(score, entry, cover)], best first: each word of the question counts by how rare it is in the file,
+    most when it is in the entry's K: words, then in its question, a little in its answer; cover is the
+    share of the most the question's words could have scored (so one stray word does not make an answer)."""
+    import math
+    words = set(faq_stems(text[:300]))
+    ents = faq["entries"]
+    if not words or not ents:
+        return []
+    docs = [(set(faq_stems(e["q"])), set(faq_stems(e["a"])), set(faq_stems(e["k"]))) for e in ents]
+
+    def idf(w):
+        df = sum(1 for q, a, k in docs if w in q or w in a or w in k)
+        return math.log(1 + len(ents) / max(df, 1))
+    best = 3 * sum(idf(w) for w in words)
+    out = []
+    for e, (q, a, k) in zip(ents, docs):
+        s = sum(idf(w) * (3 if w in k else 2 if w in q else 0.5 if w in a else 0) for w in words)
+        out.append((s, e, s / best))
+    out.sort(key=lambda x: -x[0])
+    return out
+
+
 class FloydAdapter(CommandMixin):
     """The account for Floyd.  [account:NAME] protocol = floyd; nothing else is
     needed.  Options:  nick= (what Floyd calls you; default your login name),
@@ -4800,6 +4878,9 @@ class FloydAdapter(CommandMixin):
         self.minds = {}                  # conv id -> his wits there (attached elsewhere)
         self.last_out = {}               # conv id -> when he last spoke there
         self.heard_ids = deque(maxlen=200)
+        self.faq_path = os.path.expanduser((o.get("faq") or "").strip())      # faq = FILE: Floyd-pro
+        self._faq_cache = (None, None)                                        # (mtime, parsed)
+        self.greeted = set()
         self.mind = self._new_mind(self.nick)
         self.phase = "down"
         self.gen = 0
@@ -4816,6 +4897,11 @@ class FloydAdapter(CommandMixin):
     ATTACH_GAP = 2.0                     # seconds between his answers in one place
     ATTACH_MAX_LINES = 5
     MAX_AGE = 60                         # ignore lines older than this (replays)
+    FAQ_GAP = 1.0                        # seconds between his answers in one place, as Floyd-pro
+    FAQ_MIN = 2.0                        # the least score that counts as an answer ...
+    FAQ_COVER = 0.3                      # ... and the least share of the question's words it explains
+    FAQ_GREET = re.compile(r"^(?:hi|hello|hey|hiya|howdy|good (?:morning|afternoon|evening))\b[\s\W]*(?:there|floyd)?\W*$")
+    FAQ_THANKS = re.compile(r"^(?:thanks|thank you|thx|cheers|ok thanks|great thanks)\b")
 
     def attached(self, conv):
         return (conv.id in self.memory.data["attached"] or
@@ -4857,6 +4943,8 @@ class FloydAdapter(CommandMixin):
         tag = self.tag.strip()
         if not text or (tag and text.startswith(tag)):
             return                       # blank, or Floyd's own line (or another Floyd's)
+        if self.faq_path:
+            return self._faq_hear(conv, text)
         who = msg.sender.display or msg.sender.address or "someone"
         mind = self.minds.get(conv.id)
         if mind is None:
@@ -4920,6 +5008,50 @@ class FloydAdapter(CommandMixin):
             return                       # a flood of triggers: let this one go
         self.last_out[conv.id] = now
         plan = plan[:self.ATTACH_MAX_LINES]
+        self._out(conv, plan)
+
+    # -- Floyd-pro: answers from a FAQ file, and nothing else -------------------
+    def _faq(self):
+        """The parsed FAQ, read again whenever the file changes."""
+        try:
+            mtime = os.stat(self.faq_path).st_mtime
+            if mtime != self._faq_cache[0]:
+                with open(self.faq_path, encoding="utf-8") as fh:
+                    self._faq_cache = (mtime, parse_faq(fh.read()))
+                _log.info("floyd: read %d FAQ entries from %s", len(self._faq_cache[1]["entries"]), self.faq_path)
+        except (OSError, UnicodeDecodeError) as e:
+            _log.warning("floyd: cannot read the FAQ %s: %s", self.faq_path, e)
+        return self._faq_cache[1]
+
+    def _faq_hear(self, conv, text):
+        now = self.chat.loop.clock()
+        faq = self._faq()
+        if faq is None or now - self.last_out.get(conv.id, -1e9) < self.FAQ_GAP:
+            return
+        hello = faq["hello"] or "Hi! I'm Floyd, a helper robot. Ask me a question and I'll look it up."
+        first = conv.id not in self.greeted
+        if len(self.greeted) > 2000:
+            self.greeted.clear()
+        self.greeted.add(conv.id)
+        low = text.lower().strip()
+        plan = []
+        if self.FAQ_GREET.match(low):
+            plan = [(0.5, hello, "")]
+        elif self.FAQ_THANKS.match(low):
+            plan = [(0.5, faq["thanks"] or "You're welcome!", "")]
+        else:
+            ranked = faq_rank(faq, text)
+            if first:
+                plan.append((0.5, hello, ""))
+            if ranked and ranked[0][0] >= self.FAQ_MIN and ranked[0][2] >= self.FAQ_COVER:
+                answer = ranked[0][1]["a"]
+                if len(ranked) > 1 and ranked[1][0] >= 0.8 * ranked[0][0] and ranked[1][0] >= self.FAQ_MIN:
+                    answer += '\n(If you meant "%s" just ask me.)' % ranked[1][1]["q"].split("?")[0].strip()
+                plan.append((1.5 if first else 0.8, answer, ""))
+            else:
+                plan.append((1.5 if first else 0.8, faq["fallback"] or
+                             "Sorry, I don't have an answer to that one. A person can help.", ""))
+        self.last_out[conv.id] = now
         self._out(conv, plan)
 
     # -- levels, the useful tools, and tips -----------------------------------
@@ -6375,6 +6507,19 @@ def check_config(path):
                 FloydAdapter.idle_seconds(o.get("idle"))
             except UserError as e:
                 errors.append("[account:%s] %s" % (i, e))
+            faq = os.path.expanduser((o.get("faq") or "").strip())
+            if faq:
+                if not os.path.isfile(faq):
+                    warnings.append("[account:%s] the FAQ file %s is not a file on this machine" % (i, faq))
+                else:
+                    try:
+                        with open(faq, encoding="utf-8") as fh:
+                            n = len(parse_faq(fh.read())["entries"])
+                    except (OSError, UnicodeDecodeError) as e:
+                        errors.append("[account:%s] cannot read the FAQ %s: %s" % (i, faq, e))
+                    else:
+                        if not n:
+                            errors.append("[account:%s] the FAQ %s has no Q:/A: entries" % (i, faq))
             if (o.get("seed") or "").strip() and not (o.get("seed") or "").strip().isdigit():
                 errors.append("[account:%s] seed= must be a whole number" % i)
             if (o.get("level") or "").strip() and tvf.parse_level(o.get("level")) is None:

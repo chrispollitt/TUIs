@@ -4987,5 +4987,106 @@ class TestLhc(Base):
         self.assertIn("department=", text)
 
 
+class TestFloydPro(Base):
+    """Floyd-pro: a Floyd with faq = FILE answers a visitor from the file alone."""
+
+    turn, settle = TestLhc.turn, TestLhc.settle
+
+    def setUp(self):
+        super().setUp()
+        self.lhc = FakeLhc()
+        self.addCleanup(self.lhc.close)
+        os.environ["TVCHAT_PASS_LHC"] = "k3y"
+        self.addCleanup(os.environ.pop, "TVCHAT_PASS_LHC", None)
+        self.faq = self.tmp / "faq.txt"
+        self.faq.write_text((Path(__file__).resolve().parent.parent / "configure" / "faq.example.txt").read_text(encoding="utf-8"),
+                            encoding="utf-8")
+        self.conf("""\
+            [account:lhc]
+            protocol = lhc
+            url      = %s
+            user     = floyd
+            poll     = 0.2
+
+            [account:pro]
+            protocol = floyd
+            attach   = lhc/*
+            faq      = %s
+            tag      =
+            idle     = 0
+            memory   = none
+            admins   = alice
+            """ % (self.lhc.url, self.faq))
+        self.chat = cb._chat()
+        self.chat.daemon = True
+        self.addCleanup(self.chat.close)
+        self.chat.adapter(self.chat.by_id["pro"]).FAQ_GAP = 0
+        self.chat.connect(self.chat.by_id["pro"])
+        self.chat.connect(self.chat.by_id["lhc"])
+
+    def said(self):
+        return [q["msg"] for q in self.lhc.posted]
+
+    def test_the_first_question_gets_a_greeting_and_the_answer_as_written(self):
+        self.lhc.chat(7, "Pat", "What should I wear?")
+        self.turn(lambda: len(self.lhc.posted) >= 2)
+        said = self.said()
+        self.assertTrue(said[0].startswith("Hi! I'm Floyd"))
+        self.assertIn("We suggest comfortable clothing. No Yoga mat or other props are needed.", said[1])
+        self.lhc.say(7, "Do I need to be flexible?")
+        self.turn(lambda: len(self.lhc.posted) >= 3)
+        self.assertIn("completely unlike other forms of Yoga", self.said()[2])        # no second greeting
+
+    def test_a_greeting_and_thanks_get_the_stock_lines(self):
+        self.lhc.chat(7, "Pat", "hello there")
+        self.turn(lambda: self.lhc.posted)
+        self.assertTrue(self.said()[0].startswith("Hi! I'm Floyd"))
+        self.lhc.say(7, "thanks!")
+        self.turn(lambda: len(self.lhc.posted) == 2)
+        self.assertIn("You're welcome", self.said()[1])
+
+    def test_a_medical_question_gets_the_list_and_not_an_opinion(self):
+        self.lhc.chat(7, "Pat", "hi", "I am pregnant, is it safe?")
+        self.turn(lambda: len(self.lhc.posted) >= 2)
+        self.settle(0.5)
+        said = "\n".join(self.said())
+        self.assertIn("Late term pregnancy", said)
+        self.assertIn("check with your doctor", said)
+
+    def test_what_he_has_no_answer_for_is_said_plainly(self):
+        self.lhc.chat(7, "Pat", "how much is a ticket to mars")
+        self.turn(lambda: len(self.lhc.posted) >= 2)
+        self.assertIn("Sorry, I don't have an answer", self.said()[1])
+
+    def test_commands_and_admin_orders_are_not_what_they_are_elsewhere(self):
+        self.lhc.chat(7, "alice", "!8ball will it work", "!claude who is floyd")      # not even a named admin
+        self.turn(lambda: len(self.lhc.posted) >= 2)
+        self.settle(0.8)
+        for text in self.said():
+            self.assertNotIn(text, cb.FloydMind.EIGHT_BALL)
+            self.assertNotIn("admins", text.lower())
+
+    def test_the_file_is_read_again_when_it_changes(self):
+        self.lhc.chat(7, "Pat", "what time is the next club")
+        self.turn(lambda: len(self.lhc.posted) >= 2)
+        self.faq.write_text(self.faq.read_text(encoding="utf-8") +
+                            "\nQ: What time is the next club?\nA: Tuesdays at 7.\nK: time\n", encoding="utf-8")
+        os.utime(str(self.faq), (time.time() + 5, time.time() + 5))
+        self.lhc.say(7, "what time is the next club")
+        self.turn(lambda: len(self.lhc.posted) >= 3)
+        self.assertIn("Tuesdays at 7", self.said()[2])
+
+    def test_check_config_wants_a_faq_with_entries(self):
+        empty = self.tmp / "empty.txt"
+        empty.write_text("# nothing\n", encoding="utf-8")
+        p = self.conf("""\
+            [account:pro]
+            protocol = floyd
+            faq      = %s
+            """ % empty)
+        errors, warnings, _ = cb.check_config(str(p))
+        self.assertTrue(any("no Q:/A: entries" in e for e in errors), errors)
+
+
 if __name__ == "__main__":
     unittest.main()

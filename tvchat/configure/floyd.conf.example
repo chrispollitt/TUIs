@@ -206,3 +206,16 @@ claude_dir      = ~
 #name        = Floyd
 #poll        = 5
 #operator_id =
+
+# Floyd-pro (optional): a SECOND Floyd account for the public.  With faq = FILE he answers visitors
+# from that file alone, word for word (see faq.example.txt), and says so when nothing fits.  He has no
+# !commands, no memory and no language model, so there is nothing to invent or to talk round, and
+# nobody there is an admin.  He re-reads the file when it changes.  Give him the Live Helper Chat
+# conversations (attach = lhc/*) and take lhc/* out of the other Floyd's attach =.
+#[account:pro]
+#protocol = floyd
+#faq      = /etc/tvchat/faq.txt
+#attach   = lhc/*
+#tag      =
+#idle     = 0
+#memory   = none

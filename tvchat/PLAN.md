@@ -24,7 +24,7 @@ static files; it cannot run a daemon or open an IRC port. Floyd stays on cpbee a
 - Visitors are anonymous: they are **never** admins. No `trust =` for them.
 - Keys never go in the config file: `$TVCHAT_PASS_LHC` in `/etc/tvchat/floyd.env`, as for Delta Chat.
 
-## Phase 1 - proof of concept (this phase)
+## Phase 1 - proof of concept (DONE 2026-11-01: live on chat.u-l.ca; the API is at https://chat.u-l.ca/index.php)
 
 Done when a message typed in the LHC widget in a browser gets a reply from Floyd.
 
@@ -49,11 +49,19 @@ Done when a message typed in the LHC widget in a browser gets a reply from Floyd
 
 ## Phase 2 - Floyd-pro for universal-laughter.com
 
-- Its own operator, department and widget embed on the company site.
-- A second `lhc` account (or a second daemon) with its own persona: the company's products, FAQs
-  and hours only; no admin commands, no access to cpbee, no shell or mail tools.
-- Per-visitor and daily caps; a human handoff ("I don't know - leave a message"); a privacy line in
-  the widget's start text (visitor text goes to the model provider).
+Start with universal-laughter.com alone. For the beta, put the widget script from chat.u-l.ca on a test page
+there (no DNS needed); a branded chat.universal-laughter.com only if wanted later (the host must answer for
+that name and have a certificate for it).
+
+- **2a - FAQ matcher (built):** `faq = FILE` on a second `protocol = floyd` account (`[account:pro]`,
+  `attach = lhc/*`). Answers are the FAQ's words, nothing generated. Seed: `configure/faq.example.txt`, from
+  https://laughteryoga.ca/frequently-asked-questions/. Medical questions get the "when not to take part" entry and
+  "ask your doctor", never an opinion (its K: words find it).
+- **To add to the FAQ (Chris):** prices and booking for private/corporate sessions, contact details for the
+  fallback, where and when the clubs meet, the next leader training (date, cost).
+- **2b - language model on top (later):** only after reading the real visitor questions from 2a; the FAQ is its
+  only material; per-visitor and daily caps; a human handoff.
+- Its own department and widget embed on the company site; a privacy line in the widget's start text.
 - Review the first weeks of transcripts.
 
 ## Phase 3 - a public IRC server

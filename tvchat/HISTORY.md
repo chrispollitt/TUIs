@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Floyd-pro (`faq = FILE` on a `protocol = floyd` account):** a Floyd for the public that answers only from a
+  FAQ file (`Q:` / `A:` / `K:` entries, `configure/faq.example.txt`), word for word: the entry whose question,
+  keywords or answer share the most (rare) words with the visitor's line, a greeting once per chat, a plain
+  "I don't have an answer" when nothing fits. No commands, memory or language model. The file is re-read when it
+  changes. `check-config` checks it.
+
 - **Floyd on Live Helper Chat (`protocol = lhc`):** a new account type: Floyd is an operator on a Live
   Helper Chat site and answers the visitors in its chat widget (`lhc/<chat id>`). He polls the site's REST
   API over HTTPS (outbound only), answers as an operator, leaves chats another operator has taken, forgets

@@ -1,0 +1,121 @@
+# A FAQ for a "Floyd-pro" account (faq = /etc/tvchat/faq.txt on a protocol = floyd account).
+# He answers a visitor from it, word for word, and says so when nothing fits: he makes nothing up.
+# He re-reads this file when it changes, so edit it and save: no restart.
+#
+#   Q: a question               (a Q: line starts an entry; the lines after it carry on the question)
+#   A: its answer               (may run over several lines: bullets, links)
+#   K: extra, words, people, use   (optional; words a visitor might use that the question and answer
+#                                  do not, e.g. "pregnant, surgery, doctor"; they count the most)
+#   Hello: what he says first    Fallback: what he says when nothing fits    Thanks: what he says to thanks
+#   (lines starting with # are notes to you)
+#
+# Sources: https://laughteryoga.ca/frequently-asked-questions/ and https://universal-laughter.com/ (about, services,
+# events), read 2026-11-01. Prices, phone and email are the site's: check them here when the site changes.
+
+Hello: Hi! I'm Floyd, the Universal Laughter helper robot. Ask me about Laughter Yoga, our sessions and workshops, or booking.
+Fallback: Sorry, I don't have an answer to that one. A person can help: email chris@universal-laughter.com or call +1.604.318.6658.
+Thanks: You're welcome! Is there anything else you'd like to know?
+
+# ---- Laughter Yoga ----
+
+Q: What is Laughter Yoga?
+A: Laughter Yoga is a method of stimulating group laughter through a series of laughter games/exercises. It is led by a certified Laughter Yoga Leader.
+K: explain, describe, meaning, about
+
+Q: What is a laughter game/exercise?
+A: A laughter game or exercise is a short activity that can stimulate laughter in the participants, even if they don't feel like laughing. For example: breathe deeply, hold it, and let it out with a laugh. Exercises are typically very simple, fun, and do not require you to "be funny."
+
+Q: Do people tell jokes? Do you have to have a sense of humour?
+A: No. We do not rely on jokes or humour. Instead, we use the physical laughter games to get us all laughing.
+K: funny, comedy, comedian
+
+Q: Do you do Yoga poses (asanas)? Do I need to be flexible, fit, or have prior Yoga experience?
+A: No. This is completely unlike other forms of Yoga that you may have seen or heard about. It's all about participating in laughter games to get us laughing together.
+K: stretch, stretching, poses, mat, experience, beginner, beginners, athletic
+
+Q: Why do it? Are there any benefits?
+A: Research has shown that laughing is very good for you, on many levels: physically, emotionally, mentally, relationally. Also, it can be a lot of fun and a great way to connect with new people.
+K: health, healthy, good, helps, stress, mood, reasons, point
+
+Q: Is Laughter Yoga suitable for everyone? What about seniors, children, or people with medical conditions?
+A: Almost everyone can benefit in some way from Laughter Yoga. Exercises can be modified to fit any ability. However, there are some situations where it is advisable not to participate: please ask me "when is it advisable to not participate?" and check with your doctor if you are unsure.
+K: seniors, elderly, old, kids, child, children, age, disability, disabled, wheelchair, injury, injured, knee, back, condition, conditions
+
+Q: What if I don't feel like laughing or cannot laugh on demand?
+A: In Laughter Yoga, we encourage people to fake laugh if need be. We say "fake it 'till you make it" or "simulate to stimulate." Research says you get the same health benefits whether your laughter is real or simulated.
+K: cannot, cant, unable, fake, forced, sad, depressed, mood
+
+Q: What if I am a serious person or easily embarrassed?
+A: While it can be more challenging for some people who are of certain temperaments, there have been many people who, seeing the benefits that others are getting, persevere and push through their feelings until they are able to fully enjoy the sessions. For some it's love at first laugh while for others it takes a few sessions before it clicks for them. We encourage you to give it a few sessions to see if it grows on you.
+K: shy, nervous, embarrassed, awkward, introvert, self-conscious, silly, scared, afraid
+
+Q: What should I wear and bring? Do I need a Yoga mat?
+A: We suggest comfortable clothing. No Yoga mat or other props are needed. A full water bottle is recommended.
+K: clothes, clothing, dress, bring, water, shoes
+
+Q: When is it advisable to not participate?
+A: If you have any of the following, you should consider delaying participation until a later date:
+• Recent major surgery
+• Serious chest infection
+• Serious abdominal pain
+• Flu, cold, or other infectious disease that may be spread to others
+• Late term pregnancy
+I can't give medical advice. If you are unsure, please check with your doctor.
+K: pregnant, pregnancy, surgery, operation, sick, ill, cold, flu, infection, infectious, doctor, medical, health, hernia, incontinence, safe, safety, risk, danger, dangerous, asthma, heart, blood, pressure
+
+# ---- Clubs and training ----
+
+Q: Are there any recurring Laughter Clubs near me?
+A: Yes! There are weekly laughter clubs, in person and online. In person: https://laughteryoga.ca/in-person-clubs  Online: https://laughteryoga.ca/online-clubs
+K: club, clubs, meetup, weekly, regular, drop-in, join, nearby, where, when, schedule
+
+Q: How do I become a Certified Laughter Yoga Leader?
+A: Once a year, we host a Laughter Yoga Leader Training weekend. To find out more, please see https://laughteryoga.ca/training
+K: certification, certified, certificate, course, training, train, teach, teacher, instructor, become, qualify, qualification, learn
+
+# ---- Universal Laughter: Chris, sessions and workshops ----
+
+Q: Who is Chris? Who runs Universal Laughter?
+A: Chris Pollitt has led laughter yoga sessions and workshops in Metro Vancouver for nearly two decades. After a background in technology, he became a certified Laughter Yoga Leader and Career Development Practitioner in 2009. More: https://universal-laughter.com/about
+K: chris, pollitt, facilitator, founder, owner, bio, experience, background, behind
+
+Q: What services does Universal Laughter offer?
+A: Chris works with organizations of all sizes:
+• Laughter Yoga Session (the most popular): fun laughter games that get any group laughing.
+• Games for Team Building: high-energy "tag" games such as human foosball, fox and squirrel and tunnel tag.
+• Interpersonal Communication Workshop: the "4 Level Connection" technique, a blend of Nonviolent Communication and Imago Dialogue.
+• Career Development Workshops: explore your strengths, values and skills to find a career that fits.
+Details: https://universal-laughter.com/services
+K: services, offer, offers, offering, workshops, workshop, programs, options, team, building, communication, career, products
+
+Q: How much does a session cost? What are your prices?
+A: Sessions and workshops are $100 per hour, and the rates are flexible: Chris will find something that fits your group and your budget. To get a quote or book, email chris@universal-laughter.com or call +1.604.318.6658.
+K: cost, costs, price, prices, pricing, fee, fees, rate, rates, quote, charge, expensive, cheap, budget, hourly, pay
+
+Q: How long is a session?
+A: A typical Laughter Yoga session is 60 minutes, team-building games 30 to 60 minutes, and the communication workshop 1 to 2 hours. Duration and fee are flexible.
+K: duration, long, hours, hour, minutes, length
+
+Q: What space or equipment do you need for a session?
+A: Laughter Yoga: a large open area, indoors or outdoors. Team-building games: a gymnasium or an outdoor field. Communication workshop: a meeting room with a whiteboard. Career workshops: a classroom with a whiteboard.
+K: space, room, venue, equipment, requirements, require, gym, whiteboard, setup, size, large, area, indoors, outdoors, outside
+
+Q: Can a Certified Laughter Yoga Leader come into my organization and lead a session for staff and/or clients?
+A: Yes! Chris leads sessions for staff and clients of organizations across Metro Vancouver. To book, email chris@universal-laughter.com or call +1.604.318.6658.
+K: workplace, company, corporate, team, staff, school, event, party, facilitator, leader, visit, organization, organisation, office
+
+Q: How do I book a session or contact Chris?
+A: Email chris@universal-laughter.com or call +1.604.318.6658. Rates are flexible.
+K: book, booking, contact, reach, email, phone, call, number, hire, availability, available, appointment
+
+Q: Where are you based?
+A: Universal Laughter is based in Vancouver, BC and works across Metro Vancouver.
+K: based, vancouver, city, serve, travel, burnaby, richmond, surrey
+
+Q: Is there something free I can try first?
+A: Yes! The Self Care Activity Chooser: spin the wheel and watch a short laughter yoga session led by Chris. No signup, no cost, and it works on your phone: https://u-l.ca/sc
+K: free, trial, try, sample, taste, demo, video, videos, watch, youtube
+
+Q: Where can I find Chris's news and events?
+A: See https://universal-laughter.com/events. Chris is also on YouTube ("A Daily Laugh For You"): https://www.youtube.com/adlfy
+K: news, upcoming, conference, talks, presentation, speaking, podcast, interview, blog, facebook, linkedin, yelp
