@@ -5102,7 +5102,7 @@ class FloydAdapter(CommandMixin):
         faq = self._faq()
         if faq is None or now - self.last_out.get(conv.id, -1e9) < self.FAQ_GAP:
             return
-        hello = faq["hello"] or "Hi! I'm Floyd, a helper robot. Ask me a question and I'll look it up."
+        hello = faq["hello"] or "Hello! Ask me a question and I'll look it up."
         first = conv.id not in self.greeted
         if len(self.greeted) > 2000:
             self.greeted.clear()
