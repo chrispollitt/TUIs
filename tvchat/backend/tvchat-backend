@@ -134,7 +134,7 @@ def _load_tvfloyd():
 
 tvf = _load_tvfloyd()
 
-PROTOCOLS = ("irc", "deltachat", "talk", "mail", "floyd")
+PROTOCOLS = ("irc", "deltachat", "talk", "mail", "lhc", "floyd")
 TALK_VIEWS = ("classic", "irc")
 STATES = ("disconnected", "connecting", "connected", "error")
 
@@ -924,7 +924,7 @@ for _n, (_al, _by) in COMMAND_TABLE.items():
     COMMAND_WORDS[_n] = _n
     for _a in _al:
         COMMAND_WORDS[_a] = _n
-PROTO_LABEL = {"irc": "IRC", "talk": "talk", "deltachat": "Delta Chat", "mail": "mail", "floyd": "Floyd"}
+PROTO_LABEL = {"irc": "IRC", "talk": "talk", "deltachat": "Delta Chat", "mail": "mail", "lhc": "Live Helper Chat", "floyd": "Floyd"}
 
 
 def _variant(name, proto):
@@ -5016,7 +5016,7 @@ class FloydAdapter(CommandMixin):
         lvl = self.level_of(conv)
         up = self._span(time.time() - getattr(self.chat, "started", time.time()))
         nets = [a.display for a in self.chat.accounts
-                if a.protocol in ("irc", "mail", "deltachat") and a.state == "connected"]
+                if a.protocol in ("irc", "mail", "deltachat", "lhc") and a.state == "connected"]
         fort = mind.fortune_prog()
         d = self.memory.data
         return mind._say([
@@ -6003,8 +6003,333 @@ class MailAdapter(CommandMixin):
             done)
 
 
+# --------------------------------------------------------------------------
+# The Live Helper Chat adapter: Floyd is an operator on a Live Helper Chat site.
+# It polls the site's REST API (basic auth: the operator and his API key), so only
+# outbound HTTPS is needed.  A visitor's chat is a conversation, lhc/<chat id>.
+# --------------------------------------------------------------------------
+def lhc_ids(text, ident="lhc"):
+    """The numbers in a department= list (comma separated); empty = every department."""
+    out = []
+    for x in (text or "").split(","):
+        x = x.strip()
+        if x:
+            if not x.isdigit():
+                raise UserError("[account:%s] department= must be department numbers, comma separated" % ident)
+            out.append(int(x))
+    return out
+
+
+def lhc_call(p, path, params=None, post=None):
+    """One call to the REST API: the decoded JSON.  Raises UserError with what went wrong."""
+    import urllib.error, urllib.parse, urllib.request
+    url = p["url"].rstrip("/") + "/restapi/" + path
+    if params:
+        url += "?" + urllib.parse.urlencode(params)
+    data = urllib.parse.urlencode(post).encode() if post is not None else None
+    req = urllib.request.Request(url, data=data)
+    token = base64.b64encode(("%s:%s" % (p["user"], p["password"])).encode()).decode()
+    req.add_header("Authorization", "Basic " + token)
+    req.add_header("Accept", "application/json")
+    ctx = None
+    if url.startswith("https") and not p["verify"]:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    try:
+        with urllib.request.urlopen(req, timeout=20, context=ctx) as r:
+            body = r.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        raise UserError("%s answered %d %s%s" % (p["url"], e.code, e.reason,
+                                                 " (wrong user or API key?)" if e.code in (401, 403) else ""))
+    except (urllib.error.URLError, OSError) as e:
+        raise UserError("could not reach %s: %s" % (p["url"], getattr(e, "reason", e)))
+    try:
+        out = json.loads(body)
+    except ValueError:
+        raise UserError("%s did not answer with JSON (is the url= the Live Helper Chat site?)" % p["url"])
+    if isinstance(out, dict) and out.get("error") is True:
+        raise UserError("Live Helper Chat said: %s" % str(out.get("result") or out.get("message") or "error")[:200])
+    return out
+
+
+def lhc_items(res, key):
+    """The list inside a REST answer: {"result": [...]} or {"result": {key: [...]}}, or a bare list."""
+    r = res.get("result") if isinstance(res, dict) and "result" in res else res
+    if isinstance(r, dict):
+        for k in (key, "list"):
+            if isinstance(r.get(k), list):
+                return [x for x in r[k] if isinstance(x, dict)]
+        vals = list(r.values())
+        return vals if vals and all(isinstance(v, dict) for v in vals) else []
+    return [x for x in r if isinstance(x, dict)] if isinstance(r, list) else []
+
+
+def lhc_fetch(p, last, mine, keepalive=0):
+    """What is new on the site: ({chat id: nick} of the chats Floyd may answer, [(chat id, message id,
+    text)] of the visitors' new lines, {chat id: newest message id seen}).  last = the newest message
+    already seen per chat; mine = chats he has already answered (they are assigned to him).
+    keepalive = 1 to mark the operator online, 2 to report that he is still here (the site counts an
+    operator online only while his activity is recent)."""
+    if keepalive and p["operator_id"]:
+        if keepalive == 1:
+            lhc_call(p, "setonlinestatus/%d/1" % p["operator_id"])
+        lhc_call(p, "updatelastactivity/%d" % p["operator_id"])
+    chats = {}
+    for status in (0, 1):                # pending, active
+        for dep in (p["departments"] or [None]):
+            q = {"status": status, "limit": 50, "sort": "id_asc"}
+            if dep is not None:
+                q["departament_id"] = dep
+            for c in lhc_items(lhc_call(p, "chats", q), "list"):
+                try:
+                    cid, owner = int(c["id"]), int(c.get("user_id") or 0)
+                except (KeyError, ValueError, TypeError):
+                    continue
+                if owner == 0 or owner == p["operator_id"] or cid in mine:
+                    chats[cid] = str(c.get("nick") or "Visitor")
+    lines, newest = [], {}
+    for cid in sorted(chats):
+        q = {"chat_id": cid, "ignore_system_messages": 1, "ignore_typing": 1, "remove_bbcode": 1}
+        if cid in last:
+            q["last_message_id"] = last[cid]
+        msgs = []
+        for m in lhc_items(lhc_call(p, "fetchchatmessages", q), "messages"):
+            try:
+                msgs.append((int(m["id"]), int(m.get("user_id") or 0), str(m.get("msg") or "")))
+            except (KeyError, ValueError, TypeError):
+                continue
+        msgs.sort()
+        if cid not in last:              # first sight (a restart): what an operator already answered is old
+            answered = max([i for i, uid, _ in msgs if uid > 0] or [0])
+            msgs = [m for m in msgs if m[0] > answered]
+        for mid, uid, text in msgs:
+            newest[cid] = max(newest.get(cid, 0), mid)
+            if uid == 0 and text.strip():
+                lines.append((cid, mid, text))
+    return chats, lines, newest
+
+
+def lhc_say(p, chat_id, text, name):
+    lhc_call(p, "addmsgadmin", post={"chat_id": chat_id, "msg": text, "sender": "operator",
+                                     **({"operator_name": name} if name else {})})
+
+
+class LhcAdapter(CommandMixin):
+    """[account:NAME] protocol = lhc.  Options: url= (the Live Helper Chat site), user= (the
+    operator Floyd is), department= (numbers, comma separated; default every department),
+    operator_id= (his user number on the site: keeps him shown online, and his chats going across
+    a restart), name= (what visitors
+    see him called), poll= (seconds, default 5), verify= (check the site's certificate, default
+    yes).  The operator's API key is found as for any account ($TVCHAT_PASS_NAME, ~/.netrc).
+    A visitor is never an admin.  Answers at most MAX_PER_CHAT lines an hour to one chat and
+    MAX_TOTAL in all."""
+
+    POLL = 5
+    MAX_PER_CHAT = 30
+    MAX_TOTAL = 300
+    KEEPALIVE = 60                       # seconds between "he is still here" calls (with operator_id=)
+    SERVER_TEXT_REFUSAL = "the server window takes no messages - only /commands (/help lists them)"
+
+    def __init__(self, chat, account):
+        self.chat, self.account, self.loop = chat, account, chat.loop
+        o = account.opts
+        self.kept = 0                    # when he last said he was here
+        self.url = (o.get("url") or "").strip()
+        self.user = (o.get("user") or "").strip()
+        self.name = (o.get("name") or "").strip()
+        self.departments = lhc_ids(o.get("department"), account.id)
+        try:
+            self.poll = float(o.get("poll") or self.POLL)
+            self.operator_id = int(o.get("operator_id") or 0)
+        except ValueError:
+            raise UserError("[account:%s] poll= and operator_id= must be numbers" % account.id)
+        self.gen = 0
+        self._ids = 0
+        self.phase = "down"
+        self.timer = None
+        self.last = {}                   # chat id -> newest message id seen
+        self.mine = set()                # chats he has answered
+        self.ignored = set()             # chats he was told to leave
+        self.convs = {}                  # chat id -> conversation
+        self.outbox = []                 # [(chat id, text)] waiting to be posted, in order
+        self.posting = False
+        self.sent = {}                   # chat id -> [times of lines said]
+        self.sent_all = []
+        self.last_error = ""
+
+    def local_id(self):
+        self._ids += 1
+        return "%s:%d" % (self.account.id, self._ids)
+
+    def need_up(self):
+        if self.phase != "up":
+            raise UserError("%s is not connected" % self.account.display)
+
+    def server_conv(self):
+        return self.chat.ensure_conv(self.account, "*", "server", self.account.display)
+
+    def system(self, conv, text):
+        self.chat.add_message(conv, Message(self.local_id(), conv.id, time.time(),
+                                            Contact(""), text, "n"), count=False)
+
+    def whoami_lines(self, conv):
+        return ["you are the operator %s on %s" % (self.user, self.url),
+                "visitors are anonymous: nobody there is an admin"]
+
+    def status_lines(self):
+        a = self.account
+        return ["%s (Live Helper Chat): %s%s" % (a.display, a.state, " - " + a.detail if a.detail else ""),
+                self.counts()]
+
+    def _params(self):
+        if not self.url or not self.user:
+            raise UserError("[account:%s] url= and user= are needed" % self.account.id)
+        host = re.sub(r"^https?://", "", self.url).split("/")[0]
+        pw = find_password_where(self.account.id, host, self.user, "lhc")[0]
+        if not pw:
+            raise UserError("no API key for %s on %s (set $%s or ~/.netrc)" % (
+                self.user, host, _env_name(self.account.id)))
+        return {"url": self.url, "user": self.user, "password": pw, "departments": self.departments,
+                "operator_id": self.operator_id, "verify": _bool(self.account.opts.get("verify"), True)}
+
+    # -- lifecycle ------------------------------------------------------------
+    def connect(self):
+        if self.phase == "up":
+            return
+        self._params()                   # a missing key is said now
+        self.server_conv()
+        self.phase = "up"
+        self.chat.set_state(self.account, "connected", self.url)
+        self._poll()
+
+    def disconnect(self):
+        was = self.phase
+        self.gen += 1
+        self.phase = "down"
+        self.loop.cancel(self.timer)
+        self.timer, self.posting, self.outbox, self.kept = None, False, [], 0
+        if was != "down":
+            self.chat.set_state(self.account, "disconnected", "")
+
+    def join(self, target):
+        raise UserError("a conversation starts when a visitor writes")
+
+    def part(self, conv):
+        if conv.kind == "server":
+            raise UserError("the server window cannot be left")
+        cid = int(conv.target)
+        self.ignored.add(cid)
+        self.convs.pop(cid, None)
+        self.chat.remove_conv(conv)
+
+    def c_quit(self, conv, rest):
+        return (self.disconnect, ())
+
+    def c_me(self, conv, rest):
+        self._in_a_chat(conv, "/me")
+        return (self.speak, (conv, "* " + rest))
+
+    # -- coming in --------------------------------------------------------------
+    def _poll(self):
+        gen = self.gen
+        if self.phase != "up":
+            return
+        try:
+            p = self._params()
+        except UserError as e:
+            self._failed(e)
+            return
+        last, mine, keep = dict(self.last), set(self.mine), 0
+        now = self.loop.clock()
+        if self.operator_id and now - self.kept >= self.KEEPALIVE:
+            keep = 2 if self.kept else 1
+            self.kept = now
+        self.loop.run_in_thread(lambda: lhc_fetch(p, last, mine, keep),
+                                lambda res, err: gen == self.gen and self._fetched(res, err))
+
+    def _failed(self, err):
+        text = str(err)
+        if text != self.last_error:      # said once, not every poll
+            self.last_error = text
+            self.system(self.server_conv(), text)
+        _log.debug("%s: %s", self.account.id, text)
+        self.timer = self.loop.call_later(min(self.poll * 6, 60), self._poll)
+
+    def _fetched(self, res, err):
+        if err is not None:
+            self._failed(err)
+            return
+        self.last_error = ""
+        chats, lines, newest = res
+        for cid, mid in newest.items():
+            self.last[cid] = max(self.last.get(cid, 0), mid)
+        for cid in set(self.last) | set(self.convs):
+            if cid not in chats:         # closed (or taken by another operator): forget it
+                self.last.pop(cid, None)
+                self.mine.discard(cid)
+                self.ignored.discard(cid)
+                conv = self.convs.pop(cid, None)
+                if conv is not None:
+                    self.chat.remove_conv(conv)
+        for cid, mid, text in lines:
+            if cid in self.ignored or cid not in chats:
+                continue
+            nick = chats[cid]
+            conv = self.convs.get(cid)
+            if conv is None:
+                conv = self.convs[cid] = self.chat.ensure_conv(self.account, str(cid), "direct", "%s (#%d)" % (nick, cid))
+            self.chat.add_message(conv, Message(self.local_id(), conv.id, time.time(),
+                                                Contact("lhc:%d" % cid, nick, None), text, ""))
+        self.timer = self.loop.call_later(self.poll, self._poll)
+
+    # -- going out: each line is an operator message, in order --------------------
+    def speak(self, conv, text):
+        self.need_up()
+        if conv.kind == "server":
+            raise UserError(self.SERVER_TEXT_REFUSAL)
+        cid = int(conv.target)
+        mid = self.local_id()
+        self.chat.add_message(conv, Message(mid, conv.id, time.time(), Contact(self.user, "me"),
+                                            text, "s"), count=False)
+        now = self.loop.clock()
+        self.sent_all = [t for t in self.sent_all if now - t < 3600]
+        mine = self.sent[cid] = [t for t in self.sent.get(cid, []) if now - t < 3600]
+        if len(mine) >= self.MAX_PER_CHAT or len(self.sent_all) >= self.MAX_TOTAL:
+            _log.info("%s: not answering chat %d: too many lines this hour", self.account.id, cid)
+            return mid
+        mine.append(now)
+        self.sent_all.append(now)
+        self.mine.add(cid)
+        self.outbox.append((cid, text))
+        self._post_next()
+        return mid
+
+    def _post_next(self):
+        if self.posting or not self.outbox or self.phase != "up":
+            return
+        try:
+            p = self._params()
+        except UserError as e:
+            self.system(self.server_conv(), str(e))
+            self.outbox = []
+            return
+        cid, text = self.outbox.pop(0)
+        self.posting, gen, name = True, self.gen, self.name
+
+        def done(res, err):
+            if gen != self.gen:
+                return
+            self.posting = False
+            if err is not None:
+                conv = self.convs.get(cid) or self.server_conv()
+                self.system(conv, "could not send to chat %d: %s" % (cid, err))
+            self._post_next()
+        self.loop.run_in_thread(lambda: lhc_say(p, cid, text, name), done)
+
+
 ADAPTERS = {"irc": IrcAdapter, "deltachat": DeltaChatAdapter, "talk": TalkAdapter,
-            "mail": MailAdapter, "floyd": FloydAdapter}
+            "mail": MailAdapter, "lhc": LhcAdapter, "floyd": FloydAdapter}
 
 
 # --------------------------------------------------------------------------
@@ -6061,6 +6386,18 @@ def check_config(path):
                 parse_known(o.get("known"))
             except UserError as e:
                 errors.append("[account:%s] %s" % (i, e))
+        elif a.protocol == "lhc":
+            if not re.match(r"^https?://[^/\s]+", (o.get("url") or "").strip()):
+                errors.append("[account:%s] url= must be the Live Helper Chat site's address (https://...)" % i)
+            if not (o.get("user") or "").strip():
+                errors.append("[account:%s] user= (the operator Floyd logs in as) is missing" % i)
+            try:
+                lhc_ids(o.get("department"), i)
+                float(o.get("poll") or LhcAdapter.POLL)
+            except (UserError, ValueError) as e:
+                errors.append(str(e) if isinstance(e, UserError) else "[account:%s] poll= must be a number of seconds" % i)
+            if (o.get("url") or "").strip().startswith("http://"):
+                warnings.append("[account:%s] url= is not https: the operator's key goes over the wire in the clear" % i)
         elif a.protocol == "deltachat":
             addr = (o.get("addr") or "").strip()
             if not DeltaChatAdapter.ADDRESS.match(addr):
@@ -6192,7 +6529,7 @@ class Chat:
         to us or a group: not ours, not a channel's chatter (a link there is
         for everyone), not a server window's notices, not mail or Floyd."""
         if "s" in msg.flags or "n" in msg.flags or conv.kind not in ("direct", "group") \
-                or conv.account.protocol in ("mail", "floyd"):
+                or conv.account.protocol in ("mail", "lhc", "floyd"):
             return                       # (n: notices and our own notes - not what a person said)
         text = msg.text or ""
         who = msg.sender.display or msg.sender.address
@@ -7197,7 +7534,7 @@ def cmd_floyd_daemon(a):
         signal.signal(sig, lambda *_: loop.stop())
     chat.start()
     for x in chat.accounts:                      # he is always on, with or without [chat] autoconnect
-        if x.protocol in ("irc", "talk", "deltachat", "mail", "floyd") and x.state == "disconnected":
+        if x.protocol in ("irc", "talk", "deltachat", "mail", "lhc", "floyd") and x.state == "disconnected":
             try:
                 chat.connect(x)
             except UserError as e:

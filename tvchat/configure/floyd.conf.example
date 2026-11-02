@@ -142,7 +142,7 @@ channels = #test
 [account:floyd]
 protocol = floyd
 # he listens in every conversation of that account, private messages included
-# add delta/* and mail/* once those accounts above are on:  attach   = cpbee/*, delta/*, mail/*
+# add delta/*, mail/* and lhc/* once those accounts above are on:  attach   = cpbee/*, delta/*, mail/*
 attach   = cpbee/*
 # add libera/* here once [account:libera] above is on:  attach   = cpbee/*, libera/*
 # speaks as himself, so no "[Floyd] " tag
@@ -187,3 +187,22 @@ claude_dir      = ~
 #claude_lines   = 10
 # what he remembers (seen, tells, karma, quotes, facts)
 #memory   = ~/.local/share/tvchat/floyd/floyd.json
+
+# Live Helper Chat (optional): he is an operator on a Live Helper Chat site, so visitors in its
+# chat widget talk to him.  He polls the site's REST API over HTTPS every poll= seconds (only
+# outbound traffic - nothing on this network is reachable from the site).  Create on the site:
+# an operator for him (user=), a REST API key for that operator, and a department (its number
+# goes in department=; empty = every department), and set him online.  The key is in floyd.env
+# as TVCHAT_PASS_LHC (the account's name, upper case).  A visitor is anonymous: never an admin.
+# He leaves a chat another operator has taken, answers one chat at most 30 lines an hour (300 in
+# all), and replies at most once in a while per chat like anywhere he is attached.  operator_id =
+# his user number on the site (the ID column of its Users page) keeps him shown online there and his chats going across a restart.  Add lhc/* to attach = below.
+#[account:lhc]
+#protocol    = lhc
+#display     = Live Helper Chat
+#url         = https://chat.u-l.ca/index.php     (with index.php if the site has no URL rewriting)
+#user        = floyd
+#department  = 1
+#name        = Floyd
+#poll        = 5
+#operator_id =

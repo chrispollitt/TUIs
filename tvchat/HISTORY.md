@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Floyd on Live Helper Chat (`protocol = lhc`):** a new account type: Floyd is an operator on a Live
+  Helper Chat site and answers the visitors in its chat widget (`lhc/<chat id>`). He polls the site's REST
+  API over HTTPS (outbound only), answers as an operator, leaves chats another operator has taken, forgets
+  chats that close, and says at most 30 lines an hour to one chat. A visitor is never an admin.
+  `check-config` knows the section; see `PLAN.md`.
+
 - **`/whoami`:** who the network knows you as in this account: your nick or address, on IRC the services
   account you are logged in to (what Floyd's `admins =` is matched against, or "not logged in") and your role
   in the channel; on talk and mail, the user and address.

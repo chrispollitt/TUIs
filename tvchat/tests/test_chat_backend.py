@@ -7,6 +7,7 @@ no network and no real account.
 """
 import base64
 import importlib.machinery
+import json
 import importlib.util
 import os
 import shutil
@@ -4752,6 +4753,238 @@ class TestServeIrc(IrcBase):
         self.assertEqual(p.wait(timeout=5), 0)
         srv.thread.join(5)
         self.assertIsNone(srv.error)          # QUIT reached the server
+
+
+class FakeLhc:
+    """A Live Helper Chat site on 127.0.0.1: the REST calls Floyd makes (basic auth user "floyd", key
+    "k3y"), over .chats - {id: {"nick", "status", "user_id"}} - and .msgs - {id: [{"id", "msg", "user_id"}]}.
+    What is posted with addmsgadmin lands in .posted and as an operator line (user_id 5)."""
+
+    def __init__(self):
+        import http.server
+        import urllib.parse
+        self.chats, self.msgs, self.posted, self.calls = {}, {}, [], []
+        self.lock = threading.Lock()
+        fake = self
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def _send(self, code, obj):
+                body = json.dumps(obj).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def _go(self, post):
+                u = urllib.parse.urlparse(self.path)
+                q = {k: v[0] for k, v in urllib.parse.parse_qs(u.query).items()}
+                if post:
+                    q.update({k: v[0] for k, v in urllib.parse.parse_qs(
+                        self.rfile.read(int(self.headers.get("Content-Length") or 0)).decode()).items()})
+                want = "Basic " + base64.b64encode(b"floyd:k3y").decode()
+                if self.headers.get("Authorization") != want:
+                    return self._send(401, {"error": True, "result": "no"})
+                with fake.lock:
+                    fake.calls.append((u.path, q))
+                    if u.path == "/restapi/chats":
+                        want_status = int(q.get("status", 0))
+                        lst = [dict(id=i, nick=c["nick"], status=c["status"], user_id=c.get("user_id", 0))
+                               for i, c in sorted(fake.chats.items()) if c["status"] == want_status]
+                        return self._send(200, {"error": False, "result": {"list": lst}})
+                    if u.path == "/restapi/fetchchatmessages":
+                        cid, after = int(q["chat_id"]), int(q.get("last_message_id") or 0)
+                        lst = [m for m in fake.msgs.get(cid, []) if m["id"] > after]
+                        return self._send(200, {"error": False, "result": {"messages": lst}})
+                    if u.path.startswith(("/restapi/updatelastactivity/", "/restapi/setonlinestatus/")):
+                        return self._send(200, {"error": False, "result": {}})
+                    if u.path == "/restapi/addmsgadmin":
+                        cid = int(q["chat_id"])
+                        fake.posted.append(q)
+                        ms = fake.msgs.setdefault(cid, [])
+                        ms.append({"id": max([m["id"] for m in ms] or [0]) + 1, "msg": q["msg"], "user_id": 5})
+                        fake.chats[cid]["user_id"] = 5
+                        return self._send(200, {"error": False, "result": {}})
+                    self._send(404, {"error": True, "result": "unknown"})
+
+            def do_GET(self):
+                self._go(False)
+
+            def do_POST(self):
+                self._go(True)
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+        self.url = "http://127.0.0.1:%d" % self.server.server_address[1]
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    def chat(self, cid, nick, *lines, status=0, user_id=0):
+        with self.lock:
+            self.chats[cid] = {"nick": nick, "status": status, "user_id": user_id}
+            ms = self.msgs.setdefault(cid, [])
+            for text in lines:
+                ms.append({"id": max([m["id"] for m in ms] or [0]) + 1, "msg": text, "user_id": 0})
+
+    def say(self, cid, text):
+        self.chat(cid, self.chats[cid]["nick"], text, status=self.chats[cid]["status"], user_id=self.chats[cid]["user_id"])
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+class TestLhc(Base):
+    """The Live Helper Chat adapter: a visitor's line is answered as the operator."""
+
+    def setUp(self):
+        super().setUp()
+        self.lhc = FakeLhc()
+        self.addCleanup(self.lhc.close)
+        os.environ["TVCHAT_PASS_LHC"] = "k3y"
+        self.addCleanup(os.environ.pop, "TVCHAT_PASS_LHC", None)
+        self.conf("""\
+            [account:lhc]
+            protocol   = lhc
+            url        = %s
+            user       = floyd
+            department = 3
+            name       = Floyd
+            poll       = 0.2
+
+            [account:floyd]
+            protocol = floyd
+            attach   = lhc/*
+            tag      =
+            idle     = 0
+            admins   = alice
+            """ % self.lhc.url)
+        self.chat = cb._chat()
+        self.chat.daemon = True
+        self.addCleanup(self.chat.close)
+        self.chat.adapter(self.chat.by_id["floyd"]).ATTACH_GAP = 0     # (his pause between answers is not under test)
+
+    def turn(self, pred, timeout=10):
+        loop = self.chat.loop
+        loop.running = True
+        deadline = time.time() + timeout
+        while not pred():
+            if time.time() > deadline:
+                self.fail("timed out; events: %r\nposted: %r" % (self.chat.events.items[-6:], self.lhc.posted))
+            loop.run_once(0.05)
+
+    def settle(self, secs=1.0):
+        end = time.time() + secs
+        while time.time() < end:
+            self.chat.loop.run_once(0.05)
+
+    def up(self):
+        self.chat.connect(self.chat.by_id["floyd"])
+        self.chat.connect(self.chat.by_id["lhc"])
+
+    def test_a_visitor_line_is_answered_once_as_the_operator(self):
+        self.lhc.chat(7, "Pat", "!8ball will it work")
+        self.up()
+        self.turn(lambda: self.lhc.posted)
+        q = self.lhc.posted[0]
+        self.assertEqual((q["chat_id"], q["sender"], q["operator_name"]), ("7", "operator", "Floyd"))
+        self.assertIn(q["msg"], cb.FloydMind.EIGHT_BALL)
+        self.settle()
+        self.assertEqual(len(self.lhc.posted), 1)                      # read once, answered once
+        self.assertEqual(self.chat.adapter(self.chat.by_id["lhc"]).convs[7].title, "Pat (#7)")
+
+    def test_with_operator_id_he_is_marked_online_and_kept_so(self):
+        ad = self.chat.adapter(self.chat.by_id["lhc"])
+        ad.operator_id, ad.KEEPALIVE = 1, 0.5
+        self.up()
+        self.turn(lambda: sum(1 for path, _ in self.lhc.calls if path == "/restapi/updatelastactivity/1") >= 2)
+        paths = [path for path, _ in self.lhc.calls]
+        self.assertEqual(paths.count("/restapi/setonlinestatus/1/1"), 1)       # once, at the start
+
+    def test_only_the_wanted_department_and_open_chats_are_asked_for(self):
+        self.lhc.chat(7, "Pat", "!8ball x")
+        self.up()
+        self.turn(lambda: self.lhc.posted)
+        asked = [q for path, q in self.lhc.calls if path == "/restapi/chats"]
+        self.assertTrue(asked and all(q["departament_id"] == "3" for q in asked))
+        self.assertEqual(sorted({q["status"] for q in asked}), ["0", "1"])
+
+    def test_a_visitor_is_never_an_admin(self):
+        self.lhc.chat(7, "alice", "!claude who is floyd")             # a nick proves nothing
+        self.up()
+        self.turn(lambda: self.lhc.posted)
+        self.assertIn("admin", self.lhc.posted[0]["msg"].lower())
+
+    def test_a_chat_another_operator_has_is_left_alone(self):
+        self.lhc.chat(8, "Sam", "!8ball x", status=1, user_id=9)
+        self.up()
+        self.settle(1.2)
+        self.assertEqual(self.lhc.posted, [])
+
+    def test_the_next_line_in_the_same_chat_is_answered(self):
+        self.lhc.chat(7, "Pat", "!8ball one")
+        self.up()
+        self.turn(lambda: len(self.lhc.posted) == 1)
+        self.lhc.say(7, "!8ball two")
+        self.turn(lambda: len(self.lhc.posted) == 2)
+
+    def test_a_chat_that_closed_goes_away(self):
+        self.lhc.chat(7, "Pat", "!8ball x")
+        self.up()
+        self.turn(lambda: self.lhc.posted)
+        ad = self.chat.adapter(self.chat.by_id["lhc"])
+        self.assertIn(7, ad.convs)
+        with self.lhc.lock:
+            self.lhc.chats[7]["status"] = 2
+        self.turn(lambda: 7 not in ad.convs)
+
+    def test_a_restart_does_not_answer_what_was_answered(self):
+        self.lhc.chat(7, "Pat", "!8ball old", status=1)
+        with self.lhc.lock:
+            self.lhc.msgs[7].append({"id": 2, "msg": "an answer", "user_id": 5})
+            self.lhc.chats[7]["user_id"] = 5
+        self.chat.adapter(self.chat.by_id["lhc"]).operator_id = 5      # (what operator_id= is for)
+        self.up()
+        self.settle(1.2)
+        self.assertEqual(self.lhc.posted, [])
+        self.lhc.say(7, "!8ball new")
+        self.turn(lambda: self.lhc.posted)
+
+    def test_the_lines_said_in_an_hour_are_limited(self):
+        ad = self.chat.adapter(self.chat.by_id["lhc"])
+        ad.MAX_PER_CHAT = 2
+        self.lhc.chat(7, "Pat", "!8ball a", "!8ball b", "!8ball c", "!8ball d")
+        self.up()
+        self.turn(lambda: len(self.lhc.posted) >= 2)
+        self.settle(2.0)
+        self.assertEqual(len(self.lhc.posted), 2)
+
+    def test_a_wrong_key_is_said_once_in_the_server_window(self):
+        os.environ["TVCHAT_PASS_LHC"] = "wrong"
+        self.up()
+        ad = self.chat.adapter(self.chat.by_id["lhc"])
+        self.turn(lambda: ad.last_error)
+        self.assertIn("401", ad.last_error)
+        self.assertIn("wrong user or API key", ad.last_error)
+
+    def test_a_missing_key_stops_the_connect(self):
+        os.environ.pop("TVCHAT_PASS_LHC")
+        with self.assertRaises(cb.UserError):
+            self.chat.connect(self.chat.by_id["lhc"])
+
+    def test_check_config_wants_a_url_and_an_operator(self):
+        p = self.conf("""\
+            [account:lhc]
+            protocol = lhc
+            url      = chat.example.org
+            department = x
+            """)
+        errors, warnings, _ = cb.check_config(str(p))
+        text = "\n".join(errors)
+        self.assertIn("url=", text)
+        self.assertIn("user=", text)
+        self.assertIn("department=", text)
 
 
 if __name__ == "__main__":

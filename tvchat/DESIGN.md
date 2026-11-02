@@ -364,6 +364,15 @@ Message-ID matches) flagged `\Seen` into `sent_folder =`, else the folder the se
 (`sent_folder_of`), else a usual name, else a new `Sent` (`INBOX.Sent` when the server's folders live under
 INBOX.). A failure is logged at INFO and does not undo the send. Test: `TestMailReplies`.
 
+**Live Helper Chat.** `LhcAdapter` is built like the mail adapter: one thread polls (`lhc_fetch`) and the main
+loop does the rest. Each poll lists the pending and active chats in the wanted departments
+(`chats?status=0|1`), keeps those unassigned, assigned to `operator_id`, or already answered (`mine`), and
+reads each one's new messages (`fetchchatmessages?last_message_id=`). Visitor lines (`user_id` 0) become
+messages from `Contact("lhc:<id>", nick, None)`: no account, so never an admin. At first sight of a chat
+(a restart) lines before the last operator line are old. What Floyd says goes out one at a time,
+in order, through `addmsgadmin`. The JSON is read tolerantly (`lhc_items`), since the shapes were taken
+from the published Swagger and checked against the real site only in the live test.
+
 **His inbox.** With `archive` (on in the daemon) `fetch_new_mail` copies each mail it took to the saved
 folder (`saved_folder =`, else \Archive, `saved`, `INBOX.saved`, `Saved`, `Archive`, else a new `saved`:
 `folder_of`, shared with the Sent lookup) and deletes the original, in the same connection that marked it
