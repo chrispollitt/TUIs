@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Fix: Floyd got the date and time wrong** (`!time in Vancouver` said "02:25 (Thu)" on a Sunday evening). His clock for
+  dates and times was the event loop's timer clock - seconds since the machine booted - taken as a date. `!time`,
+  `!date`, `!time in X`, `!seen`, `!tell`, the catch-up and the "ignore lines older than a minute" check now use the
+  real clock (`Chat.wall`). Memory saved with the old numbers is cleaned by `floyd-clock-on-cpbee.sh`.
+
 - **Floyd tells jokes:** `!joke` gives a setup line and, a moment later, the punchline, from thirty
   clean, family-friendly jokes in his own voice (some laughter-yoga ones). Heard wherever `!8ball` is,
   listed in `!help`; the `seed =` of the account makes the choice repeatable.

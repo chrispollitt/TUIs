@@ -5019,6 +5019,23 @@ class TestLhc(Base):
         self.assertIn("department=", text)
 
 
+class TestFloydWallClock(Base):
+    """What Floyd says of the date and time comes from the wall clock, not the loop's timer clock."""
+
+    def test_his_mind_dates_things_by_the_wall_clock(self):
+        self.conf("""\
+            [account:floyd]
+            protocol = floyd
+            memory   = none
+            """)
+        chat = cb.Chat(loop=cb.Loop(clock=lambda: 5.0), clock=lambda: 1793592000.0)   # 5 s since boot; 2 Nov 2026
+        mind = chat.adapter(chat.by_id["floyd"])._new_mind("x")
+        self.assertEqual(mind.clock(), 1793592000.0)
+        said = [t for _, t, *_ in mind.botcmd("!date", "pat")]
+        self.assertIn("November", said[0])                      # not January 1970
+        self.assertIn("2026", __import__("time").strftime("%Y", __import__("time").localtime(mind.clock())))
+
+
 class TestFloydPro(Base):
     """Floyd-pro: a Floyd with faq = FILE answers a visitor from the file alone."""
 

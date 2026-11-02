@@ -4965,7 +4965,7 @@ class FloydAdapter(CommandMixin):
 
     def _new_mind(self, nick):
         return FloydMind(random.Random(self.seed) if self.seed is not None else random.Random(),
-                         nick, clock=self.chat.loop.clock, memory=self.memory)
+                         nick, clock=self.chat.wall, memory=self.memory)
 
     # -- attached to another account's conversation ------------------------
     ATTACH_GAP = 2.0                     # seconds between his answers in one place
@@ -5010,7 +5010,7 @@ class FloydAdapter(CommandMixin):
             return
         if self.chat.daemon and "s" in msg.flags:
             return                       # the bot never answers himself
-        if msg.id in self.heard_ids or self.chat.loop.clock() - msg.when > self.MAX_AGE:
+        if msg.id in self.heard_ids or self.chat.wall() - msg.when > self.MAX_AGE:
             return
         self.heard_ids.append(msg.id)
         text = msg.text.strip()
@@ -5024,7 +5024,7 @@ class FloydAdapter(CommandMixin):
         if mind is None:
             mind = self.minds[conv.id] = self._new_mind(who)
         mind.nick = who
-        now = self.chat.loop.clock()
+        now = self.chat.wall()           # (what he notes of people is dated: seen, tells, catch-up)
         lvl = self.level_of(conv)
         m = re.match(r"^@?floyd(?:-bot)?\s*[:,]\s*(.*)$", text, re.I)
         # on the server, a private message is always meant for him
@@ -5291,7 +5291,7 @@ class FloydAdapter(CommandMixin):
         t = (body[1:] if bang else body).strip()
         verb, _, rest = t.partition(" ")
         verb = verb.lower()
-        now = self.chat.loop.clock()
+        now = self.chat.wall()
         text = None
         try:
             if verb == "catchup" or (not bang and self.CATCHUP_RX.search(t)
@@ -6652,6 +6652,7 @@ def check_config(path):
 class Chat:
     def __init__(self, loop=None, clock=time.time):
         self.loop = loop or Loop()
+        self.wall = clock                # the date and time (the loop's clock is only for timers: seconds since boot)
         self.started = time.time()       # for Floyd's !status
         self.events = EventQueue(clock)
         # A broken tvchat.conf must not kill the co-process before its banner
