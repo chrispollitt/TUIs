@@ -5153,5 +5153,82 @@ class TestFloydPro(Base):
         self.assertTrue(any("no Q:/A: entries" in e for e in errors), errors)
 
 
+class TestTwoSites(Base):
+    """A fun site and a pro site: each Floyd answers only on his own, and each site has its own key."""
+
+    turn, settle = TestLhc.turn, TestLhc.settle
+
+    def setUp(self):
+        super().setUp()
+        self.fun, self.pro = FakeLhc(), FakeLhc()
+        self.addCleanup(self.fun.close)
+        self.addCleanup(self.pro.close)
+        for k in ("TVCHAT_PASS_LHC", "TVCHAT_PASS_LHC_PRO"):
+            os.environ[k] = "k3y"
+            self.addCleanup(os.environ.pop, k, None)
+        self.faq = self.tmp / "faq.txt"
+        self.faq.write_text((Path(__file__).resolve().parent.parent / "configure" / "faq.example.txt").read_text(encoding="utf-8"),
+                            encoding="utf-8")
+        self.conf("""\
+            [account:lhc]
+            protocol = lhc
+            url      = %s
+            user     = floyd
+            poll     = 0.2
+
+            [account:lhc_pro]
+            protocol = lhc
+            url      = %s
+            user     = floyd
+            poll     = 0.2
+
+            [account:floyd]
+            protocol = floyd
+            attach   = lhc/*
+            tag      =
+            idle     = 0
+            memory   = none
+
+            [account:pro]
+            protocol = floyd
+            attach   = lhc_pro/*
+            faq      = %s
+            tag      =
+            idle     = 0
+            memory   = none
+            """ % (self.fun.url, self.pro.url, self.faq))
+        self.chat = cb._chat()
+        self.chat.daemon = True
+        self.addCleanup(self.chat.close)
+        for a in ("floyd", "pro"):
+            self.chat.adapter(self.chat.by_id[a]).ATTACH_GAP = 0
+            self.chat.adapter(self.chat.by_id[a]).FAQ_GAP = 0
+            self.chat.connect(self.chat.by_id[a])
+        for a in ("lhc", "lhc_pro"):
+            self.chat.connect(self.chat.by_id[a])
+
+    def test_each_floyd_answers_on_his_own_site_only(self):
+        self.fun.chat(1, "Pat", "!8ball will it work", "What should I wear?")
+        self.pro.chat(1, "Sam", "!8ball will it work", "What should I wear?")
+        self.turn(lambda: self.fun.posted and len(self.pro.posted) >= 2, timeout=15)
+        self.settle(1.5)
+        fun = [q["msg"] for q in self.fun.posted]
+        pro = [q["msg"] for q in self.pro.posted]
+        self.assertTrue(any(m in cb.FloydMind.EIGHT_BALL for m in fun))           # the playful Floyd on the fun site
+        self.assertFalse(any("comfortable clothing" in m for m in fun))           # ... never the FAQ
+        self.assertFalse(any(m in cb.FloydMind.EIGHT_BALL for m in pro))          # no playful answers on the pro site
+        self.assertTrue(any("comfortable clothing" in m for m in pro))            # the FAQ is the pro Floyd's alone
+
+    def test_a_wrong_key_for_one_site_does_not_touch_the_other(self):
+        os.environ["TVCHAT_PASS_LHC_PRO"] = "wrong"                  # (read at each poll)
+        self.pro.chat(1, "Sam", "!8ball ok")
+        self.fun.chat(1, "Pat", "!8ball ok")
+        self.turn(lambda: self.fun.posted)
+        self.settle(1.0)
+        self.assertEqual(self.pro.posted, [])
+        self.assertIn("401", self.chat.adapter(self.chat.by_id["lhc_pro"]).last_error)
+        self.assertEqual(self.chat.adapter(self.chat.by_id["lhc"]).last_error, "")
+
+
 if __name__ == "__main__":
     unittest.main()
