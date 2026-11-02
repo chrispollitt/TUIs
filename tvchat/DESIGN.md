@@ -282,7 +282,7 @@ The little world (three rooms, a few items, what you carry, what Floyd holds) li
 always get an answer. Talking by himself is one timer re-armed on every line; after three
 unanswered tries he shuts down until spoken to.
 
-The bot in him is `FloydMind.botcmd()` (`!seen !tell !quote !addquote !karma !8ball !fortune !learn
+The bot in him is `FloydMind.botcmd()` (`!seen !tell !quote !addquote !karma !8ball !fortune !joke !learn
 !forget !help`, `nick++`, facts) over `FloydMemory`, one JSON file per account (written atomically,
 each list capped, a damaged file starts empty). `!fortune` runs `fortune -s` if it is on `PATH`
 (2 s timeout), else uses his own. **Attaching:** `Chat.add_message` offers every message to each

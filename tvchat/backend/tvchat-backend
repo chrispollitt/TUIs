@@ -4321,6 +4321,69 @@ class FloydMind(object):
         "A friend is someone who holds your bolt. You have a friend.",
         "Beware of the dark. Floyd isn't afraid. Floyd is cautious.",
     )
+    # (setup, punchline): !joke says the first, and the second a moment later
+    JOKES = (
+        ("Why did the robot go to laughter yoga?",
+         "To loosen his screws. Ha ha ha! Floyd practised the ha-ha-ha part all night."),
+        ("What do you call a robot who takes the long way round?",
+         "R2-Detour. Floyd got lost on the way to the end of this one."),
+        ("Why was the robot so calm?",
+         "Nobody ever pushed his buttons. Floyd checked. Floyd has buttons."),
+        ("What did the robot say to the gas pump?",
+         "Please take your finger out of your ear, I'm trying to fill up. Floyd said it politely."),
+        ("Why did the scarecrow get a prize?",
+         "He was outstanding in his field. Floyd is outstanding in a corridor."),
+        ("What do you call a fake noodle?",
+         "An impasta! Floyd laughed so hard his fan came loose."),
+        ("Why don't eggs tell jokes?",
+         "They'd crack each other up. Floyd would too. Floyd is egg-shaped inside."),
+        ("What do you call a bear with no teeth?",
+         "A gummy bear! Floyd likes the gummy kind best."),
+        ("Why did the bicycle fall over?",
+         "It was two-tired. Floyd is never tired. Floyd is just low on battery."),
+        ("What did one wall say to the other wall?",
+         "I'll meet you at the corner. Floyd waited at the corner. Nobody came. It was fine."),
+        ("Why can't you trust an atom?",
+         "They make up everything. Floyd only makes up a little bit."),
+        ("What do you call cheese that isn't yours?",
+         "Nacho cheese! Floyd gave it back."),
+        ("Why did the cookie go to the doctor?",
+         "It felt crummy. Floyd gave it a hug. Floyd's hugs are mostly metal."),
+        ("What is a robot's favourite snack?",
+         "Microchips! Floyd means the small ones. Floyd is not allowed the big ones."),
+        ("Why did the math book look sad?",
+         "It had too many problems. Floyd offered to hold some. Floyd can hold seven."),
+        ("What do you call a sleeping dinosaur?",
+         "A dino-snore! Floyd does not snore. Floyd hums."),
+        ("Why did the tomato turn red?",
+         "It saw the salad dressing! Floyd looked away politely."),
+        ("What is a laughter yogi's favourite kind of music?",
+         "Ha-ha-harmony! Everybody together now: ho ho, ha ha ha."),
+        ("Why did the laughter yogi bring a ladder?",
+         "He heard the laughs were on the next level. Floyd is on level chatty."),
+        ("What do you say to a laughing clock?",
+         "Time to ha-ha! Floyd looked at the big clock and it giggled."),
+        ("How does a robot say good morning?",
+         "Beep-beep, ha-ha-ha! Floyd says it with his whole chassis."),
+        ("Why did the banana go to the party?",
+         "Because it heard it was going to be a-peeling. Floyd was not invited. Floyd came anyway."),
+        ("What do you call a pile of kittens?",
+         "A meow-ntain! Floyd climbed it. It purred."),
+        ("Why did the picture go to jail?",
+         "It was framed! Floyd was very worried for it."),
+        ("What did the left eye say to the right eye?",
+         "Between you and me, something smells. Floyd has no nose. Floyd trusts the eyes."),
+        ("Why do bees have sticky hair?",
+         "Because they use honeycombs! Floyd tried a honeycomb. It was not for robots."),
+        ("What do you call a boomerang that doesn't come back?",
+         "A stick. Floyd has thrown many sticks. Floyd misses them all."),
+        ("Why did the flashlight go to school?",
+         "To get a little brighter. Floyd's light is very small, but it is his."),
+        ("What did the ocean say to the beach?",
+         "Nothing, it just waved! Floyd waved back. Floyd waves with his whole arm."),
+        ("Why did the smiley face win the race?",
+         "It always finished with a grin. Floyd finished too. Floyd was last, but with a grin."),
+    )
     KARMA = re.compile(r"^@?([\w\[\]\\`^{|}.-]+?)(\+\+|--)\s*$")
     # the !words that are just the errands under another name
     BANG_ERRANDS = {"time": "what time is it", "date": "what's the date", "coin": "flip a coin",
@@ -4563,8 +4626,16 @@ class FloydMind(object):
                          % (who, t["from"], _dur(now - t["ts"]), t["text"])))
         return self._say(plan)
 
+    def joke(self, plain=False):
+        """(setup, punchline).  plain = the joke alone: the punchline's first sentence, without Floyd's
+        remark after it (Floyd-pro tells it so)."""
+        setup, punch = self.rng.choice(self.JOKES)
+        if plain:
+            punch = re.split(r"(?<=[.!?])\s+", punch, 1)[0]
+        return setup, punch
+
     def botcmd(self, text, who):
-        """!seen !tell !quote !addquote !karma !8ball !learn !forget !help, a
+        """!seen !tell !quote !addquote !karma !8ball !fortune !joke !learn !forget !help, a
         learned fact (!word), the errands under a ! (!time, !roll 20), and
         nick++ / nick--.  A plan, or None when the line is none of those."""
         t = text.strip()
@@ -4630,6 +4701,9 @@ class FloydMind(object):
             return self._say([(1.0, self.rng.choice(self.EIGHT_BALL))])
         if cmd == "fortune":
             return self._fortune()
+        if cmd == "joke":
+            setup, punch = self.joke()
+            return self._say([(1.0, setup), (3.5, punch)])
         if cmd == "learn":
             m = re.match(r"(.+?)\s+(?:is|=)\s+(.+)$", arg)
             if not m or len(m.group(2)) > 300:
@@ -4644,7 +4718,7 @@ class FloydMind(object):
             return self._say([(0.8, "Floyd forgot %s. Floyd forgets quickly. It was easy." % arg)])
         if cmd == "help":
             return self._say([
-                (0.8, "Floyd knows: !seen NICK, !tell NICK MESSAGE, !quote [N], !addquote TEXT, !karma [THING], someone++ / someone--, !8ball QUESTION, !fortune, !status (how he is), !about (what he is), !leave (operators)."),
+                (0.8, "Floyd knows: !seen NICK, !tell NICK MESSAGE, !quote [N], !addquote TEXT, !karma [THING], someone++ / someone--, !8ball QUESTION, !fortune, !joke, !status (how he is), !about (what he is), !leave (operators)."),
                 (1.8, "Also !learn THING is WHAT, !forget THING, !THING, !time, !date, !coin, !roll [N], !count N, !remind 5 minutes to X. Say 'floyd: play' for Hider and Seeker."),
                 (2.8, "Useful: !calc 12*7, !convert 5 km to mi, !time in Tokyo, !todo [add X|done N], !note X / !notes, !catchup, !level [off|minimal|helpful|chatty|clippy].")])
         if cmd == "roll":
@@ -4751,8 +4825,8 @@ class FloydMind(object):
 
 # --------------------------------------------------------------------------
 # Floyd-pro: a Floyd account with faq = FILE answers visitors from that file alone, word for word, and
-# says so when nothing fits.  No commands, no memory, no language model: nothing to invent or to talk
-# round.  The file: "Q:" starts an entry, "A:" its answer, "K:" extra words that should find it; Hello:,
+# says so when nothing fits.  No commands (but !joke), no memory, no language model: nothing to invent or
+# to talk round.  The file: "Q:" starts an entry, "A:" its answer, "K:" extra words that should find it; Hello:,
 # Fallback: and Thanks: are his stock lines; "#" lines are notes.  See configure/faq.example.txt.
 # --------------------------------------------------------------------------
 FAQ_STOP = frozenset((
@@ -5035,7 +5109,10 @@ class FloydAdapter(CommandMixin):
         self.greeted.add(conv.id)
         low = text.lower().strip()
         plan = []
-        if self.FAQ_GREET.match(low):
+        if re.match(r"^!joke\s*$", low):     # the one command he shares with the playful Floyd
+            setup, punch = self.mind.joke(plain=True)
+            plan = [(0.5, setup, ""), (3.0, punch, "")]
+        elif self.FAQ_GREET.match(low):
             plan = [(0.5, hello, "")]
         elif self.FAQ_THANKS.match(low):
             plan = [(0.5, faq["thanks"] or "You're welcome!", "")]

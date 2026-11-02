@@ -3705,6 +3705,38 @@ class TestFloydAttached(Base):
         self.hear("bob", "alice++")
         self.assertIn("[Floyd] Floyd gave alice a point. alice has 1 point now.", self.other.said)
 
+    def _jokes_said(self):
+        return [s for s in self.other.said if s.startswith("[Floyd] ")]
+
+    def test_joke_gives_a_setup_then_a_punchline_from_the_list(self):
+        self.other.send(self.conv, "/floyd on")
+        self.hear("bob", "!joke")
+        said = self._jokes_said()
+        self.assertEqual(len(said), 2)
+        lines = [s[len("[Floyd] "):] for s in said]
+        self.assertIn(tuple(lines), cb.FloydMind.JOKES)
+
+    def test_joke_is_a_two_step_plan_with_a_delay_between(self):
+        plan = cb.FloydMind(rng=cb.random.Random(1)).botcmd("!joke", "bob")
+        self.assertEqual(len(plan), 2)
+        self.assertLess(plan[0][0], plan[1][0])
+        self.assertIn(plan[0][1], [j[0] for j in cb.FloydMind.JOKES])
+        self.assertIn(plan[1][1], [j[1] for j in cb.FloydMind.JOKES])
+
+    def test_joke_is_in_the_help_and_the_list_is_clean(self):
+        self.other.send(self.conv, "/floyd on")
+        self.hear("bob", "!help")
+        self.assertTrue(any("!joke" in s for s in self.other.said))
+        self.assertGreaterEqual(len(cb.FloydMind.JOKES), 25)
+        self.assertEqual(len(set(cb.FloydMind.JOKES)), len(cb.FloydMind.JOKES))
+
+    def test_joke_follows_the_seed(self):
+        def jokes(seed):
+            mind = cb.FloydMind(rng=cb.random.Random(seed))
+            return [mind.botcmd("!joke", "bob")[0][1] for _ in range(5)]
+        self.assertEqual(jokes(7), jokes(7))
+        self.assertNotEqual(jokes(7), jokes(8))
+
     def test_an_unknown_bang_command_gets_an_answer(self):
         self.other.send(self.conv, "/floyd on")
         self.hear("bob", "!frobnicate now")
@@ -5031,7 +5063,7 @@ class TestFloydPro(Base):
         self.lhc.chat(7, "Pat", "What should I wear?")
         self.turn(lambda: len(self.lhc.posted) >= 2)
         said = self.said()
-        self.assertTrue(said[0].startswith("Hi! I'm Floyd"))
+        self.assertTrue(said[0].startswith("Hello, and welcome to Universal Laughter"))
         self.assertIn("We suggest comfortable clothing. No Yoga mat or other props are needed.", said[1])
         self.lhc.say(7, "Do I need to be flexible?")
         self.turn(lambda: len(self.lhc.posted) >= 3)
@@ -5040,7 +5072,7 @@ class TestFloydPro(Base):
     def test_a_greeting_and_thanks_get_the_stock_lines(self):
         self.lhc.chat(7, "Pat", "hello there")
         self.turn(lambda: self.lhc.posted)
-        self.assertTrue(self.said()[0].startswith("Hi! I'm Floyd"))
+        self.assertTrue(self.said()[0].startswith("Hello, and welcome to Universal Laughter"))
         self.lhc.say(7, "thanks!")
         self.turn(lambda: len(self.lhc.posted) == 2)
         self.assertIn("You're welcome", self.said()[1])
@@ -5056,7 +5088,8 @@ class TestFloydPro(Base):
     def test_what_he_has_no_answer_for_is_said_plainly(self):
         self.lhc.chat(7, "Pat", "how much is a ticket to mars")
         self.turn(lambda: len(self.lhc.posted) >= 2)
-        self.assertIn("Sorry, I don't have an answer", self.said()[1])
+        self.assertIn("I don't have an answer", self.said()[1])
+        self.assertIn("chris@universal-laughter.com", self.said()[1])
 
     def test_commands_and_admin_orders_are_not_what_they_are_elsewhere(self):
         self.lhc.chat(7, "alice", "!8ball will it work", "!claude who is floyd")      # not even a named admin
@@ -5065,6 +5098,21 @@ class TestFloydPro(Base):
         for text in self.said():
             self.assertNotIn(text, cb.FloydMind.EIGHT_BALL)
             self.assertNotIn("admins", text.lower())
+
+    def test_joke_is_the_one_command_he_shares_and_is_told_plainly(self):
+        self.lhc.chat(7, "Pat", "!joke")
+        self.turn(lambda: len(self.lhc.posted) >= 2, timeout=15)
+        setup, punch = self.said()[:2]
+        self.assertIn(setup, [j[0] for j in cb.FloydMind.JOKES])
+        self.assertNotIn("Floyd", punch)                    # the joke alone, without the playful Floyd's remark
+        self.assertTrue(any(j[1].startswith(punch) for j in cb.FloydMind.JOKES))
+
+    def test_every_joke_has_a_punchline_that_stands_alone(self):
+        mind = cb.FloydMind(__import__("random").Random(1), "x", clock=time.time, memory=cb.FloydMemory(None))
+        for setup, punch in cb.FloydMind.JOKES:
+            plain = __import__("re").split(r"(?<=[.!?])\s+", punch, 1)[0]
+            self.assertNotIn("Floyd", plain, setup)
+        self.assertEqual(len(mind.joke(plain=True)), 2)
 
     def test_the_file_is_read_again_when_it_changes(self):
         self.lhc.chat(7, "Pat", "what time is the next club")

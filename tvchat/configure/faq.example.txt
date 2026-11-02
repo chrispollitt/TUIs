@@ -12,9 +12,9 @@
 # Sources: https://laughteryoga.ca/frequently-asked-questions/ and https://universal-laughter.com/ (about, services,
 # events), read 2026-11-01. Prices, phone and email are the site's: check them here when the site changes.
 
-Hello: Hi! I'm Floyd, the Universal Laughter helper robot. Ask me about Laughter Yoga, our sessions and workshops, or booking.
-Fallback: Sorry, I don't have an answer to that one. A person can help: email chris@universal-laughter.com or call +1.604.318.6658.
-Thanks: You're welcome! Is there anything else you'd like to know?
+Hello: Hello, and welcome to Universal Laughter. I'm Floyd, the virtual assistant. I can answer questions about Laughter Yoga, our sessions and workshops, and booking. How can I help you today?
+Fallback: I'm sorry, I don't have an answer to that. Chris will be glad to help directly: email chris@universal-laughter.com or call +1.604.318.6658.
+Thanks: You're welcome. Is there anything else I can help you with?
 
 # ---- Laughter Yoga ----
 

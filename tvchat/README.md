@@ -60,8 +60,8 @@ is not a parser line, like "take care", is just chat.
 
 He is also an old-school channel bot, in his own voice: `!seen NICK`, `!tell NICK MESSAGE`
 (delivered the next time they speak), karma with `someone++` / `someone--` and `!karma`,
-`!quote` / `!addquote`, `!learn THING is WHAT` then `!THING` or `THING?`, `!8ball`, `!help`,
-and `!fortune`, which asks the real `fortune(6)` when it is installed and has a few of his own
+`!quote` / `!addquote`, `!learn THING is WHAT` then `!THING` or `THING?`, `!8ball`, `!joke` (a setup, then the
+punchline a moment later), `!help`, and `!fortune`, which asks the real `fortune(6)` when it is installed and has a few of his own
 when it is not. What he remembers (seen, tells, karma, quotes, facts) is kept between sessions in
 `~/.local/share/tvchat/floyd/NAME.json` (`memory = PATH` moves it, `memory = none` keeps nothing).
 

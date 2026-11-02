@@ -152,7 +152,7 @@ idle     = 0
 # how much he does: off | minimal | helpful | chatty | clippy
 #   off      deaf and mute (only "!level" is heard)
 #   minimal  answers when spoken to and runs !commands, including !calc, !convert, !time in X,
-#            !todo, !note, !catchup; no banter, no karma, no unprompted anything
+#            !todo, !note, !catchup, !joke, !8ball, !fortune; no banter, no karma, no unprompted anything
 #   helpful  + the same in plain words ("floyd: what is 12*7"), karma, !tell delivery
 #   chatty   + banter and games (the default)
 #   clippy   + unprompted tips: "Floyd not clippy but it looks like you ..." (one per conversation
@@ -209,7 +209,7 @@ claude_dir      = ~
 
 # Floyd-pro (optional): a SECOND Floyd account for the public.  With faq = FILE he answers visitors
 # from that file alone, word for word (see faq.example.txt), and says so when nothing fits.  He has no
-# !commands, no memory and no language model, so there is nothing to invent or to talk round, and
+# !commands (except !joke), no memory and no language model, so there is nothing to invent or to talk round, and
 # nobody there is an admin.  He re-reads the file when it changes.  Give him the Live Helper Chat
 # conversations (attach = lhc/*) and take lhc/* out of the other Floyd's attach =.
 #[account:pro]
