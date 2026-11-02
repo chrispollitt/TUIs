@@ -4080,6 +4080,8 @@ class DeltaChatAdapter(CommandMixin):
         chat_id = self._group(conv)
         addr = addr.strip()
         self._check_addresses([addr])
+        if addr.lower() == self.addr.lower():
+            raise UserError("%s is you: you are already in your own group. Invite the other person" % addr)
         try:
             added, invited = self._members_for(chat_id, [addr])
             self._members(conv)
