@@ -21,19 +21,22 @@ Picking up: Floyd on Live Helper Chat, and Joy (PLAN.md has the phases; Nov 2, 2
   - BUILT, NOT DEPLOYED (run joy-update-on-cpbee.sh): typo mending, "are you a real person?" entry,
     abuse flagging (polite warning, then the chat is closed and the address turned away for an hour).
  Chris, next:
-  a. Run TO_BE_RUN/REUSABLE/joy-update-on-cpbee.sh (re-runnable): installs the latest backend
+  a. Run TO_BE_RUN/joy-update-on-cpbee.sh when Claude puts it there (a stub: the real script is
+     tvchat/deploy/joy-update-on-cpbee.sh; it moves itself to DONE): installs the latest backend
      (typo mending, abuse flagging, the questions log) and merges new FAQ entries and stock lines into
      the live /etc/tvchat/faq.txt without touching yours. Do this after any change Claude announces.
   b. Try the widget on the beta (https://universal-laughter.com/?chat=1) on desktop AND phone; ask odd
      questions. A few days of real use.
-  c. Then TO_BE_RUN/REUSABLE/joy-report.sh (re-runnable; DAYS or an argument): what she missed and what was weak.
+  c. Then REUSABLE/joy-report.sh (your own tool; DAYS or an argument): what she missed and what was weak.
      Paste it to Claude.
-  d. Go live: MODE=live TO_BE_RUN/REUSABLE/ul-chat-widget-on-whatwelove.sh (MODE=off removes the widget again).
-     (TO_BE_RUN/ holds one-shot deploys that move to DONE/; the scripts to run again and again live in
-     TO_BE_RUN/REUSABLE/: joy-update-on-cpbee.sh, joy-report.sh, ul-chat-widget-on-whatwelove.sh,
+  d. Go live: MODE=live REUSABLE/ul-chat-widget-on-whatwelove.sh (MODE=off removes the widget again).
+     (How the scripts are kept: the REAL scripts are in the repo, tvchat/deploy/. TO_BE_RUN/ holds stubs
+     Claude asks you to run: they move to DONE/ on success. TO_BE_RUN/REUSABLE/ holds stubs for YOUR OWN
+     ad hoc tools, which never move: joy-report.sh, ul-chat-widget-on-whatwelove.sh,
      lhc-pro-sync-on-whatwelove.sh.)
-  e2. The visitor's own widget looks for news only every 3.5 s (the pro admin's chat message update interval,
-     chat_message_sinterval): lower it (say 1.5 s) to shorten the rest of the wait.
+  e2. The visitor's own chat window looks for news only every 3.5 s: `chat_message_sinterval` in the pro site's
+     settings/settings.ini.php (NOT in the admin menus). TO_BE_RUN/lhc-sinterval-on-whatwelove.sh (VALUE=1.5)
+     changes it; whether the embedded widget obeys it is being tested.
   e1. FAQ gaps from testing: online sessions, a video of Chris, "is he certified", the wellness app are ANSWERED
      (Nov 3). Still open: maybe "What time is it?" (she says Vancouver is where Chris is).
   e. Optional: Joy's profile name in the pro admin (still "joy-assistant"; the fun site's is "floyd-bot");
