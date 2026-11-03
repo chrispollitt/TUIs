@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Live Helper Chat: a poll no longer grows with the number of old chats, and the delays are logged:** every chat he has
+  answered stays open on the site, and each poll used to ask for the messages of every open chat, one after another, so
+  the wait for an answer grew with each test chat (an 11 s answer in a screen recording). Now the lists are fetched at
+  once, a chat's messages only when the list shows a newer last message than the one he has seen, and what is needed in
+  parallel. The journal says where the time goes: `a line was seen N s after it was sent` (the poll and the site) and
+  `answered N s after the line was seen` (his pause and the post); the rest is the visitor's own widget.
+
 - **Four more FAQ entries from Chris, and a fairer tie:** online sessions (Zoom or Teams: yes), a video of Chris leading
   (the Services page and the YouTube channel), "Is Chris certified and qualified?" (yes, since 2009) and the wellness app
   (https://selfcare.universal-laughter.com/). When two entries score the same, the one whose own question is more fully

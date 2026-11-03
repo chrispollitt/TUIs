@@ -4853,7 +4853,8 @@ class FakeLhc:
                     fake.calls.append((u.path, q))
                     if u.path == "/restapi/chats":
                         want_status = int(q.get("status", 0))
-                        lst = [dict(id=i, nick=c["nick"], status=c["status"], user_id=c.get("user_id", 0), ip=c.get("ip", ""))
+                        lst = [dict(id=i, nick=c["nick"], status=c["status"], user_id=c.get("user_id", 0), ip=c.get("ip", ""),
+                                    last_msg_id=max([m["id"] for m in fake.msgs.get(i, [])] or [0]))
                                for i, c in sorted(fake.chats.items()) if c["status"] == want_status]
                         return self._send(200, {"error": False, "result": {"list": lst}})
                     if u.path == "/restapi/fetchchatmessages":
@@ -4871,7 +4872,7 @@ class FakeLhc:
                         cid = int(q["chat_id"])
                         fake.posted.append(q)
                         ms = fake.msgs.setdefault(cid, [])
-                        ms.append({"id": max([m["id"] for m in ms] or [0]) + 1, "msg": q["msg"], "user_id": 5})
+                        ms.append({"id": max([m["id"] for m in ms] or [0]) + 1, "msg": q["msg"], "user_id": 5, "time": int(time.time())})
                         fake.chats[cid]["user_id"] = 5
                         return self._send(200, {"error": False, "result": {}})
                     self._send(404, {"error": True, "result": "unknown"})
@@ -4901,7 +4902,7 @@ class FakeLhc:
             self.chats[cid] = {"nick": nick, "status": status, "user_id": user_id, "ip": ip}
             ms = self.msgs.setdefault(cid, [])
             for text in lines:
-                ms.append({"id": max([m["id"] for m in ms] or [0]) + 1, "msg": text, "user_id": 0})
+                ms.append({"id": max([m["id"] for m in ms] or [0]) + 1, "msg": text, "user_id": 0, "time": int(time.time())})
 
     def say(self, cid, text):
         c = self.chats[cid]
@@ -5480,6 +5481,20 @@ class TestFloydPro(Base):
         self.assertGreater(first[1]["operator_typing"], 0)
         self.assertEqual(first[1]["operator_typing_id"], 1)
         self.assertEqual(last[1], {"operator_typing": 0, "operator_typing_id": 0})
+
+    def test_chats_with_nothing_new_are_not_asked_for_their_messages_again(self):
+        for cid in (11, 12, 13):                                  # old chats, answered long ago, still open on the site
+            self.lhc.chat(cid, "Old", "!8ball old", status=1, user_id=5)
+            self.lhc.msgs[cid].append({"id": 99, "msg": "an old answer", "user_id": 5})
+            self.chat.adapter(self.chat.by_id["lhc"]).mine.add(cid)
+        self.lhc.chat(7, "Pat", "What should I wear?")
+        self.turn(lambda: len(self.lhc.posted) >= 2, timeout=20)
+        self.settle(1.0)
+        asked = lambda cid: sum(1 for path, q in self.lhc.calls if path == "/restapi/fetchchatmessages" and q.get("chat_id") == str(cid))
+        before = [asked(c) for c in (11, 12, 13)]
+        self.settle(2.0)                                           # many polls later ...
+        self.assertEqual([asked(c) for c in (11, 12, 13)], before)  # ... the old chats were not asked again
+        self.assertLessEqual(max(before), 1)
 
     def test_a_slow_typing_call_never_holds_up_the_answer(self):
         self.chat.adapter(self.chat.by_id["lhc"]).operator_id = 1

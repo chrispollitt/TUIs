@@ -6587,7 +6587,7 @@ def lhc_items(res, key):
 
 def lhc_fetch(p, last, mine, keepalive=0):
     """What is new on the site: ({chat id: nick} of the chats Floyd may answer, [(chat id, message id,
-    text)] of the visitors' new lines, {chat id: newest message id seen}).  last = the newest message
+    text, time)] of the visitors' new lines, {chat id: newest message id seen}).  last = the newest message
     already seen per chat; mine = chats he has already answered (they are assigned to him).
     keepalive = 1 to mark the operator online, 2 to report that he is still here (the site counts an
     operator online only while his activity is recent)."""
@@ -6595,13 +6595,19 @@ def lhc_fetch(p, last, mine, keepalive=0):
         if keepalive == 1:
             lhc_call(p, "setonlinestatus/%d/1" % p["operator_id"])
         lhc_call(p, "updatelastactivity/%d" % p["operator_id"])
-    chats, ips = {}, {}
-    for status in (0, 1):                # pending, active
-        for dep in (p["departments"] or [None]):
-            q = {"status": status, "limit": 50, "sort": "id_asc"}
-            if dep is not None:
-                q["departament_id"] = dep
-            for c in lhc_items(lhc_call(p, "chats", q), "list"):
+    from concurrent.futures import ThreadPoolExecutor
+    chats, ips, tops = {}, {}, {}
+
+    def listing(job):
+        status, dep = job
+        q = {"status": status, "limit": 50, "sort": "id_asc"}
+        if dep is not None:
+            q["departament_id"] = dep
+        return lhc_items(lhc_call(p, "chats", q), "list")
+    jobs = [(status, dep) for status in (0, 1) for dep in (p["departments"] or [None])]     # pending, active
+    with ThreadPoolExecutor(max_workers=4) as ex:                          # the lists at once, not one after another
+        for rows in ex.map(listing, jobs):
+            for c in rows:
                 try:
                     cid, owner = int(c["id"]), int(c.get("user_id") or 0)
                 except (KeyError, ValueError, TypeError):
@@ -6609,25 +6615,33 @@ def lhc_fetch(p, last, mine, keepalive=0):
                 if owner == 0 or owner == p["operator_id"] or cid in mine:
                     chats[cid] = str(c.get("nick") or "Visitor")
                     ips[cid] = str(c.get("ip") or "")
-    lines, newest = [], {}
-    for cid in sorted(chats):
+                    tops[cid] = int(c.get("last_msg_id") or 0)
+
+    def messages(cid):
         q = {"chat_id": cid, "ignore_system_messages": 1, "ignore_typing": 1, "remove_bbcode": 1}
         if cid in last:
             q["last_message_id"] = last[cid]
-        msgs = []
+        out = []
         for m in lhc_items(lhc_call(p, "fetchchatmessages", q), "messages"):
             try:
-                msgs.append((int(m["id"]), int(m.get("user_id") or 0), str(m.get("msg") or "")))
+                out.append((int(m["id"]), int(m.get("user_id") or 0), str(m.get("msg") or ""), float(m.get("time") or 0)))
             except (KeyError, ValueError, TypeError):
                 continue
-        msgs.sort()
-        if cid not in last:              # first sight (a restart): what an operator already answered is old
-            answered = max([i for i, uid, _ in msgs if uid > 0] or [0])
-            msgs = [m for m in msgs if m[0] > answered]
-        for mid, uid, text in msgs:
-            newest[cid] = max(newest.get(cid, 0), mid)
-            if uid == 0 and text.strip():
-                lines.append((cid, mid, text))
+        out.sort()
+        return cid, out
+    # only the chats whose last message is newer than the one seen: every chat he has answered stays open on the site,
+    # and asking each of them every second made the wait grow with the number of old chats
+    todo = [cid for cid in sorted(chats) if not (cid in last and cid in tops and tops[cid] <= last[cid])]
+    lines, newest = [], {}
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        for cid, msgs in ex.map(messages, todo):
+            newest[cid] = max([m[0] for m in msgs] or [0])     # all of it seen, even what is old or empty: not asked for again
+            if cid not in last:          # first sight (a restart): what an operator already answered is old
+                answered = max([m[0] for m in msgs if m[1] > 0] or [0])
+                msgs = [m for m in msgs if m[0] > answered]
+            for mid, uid, text, mtime in msgs:
+                if uid == 0 and text.strip():
+                    lines.append((cid, mid, text, mtime))
     return chats, lines, newest, ips
 
 
@@ -6705,6 +6719,7 @@ class LhcAdapter(CommandMixin):
         self.typing_opt = _bool(o.get("typing"), True)
         self.typing_on, self.typing_fail = set(), 0
         self.tq, self.tposting, self.typing_logged = [], False, False      # its own queue: never behind a line he says
+        self.seen_at = {}                # chat id -> when he saw the visitor's last line (to say how long answering took)
 
     def abuse_action(self, conv):
         return "close"
@@ -6887,7 +6902,7 @@ class LhcAdapter(CommandMixin):
                 conv = self.convs.pop(cid, None)
                 if conv is not None:
                     self.chat.remove_conv(conv)
-        for cid, mid, text in lines:
+        for cid, mid, text, mtime in lines:
             if cid in self.ignored or cid not in chats:
                 continue
             nick = chats[cid]
@@ -6896,6 +6911,9 @@ class LhcAdapter(CommandMixin):
                 conv = self.convs[cid] = self.chat.ensure_conv(self.account, str(cid), "direct", "%s (#%d)" % (nick, cid))
             self.chat.add_message(conv, Message(self.local_id(), conv.id, time.time(),
                                                 Contact("lhc:%d" % cid, nick, None), text, ""))
+            self.seen_at[cid] = now
+            if mtime:                    # where the wait goes: how long the line sat before he saw it ...
+                _log.info("%s: chat %d: a line was seen %.1f s after it was sent", self.account.id, cid, max(0.0, now - mtime))
         if lines:
             self.last_line = now
         self.timer = self.loop.call_later(self.poll_fast if now - self.last_line < self.FAST_FOR else self.poll, self._poll)
@@ -6941,9 +6959,13 @@ class LhcAdapter(CommandMixin):
             if err is not None:
                 conv = self.convs.get(cid) or self.server_conv()
                 self.system(conv, "could not send to chat %d: %s" % (cid, err))
-            elif isinstance(text, str) and cid in self.typing_on:     # what he was "typing" is said: stop showing it
-                self.typing_on.discard(cid)
-                self._typing_job(cid, False)
+            elif isinstance(text, str):
+                t0 = self.seen_at.pop(cid, None)
+                if t0 is not None:       # ... and how long answering took, from his seeing it to its being posted
+                    _log.info("%s: chat %d: answered %.1f s after the line was seen", self.account.id, cid, self.chat.wall() - t0)
+                if cid in self.typing_on:                 # what he was "typing" is said: stop showing it
+                    self.typing_on.discard(cid)
+                    self._typing_job(cid, False)
             self._post_next()
         self.loop.run_in_thread((lambda: lhc_close(p, cid)) if text is None else (lambda: lhc_say(p, cid, text, name)), done)
 
