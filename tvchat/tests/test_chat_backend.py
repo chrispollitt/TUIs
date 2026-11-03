@@ -5363,6 +5363,17 @@ class TestFloydPro(Base):
         self.assertIn("Yes!", r[1]["a"])
         self.assertIn("Zoom or Microsoft Teams", r[1]["a"])
 
+    def test_who_are_you_and_what_are_you_are_answered(self):
+        qs = ("Who are you?", "What are you?", "who is this", "what's your name", "introduce yourself", "who am I talking to?")
+        for i, q in enumerate(qs):
+            self.lhc.chat(30 + i, "Pat", q)
+        self.turn(lambda: len(self.lhc.posted) >= 6, timeout=25)
+        said = [q["msg"] for q in self.lhc.posted]
+        self.assertEqual(sum("a computer program that answers questions about Laughter Yoga" in m for m in said), 6)
+        self.assertFalse(any("don't have an answer" in m for m in said))
+        self.lhc.chat(40, "Pat", "who is Chris?")                                # a question about someone else is still the FAQ's
+        self.turn(lambda: any("Chris Pollitt has led" in q["msg"] for q in self.lhc.posted), timeout=15)
+
     def test_commands_get_special_treatment_and_emoji_are_not_a_miss(self):
         self.lhc.chat(7, "Pat", "/help", "!about", "!frobnicate", "\u2764\ufe0f\U0001F923\u203c\ufe0f", "!help")
         self.turn(lambda: len(self.lhc.posted) >= 5, timeout=25)
@@ -5371,7 +5382,7 @@ class TestFloydPro(Base):
         self.assertFalse(any("Research has shown" in m for m in said))                       # not the "benefits" entry
         self.assertTrue(any("I don't use commands like !frobnicate" in m for m in said))
         self.assertTrue(any("appreciate the smile" in m for m in said))
-        self.assertEqual(sum("Hello, and welcome" in m for m in said), 1)                    # !about: who he is (a command is not a question: no greeting before it)
+        self.assertEqual(sum("a computer program that answers questions" in m for m in said), 1)   # !about: who he is (a command is not a question: no greeting before it)
 
     def test_an_unknown_command_counts_as_probing_and_six_in_a_row_end_the_chat(self):
         self.lhc.chat(7, "Pat", *["!cmd%d" % i for i in range(6)])

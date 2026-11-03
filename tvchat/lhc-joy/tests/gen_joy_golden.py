@@ -21,6 +21,8 @@ SCENARIOS = [
                          "Is there an example video of him leading?", "how do I become a certified leader"]),
     ("commands", ["/help", "!about", "!frobnicate", "❤️\U0001F923‼️", "!help", "help", "?", "what can you do", "/start",
                   "!!", "/"]),
+    ("identity", ["Who are you?", "What are you?", "who is this", "what's your name", "introduce yourself", "tell me about yourself",
+                  "what do you do", "who is Chris?", "who am I talking to?", "WHO ARE YOU", "your name", "who are you exactly?"]),
     ("greet thanks joke", ["hello", "thanks!", "!joke", "good morning there", "thank you so much"]),
     ("lost after five misses", WORDS[:7]),
     ("an answer resets the count", WORDS[:5] + ["What should I wear?"] + WORDS[:5] + ["how much does it cost"]),

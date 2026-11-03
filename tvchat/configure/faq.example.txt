@@ -10,6 +10,7 @@
 #   Warning: the polite flag for abusive words (first time)    Goodbye: what he says when it is repeated and the chat is ended
 #   Lost: what he says (and the chat is ended) after more than max_misses (default 5) answers missed in a row
 #   Help: what he says to help, /help, !help, ?  (he has no commands; !joke is the one he shares with Floyd)
+#   About: what he says to "who are you?", "what are you?", "what's your name?", !about ... (default: the Hello line)
 #   (lines starting with # are notes to you)
 #
 # Sources: https://laughteryoga.ca/frequently-asked-questions/ and https://universal-laughter.com/ (about, services,
@@ -21,6 +22,7 @@ Thanks: You're welcome. Is there anything else I can help you with?
 Warning: I'm happy to help with questions about Laughter Yoga, but I can't continue if the language isn't respectful. Please keep it friendly.
 Goodbye: I'm ending this chat because the language has not been respectful. You're welcome to contact Chris directly: email chris@universal-laughter.com or call +1.604.318.6658.
 Lost: You seem to be having an issue getting what you need from me, and I'm sorry about that. I'll end this chat now. Chris will be glad to help directly: email chris@universal-laughter.com or call +1.604.318.6658.
+About: I'm Joy, Universal Laughter's virtual assistant: a computer program that answers questions about Laughter Yoga, Chris's sessions and workshops, and booking, using answers Chris wrote himself. Just ask me a question in plain words!
 Help: I'm Joy, Universal Laughter's virtual assistant. There are no commands: just ask me a question in plain words, for example "What is Laughter Yoga?", "What should I wear?" or "How much does a session cost?" You can also say hello, say thanks, or ask for a joke.
 
 # ---- Laughter Yoga ----

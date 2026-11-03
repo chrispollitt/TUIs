@@ -4964,13 +4964,13 @@ def faq_fix(faq, text):
 
 
 def parse_faq(text):
-    faq = {"hello": "", "fallback": "", "thanks": "", "warning": "", "goodbye": "", "lost": "", "help": "", "entries": []}
+    faq = {"hello": "", "fallback": "", "thanks": "", "warning": "", "goodbye": "", "lost": "", "help": "", "about": "", "entries": []}
     cur = None
     for line in text.splitlines():
         s = line.strip()
         if s.startswith("#"):
             continue
-        m = re.match(r"^(Q|A|K|Hello|Fallback|Thanks|Warning|Goodbye|Lost|Help)\s*:\s*(.*)$", s)
+        m = re.match(r"^(Q|A|K|Hello|Fallback|Thanks|Warning|Goodbye|Lost|Help|About)\s*:\s*(.*)$", s)
         if m:
             tag, rest = m.group(1), m.group(2)
             if tag == "Q":
@@ -5113,7 +5113,9 @@ class FloydAdapter(CommandMixin):
     FAQ_THANKS = re.compile(r"^(?:thanks|thank you|thx|cheers|ok thanks|great thanks)\b")
     FAQ_HELP = re.compile(r"^(?:[!/]\s*(?:help|commands?|menu|h|\?)|help|\?+|commands?|menu|options|what can you (?:do|help with)|"
                           r"how does this work|how do i use (?:this|you))\W*$")
-    FAQ_ABOUT = re.compile(r"^[!/]\s*(?:about|who|whoami|bot|status|version|info|start|hello|hi)\W*$")
+    FAQ_ABOUT = re.compile(r"^(?:[!/]\s*(?:about|who|whoami|bot|status|version|info|start|hello|hi)|(?:who|what)\s+(?:are|r)\s+(?:you|u)"
+                           r"(?:\s+exactly)?|who\s+is\s+this|what\s+is\s+this|who\s+am\s+i\s+(?:talking|speaking|chatting)\s+(?:to|with)|"
+                           r"(?:what(?:'s|s|\s+is)\s+)?your\s+name|introduce\s+yourself|tell\s+me\s+about\s+yourself|what\s+do\s+you\s+do)\W*$")
     HELP_TEXT = ("I'm Joy, Universal Laughter's virtual assistant. There are no commands: just ask me a question in plain "
                  "words, for example \"What is Laughter Yoga?\", \"What should I wear?\" or \"How much does a session cost?\" "
                  "You can also say hello, say thanks, or ask for a joke.")
@@ -5372,8 +5374,8 @@ class FloydAdapter(CommandMixin):
             plan = [(0.3, faq["help"] or self.HELP_TEXT, "")]
             self._faq_note(conv, text, "command")
             self.misses.pop(conv.id, None)
-        elif self.FAQ_ABOUT.match(low):                                 # !about, /start ...: who he is
-            plan = [(0.3, hello, "")]
+        elif self.FAQ_ABOUT.match(low):                                 # !about, "who are you?" ...: who he is
+            plan = [(0.3, faq["about"] or hello, "")]
             self._faq_note(conv, text, "command")
             self.misses.pop(conv.id, None)
         elif not re.search(r"[A-Za-z0-9]", text):                       # emoji and symbols only: a smile is not a miss

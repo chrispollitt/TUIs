@@ -20,18 +20,17 @@ Picking up: Floyd on Live Helper Chat, and Joy (PLAN.md has the phases; Nov 2, 2
     "arer you a human?" (now answered, and typos are mended).
   - BUILT, NOT DEPLOYED (run joy-update-on-cpbee.sh): typo mending, "are you a real person?" entry,
     abuse flagging (polite warning, then the chat is closed and the address turned away for an hour).
- JOY MOVES TO THE WEB HOST (Nov 3, 2026): Joy now exists as a Live Helper Chat EXTENSION in PHP (tvchat/lhc-joy, committed
- 43a7937): she answers the instant a visitor writes, inside the chat site's own request - no daemon, no polling, nothing on cpbee
+ JOY IS ON THE WEB HOST (switched over Nov 3, 2026, tested live: answers in ~2 s, first-message path and later lines both work, the
+ log records, joy-report.sh reads it). She is a Live Helper Chat EXTENSION in PHP (tvchat/lhc-joy): she answers the instant a visitor writes, inside the chat site's own request - no daemon, no polling, nothing on cpbee
  (the ~10 s answers came from the round trip cpbee <-> the web host). The Python Floyd-pro stays as the REFERENCE and the way back; the
  drift guard is lhc-joy/tests (gen_joy_golden.py + joy_golden.php: 107 steps, 0 mismatches). Her FAQ and log live in
  /home/whatwelo/joy/ (faq.txt = the one to edit now; questions.log). The playful Floyd stays on cpbee.
- Switchover, in this order (never both Joys on at once: two answers):
-   1. TO_BE_RUN/joy-webhost-install.sh      installs her on the host, SILENT (nothing changes for visitors)
-   2. deploy/joy-cpbee-pro.sh ACTION=off    takes the old Joy out of Floyd's config on cpbee (a stub in TO_BE_RUN when it is time)
-   3. deploy/joy-webhost-on-whatwelove.sh ACTION=enable   she answers; try the widget (universal-laughter.com/?chat=1)
-   Way back: ACTION=disable on the host script, then ACTION=on on the cpbee script. ACTION=status says where things are.
-   After it works: joy-report.sh must read /home/whatwelo/joy/questions.log on the host (it still reads cpbee's);
-   the cpbee account sections stay saved in /etc/tvchat/joy-pro-accounts.saved; edit the FAQ on the HOST from then on.
+ Done in this order (never both Joys on at once: two answers): install silent -> deploy/joy-cpbee-pro.sh ACTION=off -> host script
+ ACTION=enable. Way back: ACTION=disable on the host script (deploy/joy-webhost-on-whatwelove.sh), then ACTION=on on the cpbee one
+ (the old Joy's sections are kept in /etc/tvchat/joy-pro-accounts.saved). ACTION=status says where things are. EDIT HER FAQ ON THE
+ HOST (/home/whatwelo/joy/faq.txt) from now on; the repo's configure/faq.example.txt is the seed and the Python reference's FAQ:
+ new entries go in both, and deploy/faq_merge.py carries repo additions to a live FAQ without touching its edits.
+ Still to do for the new Joy: her questions log has no rotation by size for the .1 file beyond one; nothing else open.
  Chris, next:
   a. Run TO_BE_RUN/joy-update-on-cpbee.sh when Claude puts it there (a stub: the real script is
      tvchat/deploy/joy-update-on-cpbee.sh; it moves itself to DONE): installs the latest backend

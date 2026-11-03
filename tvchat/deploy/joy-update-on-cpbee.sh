@@ -5,7 +5,7 @@
 # WHAT:   1. installs the repo's tvchat-backend if it differs from cpbee's (old one kept as .bak.<time>) and restarts tvchat-floyd
 #            (only then: a FAQ change alone needs no restart);
 #         2. adds to Joy's LIVE FAQ (/etc/tvchat/faq.txt) every entry of the repo's configure/faq.example.txt whose QUESTION is not in
-#            it yet, and any stock line (Hello, Fallback, Thanks, Warning, Goodbye, Lost, Help) it has not got.  Entries already there are NEVER touched (your edits and re-worded answers stay) and nothing is removed; the old file is
+#            it yet, and any stock line (Hello, Fallback, Thanks, Warning, Goodbye, Lost, Help, About) it has not got.  Entries already there are NEVER touched (your edits and re-worded answers stay) and nothing is removed; the old file is
 #            kept as .bak.<time>.  Joy re-reads the file when it changes.
 # NOT:    it does not change an entry that exists: edit /etc/tvchat/faq.txt by hand for that.
 # SAFE:   DRY_RUN=1 says what it would install and add, and changes nothing.
@@ -82,7 +82,7 @@ def blocks(text):
 have = set(q for q, _ in blocks(live))
 new = [(q, b) for q, b in blocks(ex) if q not in have]
 stock = []                               # his stock lines the live file has not got yet (never one it has)
-for key in ("Hello", "Fallback", "Thanks", "Warning", "Goodbye", "Lost", "Help"):
+for key in ("Hello", "Fallback", "Thanks", "Warning", "Goodbye", "Lost", "Help", "About"):
     m = re.search(r"^%s:.*$" % key, ex, re.M)
     if m and not re.search(r"^%s:" % key, live, re.M):
         stock.append(m.group(0))

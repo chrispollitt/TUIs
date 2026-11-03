@@ -28,6 +28,9 @@ if [[ $ACTION == install ]]; then
   TAR_B64=$(tar czf - -C "$root/lhc-joy/extension" --exclude='settings/settings.ini.php' joy | base64 -w0)
   FAQ_TXT=$(ssh cpbee 'cat /etc/tvchat/faq.txt' 2>/dev/null) || FAQ_TXT=""
   [[ -n $FAQ_TXT ]] || FAQ_TXT=$(cat "$root/configure/faq.example.txt")
+  # what the repo has that the live FAQ lacks (new entries, new stock lines) is added; nothing of the live one is changed
+  say "FAQ: from cpbee's live FAQ, plus what the repo has that it lacks:"
+  FAQ_TXT=$(printf '%s\n' "$FAQ_TXT" | python3 "$here/faq_merge.py" - "$root/configure/faq.example.txt") || die "faq_merge.py failed"
   FAQ_B64=$(printf '%s\n' "$FAQ_TXT" | base64 -w0)
 fi
 

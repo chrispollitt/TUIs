@@ -128,7 +128,7 @@ class JoyBrain
 
     public static function parseFaq($text)
     {
-        $faq = ['hello' => '', 'fallback' => '', 'thanks' => '', 'warning' => '', 'goodbye' => '', 'lost' => '', 'help' => '', 'entries' => []];
+        $faq = ['hello' => '', 'fallback' => '', 'thanks' => '', 'warning' => '', 'goodbye' => '', 'lost' => '', 'help' => '', 'about' => '', 'entries' => []];
         $cur = null;                    // [&container, key]
         $entries = [];
         foreach (preg_split('/\r\n|\r|\n/', (string)$text) as $line) {
@@ -139,7 +139,7 @@ class JoyBrain
             if ($s !== '' && $s[0] === '#') {
                 continue;
             }
-            if (preg_match('/^(Q|A|K|Hello|Fallback|Thanks|Warning|Goodbye|Lost|Help)\s*:\s*(.*)$/', $s, $m)) {
+            if (preg_match('/^(Q|A|K|Hello|Fallback|Thanks|Warning|Goodbye|Lost|Help|About)\s*:\s*(.*)$/', $s, $m)) {
                 $tag = $m[1];
                 $rest = $m[2];
                 if ($tag === 'Q') {
@@ -338,8 +338,10 @@ class JoyBrain
             . 'how does this work|how do i use (?:this|you))\W*$/', $low)) {
             $r['say'][] = $faq['help'] ?: self::HELP_TEXT;
             $r['note'] = [$ok('command'), '', 0, 0];
-        } elseif (preg_match('/^[!\/]\s*(?:about|who|whoami|bot|status|version|info|start|hello|hi)\W*$/', $low)) {
-            $r['say'][] = $hello;
+        } elseif (preg_match('/^(?:[!\/]\s*(?:about|who|whoami|bot|status|version|info|start|hello|hi)|(?:who|what)\s+(?:are|r)\s+(?:you|u)'
+            . '(?:\s+exactly)?|who\s+is\s+this|what\s+is\s+this|who\s+am\s+i\s+(?:talking|speaking|chatting)\s+(?:to|with)|'
+            . '(?:what(?:\'s|s|\s+is)\s+)?your\s+name|introduce\s+yourself|tell\s+me\s+about\s+yourself|what\s+do\s+you\s+do)\W*$/', $low)) {
+            $r['say'][] = $faq['about'] ?: $hello;
             $r['note'] = [$ok('command'), '', 0, 0];
         } elseif (!preg_match('/[A-Za-z0-9]/', (string)$text)) {         // emoji and symbols only: a smile is not a miss
             $r['say'][] = "Thank you! I can only read words, I'm afraid, but I appreciate the smile. How can I help?";

@@ -157,7 +157,7 @@
    {
     "in": "!about",
     "out": [
-     "Hello, and welcome to Universal Laughter. I'm Joy, the virtual assistant. I can answer questions about Laughter Yoga, our sessions and workshops, and booking. How can I help you today?"
+     "I'm Joy, Universal Laughter's virtual assistant: a computer program that answers questions about Laughter Yoga, Chris's sessions and workshops, and booking, using answers Chris wrote himself. Just ask me a question in plain words!"
     ],
     "closed": false
    },
@@ -206,7 +206,7 @@
    {
     "in": "/start",
     "out": [
-     "Hello, and welcome to Universal Laughter. I'm Joy, the virtual assistant. I can answer questions about Laughter Yoga, our sessions and workshops, and booking. How can I help you today?"
+     "I'm Joy, Universal Laughter's virtual assistant: a computer program that answers questions about Laughter Yoga, Chris's sessions and workshops, and booking, using answers Chris wrote himself. Just ask me a question in plain words!"
     ],
     "closed": false
    },
@@ -967,6 +967,95 @@
     "out": [
      "Hello, and welcome to Universal Laughter. I'm Joy, the virtual assistant. I can answer questions about Laughter Yoga, our sessions and workshops, and booking. How can I help you today?",
      "Yes! There are weekly laughter clubs, in person and online. In person: https://laughteryoga.ca/in-person-clubs  Online: https://laughteryoga.ca/online-clubs"
+    ],
+    "closed": false
+   }
+  ]
+ },
+ {
+  "name": "identity",
+  "steps": [
+   {
+    "in": "Who are you?",
+    "out": [
+     "I'm Joy, Universal Laughter's virtual assistant: a computer program that answers questions about Laughter Yoga, Chris's sessions and workshops, and booking, using answers Chris wrote himself. Just ask me a question in plain words!"
+    ],
+    "closed": false
+   },
+   {
+    "in": "What are you?",
+    "out": [
+     "I'm Joy, Universal Laughter's virtual assistant: a computer program that answers questions about Laughter Yoga, Chris's sessions and workshops, and booking, using answers Chris wrote himself. Just ask me a question in plain words!"
+    ],
+    "closed": false
+   },
+   {
+    "in": "who is this",
+    "out": [
+     "I'm Joy, Universal Laughter's virtual assistant: a computer program that answers questions about Laughter Yoga, Chris's sessions and workshops, and booking, using answers Chris wrote himself. Just ask me a question in plain words!"
+    ],
+    "closed": false
+   },
+   {
+    "in": "what's your name",
+    "out": [
+     "I'm Joy, Universal Laughter's virtual assistant: a computer program that answers questions about Laughter Yoga, Chris's sessions and workshops, and booking, using answers Chris wrote himself. Just ask me a question in plain words!"
+    ],
+    "closed": false
+   },
+   {
+    "in": "introduce yourself",
+    "out": [
+     "I'm Joy, Universal Laughter's virtual assistant: a computer program that answers questions about Laughter Yoga, Chris's sessions and workshops, and booking, using answers Chris wrote himself. Just ask me a question in plain words!"
+    ],
+    "closed": false
+   },
+   {
+    "in": "tell me about yourself",
+    "out": [
+     "I'm Joy, Universal Laughter's virtual assistant: a computer program that answers questions about Laughter Yoga, Chris's sessions and workshops, and booking, using answers Chris wrote himself. Just ask me a question in plain words!"
+    ],
+    "closed": false
+   },
+   {
+    "in": "what do you do",
+    "out": [
+     "I'm Joy, Universal Laughter's virtual assistant: a computer program that answers questions about Laughter Yoga, Chris's sessions and workshops, and booking, using answers Chris wrote himself. Just ask me a question in plain words!"
+    ],
+    "closed": false
+   },
+   {
+    "in": "who is Chris?",
+    "out": [
+     "Chris Pollitt has led laughter yoga sessions and workshops in Metro Vancouver for nearly two decades. After a background in technology, he became a certified Laughter Yoga Leader and Career Development Practitioner in 2009. More: https://universal-laughter.com/about"
+    ],
+    "closed": false
+   },
+   {
+    "in": "who am I talking to?",
+    "out": [
+     "I'm Joy, Universal Laughter's virtual assistant: a computer program that answers questions about Laughter Yoga, Chris's sessions and workshops, and booking, using answers Chris wrote himself. Just ask me a question in plain words!"
+    ],
+    "closed": false
+   },
+   {
+    "in": "WHO ARE YOU",
+    "out": [
+     "I'm Joy, Universal Laughter's virtual assistant: a computer program that answers questions about Laughter Yoga, Chris's sessions and workshops, and booking, using answers Chris wrote himself. Just ask me a question in plain words!"
+    ],
+    "closed": false
+   },
+   {
+    "in": "your name",
+    "out": [
+     "I'm Joy, Universal Laughter's virtual assistant: a computer program that answers questions about Laughter Yoga, Chris's sessions and workshops, and booking, using answers Chris wrote himself. Just ask me a question in plain words!"
+    ],
+    "closed": false
+   },
+   {
+    "in": "who are you exactly?",
+    "out": [
+     "I'm Joy, Universal Laughter's virtual assistant: a computer program that answers questions about Laughter Yoga, Chris's sessions and workshops, and booking, using answers Chris wrote himself. Just ask me a question in plain words!"
     ],
     "closed": false
    }
