@@ -4824,6 +4824,7 @@ class FakeLhc:
         import http.server
         import urllib.parse
         self.chats, self.msgs, self.posted, self.calls, self.closed, self.typing = {}, {}, [], [], [], []
+        self.typing_delay = 0
         self.lock = threading.Lock()
         fake = self
 
@@ -4885,6 +4886,7 @@ class FakeLhc:
                     return self._send(401, {"error": True, "result": "no"})
                 with fake.lock:
                     fake.typing.append((u.path, body))
+                time.sleep(fake.typing_delay)                 # (a site that is slow to take the indicator)
                 self._send(200, {"error": False, "result": {}})
 
             def do_POST(self):
@@ -5329,6 +5331,16 @@ class TestFloydPro(Base):
         self.assertIn("how much is a ticket to mars", text)
         self.assertIn("ENTRIES USED", text)
 
+    def test_the_entry_about_ai_beats_an_old_keyword_list_that_still_says_ai(self):
+        text = (Path(__file__).resolve().parent.parent / "configure" / "faq.example.txt").read_text(encoding="utf-8")
+        stale = text.replace("K: human, person, robot, bot, chatbot, automated, machine, computer, staff",
+                             "K: human, person, robot, bot, chatbot, ai, artificial, automated, machine, computer, staff")
+        self.assertNotEqual(stale, text)                       # (a live FAQ made before the AI entry looks like this)
+        faq = cb.parse_faq(stale)
+        for q in ("are you an AI?", "is this chatgpt", "are you artificial intelligence"):
+            self.assertTrue(cb.faq_rank(faq, q)[0][1]["q"].startswith("Are you AI"), q)
+        self.assertTrue(cb.faq_rank(faq, "are you a human?")[0][1]["q"].startswith("Are you a real person"))
+
     def test_are_you_ai_is_answered_plainly_and_apart_from_are_you_human(self):
         for i, q in enumerate(("are you an AI?", "is this ChatGPT", "are you artificial intelligence", "are you a human?")):
             self.lhc.chat(20 + i, "Pat", q)
@@ -5432,6 +5444,12 @@ class TestFloydPro(Base):
         self.assertGreater(first[1]["operator_typing"], 0)
         self.assertEqual(first[1]["operator_typing_id"], 1)
         self.assertEqual(last[1], {"operator_typing": 0, "operator_typing_id": 0})
+
+    def test_a_slow_typing_call_never_holds_up_the_answer(self):
+        self.chat.adapter(self.chat.by_id["lhc"]).operator_id = 1
+        self.lhc.typing_delay = 5.0                                          # every indicator call takes 5 s
+        self.lhc.chat(7, "Pat", "What should I wear?")
+        self.turn(lambda: len(self.lhc.posted) >= 2, timeout=3.5)            # yet the greeting and the answer are not late
 
     def test_typing_can_be_switched_off_and_needs_the_operator_number(self):
         ad = self.chat.adapter(self.chat.by_id["lhc"])
