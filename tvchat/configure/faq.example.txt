@@ -9,6 +9,7 @@
 #   Hello: what he says first    Fallback: what he says when nothing fits    Thanks: what he says to thanks
 #   Warning: the polite flag for abusive words (first time)    Goodbye: what he says when it is repeated and the chat is ended
 #   Lost: what he says (and the chat is ended) after more than max_misses (default 5) answers missed in a row
+#   Help: what he says to help, /help, !help, ?  (he has no commands; !joke is the one he shares with Floyd)
 #   (lines starting with # are notes to you)
 #
 # Sources: https://laughteryoga.ca/frequently-asked-questions/ and https://universal-laughter.com/ (about, services,
@@ -20,6 +21,7 @@ Thanks: You're welcome. Is there anything else I can help you with?
 Warning: I'm happy to help with questions about Laughter Yoga, but I can't continue if the language isn't respectful. Please keep it friendly.
 Goodbye: I'm ending this chat because the language has not been respectful. You're welcome to contact Chris directly: email chris@universal-laughter.com or call +1.604.318.6658.
 Lost: You seem to be having an issue getting what you need from me, and I'm sorry about that. I'll end this chat now. Chris will be glad to help directly: email chris@universal-laughter.com or call +1.604.318.6658.
+Help: I'm Joy, Universal Laughter's virtual assistant. There are no commands: just ask me a question in plain words, for example "What is Laughter Yoga?", "What should I wear?" or "How much does a session cost?" You can also say hello, say thanks, or ask for a joke.
 
 # ---- Laughter Yoga ----
 
@@ -132,3 +134,19 @@ K: human, person, robot, bot, chatbot, automated, machine, computer, staff
 Q: Are you AI? Is this ChatGPT?
 A: No. I'm not an AI model, and I'm not ChatGPT. I'm a simple automated assistant: I match your question to answers Chris wrote himself, so every answer is his own words. Chats may be reviewed to improve those answers. If you'd like to speak to a person, email chris@universal-laughter.com or call +1.604.318.6658.
 K: ai, artificial, intelligence, chatgpt, gpt, llm, openai, generative, claude, gemini, copilot
+
+Q: Does Chris do online sessions (Zoom or Teams)?
+A: Yes! Chris leads online sessions over Zoom or Microsoft Teams as well as in person. To book, email chris@universal-laughter.com or call +1.604.318.6658.
+K: zoom, teams, microsoft, online, virtual, remote, webinar, internet, livestream, virtually
+
+Q: Is there a video of Chris leading a session?
+A: Yes! You can see Chris leading Laughter Yoga on the Services page, https://universal-laughter.com/services, and on his YouTube channel, "A Daily Laugh For You": https://www.youtube.com/adlfy
+K: video, videos, watch, youtube, example, demo, sample, footage, clip, recording, see
+
+Q: Is Chris certified and qualified?
+A: Yes. Chris became a certified Laughter Yoga Leader and Career Development Practitioner in 2009. More: https://universal-laughter.com/about
+K: certified, certification, qualified, qualification, qualifications, credentials, trained, accredited, licensed, legitimate
+
+Q: Is there a wellness app?
+A: Yes! The Universal Laughter Self Care app: spin the wheel for a self-care activity, including a short Laughter Yoga session led by Chris. It's free, needs no signup, and works on your phone: https://selfcare.universal-laughter.com/
+K: app, apps, wellness, selfcare, self, care, wheel, spin, mobile, phone, download, iphone, android, application

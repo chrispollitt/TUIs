@@ -5341,6 +5341,42 @@ class TestFloydPro(Base):
             self.assertTrue(cb.faq_rank(faq, q)[0][1]["q"].startswith("Are you AI"), q)
         self.assertTrue(cb.faq_rank(faq, "are you a human?")[0][1]["q"].startswith("Are you a real person"))
 
+    def test_what_chris_said_about_online_video_certification_and_the_app(self):
+        faq = cb.parse_faq((Path(__file__).resolve().parent.parent / "configure" / "faq.example.txt").read_text(encoding="utf-8"))
+        want = {"Does Chris do ZOOM sessions?": "Does Chris do online sessions",
+                "do you do sessions on teams": "Does Chris do online sessions",
+                "can you lead a virtual workshop": "Does Chris do online sessions",
+                "Is there an example video of him leading?": "Is there a video of Chris leading",
+                "can I see a video of him leading": "Is there a video of Chris leading",
+                "Is Chris certified?": "Is Chris certified",
+                "is he certified?": "Is Chris certified",            # ties with the training entry: the fuller match wins
+                "are you qualified": "Is Chris certified",
+                "how do I become a certified leader": "How do I become a Certified Laughter Yoga Leader",
+                "Is there a wellness app?": "Is there a wellness app",
+                "do you have an app for my phone": "Is there a wellness app",
+                "is there something free I can try": "Is there something free I can try first"}
+        for q, entry in want.items():
+            r = cb.faq_rank(faq, q)[0]
+            self.assertTrue(r[1]["q"].startswith(entry) and r[0] >= 2.0 and r[2] >= 0.3, (q, r[1]["q"][:45], r[0], r[2]))
+        r = cb.faq_rank(faq, "Does Chris do ZOOM sessions?")[0]
+        self.assertIn("Yes!", r[1]["a"])
+        self.assertIn("Zoom or Microsoft Teams", r[1]["a"])
+
+    def test_commands_get_special_treatment_and_emoji_are_not_a_miss(self):
+        self.lhc.chat(7, "Pat", "/help", "!about", "!frobnicate", "\u2764\ufe0f\U0001F923\u203c\ufe0f", "!help")
+        self.turn(lambda: len(self.lhc.posted) >= 5, timeout=25)
+        said = [q["msg"] for q in self.lhc.posted]
+        self.assertEqual(sum("There are no commands" in m for m in said), 2)                 # /help and !help
+        self.assertFalse(any("Research has shown" in m for m in said))                       # not the "benefits" entry
+        self.assertTrue(any("I don't use commands like !frobnicate" in m for m in said))
+        self.assertTrue(any("appreciate the smile" in m for m in said))
+        self.assertEqual(sum("Hello, and welcome" in m for m in said), 1)                    # !about: who he is (a command is not a question: no greeting before it)
+
+    def test_an_unknown_command_counts_as_probing_and_six_in_a_row_end_the_chat(self):
+        self.lhc.chat(7, "Pat", *["!cmd%d" % i for i in range(6)])
+        self.turn(lambda: self.lhc.closed == [7], timeout=25)
+        self.assertTrue(any("You seem to be having an issue" in q["msg"] for q in self.lhc.posted))
+
     def test_are_you_ai_is_answered_plainly_and_apart_from_are_you_human(self):
         for i, q in enumerate(("are you an AI?", "is this ChatGPT", "are you artificial intelligence", "are you a human?")):
             self.lhc.chat(20 + i, "Pat", q)

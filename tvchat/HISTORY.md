@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **Four more FAQ entries from Chris, and a fairer tie:** online sessions (Zoom or Teams: yes), a video of Chris leading
+  (the Services page and the YouTube channel), "Is Chris certified and qualified?" (yes, since 2009) and the wellness app
+  (https://selfcare.universal-laughter.com/). When two entries score the same, the one whose own question is more fully
+  matched now wins (so "is he certified?" beats "How do I become a Certified Laughter Yoga Leader?" even when the older
+  entry comes first in a live FAQ); he, him, his, she, her, them and their are filler words.
+- **Floyd-pro treats commands and emoji properly:** `help`, `/help`, `!help`, `?` and "what can you do" get the FAQ's
+  `Help:` line (no commands, just ask in plain words, with examples; `/help` used to match the "benefits" entry);
+  `!about`, `/start`, `!bot` and the like get his introduction; any other `!word` or `/word` is not matched against the
+  FAQ at all but answered "I don't use commands like !word ..." and counts as a miss (probing, so six in a row end the
+  chat); a message of only emoji or symbols gets a friendly line and is not a miss. The merge script carries the new
+  `Help:` stock line to the live FAQ.
 - **"Are you an AI?" is answered honestly:** Joy has her own FAQ entry ("No. I'm not an AI model, and I'm not
   ChatGPT. I'm a simple automated assistant: I match your question to answers Chris wrote himself ... Chats may be
   reviewed to improve those answers"; if an AI layer is ever added, this entry must change with it). The playful Floyd

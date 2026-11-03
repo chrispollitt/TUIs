@@ -34,6 +34,8 @@ Picking up: Floyd on Live Helper Chat, and Joy (PLAN.md has the phases; Nov 2, 2
      lhc-pro-sync-on-whatwelove.sh.)
   e2. The visitor's own widget looks for news only every 3.5 s (the pro admin's chat message update interval,
      chat_message_sinterval): lower it (say 1.5 s) to shorten the rest of the wait.
+  e1. FAQ gaps from testing: online sessions, a video of Chris, "is he certified", the wellness app are ANSWERED
+     (Nov 3). Still open: maybe "What time is it?" (she says Vancouver is where Chris is).
   e. Optional: Joy's profile name in the pro admin (still "joy-assistant"; the fun site's is "floyd-bot");
      a privacy line in the widget's start text ("chats may be reviewed to improve our answers"), because
      the questions log keeps what visitors type.

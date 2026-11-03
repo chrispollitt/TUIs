@@ -4846,7 +4846,7 @@ class FloydMind(object):
 FAQ_STOP = frozenset((
     "a an the and or of to in on at for from with about is are was were be been am do does did can could would "
     "should will may might i you we they it this that these those my your our me us what who whom how when where "
-    "why which if so as by not no yes please there here have has had any some tell").split())
+    "why which if so as by not no yes please there here have has had any some tell he him his she her them their").split())
 
 
 def faq_stems(text):
@@ -4964,13 +4964,13 @@ def faq_fix(faq, text):
 
 
 def parse_faq(text):
-    faq = {"hello": "", "fallback": "", "thanks": "", "warning": "", "goodbye": "", "lost": "", "entries": []}
+    faq = {"hello": "", "fallback": "", "thanks": "", "warning": "", "goodbye": "", "lost": "", "help": "", "entries": []}
     cur = None
     for line in text.splitlines():
         s = line.strip()
         if s.startswith("#"):
             continue
-        m = re.match(r"^(Q|A|K|Hello|Fallback|Thanks|Warning|Goodbye|Lost)\s*:\s*(.*)$", s)
+        m = re.match(r"^(Q|A|K|Hello|Fallback|Thanks|Warning|Goodbye|Lost|Help)\s*:\s*(.*)$", s)
         if m:
             tag, rest = m.group(1), m.group(2)
             if tag == "Q":
@@ -5011,8 +5011,8 @@ def faq_rank(faq, text):
     out = []
     for e, (q, a, k) in zip(ents, docs):
         s = sum(idf(w) * ((4 if w in q else 3) if w in k else 2 if w in q else 0.5 if w in a else 0) for w in words)
-        out.append((s, e, s / best))
-    out.sort(key=lambda x: -x[0])
+        out.append((s, e, s / best, len(words & q) / max(len(q), 1)))
+    out.sort(key=lambda x: (-round(x[0], 6), -x[3]))                # a tie: the entry whose question is more fully matched
     return out
 
 
@@ -5111,6 +5111,12 @@ class FloydAdapter(CommandMixin):
     FAQ_COVER = 0.3                      # ... and the least share of the question's words it explains
     FAQ_GREET = re.compile(r"^(?:hi|hello|hey|hiya|howdy|good (?:morning|afternoon|evening))\b[\s\W]*(?:there|floyd)?\W*$")
     FAQ_THANKS = re.compile(r"^(?:thanks|thank you|thx|cheers|ok thanks|great thanks)\b")
+    FAQ_HELP = re.compile(r"^(?:[!/]\s*(?:help|commands?|menu|h|\?)|help|\?+|commands?|menu|options|what can you (?:do|help with)|"
+                          r"how does this work|how do i use (?:this|you))\W*$")
+    FAQ_ABOUT = re.compile(r"^[!/]\s*(?:about|who|whoami|bot|status|version|info|start|hello|hi)\W*$")
+    HELP_TEXT = ("I'm Joy, Universal Laughter's virtual assistant. There are no commands: just ask me a question in plain "
+                 "words, for example \"What is Laughter Yoga?\", \"What should I wear?\" or \"How much does a session cost?\" "
+                 "You can also say hello, say thanks, or ask for a joke.")
 
     def attached(self, conv):
         return (conv.id in self.memory.data["attached"] or
@@ -5362,8 +5368,20 @@ class FloydAdapter(CommandMixin):
             plan = [(0.3, faq["thanks"] or "You're welcome!", "")]
             self._faq_note(conv, text, "thanks")
             self.misses.pop(conv.id, None)
+        elif self.FAQ_HELP.match(low):                                  # help, /help, !help, ?: how to talk to him
+            plan = [(0.3, faq["help"] or self.HELP_TEXT, "")]
+            self._faq_note(conv, text, "command")
+            self.misses.pop(conv.id, None)
+        elif self.FAQ_ABOUT.match(low):                                 # !about, /start ...: who he is
+            plan = [(0.3, hello, "")]
+            self._faq_note(conv, text, "command")
+            self.misses.pop(conv.id, None)
+        elif not re.search(r"[A-Za-z0-9]", text):                       # emoji and symbols only: a smile is not a miss
+            plan = [(0.3, "Thank you! I can only read words, I'm afraid, but I appreciate the smile. How can I help?", "")]
+            self._faq_note(conv, text, "other")
         else:
-            ranked = faq_rank(faq, text)
+            command = low[:1] in ("!", "/")                             # a command he does not know: not a FAQ question
+            ranked = [] if command else faq_rank(faq, text)
             if first:
                 plan.append((0.3, hello, ""))
             if ranked and ranked[0][0] >= self.FAQ_MIN and ranked[0][2] >= self.FAQ_COVER:
@@ -5390,8 +5408,10 @@ class FloydAdapter(CommandMixin):
                         self._later(3.0, lambda: ad.end_abuse(conv, conv.title, "lost", False))
                     return
                 self._faq_note(conv, text, "miss", best[1]["q"].split("?")[0].strip(), best[0], best[2])
-                plan.append((1.2 if first else 0.5, faq["fallback"] or
-                             "Sorry, I don't have an answer to that one. A person can help.", ""))
+                plan.append((1.2 if first else 0.5,
+                             ("I don't use commands like %s - just ask me a question in plain words, for example "
+                              "\"What should I wear?\" or \"How much does a session cost?\"" % text.split()[0][:20]) if command else
+                             (faq["fallback"] or "Sorry, I don't have an answer to that one. A person can help."), ""))
         self.last_out[conv.id] = now
         self._out(conv, plan)
 
