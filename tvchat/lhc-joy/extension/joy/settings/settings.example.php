@@ -14,4 +14,10 @@ return array(
     'max_misses'    => 5,                                          // more answers missed in a row than this: she says goodbye (0 = never)
     'ban_minutes'   => 60,                                         // an abuser's address is turned away this long (0 = this chat only)
     'kill_file'     => '/home/whatwelo/joy/DISABLED',              // while this file exists she says nothing
+    // Urgent mail to a person, at once (empty alert_to = off): her own code failing, or a visitor using one of the alert words.
+    'alert_to'      => 'chris@universal-laughter.com',
+    'alert_from'    => 'joy@universal-laughter.com',
+    'alert_state'   => '/home/whatwelo/joy/alerts.json',           // throttle: the same alert once an hour, ten mails an hour at most
+    'alert_words'   => array('urgent', 'emergency', 'asap', 'complaint', 'refund', 'lawyer'),
+    'admin_url'     => 'https://chat.universal-laughter.com/index.php/site_admin/chat/single/',
 );

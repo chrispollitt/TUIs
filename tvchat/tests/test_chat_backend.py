@@ -5100,6 +5100,120 @@ class TestFloydWallClock(Base):
         self.assertIn("2026", __import__("time").strftime("%Y", __import__("time").localtime(mind.clock())))
 
 
+class TestJoyCheckin(Base):
+    """Floyd's daily "How's it going?" with Joy: he asks the site with the API key, and mails Chris only when she is not well."""
+
+    def setUp(self):
+        super().setUp()
+        self.lhc = FakeLhc()
+        self.addCleanup(self.lhc.close)
+        os.environ["TVCHAT_PASS_LHC_PRO"] = "k3y"
+        os.environ["TVCHAT_PASS_MAILBOX"] = "pw"
+        self.addCleanup(os.environ.pop, "TVCHAT_PASS_LHC_PRO", None)
+        self.addCleanup(os.environ.pop, "TVCHAT_PASS_MAILBOX", None)
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        self.s = {"url": self.lhc.url, "user": "floyd", "to": "chris@example.test", "mail_account": "mailbox",
+                  "department": "0", "wait": "0", "state": os.path.join(self.dir, "state.json")}
+        self.accounts = {"mailbox": cb.Account("mailbox", "mail", "mailbox", {"addr": "floyd@example.test", "smtp_server": "smtp.example.test"})}
+        self.mailed, self.said = [], []
+        patcher = unittest.mock.patch.object(cb, "send_reply_mail", lambda p, to, subject, irt, refs, body, name="": self.mailed.append((to, subject, body, p["addr"], name)))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def run_checkin(self, **kw):
+        return cb.joy_checkin(self.s, self.accounts, out=self.said.append, **kw)
+
+    def op_line(self, cid, text="Hello!"):
+        self.lhc.chats[cid]["user_id"] = 5
+        ms = self.lhc.msgs[cid]
+        ms.append({"id": max(m["id"] for m in ms) + 1, "msg": text, "user_id": 5, "time": int(time.time())})
+
+    def test_all_is_well_nothing_is_mailed(self):
+        self.lhc.chat(1, "Ann", "What should I wear?", status=1)
+        self.op_line(1)
+        text = self.run_checkin()
+        self.assertEqual(self.mailed, [])
+        self.assertIn("Floyd: How's it going, Joy?", text)
+        self.assertIn("Fine, thanks! 1 visitor wrote 1 line", text)
+        self.assertTrue(any(c[0] == "/restapi/fetchchatmessages" for c in self.lhc.calls))
+
+    def test_a_visitor_left_waiting_is_mailed_once_then_not_again(self):
+        self.lhc.chat(1, "Ann", "Hello?", status=1)
+        time.sleep(0.05)
+        text = self.run_checkin()
+        self.assertIn("Not so well", text)
+        self.assertEqual(len(self.mailed), 1)
+        to, subject, body, frm, name = self.mailed[0]
+        self.assertEqual((to, frm, name), ("chris@example.test", "floyd@example.test", "Floyd"))
+        self.assertIn("Joy needs your attention", subject)
+        self.assertIn("nobody answered (chat 1)", body)
+        self.run_checkin()                                      # (still wrong, already said)
+        self.assertEqual(len(self.mailed), 1)
+        self.run_checkin(now=time.time() + 3 * 86400)          # three days on: said again
+        self.assertEqual(len(self.mailed), 2)
+
+    def test_a_different_fault_is_mailed_at_once(self):
+        self.lhc.chat(1, "Ann", "Hello?", status=1)
+        time.sleep(0.05)
+        self.run_checkin()
+        self.lhc.chat(2, "Bob", "Anyone?", status=0)
+        time.sleep(0.05)
+        self.run_checkin()
+        self.assertEqual(len(self.mailed), 2)
+        self.assertIn("chat 1, 2", self.mailed[1][2])
+
+    def test_dry_run_mails_nothing_and_remembers_nothing(self):
+        self.lhc.chat(1, "Ann", "Hello?", status=1)
+        time.sleep(0.05)
+        self.run_checkin(dry=True)
+        self.assertEqual(self.mailed, [])
+        self.assertIn("dry run: would mail chris@example.test", "".join(self.said))
+        self.assertFalse(os.path.exists(self.s["state"]))
+
+    def test_a_site_that_cannot_be_reached_is_a_fault_too(self):
+        self.lhc.close()
+        self.run_checkin()
+        self.assertEqual(len(self.mailed), 1)
+        self.assertIn("could not ask her chat site", self.mailed[0][2])
+
+    def test_a_wrong_key_is_a_fault_not_a_crash(self):
+        os.environ["TVCHAT_PASS_LHC_PRO"] = "wrong"
+        self.run_checkin()
+        self.assertIn("wrong user or API key", self.mailed[0][2])
+
+    def test_a_quiet_day_is_fine_and_monday_gets_the_all_well_note(self):
+        monday = time.mktime((2026, 11, 2, 12, 0, 0, 0, 0, -1))
+        self.s["weekly"] = "Mon"
+        self.run_checkin(now=monday + 86400)                    # Tuesday: nothing
+        self.assertEqual(self.mailed, [])
+        text = self.run_checkin(now=monday)
+        self.assertIn("Quiet, thanks", text)
+        self.assertEqual(self.mailed[0][1], "Joy: all well this week")
+
+    def test_slow_answers_are_a_fault(self):
+        now = time.time()
+        chats = [{"id": i, "nick": "v", "status": 1, "msgs": [(1, 0, "hi", now - 200), (2, 5, "hello", now - 100)]} for i in range(3)]
+        stats, issues = cb.joy_assess(chats, now, wait=180, slow=45)
+        self.assertEqual((stats["slow"], len(issues)), (3, 1))
+        self.assertIn("took over 45 seconds", issues[0])
+
+    def test_assess_counts_closed_chats_only_when_several(self):
+        now = time.time()
+        dead = lambda i: {"id": i, "nick": "v", "status": 2, "msgs": [(1, 0, "hi", now - 500)]}
+        self.assertEqual(cb.joy_assess([dead(1)], now)[1], [])
+        self.assertEqual(len(cb.joy_assess([dead(1), dead(2)], now)[1]), 1)
+
+    def test_it_needs_its_settings(self):
+        del self.s["to"]
+        with self.assertRaises(cb.UserError):
+            self.run_checkin()
+        self.s["to"] = "chris@example.test"
+        os.environ.pop("TVCHAT_PASS_LHC_PRO")
+        with self.assertRaises(cb.UserError):
+            self.run_checkin()
+
+
 class TestFloydAbuseElsewhere(Base):
     """The playful Floyd and abuse on IRC: kick (he is an op), only ignore (he is not), leave a query - tolerantly."""
 

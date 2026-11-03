@@ -69,13 +69,18 @@ install)
   mkdir -p $ROOT/extension
   echo "$TAR_B64" | base64 -d | tar xz -C $ROOT/extension
   [ -f $JOY/settings.keep ] && { cp -p $JOY/settings.keep $EXT/settings/settings.ini.php; rm -f $JOY/settings.keep; }
-  for f in $EXT/bootstrap/bootstrap.php $EXT/classes/JoyBrain.php $EXT/classes/JoyJokes.php; do php -l $f >/dev/null || { echo "$f does not pass php -l" >&2; exit 1; }; done
+  for f in $EXT/bootstrap/bootstrap.php $EXT/classes/JoyBrain.php $EXT/classes/JoyJokes.php $EXT/classes/JoyAlert.php; do php -l $f >/dev/null || { echo "$f does not pass php -l" >&2; exit 1; }; done
   echo "code: installed in $EXT"
   # 2. her settings (written once: edit them there)
   if [ ! -f $EXT/settings/settings.ini.php ]; then
     sed -e "s/'dep_id'        => [0-9]*/'dep_id'        => $DEP_ID/" -e "s/'operator_id'   => [0-9]*/'operator_id'   => $OPERATOR_ID/" $EXT/settings/settings.example.php > $EXT/settings/settings.ini.php
     echo "settings: written ($EXT/settings/settings.ini.php): department $DEP_ID, operator $OPERATOR_ID"
-  else echo "settings: kept as they are"; fi
+  else
+    # her settings are hers (edited there), but a key added since is carried over from the example: the alert_* ones (urgent mail) and admin_url
+    cp -p $EXT/settings/settings.ini.php $JOY/settings.ini.php.bak
+    php -r '$f = $argv[1]; $c = include $f; $e = include $argv[2]; $add = []; foreach ($e as $k => $v) { if ((strpos($k, "alert_") === 0 || $k === "admin_url") && !array_key_exists($k, $c)) { $c[$k] = $v; $add[] = $k; } } if ($add) { file_put_contents($f, "<?php\nreturn " . var_export($c, true) . ";\n"); } echo "settings: kept as they are" . ($add ? ", plus new keys: " . implode(", ", $add) : "") . "\n";' $EXT/settings/settings.ini.php $EXT/settings/settings.example.php
+    php -l $EXT/settings/settings.ini.php >/dev/null || { cp -p $JOY/settings.ini.php.bak $EXT/settings/settings.ini.php; echo "settings failed php -l: the old file is back" >&2; exit 1; }
+  fi
   # 3. her FAQ (from cpbee, only if there is none)
   if [ ! -f $JOY/faq.txt ] || [ "${FORCE_FAQ:-0}" = 1 ]; then
     [ -f $JOY/faq.txt ] && cp -p $JOY/faq.txt $JOY/faq.txt.bak.$(date +%Y%m%d-%H%M%S)

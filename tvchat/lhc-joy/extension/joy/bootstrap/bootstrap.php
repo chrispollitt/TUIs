@@ -20,6 +20,7 @@ class erLhcoreClassExtensionJoy
         $base = dirname(__DIR__) . '/classes/';
         require_once $base . 'JoyBrain.php';
         require_once $base . 'JoyJokes.php';
+        require_once $base . 'JoyAlert.php';
         $dispatcher = erLhcoreClassChatEventDispatcher::getInstance();
         $dispatcher->listen('chat.addmsguser', array($this, 'onVisitor'));       // a visitor's later lines
         $dispatcher->listen('chat.chat_started', array($this, 'onVisitor'));     // the first line, as the chat starts
@@ -30,8 +31,28 @@ class erLhcoreClassExtensionJoy
         try {
             $this->process($params['chat']);
         } catch (\Throwable $e) {
-            error_log('[joy] ' . $e->getMessage() . ' at ' . $e->getFile() . ':' . $e->getLine());
+            $what = $e->getMessage() . ' at ' . $e->getFile() . ':' . $e->getLine();
+            error_log('[joy] ' . $what);
+            try {
+                $cfg = $this->config();
+                JoyAlert::send($cfg, 'error', 'Joy is failing', "Joy's code threw an error while answering a visitor (the chat itself is unharmed, but she may not be answering):\n\n" . $what
+                    . "\n\nIf it keeps happening, silence her with: touch " . (isset($cfg['kill_file']) ? $cfg['kill_file'] : 'her kill file') . "\n");
+            } catch (\Throwable $e2) {
+                error_log('[joy] and the alert failed too: ' . $e2->getMessage());
+            }
         }
+    }
+
+    /** Tell a person at once when a visitor uses an alert word; she answers as usual. */
+    private function alertWords($cfg, $chat, $text)
+    {
+        $w = JoyAlert::urgent($text, isset($cfg['alert_words']) && is_array($cfg['alert_words']) ? $cfg['alert_words'] : array());
+        if ($w === null) {
+            return;
+        }
+        $link = rtrim(isset($cfg['admin_url']) ? $cfg['admin_url'] : 'https://chat.universal-laughter.com/index.php/site_admin/chat/single/', '/') . '/' . $chat->id;
+        JoyAlert::send($cfg, 'urgent/' . $chat->id, 'A visitor wrote "' . $w . '" to Joy (chat ' . $chat->id . ')',
+            "A visitor in Joy's chat used the word \"$w\":\n\n  " . mb_substr(JoyBrain::redact($text), 0, 300) . "\n\nJoy has answered from her FAQ as usual; this may need a person.\nThe chat: $link\n");
     }
 
     private function config()
@@ -89,6 +110,7 @@ class erLhcoreClassExtensionJoy
             if ($text === '' || ($fresh && (int)$m->time < time() - 120)) {
                 continue;
             }
+            $this->alertWords($cfg, $chat, $text);
             $r = JoyBrain::reply($faq, $st, $text, $opt);
             foreach ($r['say'] as $line) {
                 $say[] = $line;

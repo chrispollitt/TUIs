@@ -7889,6 +7889,172 @@ def cmd_faq_report(a):
     return 0
 
 
+# --------------------------------------------------------------------------
+# joy-checkin: Floyd's daily "How's it going?" with Joy (Floyd-pro on the web host's Live Helper Chat site).  He asks
+# the site, with the same API key an operator uses, what her visitors saw in the last day: were they answered, how
+# fast.  Nothing wrong -> nothing is mailed (a short note on one weekday, if asked).  Something wrong -> the chat
+# between the two is mailed to the person who looks after her.  Run by a systemd timer; [joy-checkin] in the config:
+#   url, user, key_account (the password's name: $TVCHAT_PASS_<KEY_ACCOUNT>, default lhc-pro), department (default 2),
+#   mail_account (an [account:...] of protocol mail: the mailbox he sends from), to (who is told), weekly (a weekday
+#   name, e.g. Mon: the all-well note; default none), wait= (seconds before an unanswered line is a fault, 180),
+#   slow= (seconds that count as a slow answer, 45), repeat_days= (how long before the same fault is mailed again, 2),
+#   state= (where he remembers what he has said).
+# --------------------------------------------------------------------------
+def joy_gather(p, dep, since):
+    """[{id, nick, status, msgs: [(id, user_id, text, time)]}] of the department's chats started since `since`."""
+    seen = {}
+    for status in (0, 1, 2):
+        q = {"status": status, "limit": 50, "sort": "id_desc"}
+        if dep:
+            q["departament_id"] = dep
+        for c in lhc_items(lhc_call(p, "chats", q), "list"):
+            try:
+                cid = int(c["id"])
+            except (KeyError, ValueError, TypeError):
+                continue
+            if float(c.get("time") or since) >= since:
+                seen[cid] = {"id": cid, "nick": str(c.get("nick") or "Visitor"), "status": int(c.get("status") or 0), "msgs": []}
+    for cid in sorted(seen)[-60:]:
+        q = {"chat_id": cid, "ignore_system_messages": 1, "ignore_typing": 1, "remove_bbcode": 1}
+        for m in lhc_items(lhc_call(p, "fetchchatmessages", q), "messages"):
+            try:
+                seen[cid]["msgs"].append((int(m["id"]), int(m.get("user_id") or 0), str(m.get("msg") or ""), float(m.get("time") or 0)))
+            except (KeyError, ValueError, TypeError):
+                pass
+        seen[cid]["msgs"].sort()
+    return [seen[k] for k in sorted(seen)]
+
+
+def joy_assess(chats, now, wait=180, slow=45):
+    """Her day in numbers, and what is wrong: (stats, issues).  A visitor line is answered by the next line from
+    an operator (user_id above 0); the first answer of a run of visitor lines is what is timed."""
+    lat, open_dead, closed_dead, lines = [], [], [], 0
+    for c in chats:
+        pending = None
+        for mid, uid, text, t in c["msgs"]:
+            if uid == 0 and text.strip():
+                lines += 1
+                if pending is None:
+                    pending = t
+            elif uid > 0 and pending is not None:
+                lat.append(max(0.0, t - pending))
+                pending = None
+        if pending is not None and now - pending > wait:
+            (closed_dead if c["status"] == 2 else open_dead).append(c)
+    lat.sort()
+    stats = {"chats": sum(1 for c in chats if any(m[1] == 0 for m in c["msgs"])), "lines": lines, "answered": len(lat),
+             "quickest": lat[0] if lat else None, "slowest": lat[-1] if lat else None,
+             "median": lat[len(lat) // 2] if lat else None, "slow": sum(1 for x in lat if x > slow),
+             "unanswered": len(open_dead) + len(closed_dead)}
+    issues = []
+    if open_dead:
+        issues.append("%d visitor chat%s still open with a question nobody answered (chat %s): is her hook broken?" % (
+            len(open_dead), "" if len(open_dead) == 1 else "s", ", ".join(str(c["id"]) for c in open_dead[:5])))
+    if len(closed_dead) >= 2:
+        issues.append("%d chats ended with the visitor's last line unanswered (chat %s)" % (
+            len(closed_dead), ", ".join(str(c["id"]) for c in closed_dead[:5])))
+    if stats["slow"] >= 3:
+        issues.append("%d answers took over %d seconds (the slowest %d s): the site or her host may be struggling" % (
+            stats["slow"], slow, stats["slowest"]))
+    return stats, issues
+
+
+def joy_talk(stats, issues, who="Floyd", her="Joy"):
+    """The check-in as the two of them would say it."""
+    def sec(x):
+        return "%d s" % round(x)
+    out = ["%s: How's it going, %s?" % (who, her)]
+    if issues:
+        out.append("%s: Not so well, %s." % (her, who))
+        out += ["%s:   - %s" % (her, i) for i in issues]
+        out.append("%s: Then Chris needs to know. I will tell him. Take care, %s." % (who, her))
+    elif not stats["lines"]:
+        out.append("%s: Quiet, thanks. Nobody has stopped by." % her)
+        out.append("%s: Then all is well. Take care, %s." % (who, her))
+    else:
+        out.append("%s: Fine, thanks! %d visitor%s wrote %d line%s, and I answered %d (the quickest in %s, the slowest in %s)." % (
+            her, stats["chats"], "" if stats["chats"] == 1 else "s", stats["lines"], "" if stats["lines"] == 1 else "s",
+            stats["answered"], sec(stats["quickest"] or 0), sec(stats["slowest"] or 0)))
+        out.append("%s: Glad to hear it. Take care, %s." % (who, her))
+    return "\n".join(out)
+
+
+def joy_checkin(s, accounts, now=None, gather=None, dry=False, out=None):
+    """One check-in; the text said (also written to `out`).  s = the [joy-checkin] section as a dict."""
+    out = out or sys.stdout.write
+    now = now if now is not None else time.time()
+    for k in ("url", "user", "to", "mail_account"):
+        if not (s.get(k) or "").strip():
+            raise UserError("[joy-checkin] %s= is needed" % k)
+    key_acct = (s.get("key_account") or "lhc-pro").strip()
+    host = re.sub(r"^https?://", "", s["url"].strip()).split("/")[0]
+    pw = find_password_where(key_acct, host, s["user"].strip(), "lhc")[0]
+    if not pw:
+        raise UserError("no API key for %s on %s (set $%s)" % (s["user"], host, _env_name(key_acct)))
+    p = {"url": s["url"].strip(), "user": s["user"].strip(), "password": pw, "operator_id": 0, "verify": True, "timeout": 30}
+    day = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"][time.localtime(now).tm_wday]
+    weekly = (s.get("weekly") or "").strip()[:3].lower() == day
+    days = 7 if weekly else 1
+    try:
+        wait, slow, repeat = float(s.get("wait") or 180), float(s.get("slow") or 45), float(s.get("repeat_days") or 2)
+        dep = int((s.get("department") or "2").strip() or 0)
+    except ValueError:
+        raise UserError("[joy-checkin] wait=, slow=, repeat_days= and department= must be numbers")
+    stats, issues = None, []
+    try:
+        chats = (gather or joy_gather)(p, dep, now - days * 86400)
+        stats, issues = joy_assess(chats, now, wait, slow)
+    except UserError as e:
+        issues = ["I could not ask her chat site (%s): is it up, and is the API key still good?" % e]
+        stats = {"chats": 0, "lines": 0, "answered": 0}
+    text = joy_talk(stats, issues)
+    out(text + "\n")
+    state_path = os.path.expanduser((s.get("state") or "~/.local/share/tvchat/floyd/joy-checkin.json").strip())
+    try:
+        with open(state_path, encoding="utf-8") as fh:
+            state = json.load(fh)
+    except (OSError, ValueError):
+        state = {}
+    if issues:
+        again = sorted(issues) != sorted(state.get("issues") or []) or now - float(state.get("mailed") or 0) >= repeat * 86400
+        subject, send = "Joy needs your attention: " + issues[0][:70], again
+    else:
+        subject, send = "Joy: all well this week", weekly
+    if not send:
+        out("(nothing to mail%s)\n" % (": already told about this" if issues else ""))
+    elif dry:
+        out("(dry run: would mail %s: %s)\n" % (s["to"].strip(), subject))
+    else:
+        acct = accounts.get(s["mail_account"].strip())
+        if not acct or acct.protocol != "mail":
+            raise UserError("[joy-checkin] mail_account= must name an [account:...] of protocol mail")
+        import types
+        m = MailAdapter.__new__(MailAdapter)
+        m.account, m.addr, m.chat = acct, (acct.opts.get("addr") or "").strip(), types.SimpleNamespace(daemon=False)
+        send_reply_mail(m._params(), s["to"].strip(), subject, "", "",
+                        text + "\n\n(Floyd's daily check-in, over %d day%s. tvchat-backend joy-checkin)\n" % (days, "" if days == 1 else "s"), "Floyd")
+        out("mailed %s: %s\n" % (s["to"].strip(), subject))
+    if not dry and (send or state.get("issues") != (issues or None)):
+        try:
+            os.makedirs(os.path.dirname(state_path), exist_ok=True)
+            with open(state_path, "w", encoding="utf-8") as fh:
+                json.dump({"issues": issues, "mailed": now if send else state.get("mailed", 0)}, fh)
+        except OSError as e:
+            out("(could not save %s: %s)\n" % (state_path, e))
+    return text
+
+
+def cmd_joy_checkin(a):
+    """joy-checkin [--dry-run]: Floyd asks how Joy is doing (see [joy-checkin] in the config); mails the owner if not well."""
+    c = configparser.ConfigParser(interpolation=None)
+    c.read(_conf_path(), encoding="utf-8")
+    if not c.has_section("joy-checkin"):
+        raise UserError("%s has no [joy-checkin] section" % _conf_path())
+    accounts, _ = load_config()
+    joy_checkin(dict(c.items("joy-checkin")), dict((x.id, x) for x in accounts), dry=a.dry_run)
+    return 0
+
+
 def cmd_reload_config(a):
     """reload-config: make the running backend use tvchat.conf as it is now."""
     sys.stdout.write(_chat().reload_config() + "\n")
@@ -8289,6 +8455,7 @@ def build_parser():
     p = sub.add_parser("invites"); p.set_defaults(fn=cmd_invites)
     p = sub.add_parser("check-config"); p.add_argument("file"); p.set_defaults(fn=cmd_check_config)
     p = sub.add_parser("faq-report"); p.add_argument("file", nargs="?", default=""); p.add_argument("--days", type=int, default=7); p.set_defaults(fn=cmd_faq_report)
+    p = sub.add_parser("joy-checkin"); p.add_argument("--dry-run", action="store_true"); p.set_defaults(fn=cmd_joy_checkin)
     p = sub.add_parser("reload-config"); p.set_defaults(fn=cmd_reload_config)
     p = sub.add_parser("invite-mail"); p.add_argument("account"); p.add_argument("address"); p.set_defaults(fn=cmd_invite_mail)
     p = sub.add_parser("has-tvmail"); p.set_defaults(fn=cmd_has_tvmail)

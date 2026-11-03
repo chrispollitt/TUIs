@@ -60,7 +60,9 @@ function copydir($a, $b) { @mkdir($b, 0777, true); foreach (scandir($a) as $f) {
 copydir(__DIR__ . '/../extension/joy', $tmp . '/extension/joy');
 copy(__DIR__ . '/../../configure/faq.example.txt', $tmp . '/faq.txt');
 $cfg = array('enabled' => true, 'dep_id' => 2, 'operator_id' => 2, 'operator_name' => 'Joy, Universal Laughter assistant',
-    'faq' => "$tmp/faq.txt", 'log' => "$tmp/q.log", 'abuse_words' => '', 'max_misses' => 5, 'ban_minutes' => 60, 'kill_file' => "$tmp/DISABLED");
+    'faq' => "$tmp/faq.txt", 'log' => "$tmp/q.log", 'abuse_words' => '', 'max_misses' => 5, 'ban_minutes' => 60, 'kill_file' => "$tmp/DISABLED",
+    'alert_to' => 'boss@example.test', 'alert_from' => 'joy@example.test', 'alert_state' => "$tmp/alerts.json",
+    'alert_words' => array('urgent', 'emergency', 'refund'), 'admin_url' => 'https://chat.example.test/admin/single/');
 file_put_contents($tmp . '/extension/joy/settings/settings.ini.php', "<?php\nreturn " . var_export($cfg, true) . ";\n");
 require $tmp . '/extension/joy/bootstrap/bootstrap.php';
 
@@ -73,6 +75,8 @@ function fire($event, $chat) { erLhcoreClassChatEventDispatcher::getInstance()->
 
 $ext = new erLhcoreClassExtensionJoy();
 $ext->run();
+$mails = array();
+JoyAlert::$mailer = function ($to, $subject, $body, $headers, $from) { global $mails; $mails[] = array($to, $subject, $body, $headers); return true; };
 
 // 1. a chat starts with a question: a greeting and the answer, the chat is hers, the state is saved
 $c1 = newChat(1);
@@ -151,6 +155,40 @@ $threw = false;
 try { fire('chat.addmsguser', $c9); } catch (Throwable $e) { $threw = true; }
 check(!$threw, 'an error inside is caught and does not reach the chat');
 erLhcoreClassModelmsg::$boom = false;
+check(count($mails) === 1 && $mails[0][0] === 'boss@example.test' && $mails[0][1] === 'Joy is failing' && strpos($mails[0][2], 'the database fell over') !== false
+    && strpos($mails[0][3], 'From: Joy <joy@example.test>') === 0, 'her own failure is mailed at once');
+erLhcoreClassModelmsg::$boom = true;
+fire('chat.addmsguser', newChat(10));
+erLhcoreClassModelmsg::$boom = false;
+check(count($mails) === 1, 'the same failure is not mailed again within the hour');
+
+// 8. a visitor with an alert word: she answers as usual AND a person is told, once per chat, with the chat's link
+$mails = array();
+$c11 = newChat(11);
+visitor($c11, 'This is URGENT, my refund has not come, call me on 604 555 0100');
+fire('chat.addmsguser', $c11);
+check(count(sent($c11)) >= 1, 'she still answers a visitor who used an alert word');
+check(count($mails) === 1 && strpos($mails[0][1], '"urgent"') !== false && strpos($mails[0][2], 'https://chat.example.test/admin/single/11') !== false
+    && strpos($mails[0][2], '604 555 0100') === false, 'a person is told at once, with the link, and the number is blanked');
+visitor($c11, 'it is an emergency');
+fire('chat.addmsguser', $c11);
+check(count($mails) === 1, 'the same chat is not mailed twice in an hour');
+$c12 = newChat(12);
+visitor($c12, 'What should I wear? (not urgently)');
+fire('chat.addmsguser', $c12);
+check(count($mails) === 1, 'a word that merely starts with an alert word is no alert');
+$c13 = newChat(13);
+visitor($c13, 'Where is my refund?');
+fire('chat.addmsguser', $c13);
+check(count($mails) === 2, 'another chat is another alert');
+
+// 9. the throttle: ten mails an hour in all; alerts off when alert_to is empty
+$mails = array();
+for ($i = 20; $i < 40; $i++) { $c = newChat($i); visitor($c, 'refund'); fire('chat.addmsguser', $c); }
+check(count($mails) === 7, 'ten mails an hour at most (three had gone already), however many chats');
+check(JoyAlert::send(array('alert_to' => '', 'alert_state' => ''), 'x', 's', 'b') === false, 'with no alert_to nothing is sent');
+$st = "$tmp/s.json";
+check(JoyAlert::due($st, 'k', 1000) && !JoyAlert::due($st, 'k', 1500) && JoyAlert::due($st, 'k', 5000), 'due: once, then not for an hour, then again');
 
 echo $fails ? "$fails FAILED\n" : "all passed\n";
 exit($fails ? 1 : 0);
