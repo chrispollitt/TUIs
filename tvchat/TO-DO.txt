@@ -1,6 +1,60 @@
 tvchat does IRC (with IRCv3) and talk(1). What is left is below, in the order
 it is likely to be done. Defects live in BUGS.md, not here.
 
+Picking up: Floyd on Live Helper Chat, and Joy (PLAN.md has the phases; Nov 2, 2026)
+ State (Nov 2, 2026, evening): BOTH sites are live and tested. chat.u-l.ca (fun/test, the playful
+ Floyd; API https://chat.u-l.ca/index.php) and chat.universal-laughter.com (pro, JOY: FAQ only,
+ /etc/tvchat/faq.txt, no 8ball and friends, shares only !joke; her fallback gives
+ chris@universal-laughter.com and +1.604.318.6658; API https://chat.universal-laughter.com/index.php,
+ operator `joy` id 2, department 2 "assist", key restricted to 209.121.12.0/22). They are two
+ SEPARATE Live Helper Chat installs (own database whatwelo_ulchatpro, settings, cache, var); cPanel
+ host reached with ssh-wwl, code at /home/whatwelo/www/u-l/chat (fun) and /home/whatwelo/www/ul/chat
+ (pro). cpbee accounts: lhc + floyd (fun), lhc_pro + pro (pro). The clock fix is verified live.
+ Pro start page for tests: https://chat.universal-laughter.com/index.php/chat/start/(department)/2
+ Chris, next:
+  a. Joy's operator email (a joy@ forwarder or chris+joy@; optional) and profile name (the widget
+     header says "joy-assistant, Assistant"; the fun site's says "floyd-bot").
+  b. The widget embed code on a test page of universal-laughter.com (set department 2).
+  c. Optional: the odd bits below under Watching/Open.
+ Claude, next:
+  - Push the unpushed commits (when told).
+  - Make the PRO site the master copy: flip lhc-pro-sync-on-whatwelove.sh to copy pro -> fun
+    (the script already takes SRC= and DST=). Later maybe symlink the read-only folders
+    (lib/vendor, translations, ezcomponents) after auditing; keep design/, settings/, cache/
+    and var/ per site.
+  - Beta widget on a test page of universal-laughter.com (embed code from the pro admin);
+    check how it looks. A branded chat.universal-laughter.com is already DNS + TLS.
+  - Read the real visitor questions for a week or two; extend the FAQ with what is missing.
+  Later:
+  - An AI layer for Joy (the FAQ as its only material; per-visitor and daily caps; a human
+    handoff), after reading real questions.
+  - Phase 3: a public IRC server on a small VPS (Ergo + Floyd + gamja on chat.u-l.ca), then the
+    admin-only bridge to cpbee, then a tvchat web app (ttyd/xterm.js first).
+  - XMPP for tvchat (Live Helper Chat supports it; "Decided: not doing" below says no XMPP:
+    revisit that line if this is wanted).
+  - Joy: privacy line in the widget's start text (visitor text may go to a model provider
+    once the AI layer exists); review transcripts.
+  - Small: Floyd-pro answers an unknown !command with the fallback or a loose FAQ match
+    ("!time in Vancouver" gave the "where are you based" entry); say so plainly instead?
+ Pinned, not looked at: media.universal-laughter.com is "very broken".
+ Pinned ideas (Chris, Nov 2, 2026):
+  - tvchat AND tvmail: an "amalgamated view" - the recent messages (last N hours or N days) from
+    all the servers/accounts of the app in one list, newest first, each marked with its source
+    (tvchat: a "recent" window across IRC/talk/Delta Chat/mail conversations; tvmail: see its
+    TO-DO.txt 28). Design it once in tvcommon.
+  - tvmail (not tvchat): multi-server support (tvmail/TO-DO.txt 26) and a forum source such as
+    phpBB or a modern equivalent (27), which suit mail-style threads better than chat.
+  - A third app, tvcal (calendar; Nov 2, 2026): not started, not designed. Reuse tvcommon (config
+    editor, backend co-process protocol); CalDAV/iCal; mail invitations could tie it to tvmail.
+    Rule of thumb Chris and Claude agreed on: nothing new starts until Joy on the pro site works.
+  - A to-do list manager to go with tvcal (maybe tvtodo, or inside tvcal; Nov 2, 2026): not
+    started. Seed: Floyd's !todo / !note (tvcommon/py/tvfloyd.py, the Notes class) already keep
+    a to-do list and notes per person in a small JSON file; due dates would tie it to tvcal.
+ Watching: the odd encrypted Delta Chat mail from floyd@cpbee.cmnet dated Oct 28 (deleted;
+ save the raw headers if another arrives). Open: Postfix 587 login for Floyd's Delta Chat
+ replies; the servers-page admin buttons on cpbee; the LAN Floyd nick (configure-floyd.sh
+ --nick floyd-bot); getmail delete = true only affects mail fetched from now on.
+
 Next
 1 Delta Chat, what is left (tvchat/DESIGN.md "Delta Chat adapter"; tried live on
   cpbee with two mailboxes, and on cmlaptop and cmdesktop):

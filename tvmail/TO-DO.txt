@@ -48,3 +48,14 @@ Setup and integration
    Done (Oct 25): Message > Chat with sender and Open chat invite, and tvchat's
    Invite mailing the link through tvmail's account. Still to do: tvmail starting
    a compose window when tvchat asks to "write an email to this contact".
+
+Pinned ideas (Chris, Nov 2, 2026; not started, not designed)
+26 Multi-server support: more than one mail account/server at once (several IMAP/SMTP
+   accounts in tvmail.conf, a folder tree per account, compose from a chosen identity).
+27 A forum-style source (phpBB or a modern equivalent): threads and posts suit tvmail much
+   better than they suit tvchat. phpBB has no real API (mail notifications / mail-in, RSS,
+   or an extension); a modern one such as Discourse has an API and mailing-list mode.
+   Decide which, then read threads as folders and post replies by mail or API.
+28 An amalgamated view: the recent messages (last N hours or N days) from ALL accounts in
+   one list, newest first, each marked with its account. Same idea for tvchat
+   (tvchat/TO-DO.txt, "Picking up"); share the design through tvcommon.
