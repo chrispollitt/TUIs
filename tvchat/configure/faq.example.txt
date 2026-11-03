@@ -7,6 +7,7 @@
 #   K: extra, words, people, use   (optional; words a visitor might use that the question and answer
 #                                  do not, e.g. "pregnant, surgery, doctor"; they count the most)
 #   Hello: what he says first    Fallback: what he says when nothing fits    Thanks: what he says to thanks
+#   Warning: the polite flag for abusive words (first time)    Goodbye: what he says when it is repeated and the chat is ended
 #   (lines starting with # are notes to you)
 #
 # Sources: https://laughteryoga.ca/frequently-asked-questions/ and https://universal-laughter.com/ (about, services,
@@ -15,6 +16,8 @@
 Hello: Hello, and welcome to Universal Laughter. I'm Joy, the virtual assistant. I can answer questions about Laughter Yoga, our sessions and workshops, and booking. How can I help you today?
 Fallback: I'm sorry, I don't have an answer to that. Chris will be glad to help directly: email chris@universal-laughter.com or call +1.604.318.6658.
 Thanks: You're welcome. Is there anything else I can help you with?
+Warning: I'm happy to help with questions about Laughter Yoga, but I can't continue if the language isn't respectful. Please keep it friendly.
+Goodbye: I'm ending this chat because the language has not been respectful. You're welcome to contact Chris directly: email chris@universal-laughter.com or call +1.604.318.6658.
 
 # ---- Laughter Yoga ----
 
@@ -119,3 +122,7 @@ K: free, trial, try, sample, taste, demo, video, videos, watch, youtube
 Q: Where can I find Chris's news and events?
 A: See https://universal-laughter.com/events. Chris is also on YouTube ("A Daily Laugh For You"): https://www.youtube.com/adlfy
 K: news, upcoming, conference, talks, presentation, speaking, podcast, interview, blog, facebook, linkedin, yelp
+
+Q: Are you a real person? Am I talking to a human or a robot?
+A: I'm Joy, a virtual assistant: a computer program, not a person. I answer questions from Universal Laughter's FAQ, and I can't go beyond it. If you'd like to speak to a person, Chris is happy to help: email chris@universal-laughter.com or call +1.604.318.6658.
+K: human, person, robot, bot, chatbot, ai, artificial, automated, machine, computer, staff

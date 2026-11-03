@@ -216,6 +216,25 @@ claude_dir      = ~
 #protocol = floyd
 #faq      = /etc/tvchat/faq.txt
 #attach   = lhc/*
+# What visitors asked, one JSON line each (when, chat, the question with emails and numbers blanked, what he
+# did, the entry used), default ~/.local/share/tvchat/floyd/ACCOUNT-questions.log, moved to .1 past 1 MB.
+# faq_log = no turns it off.  Read it with:  tvchat-backend faq-report [--days N]  (what was missed, weak
+# answers, entries used).  It holds what visitors typed: say so in the chat's start text.
+#faq_log  = ~/.local/share/tvchat/floyd/pro-questions.log
+# Abusive words (a starter list of profanity and direct insults; f*ck, b1tch and fuuuck count too): the first
+# time in a chat he flags it politely (the FAQ's Warning: line) and does not answer; the second time he says
+# the Goodbye: line and ends the chat - on Live Helper Chat it is closed, and the visitor's address is turned
+# away for ban_minutes (set on the lhc account, default 60, 0 = this chat only; a shared address, as on a
+# mobile network, is turned away too).  abuse = no turns it off; abuse_words = FILE adds words, one per line.
+#abuse    = yes
+#abuse_words = /etc/tvchat/abuse-words.txt
+# The playful Floyd (an account without faq =) judges the same way but TOLERANTLY: plain swearing is let go, only
+# insults count; the first is let go, the second and third are flagged in his own voice, the fourth ends it.  He has
+# feelings too: on Live Helper Chat he closes the chat; on IRC in a channel he KICKS the person if he is an op or
+# halfop there (otherwise he only stops answering them), and in a private chat he says goodbye and LEAVES.  In a
+# channel he judges only what is said to him ("floyd ..." or "bot"), never his admins or the channel's operators,
+# and never what friends say to each other.  Among friends on a LAN, abuse = no turns it off for him; abuse = yes
+# makes him as strict as Floyd-pro; abuse_warning = / abuse_goodbye = change his words.
 #tag      =
 #idle     = 0
 #memory   = none

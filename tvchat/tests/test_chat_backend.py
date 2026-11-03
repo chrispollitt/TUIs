@@ -4795,7 +4795,7 @@ class FakeLhc:
     def __init__(self):
         import http.server
         import urllib.parse
-        self.chats, self.msgs, self.posted, self.calls = {}, {}, [], []
+        self.chats, self.msgs, self.posted, self.calls, self.closed = {}, {}, [], [], []
         self.lock = threading.Lock()
         fake = self
 
@@ -4824,13 +4824,18 @@ class FakeLhc:
                     fake.calls.append((u.path, q))
                     if u.path == "/restapi/chats":
                         want_status = int(q.get("status", 0))
-                        lst = [dict(id=i, nick=c["nick"], status=c["status"], user_id=c.get("user_id", 0))
+                        lst = [dict(id=i, nick=c["nick"], status=c["status"], user_id=c.get("user_id", 0), ip=c.get("ip", ""))
                                for i, c in sorted(fake.chats.items()) if c["status"] == want_status]
                         return self._send(200, {"error": False, "result": {"list": lst}})
                     if u.path == "/restapi/fetchchatmessages":
                         cid, after = int(q["chat_id"]), int(q.get("last_message_id") or 0)
                         lst = [m for m in fake.msgs.get(cid, []) if m["id"] > after]
                         return self._send(200, {"error": False, "result": {"messages": lst}})
+                    if u.path == "/restapi/setchatstatus":
+                        cid = int(q["chat_id"])
+                        fake.chats[cid]["status"] = int(q["status"])
+                        fake.closed.append(cid)
+                        return self._send(200, {"error": False, "result": {}})
                     if u.path.startswith(("/restapi/updatelastactivity/", "/restapi/setonlinestatus/")):
                         return self._send(200, {"error": False, "result": {}})
                     if u.path == "/restapi/addmsgadmin":
@@ -4852,15 +4857,16 @@ class FakeLhc:
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
 
-    def chat(self, cid, nick, *lines, status=0, user_id=0):
+    def chat(self, cid, nick, *lines, status=0, user_id=0, ip=""):
         with self.lock:
-            self.chats[cid] = {"nick": nick, "status": status, "user_id": user_id}
+            self.chats[cid] = {"nick": nick, "status": status, "user_id": user_id, "ip": ip}
             ms = self.msgs.setdefault(cid, [])
             for text in lines:
                 ms.append({"id": max([m["id"] for m in ms] or [0]) + 1, "msg": text, "user_id": 0})
 
     def say(self, cid, text):
-        self.chat(cid, self.chats[cid]["nick"], text, status=self.chats[cid]["status"], user_id=self.chats[cid]["user_id"])
+        c = self.chats[cid]
+        self.chat(cid, c["nick"], text, status=c["status"], user_id=c["user_id"], ip=c.get("ip", ""))
 
     def close(self):
         self.server.shutdown()
@@ -4941,6 +4947,24 @@ class TestLhc(Base):
         asked = [q for path, q in self.lhc.calls if path == "/restapi/chats"]
         self.assertTrue(asked and all(q["departament_id"] == "3" for q in asked))
         self.assertEqual(sorted({q["status"] for q in asked}), ["0", "1"])
+
+    def test_the_playful_floyd_lets_swearing_go_and_is_patient_with_insults(self):
+        self.lhc.chat(7, "Pat", "!8ball this shit better work", ip="9.9.9.9")        # swearing alone: nothing
+        self.up()
+        self.turn(lambda: self.lhc.posted)
+        self.assertIn(self.lhc.posted[0]["msg"], cb.FloydMind.EIGHT_BALL)
+        self.lhc.say(7, "!8ball you idiot")                                          # the first insult: let go
+        self.turn(lambda: len(self.lhc.posted) == 2)
+        self.assertIn(self.lhc.posted[1]["msg"], cb.FloydMind.EIGHT_BALL)
+        self.lhc.say(7, "you idiot")                                                 # the second: a gentle flag
+        self.turn(lambda: len(self.lhc.posted) == 3)
+        self.assertIn("Floyd doesn't like that kind of talk", self.lhc.posted[2]["msg"])
+        self.lhc.say(7, "idiot idiot")                                               # the third: flagged again
+        self.turn(lambda: len(self.lhc.posted) == 4)
+        self.assertEqual(self.lhc.closed, [])
+        self.lhc.say(7, "you moron")                                                 # the fourth: he leaves
+        self.turn(lambda: self.lhc.closed == [7], timeout=15)
+        self.assertIn("Floyd is going now", self.lhc.posted[-1]["msg"])
 
     def test_a_visitor_is_never_an_admin(self):
         self.lhc.chat(7, "alice", "!claude who is floyd")             # a nick proves nothing
@@ -5036,6 +5060,82 @@ class TestFloydWallClock(Base):
         self.assertIn("2026", __import__("time").strftime("%Y", __import__("time").localtime(mind.clock())))
 
 
+class TestFloydAbuseElsewhere(Base):
+    """The playful Floyd and abuse on IRC: kick (he is an op), only ignore (he is not), leave a query - tolerantly."""
+
+    class Other(TestFloydAttached.Other):
+        def __init__(self, chat, account):
+            super().__init__(chat, account)
+            self.action, self.ended = "kick", []
+
+        def abuse_action(self, conv):
+            return self.action
+
+        def end_abuse(self, conv, nick, reason):
+            self.ended.append((conv.id, nick))
+
+    setUp = TestFloydAttached.setUp
+    hear = TestFloydAttached.hear
+
+    def floyd_said(self):
+        return [s for s in self.other.said if s.startswith("[Floyd]")]
+
+    def test_in_a_channel_he_kicks_after_warnings_but_only_for_what_is_said_to_him(self):
+        self.other.send(self.conv, "/floyd on")
+        self.hear("bob", "you idiot, this is a nice day")                 # not to him: nothing, however often
+        self.hear("bob", "you idiot")
+        self.hear("bob", "you idiot")
+        self.hear("bob", "you idiot")
+        self.assertEqual(self.other.ended, [])
+        for i in range(3):
+            self.hear("bob", "floyd you idiot")
+            self.assertEqual(self.other.ended, [], i)                       # the 1st let go, the 2nd and 3rd flagged
+        self.assertTrue(any("bob: Floyd doesn't like that kind of talk" in s for s in self.floyd_said()))
+        self.hear("bob", "floyd you moron")                                  # the 4th: he asks him to go and kicks
+        self.assertTrue(any("bob: Floyd has feelings too. Floyd asked nicely" in s for s in self.floyd_said()))
+        self.clk.t += 3
+        self.chat.loop.run_due()
+        self.assertEqual(self.other.ended, [(self.conv.id, "bob")])
+        said = len(self.other.said)
+        self.hear("bob", "!8ball ok")                                        # he says no more to bob ...
+        self.assertEqual(len(self.other.said), said)
+        self.hear("alice", "!8ball ok")                                      # ... but still answers everybody else
+        self.assertGreater(len(self.other.said), said)
+
+    def test_without_op_he_only_ignores_the_person(self):
+        self.other.action = "ignore"
+        self.other.send(self.conv, "/floyd on")
+        for _ in range(4):
+            self.hear("bob", "floyd you idiot")
+        self.assertTrue(any("Floyd will not answer you any more" in s for s in self.floyd_said()))
+        self.clk.t += 3
+        self.chat.loop.run_due()
+        self.assertEqual(len([e for e in self.other.ended]), 1)             # (the adapter does nothing for "ignore")
+        said = len(self.other.said)
+        self.hear("bob", "!8ball ok")
+        self.assertEqual(len(self.other.said), said)
+
+    def test_in_a_query_he_says_goodbye_and_leaves(self):
+        self.other.action = "leave"
+        self.conv = self.chat.ensure_conv(self.net, "bob", "direct")
+        self.other.send(self.conv, "/floyd on")
+        for _ in range(3):
+            self.hear("bob", "you idiot")
+        self.assertEqual(self.other.ended, [])
+        self.hear("bob", "you idiot")
+        self.assertTrue(any("Floyd has feelings too. Floyd is going now" in s for s in self.floyd_said()))
+        self.clk.t += 3
+        self.chat.loop.run_due()
+        self.assertEqual(self.other.ended, [(self.conv.id, "bob")])
+
+    def test_his_admins_and_swearing_are_not_judged(self):
+        self.other.send(self.conv, "/floyd on")
+        for _ in range(5):
+            self.hear("bob", "floyd this shit is fucking great")            # swearing, not an insult: let go
+        self.assertEqual(self.other.ended, [])
+        self.assertFalse(any("doesn't like" in s for s in self.floyd_said()))
+
+
 class TestFloydPro(Base):
     """Floyd-pro: a Floyd with faq = FILE answers a visitor from the file alone."""
 
@@ -5048,6 +5148,7 @@ class TestFloydPro(Base):
         os.environ["TVCHAT_PASS_LHC"] = "k3y"
         self.addCleanup(os.environ.pop, "TVCHAT_PASS_LHC", None)
         self.faq = self.tmp / "faq.txt"
+        self.qlog = self.tmp / "questions.log"
         self.faq.write_text((Path(__file__).resolve().parent.parent / "configure" / "faq.example.txt").read_text(encoding="utf-8"),
                             encoding="utf-8")
         self.conf("""\
@@ -5061,11 +5162,12 @@ class TestFloydPro(Base):
             protocol = floyd
             attach   = lhc/*
             faq      = %s
+            faq_log  = %s
             tag      =
             idle     = 0
             memory   = none
             admins   = alice
-            """ % (self.lhc.url, self.faq))
+            """ % (self.lhc.url, self.faq, self.qlog))
         self.chat = cb._chat()
         self.chat.daemon = True
         self.addCleanup(self.chat.close)
@@ -5130,6 +5232,127 @@ class TestFloydPro(Base):
             plain = __import__("re").split(r"(?<=[.!?])\s+", punch, 1)[0]
             self.assertNotIn("Floyd", plain, setup)
         self.assertEqual(len(mind.joke(plain=True)), 2)
+
+    def records(self):
+        import json as _json
+        return [_json.loads(l) for l in self.qlog.read_text(encoding="utf-8").splitlines() if l.strip()]
+
+    def test_what_visitors_ask_is_logged_with_what_he_did_with_it(self):
+        self.lhc.chat(7, "Pat", "What should I wear?", "how much is a ticket to mars", "!joke", "thanks")
+        self.turn(lambda: len(self.lhc.posted) >= 5, timeout=20)
+        self.settle(1.0)
+        by = dict((r["q"], r) for r in self.records())
+        self.assertEqual(by["What should I wear?"]["r"], "answer")
+        self.assertEqual(by["What should I wear?"]["e"], "What should I wear and bring")
+        self.assertGreater(by["What should I wear?"]["c"], 0.3)
+        self.assertEqual(by["how much is a ticket to mars"]["r"], "miss")
+        self.assertEqual(by["!joke"]["r"], "joke")
+        self.assertEqual(by["thanks"]["r"], "thanks")
+        self.assertTrue(all(r["chat"] == "lhc/7" and r["t"].endswith("Z") for r in by.values()))
+
+    def test_emails_and_numbers_are_blanked_in_the_log(self):
+        self.lhc.chat(7, "Pat", "my email is pat@example.org and my number is 604 555 1234, can someone call about the moon")
+        self.turn(lambda: self.lhc.posted)
+        self.settle(0.5)
+        q = self.records()[0]["q"]
+        self.assertNotIn("pat@example.org", q)
+        self.assertNotIn("555", q)
+        self.assertIn("<email>", q)
+        self.assertIn("<number>", q)
+
+    def test_the_log_can_be_switched_off_and_rotates(self):
+        ad = self.chat.adapter(self.chat.by_id["pro"])
+        ad.FAQ_LOG_MAX = 100
+        self.lhc.chat(7, "Pat", "What should I wear?")
+        self.turn(lambda: self.lhc.posted)
+        self.lhc.say(7, "do I need a yoga mat")
+        self.lhc.say(7, "how long is a session")
+        self.turn(lambda: len(self.lhc.posted) >= 4, timeout=15)
+        self.assertTrue(os.path.exists(str(self.qlog) + ".1"))          # moved on when it grew past the limit
+        ad.faq_log = None
+        before = self.qlog.read_text(encoding="utf-8")
+        self.lhc.say(7, "can children join")
+        self.turn(lambda: len(self.lhc.posted) >= 5, timeout=15)
+        self.assertEqual(self.qlog.read_text(encoding="utf-8"), before)
+
+    def test_the_report_lists_what_was_missed(self):
+        import io as _io
+        self.lhc.chat(7, "Pat", "how much is a ticket to mars", "What should I wear?")
+        self.turn(lambda: len(self.lhc.posted) >= 3, timeout=15)
+        self.settle(0.5)
+        buf, old = _io.StringIO(), sys.stdout
+        sys.stdout = buf
+        try:
+            rc = cb.cmd_faq_report(types.SimpleNamespace(file=str(self.qlog), days=7))
+        finally:
+            sys.stdout = old
+        text = buf.getvalue()
+        self.assertEqual(rc, 0)
+        self.assertIn("answered 1, not answered 1 (50% missed)", text)
+        self.assertIn("how much is a ticket to mars", text)
+        self.assertIn("ENTRIES USED", text)
+
+    def test_are_you_a_human_is_answered_honestly_even_with_a_typo(self):
+        for i, q in enumerate(("arer you a human?", "are you a robot", "is this a bot")):
+            self.lhc.chat(10 + i, "Pat", q)
+        self.turn(lambda: len(self.lhc.posted) >= 6, timeout=20)
+        said = [q["msg"] for q in self.lhc.posted if "virtual assistant: a computer program" in q["msg"]]
+        self.assertEqual(len(said), 3, [q["msg"][:60] for q in self.lhc.posted])
+        self.assertIn("chris@universal-laughter.com", said[0])
+
+    def test_common_typos_are_mended(self):
+        faq = cb.parse_faq((Path(__file__).resolve().parent.parent / "configure" / "faq.example.txt").read_text(encoding="utf-8"))
+        want = {"arer you a human?": "Are you a real person",
+                "are you a humna": "Are you a real person",
+                "do I need a yogga mat": "Do you do Yoga poses",
+                "whta should I wear?": "What should I wear",
+                "how much dose it cost": "How much does a session cost",
+                "I am pregnent, is it safe?": "When is it advisable",
+                "wheelchiar access": "Is Laughter Yoga suitable",
+                "what is laughtr yoga": "What is Laughter Yoga"}
+        for q, entry in want.items():
+            r = cb.faq_rank(faq, q)[0]
+            self.assertTrue(r[1]["q"].startswith(entry) and r[0] >= 2.0 and r[2] >= 0.3, (q, r[1]["q"][:40], r[0], r[2]))
+
+    def test_a_typo_fix_does_not_turn_nonsense_into_an_answer(self):
+        faq = cb.parse_faq((Path(__file__).resolve().parent.parent / "configure" / "faq.example.txt").read_text(encoding="utf-8"))
+        for q in ("how much is a ticket to mars", "what is the weather today", "can someone call about the moon"):
+            r = cb.faq_rank(faq, q)[0]
+            self.assertFalse(r[0] >= 2.0 and r[2] >= 0.3, (q, r[1]["q"][:40], r[0], r[2]))
+
+    def test_abusive_words_are_found_and_innocent_ones_are_not(self):
+        for t in ("f*ck you", "you are an idiot", "SHIT", "fuuuck this", "b1tch", "what the fucking hell", "you dickhead"):
+            self.assertTrue(cb.faq_abusive(t), t)
+        for t in ("Dickens", "my assistant", "Scunthorpe", "how much is a session", "shiitake mushrooms", "bitcoin", "classic"):
+            self.assertFalse(cb.faq_abusive(t), t)
+        self.assertTrue(cb.faq_abusive("you blorp", {"blorp"}))
+
+    def test_abuse_is_flagged_politely_and_repeated_abuse_ends_the_chat_and_the_address_is_turned_away(self):
+        self.lhc.chat(7, "Pat", "you stupid f*cking bot", ip="1.2.3.4")
+        self.turn(lambda: self.lhc.posted)
+        self.assertIn("respectful", self.said()[0])
+        self.assertNotIn("Hello, and welcome", self.said()[0])          # a flag, not a greeting or an answer
+        self.assertEqual(self.lhc.closed, [])                           # once is only a flag
+        self.lhc.say(7, "What should I wear?")                          # a polite question is still answered
+        self.turn(lambda: any("comfortable clothing" in m for m in self.said()))
+        self.lhc.say(7, "this is shit")                                 # repeated: goodbye, and the chat is closed
+        self.turn(lambda: self.lhc.closed == [7], timeout=15)
+        self.assertTrue(any("ending this chat" in m for m in self.said()))
+        said = len(self.lhc.posted)
+        self.lhc.say(7, "What should I wear?")
+        self.settle(1.5)
+        self.assertEqual(len(self.lhc.posted), said)                    # nothing more is said there
+        self.lhc.chat(8, "Pat", "hello, a new chat", ip="1.2.3.4")       # the same address again: closed, unanswered
+        self.turn(lambda: 8 in self.lhc.closed, timeout=15)
+        self.assertEqual(len(self.lhc.posted), said)
+        self.lhc.chat(9, "Sam", "What should I wear?", ip="5.6.7.8")     # somebody else is fine
+        self.turn(lambda: len(self.lhc.posted) > said, timeout=15)
+
+    def test_abuse_can_be_switched_off(self):
+        self.chat.adapter(self.chat.by_id["pro"]).abuse_cfg = "off"
+        self.lhc.chat(7, "Pat", "what the fuck is laughter yoga")
+        self.turn(lambda: self.lhc.posted)
+        self.assertNotIn("respectful", "\n".join(self.said()))
 
     def test_the_file_is_read_again_when_it_changes(self):
         self.lhc.chat(7, "Pat", "what time is the next club")

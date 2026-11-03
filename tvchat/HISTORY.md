@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- **Floyd-pro mends common typos and flags abuse:** a word the FAQ does not know becomes its nearest word before the
+  match (one slip for words of 5-7 letters, two for longer; a 4-letter word only becomes a filler word: `arer you a
+  human` -> `are you a human`, `whta` -> `what`), so `pregnent`, `yogga` or `wheelchiar` still find their entry while
+  nonsense is not turned into an answer. A starter list of profane and insulting words (`abuse = no` turns it off,
+  `abuse_words = FILE` adds words): the first time in a chat he flags it politely (the FAQ's `Warning:` line) and does
+  not answer; the second time he says `Goodbye:` and ends the chat - on Live Helper Chat it is closed, he says no
+  more there, and the visitor's address is turned away for `ban_minutes` (default 60) on the `lhc` account. The
+  example FAQ answers "Are you a real person?" honestly: a program, with Chris's contact details. The playful Floyd
+  judges too, but tolerantly: plain swearing is let go, only insults count, the first is let go, the second and
+  third are flagged in his own voice, the fourth ends it (`abuse = no | tolerant | yes`, `abuse_warning =`,
+  `abuse_goodbye =`). He has feelings too: on Live Helper Chat he closes the chat; on IRC in a channel he kicks the
+  person if he is an op or halfop there (else only stops answering them) and in a query he says goodbye and leaves.
+  In a channel he judges only what is said to him ("floyd ..." or "bot"), never his admins or the channel's
+  operators. Nothing is judged on talk, Delta Chat or mail.
+
+- **Floyd-pro keeps a questions log, and `faq-report`:** with `faq = FILE` he writes one JSON line per visitor
+  question to `~/.local/share/tvchat/floyd/ACCOUNT-questions.log` (`faq_log = FILE` chooses it, `faq_log = no`
+  turns it off): when, which chat, the question (emails and phone-like numbers blanked, 300 characters), what he did
+  (answer, miss, hello, thanks, joke), the FAQ entry used and how well it fitted. It moves to `.1` past 1 MB.
+  `tvchat-backend faq-report [FILE] [--days N]` lists what was not answered (most asked first, with the closest
+  entry), the weak answers and the entries used: the FAQ's to-do list.
+
 - **Fix: Floyd got the date and time wrong** (`!time in Vancouver` said "02:25 (Thu)" on a Sunday evening). His clock for
   dates and times was the event loop's timer clock - seconds since the machine booted - taken as a date. `!time`,
   `!date`, `!time in X`, `!seen`, `!tell`, the catch-up and the "ignore lines older than a minute" check now use the

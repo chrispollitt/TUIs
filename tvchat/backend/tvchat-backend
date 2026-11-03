@@ -2100,6 +2100,20 @@ class IrcAdapter(CommandMixin):
         if self.invites.pop((sender or "").strip().lower(), None) is None:
             raise UserError("no invitation from %s" % sender)
 
+    def abuse_action(self, conv):
+        """What Floyd can do about someone abusive here: in a channel, kick (when he is an op or halfop) or else only
+        ignore them; in a query, leave; nothing elsewhere."""
+        if conv.kind == "channel":
+            return "kick" if self.my_role(conv) in ("owner", "admin", "op", "halfop") else "ignore"
+        return "leave" if conv.kind == "direct" else None
+
+    def end_abuse(self, conv, nick, reason):
+        action = self.abuse_action(conv)
+        if action == "kick" and self.phase == "up":
+            self.send_raw("KICK %s %s :%s" % (conv.title, re.sub(r"[\s\r\n]", "", nick), reason))
+        elif action == "leave":
+            self.part(conv)
+
     def part(self, conv):
         if conv.kind == "server":
             raise UserError("the server window cannot be left - disconnect instead")
@@ -4849,14 +4863,99 @@ def faq_stems(text):
     return out
 
 
+def _squash(s):
+    return re.sub(r"(.)\1+", r"\1", s)             # fuuuck -> fuck, asshole -> ashole: both sides squashed alike
+
+
+_LEET = str.maketrans({"0": "o", "1": "i", "3": "e", "4": "a", "5": "s", "7": "t", "@": "a", "$": "s", "!": "i", "*": "u"})
+# A starter list: profanity (as stems: fucking, shitty ...) and direct insults (whole words: Dickens is not one).
+# More words go in abuse_words = FILE on the account (one per line).
+FAQ_SWEAR_STEMS = tuple(_squash(w) for w in ("fuck", "fuk", "fck", "shit", "bullshit"))     # swearing
+FAQ_INSULT_STEMS = tuple(_squash(w) for w in (
+    "bitch", "biatch", "bastard", "asshole", "arsehole", "cunt", "wank", "douche"))        # said to a person
+FAQ_ABUSE_WORDS = frozenset(_squash(w) for w in (
+    "dick", "dicks", "dickhead", "prick", "twat", "slut", "whore", "retard", "retarded", "idiot", "idiots", "moron",
+    "morons", "imbecile", "scumbag", "dumbass", "jackass"))
+FAQ_ABUSE_OK = frozenset(("shitake",))               # (shiitake squashed)
+
+
+def faq_abusive(text, extra=(), tolerant=False):
+    """True when the text has a profane or insulting word (letters swapped for digits or stars, stretched
+    letters and capitals do not hide it).  tolerant: plain swearing is let go; only words said to a person count."""
+    stems = FAQ_INSULT_STEMS if tolerant else FAQ_SWEAR_STEMS + FAQ_INSULT_STEMS
+    for t in re.findall(r"[a-z]+", _squash(text.lower().translate(_LEET))):
+        if t in FAQ_ABUSE_OK:
+            continue
+        if t in FAQ_ABUSE_WORDS or t in extra or any(t.startswith(s) for s in stems):
+            return True
+    return False
+
+
+def faq_redact(text):
+    """What a visitor typed, with email addresses and phone-like numbers blanked: the questions log keeps
+    questions, not people."""
+    text = re.sub(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+", "<email>", text)
+    return re.sub(r"\+?\d[\d\s().-]{6,}\d", "<number>", text)
+
+
+def _tokens(text):
+    return re.findall(r"[a-z0-9]+", text.lower().replace("'", ""))
+
+
+def _edit_distance(a, b, limit):
+    """Edit distance counting an adjacent swap as one (humna -> human); limit + 1 when it is more than limit."""
+    if abs(len(a) - len(b)) > limit:
+        return limit + 1
+    prev2, prev = None, list(range(len(b) + 1))
+    for i in range(1, len(a) + 1):
+        cur = [i] + [0] * len(b)
+        for j in range(1, len(b) + 1):
+            cur[j] = min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] != b[j - 1]))
+            if i > 1 and j > 1 and a[i - 1] == b[j - 2] and a[i - 2] == b[j - 1]:
+                cur[j] = min(cur[j], prev2[j - 2] + 1)
+        prev2, prev = prev, cur
+    return prev[-1]
+
+
+def faq_fix(faq, text):
+    """The text with its misspelt words mended: a word the FAQ (and the filler words) does not know becomes the
+    nearest word it does know - one slip for words of 5-7 letters, two for longer ones; a 4-letter word only
+    becomes a filler word (arer -> are, whta -> what), so odd words (mars) are not turned into real ones."""
+    from collections import Counter
+    vocab = faq.get("_vocab")
+    if vocab is None:
+        vocab = Counter()
+        for e in faq["entries"]:
+            for part in (e["q"], e["a"], e["k"]):
+                vocab.update(_tokens(part))
+        for w in FAQ_STOP:
+            vocab[w] += 50                           # (a filler word is the likeliest thing meant)
+        faq["_vocab"] = vocab
+    out = []
+    for w in _tokens(text):
+        if w in vocab or len(w) < 4 or w.isdigit():
+            out.append(w)
+            continue
+        limit = 1 if len(w) < 8 else 2
+        best = None
+        for v, n in vocab.items():
+            if abs(len(v) - len(w)) > limit or len(v) < 3 or (len(w) == 4 and v not in FAQ_STOP):
+                continue
+            d = _edit_distance(w, v, limit)
+            if d <= limit and (best is None or (d, -n, v) < best[0]):
+                best = ((d, -n, v), v)
+        out.append(best[1] if best else w)
+    return " ".join(out)
+
+
 def parse_faq(text):
-    faq = {"hello": "", "fallback": "", "thanks": "", "entries": []}
+    faq = {"hello": "", "fallback": "", "thanks": "", "warning": "", "goodbye": "", "entries": []}
     cur = None
     for line in text.splitlines():
         s = line.strip()
         if s.startswith("#"):
             continue
-        m = re.match(r"^(Q|A|K|Hello|Fallback|Thanks)\s*:\s*(.*)$", s)
+        m = re.match(r"^(Q|A|K|Hello|Fallback|Thanks|Warning|Goodbye)\s*:\s*(.*)$", s)
         if m:
             tag, rest = m.group(1), m.group(2)
             if tag == "Q":
@@ -4883,7 +4982,7 @@ def faq_rank(faq, text):
     most when it is in the entry's K: words, then in its question, a little in its answer; cover is the
     share of the most the question's words could have scored (so one stray word does not make an answer)."""
     import math
-    words = set(faq_stems(text[:300]))
+    words = set(faq_stems(faq_fix(faq, text[:300])))
     ents = faq["entries"]
     if not words or not ents:
         return []
@@ -4953,8 +5052,25 @@ class FloydAdapter(CommandMixin):
         self.last_out = {}               # conv id -> when he last spoke there
         self.heard_ids = deque(maxlen=200)
         self.faq_path = os.path.expanduser((o.get("faq") or "").strip())      # faq = FILE: Floyd-pro
+        where = (o.get("faq_log") or "").strip()                              # what visitors asked (see _faq_note)
+        self.faq_log = None if (not self.faq_path or where.lower() in ("no", "none", "off")) else (
+            os.path.expanduser(where) if where else os.path.join(
+                os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share"),
+                "tvchat", "floyd", account.id + "-questions.log"))
         self._faq_cache = (None, None)                                        # (mtime, parsed)
         self.greeted = set()
+        cfg = (o.get("abuse") or "").strip().lower()            # abuse = no | tolerant | yes (strict)
+        self.abuse_cfg = ("off" if cfg in ("no", "off", "none", "false", "0") else "tolerant" if cfg == "tolerant" else
+                          "strict" if cfg in ("yes", "on", "strict", "true", "1") else "")
+        self.abuse_extra, self.strikes, self.faq_muted = set(), {}, set()
+        where = os.path.expanduser((o.get("abuse_words") or "").strip())
+        if where:                                               # abuse_words = FILE: more words, one per line
+            try:
+                with open(where, encoding="utf-8") as fh:
+                    self.abuse_extra = set(_squash(w.strip().lower()) for w in fh
+                                           if w.strip() and not w.lstrip().startswith("#"))
+            except OSError as e:
+                _log.warning("floyd: cannot read abuse_words %s: %s", where, e)
         self.mind = self._new_mind(self.nick)
         self.phase = "down"
         self.gen = 0
@@ -4971,6 +5087,7 @@ class FloydAdapter(CommandMixin):
     ATTACH_GAP = 2.0                     # seconds between his answers in one place
     ATTACH_MAX_LINES = 5
     MAX_AGE = 60                         # ignore lines older than this (replays)
+    FAQ_LOG_MAX = 1000000                # bytes: past this the questions log moves to NAME.1 (one old file is kept)
     FAQ_GAP = 1.0                        # seconds between his answers in one place, as Floyd-pro
     FAQ_MIN = 2.0                        # the least score that counts as an answer ...
     FAQ_COVER = 0.3                      # ... and the least share of the question's words it explains
@@ -5020,9 +5137,16 @@ class FloydAdapter(CommandMixin):
         if self.faq_path:
             return self._faq_hear(conv, text)
         who = msg.sender.display or msg.sender.address or "someone"
+        if self._abuse_key(conv, who) in self.faq_muted:
+            return                       # a chat or a person he has ended
         mind = self.minds.get(conv.id)
         if mind is None:
             mind = self.minds[conv.id] = self._new_mind(who)
+        mode = self._abuse_mode(conv, msg, text)
+        if mode and faq_abusive(text, self.abuse_extra, mode == "tolerant"):
+            warning, goodbye = self._abuse_words(conv, who)
+            if self._abuse(conv, who, text, mode == "strict", warning, goodbye, lambda t: mind._say([(0.8, t)])):
+                return
         mind.nick = who
         now = self.chat.wall()           # (what he notes of people is dated: seen, tells, catch-up)
         lvl = self.level_of(conv)
@@ -5097,10 +5221,106 @@ class FloydAdapter(CommandMixin):
             _log.warning("floyd: cannot read the FAQ %s: %s", self.faq_path, e)
         return self._faq_cache[1]
 
+    def _faq_note(self, conv, text, kind, entry="", score=0.0, cover=0.0):
+        """One JSON line in the questions log: when, which chat, what was asked (emails and numbers blanked, 300
+        characters), what he did with it (answer, miss, hello, thanks, joke), the entry used and how well it fit.
+        Read it with  tvchat-backend faq-report ."""
+        if not self.faq_log:
+            return
+        try:
+            rec = {"t": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self.chat.wall())), "chat": conv.id,
+                   "q": faq_redact(text)[:300], "r": kind, "e": entry, "s": round(score, 2), "c": round(cover, 2)}
+            os.makedirs(os.path.dirname(self.faq_log), exist_ok=True)
+            if os.path.exists(self.faq_log) and os.path.getsize(self.faq_log) > self.FAQ_LOG_MAX:
+                os.replace(self.faq_log, self.faq_log + ".1")
+            with open(self.faq_log, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        except OSError as e:
+            _log.warning("floyd: cannot write the questions log %s: %s", self.faq_log, e)
+
+    ADDRESSED = re.compile(r"\b(?:floyd(?:-bot)?|bot)\b", re.I)
+
+    def _abuse_mode(self, conv, msg=None, text=""):
+        """"strict" (Floyd-pro: any profanity or insult), "tolerant" (the playful Floyd: only insults, and more of
+        them) or None.  The playful Floyd judges only where he can do something about it (his adapter's
+        abuse_action: close a Live Helper Chat, kick on IRC, leave a query) and, in a channel, only what is said
+        to him; never his admins or a channel's operators.  abuse = no | tolerant | yes sets it."""
+        if self.abuse_cfg == "off":
+            return None
+        if self.faq_path:
+            return "tolerant" if self.abuse_cfg == "tolerant" else "strict"
+        if msg is not None:
+            if self.is_admin(msg.sender):
+                return None
+            ent = getattr(conv, "members", {}).get((msg.sender.display or msg.sender.address or "").lower())
+            if ent and ROLE_RANK.get(ent[2], 9) <= ROLE_RANK["halfop"]:
+                return None
+        if conv.kind == "channel" and not self.ADDRESSED.search(text):
+            return None
+        if not getattr(self.chat.adapter(conv.account), "abuse_action", lambda c: None)(conv):
+            return None
+        return "strict" if self.abuse_cfg == "strict" else "tolerant"
+
+    def _abuse_key(self, conv, nick):
+        """In a channel it is the person who is judged (and ended), elsewhere the whole chat."""
+        return conv.id if conv.kind != "channel" else "%s/%s" % (conv.id, nick.lower())
+
+    def _abuse_words(self, conv, nick):
+        """(warning, goodbye(action)) in the playful Floyd's voice; abuse_warning = / abuse_goodbye = override."""
+        o, who = self.account.opts, (nick + ": ") if conv.kind == "channel" else ""
+        warning = who + (o.get("abuse_warning") or "Floyd doesn't like that kind of talk. Floyd would like to stay "
+                         "friends. Please be nice, or Floyd will have to go.")
+
+        def goodbye(action):
+            if o.get("abuse_goodbye"):
+                return who + o.get("abuse_goodbye")
+            return who + {"kick": "Floyd has feelings too. Floyd asked nicely. Floyd is asking you to go.",
+                          "ignore": "Floyd has feelings too. Floyd will not answer you any more.",
+                          "leave": "Floyd has feelings too. Floyd is going now. Floyd is sad. Please come back when "
+                                   "you can be kind."}.get(action, "Floyd is going now. Floyd is sad. Please come "
+                                                                   "back when you can be kind.")
+        return warning, goodbye
+
+    def _abuse(self, conv, nick, text, strict, warning, goodbye, say):
+        """An abusive line.  Strict: a polite flag the first time (not answered), the second time a goodbye and the
+        chat or person is ended.  Tolerant: the first is let go, the second and third are flagged, the fourth ends it.
+        Ending is the adapter's: Live Helper Chat closes the chat and turns the address away for a while, IRC kicks
+        (he is an op) or only ignores the person (he is not), a query is left; he says no more to them.  goodbye is
+        a function of the action.  True when the line is dealt with here."""
+        key = self._abuse_key(conv, nick)
+        n = self.strikes[key] = self.strikes.get(key, 0) + 1
+        if len(self.strikes) > 2000:
+            self.strikes.clear()
+        warn_at, kick_at = (1, 2) if strict else (2, 4)
+        if n < warn_at:
+            return False
+        if n < kick_at:
+            self._faq_note(conv, text, "abuse")
+            self._out(conv, say(warning))
+            return True
+        ad = self.chat.adapter(conv.account)
+        action = getattr(ad, "abuse_action", lambda c: None)(conv)
+        self._faq_note(conv, text, "kick")
+        self.faq_muted.add(key)
+        self._out(conv, say(goodbye(action)))
+        if action:
+            self._later(2.5, lambda: ad.end_abuse(conv, nick, "abusive language"))
+        return True
+
     def _faq_hear(self, conv, text):
         now = self.chat.loop.clock()
         faq = self._faq()
-        if faq is None or now - self.last_out.get(conv.id, -1e9) < self.FAQ_GAP:
+        if faq is None or conv.id in self.faq_muted or now - self.last_out.get(conv.id, -1e9) < self.FAQ_GAP:
+            return
+        mode = self._abuse_mode(conv)
+        goodbye = (faq["goodbye"] or "I'm ending this chat because the language has not been respectful. A person "
+                                     "can help: please contact us directly.")
+        if mode and faq_abusive(text, self.abuse_extra, mode == "tolerant") and self._abuse(
+                conv, conv.title, text, mode == "strict",
+                faq["warning"] or "I'm happy to help, but I can't continue if the language isn't respectful. "
+                                  "Please keep it friendly.",
+                lambda action: goodbye, lambda t: [(0.8, t, "")]):
+            self.last_out[conv.id] = now
             return
         hello = faq["hello"] or "Hello! Ask me a question and I'll look it up."
         first = conv.id not in self.greeted
@@ -5112,10 +5332,13 @@ class FloydAdapter(CommandMixin):
         if re.match(r"^!joke\s*$", low):     # the one command he shares with the playful Floyd
             setup, punch = self.mind.joke(plain=True)
             plan = [(0.5, setup, ""), (3.0, punch, "")]
+            self._faq_note(conv, text, "joke")
         elif self.FAQ_GREET.match(low):
             plan = [(0.5, hello, "")]
+            self._faq_note(conv, text, "hello")
         elif self.FAQ_THANKS.match(low):
             plan = [(0.5, faq["thanks"] or "You're welcome!", "")]
+            self._faq_note(conv, text, "thanks")
         else:
             ranked = faq_rank(faq, text)
             if first:
@@ -5125,9 +5348,12 @@ class FloydAdapter(CommandMixin):
                 if len(ranked) > 1 and ranked[1][0] >= 0.8 * ranked[0][0] and ranked[1][0] >= self.FAQ_MIN:
                     answer += '\n(If you meant "%s" just ask me.)' % ranked[1][1]["q"].split("?")[0].strip()
                 plan.append((1.5 if first else 0.8, answer, ""))
+                self._faq_note(conv, text, "answer", ranked[0][1]["q"].split("?")[0].strip(), ranked[0][0], ranked[0][2])
             else:
                 plan.append((1.5 if first else 0.8, faq["fallback"] or
                              "Sorry, I don't have an answer to that one. A person can help.", ""))
+                best = ranked[0] if ranked else (0.0, {"q": ""}, 0.0)
+                self._faq_note(conv, text, "miss", best[1]["q"].split("?")[0].strip(), best[0], best[2])
         self.last_out[conv.id] = now
         self._out(conv, plan)
 
@@ -6284,7 +6510,7 @@ def lhc_fetch(p, last, mine, keepalive=0):
         if keepalive == 1:
             lhc_call(p, "setonlinestatus/%d/1" % p["operator_id"])
         lhc_call(p, "updatelastactivity/%d" % p["operator_id"])
-    chats = {}
+    chats, ips = {}, {}
     for status in (0, 1):                # pending, active
         for dep in (p["departments"] or [None]):
             q = {"status": status, "limit": 50, "sort": "id_asc"}
@@ -6297,6 +6523,7 @@ def lhc_fetch(p, last, mine, keepalive=0):
                     continue
                 if owner == 0 or owner == p["operator_id"] or cid in mine:
                     chats[cid] = str(c.get("nick") or "Visitor")
+                    ips[cid] = str(c.get("ip") or "")
     lines, newest = [], {}
     for cid in sorted(chats):
         q = {"chat_id": cid, "ignore_system_messages": 1, "ignore_typing": 1, "remove_bbcode": 1}
@@ -6316,7 +6543,11 @@ def lhc_fetch(p, last, mine, keepalive=0):
             newest[cid] = max(newest.get(cid, 0), mid)
             if uid == 0 and text.strip():
                 lines.append((cid, mid, text))
-    return chats, lines, newest
+    return chats, lines, newest, ips
+
+
+def lhc_close(p, chat_id):
+    lhc_call(p, "setchatstatus", post={"chat_id": chat_id, "status": 2})
 
 
 def lhc_say(p, chat_id, text, name):
@@ -6366,6 +6597,31 @@ class LhcAdapter(CommandMixin):
         self.sent = {}                   # chat id -> [times of lines said]
         self.sent_all = []
         self.last_error = ""
+        try:
+            self.ban_secs = 60 * float(o.get("ban_minutes") or 60)
+        except ValueError:
+            raise UserError("[account:%s] ban_minutes= must be a number" % account.id)
+        self.ips = {}                    # chat id -> the visitor's address, as the site tells it
+        self.banned = {}                 # address -> wall-clock time its ban ends (kicked for abuse)
+
+    def abuse_action(self, conv):
+        return "close"
+
+    def end_abuse(self, conv, nick, reason):
+        self.kick(conv)
+
+    def kick(self, conv):
+        """End this chat on the site (closed), ignore it from now on, and turn the visitor's address away for
+        ban_minutes= (default 60; 0 = only this chat): a fresh chat from it is closed unanswered."""
+        cid = int(conv.target)
+        ip = self.ips.get(cid)
+        if ip and self.ban_secs > 0:
+            self.banned[ip] = self.chat.wall() + self.ban_secs
+        self.ignored.add(cid)
+        self.convs.pop(cid, None)
+        self.outbox.append((cid, None))              # None: close it
+        self._post_next()
+        self.chat.remove_conv(conv)
 
     def local_id(self):
         self._ids += 1
@@ -6470,7 +6726,15 @@ class LhcAdapter(CommandMixin):
             self._failed(err)
             return
         self.last_error = ""
-        chats, lines, newest = res
+        chats, lines, newest, ips = res
+        self.ips.update(ips)
+        now = self.chat.wall()
+        self.banned = dict((ip, t) for ip, t in self.banned.items() if t > now)
+        for cid in chats:
+            if ips.get(cid) in self.banned and cid not in self.ignored:     # a kicked visitor's new chat: closed, unanswered
+                self.ignored.add(cid)
+                self.outbox.append((cid, None))
+                self._post_next()
         for cid, mid in newest.items():
             self.last[cid] = max(self.last.get(cid, 0), mid)
         for cid in set(self.last) | set(self.convs):
@@ -6534,7 +6798,7 @@ class LhcAdapter(CommandMixin):
                 conv = self.convs.get(cid) or self.server_conv()
                 self.system(conv, "could not send to chat %d: %s" % (cid, err))
             self._post_next()
-        self.loop.run_in_thread(lambda: lhc_say(p, cid, text, name), done)
+        self.loop.run_in_thread((lambda: lhc_close(p, cid)) if text is None else (lambda: lhc_say(p, cid, text, name)), done)
 
 
 ADAPTERS = {"irc": IrcAdapter, "deltachat": DeltaChatAdapter, "talk": TalkAdapter,
@@ -7400,6 +7664,57 @@ def cmd_check_config(a):
     return 1 if errors else 0
 
 
+def cmd_faq_report(a):
+    """faq-report [FILE] [--days N]: what visitors asked Floyd-pro lately, from his questions log (default: every
+    ~/.local/share/tvchat/floyd/*-questions.log): what he could not answer, weak answers, the entries used."""
+    import glob
+    from collections import Counter
+    paths = [a.file] if a.file else sorted(glob.glob(os.path.expanduser("~/.local/share/tvchat/floyd/*-questions.log")))
+    if not paths:
+        sys.stdout.write("no questions log found (is faq_log on, and has anybody asked anything?)\n")
+        return 1
+    cutoff = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - a.days * 86400))
+    recs = []
+    for path in paths:
+        for p in (path + ".1", path):
+            try:
+                with open(p, encoding="utf-8") as fh:
+                    for line in fh:
+                        try:
+                            r = json.loads(line)
+                        except ValueError:
+                            continue
+                        if isinstance(r, dict) and r.get("t", "") >= cutoff:
+                            recs.append(r)
+            except OSError:
+                pass
+    out = sys.stdout.write
+    kinds = Counter(r.get("r") for r in recs)
+    asked = kinds["answer"] + kinds["miss"]
+    out("Questions in the last %d day%s: %d (%d chats)\n" % (a.days, "" if a.days == 1 else "s", len(recs),
+                                                         len(set(r.get("chat") for r in recs))))
+    out("  answered %d, not answered %d%s; hello %d, thanks %d, jokes %d\n" % (
+        kinds["answer"], kinds["miss"], " (%d%% missed)" % round(100.0 * kinds["miss"] / asked) if asked else "",
+        kinds["hello"], kinds["thanks"], kinds["joke"]))
+    miss = Counter(r.get("q", "").strip().lower() for r in recs if r.get("r") == "miss")
+    if miss:
+        out("\nNOT ANSWERED (most asked first; the closest entry in brackets):\n")
+        closest = dict((r.get("q", "").strip().lower(), r.get("e", "")) for r in recs if r.get("r") == "miss")
+        for q, n in miss.most_common(25):
+            out("  %3dx  %s   [%s]\n" % (n, q, closest.get(q) or "-"))
+    weak = [r for r in recs if r.get("r") == "answer" and r.get("c", 1) < 0.5]
+    if weak:
+        out("\nWEAK ANSWERS (little of the question was explained; worth a keyword?):\n")
+        for r in weak[-15:]:
+            out("  %s  ->  %s  (fit %.2f)\n" % (r.get("q", ""), r.get("e", ""), r.get("c", 0)))
+    used = Counter(r.get("e") for r in recs if r.get("r") == "answer")
+    if used:
+        out("\nENTRIES USED:\n")
+        for e, n in used.most_common(15):
+            out("  %3dx  %s\n" % (n, e))
+    return 0
+
+
 def cmd_reload_config(a):
     """reload-config: make the running backend use tvchat.conf as it is now."""
     sys.stdout.write(_chat().reload_config() + "\n")
@@ -7799,6 +8114,7 @@ def build_parser():
     p = sub.add_parser("invite-send"); p.add_argument("account"); p.add_argument("conv"); p.add_argument("channel", nargs="?", default=""); p.set_defaults(fn=cmd_invite_send)
     p = sub.add_parser("invites"); p.set_defaults(fn=cmd_invites)
     p = sub.add_parser("check-config"); p.add_argument("file"); p.set_defaults(fn=cmd_check_config)
+    p = sub.add_parser("faq-report"); p.add_argument("file", nargs="?", default=""); p.add_argument("--days", type=int, default=7); p.set_defaults(fn=cmd_faq_report)
     p = sub.add_parser("reload-config"); p.set_defaults(fn=cmd_reload_config)
     p = sub.add_parser("invite-mail"); p.add_argument("account"); p.add_argument("address"); p.set_defaults(fn=cmd_invite_mail)
     p = sub.add_parser("has-tvmail"); p.set_defaults(fn=cmd_has_tvmail)
