@@ -8,6 +8,7 @@
 #                                  do not, e.g. "pregnant, surgery, doctor"; they count the most)
 #   Hello: what he says first    Fallback: what he says when nothing fits    Thanks: what he says to thanks
 #   Warning: the polite flag for abusive words (first time)    Goodbye: what he says when it is repeated and the chat is ended
+#   Lost: what he says (and the chat is ended) after more than max_misses (default 5) answers missed in a row
 #   (lines starting with # are notes to you)
 #
 # Sources: https://laughteryoga.ca/frequently-asked-questions/ and https://universal-laughter.com/ (about, services,
@@ -18,6 +19,7 @@ Fallback: I'm sorry, I don't have an answer to that. Chris will be glad to help 
 Thanks: You're welcome. Is there anything else I can help you with?
 Warning: I'm happy to help with questions about Laughter Yoga, but I can't continue if the language isn't respectful. Please keep it friendly.
 Goodbye: I'm ending this chat because the language has not been respectful. You're welcome to contact Chris directly: email chris@universal-laughter.com or call +1.604.318.6658.
+Lost: You seem to be having an issue getting what you need from me, and I'm sorry about that. I'll end this chat now. Chris will be glad to help directly: email chris@universal-laughter.com or call +1.604.318.6658.
 
 # ---- Laughter Yoga ----
 
@@ -125,4 +127,8 @@ K: news, upcoming, conference, talks, presentation, speaking, podcast, interview
 
 Q: Are you a real person? Am I talking to a human or a robot?
 A: I'm Joy, a virtual assistant: a computer program, not a person. I answer questions from Universal Laughter's FAQ, and I can't go beyond it. If you'd like to speak to a person, Chris is happy to help: email chris@universal-laughter.com or call +1.604.318.6658.
-K: human, person, robot, bot, chatbot, ai, artificial, automated, machine, computer, staff
+K: human, person, robot, bot, chatbot, automated, machine, computer, staff
+
+Q: Are you AI? Is this ChatGPT?
+A: No. I'm not an AI model, and I'm not ChatGPT. I'm a simple automated assistant: I match your question to answers Chris wrote himself, so every answer is his own words. Chats may be reviewed to improve those answers. If you'd like to speak to a person, email chris@universal-laughter.com or call +1.604.318.6658.
+K: ai, artificial, intelligence, chatgpt, gpt, llm, openai, generative, claude, gemini, copilot

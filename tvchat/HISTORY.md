@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **"Are you an AI?" is answered honestly:** Joy has her own FAQ entry ("No. I'm not an AI model, and I'm not
+  ChatGPT. I'm a simple automated assistant: I match your question to answers Chris wrote himself ... Chats may be
+  reviewed to improve those answers"; if an AI layer is ever added, this entry must change with it). The playful Floyd
+  says "mostly no": an old-fashioned bot with no language model inside - but he has a friend, Claude, who is an AI,
+  and what he adds depends on who asks and whether Claude is on here: an admin is told to `!claude QUESTION`, anybody
+  else that only his admins can, on a network that does not want such bots (`llm = no`) that he asks Claude nothing
+  there, and when Claude is off that Claude is not awake right now.
+- **Floyd answers faster, shows "is typing", and Joy lets go of lost visitors:** on Live Helper Chat he looks at the
+  site every 2 s (1 s while a chat is going, `poll_fast`; it was 5 s) and pauses less before answering. While he
+  "writes" the visitor's widget shows "NAME is typing" (`typing = no` turns it off): it sets the chat's
+  `operator_typing` through the REST update and clears it when the line is said. A visitor who gets "I don't have an
+  answer" more than `max_misses` (default 5) times in a row hears the FAQ's `Lost:` line and the chat is closed (no
+  address ban). The abuse word list also knows `bugger`, `fsck`, `you suck`, `you're stupid`, `bite me`, `shut up`
+  and the like, and `idiot!` is no longer missed (a trailing `!` used to be read as an `i`). The report counts
+  flags, abuse endings and lost endings.
 - **Floyd-pro mends common typos and flags abuse:** a word the FAQ does not know becomes its nearest word before the
   match (one slip for words of 5-7 letters, two for longer; a 4-letter word only becomes a filler word: `arer you a
   human` -> `are you a human`, `whta` -> `what`), so `pregnent`, `yogga` or `wheelchiar` still find their entry while

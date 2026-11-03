@@ -204,7 +204,13 @@ claude_dir      = ~
 #user        = floyd
 #department  = 1
 #name        = Floyd
-#poll        = 5
+# How often he looks at the site: poll = seconds when nothing is going on (default 2), poll_fast = while a chat is
+# going, i.e. within two minutes of a visitor's line (default 1).  typing = no turns off "NAME is typing" (shown to
+# the visitor while he answers; needs operator_id; gives up quietly if the site refuses it).  The visitor's own
+# widget looks for news every 3.5 s by default (the site's chat message update interval): that is the rest of the wait.
+#poll        = 2
+#poll_fast   = 1
+#typing      = yes
 #operator_id =
 
 # Floyd-pro (optional): a SECOND Floyd account for the public.  With faq = FILE he answers visitors
@@ -228,6 +234,9 @@ claude_dir      = ~
 # mobile network, is turned away too).  abuse = no turns it off; abuse_words = FILE adds words, one per line.
 #abuse    = yes
 #abuse_words = /etc/tvchat/abuse-words.txt
+# A visitor who gets "I don't have an answer" more than max_misses (default 5, 0 = never) times in a row is
+# probing or lost: he says the FAQ's Lost: line and ends the chat (no address ban: that is for abuse).
+#max_misses = 5
 # The playful Floyd (an account without faq =) judges the same way but TOLERANTLY: plain swearing is let go, only
 # insults count; the first is let go, the second and third are flagged in his own voice, the fourth ends it.  He has
 # feelings too: on Live Helper Chat he closes the chat; on IRC in a channel he KICKS the person if he is an op or

@@ -2107,7 +2107,7 @@ class IrcAdapter(CommandMixin):
             return "kick" if self.my_role(conv) in ("owner", "admin", "op", "halfop") else "ignore"
         return "leave" if conv.kind == "direct" else None
 
-    def end_abuse(self, conv, nick, reason):
+    def end_abuse(self, conv, nick, reason, ban=True):
         action = self.abuse_action(conv)
         if action == "kick" and self.phase == "up":
             self.send_raw("KICK %s %s :%s" % (conv.title, re.sub(r"[\s\r\n]", "", nick), reason))
@@ -4870,20 +4870,35 @@ def _squash(s):
 _LEET = str.maketrans({"0": "o", "1": "i", "3": "e", "4": "a", "5": "s", "7": "t", "@": "a", "$": "s", "!": "i", "*": "u"})
 # A starter list: profanity (as stems: fucking, shitty ...) and direct insults (whole words: Dickens is not one).
 # More words go in abuse_words = FILE on the account (one per line).
-FAQ_SWEAR_STEMS = tuple(_squash(w) for w in ("fuck", "fuk", "fck", "shit", "bullshit"))     # swearing
+FAQ_SWEAR_STEMS = tuple(_squash(w) for w in ("fuck", "fuk", "fck", "fsck", "shit", "bullshit", "bugger"))   # swearing
 FAQ_INSULT_STEMS = tuple(_squash(w) for w in (
     "bitch", "biatch", "bastard", "asshole", "arsehole", "cunt", "wank", "douche"))        # said to a person
 FAQ_ABUSE_WORDS = frozenset(_squash(w) for w in (
     "dick", "dicks", "dickhead", "prick", "twat", "slut", "whore", "retard", "retarded", "idiot", "idiots", "moron",
     "morons", "imbecile", "scumbag", "dumbass", "jackass"))
 FAQ_ABUSE_OK = frozenset(("shitake",))               # (shiitake squashed)
+# said to him: "you're stupid", "you suck" (an insult in both modes); rude phrases (strict only)
+FAQ_DIRECTED = re.compile(r"\byou(?:re|r|\s+are|\s+r)?\s+(?:(?:such|so|really|very|just|a|an|the|complete|total|absolute)\s+)*"
+                          r"(?:stupid|dumb|useless|pathetic|worthless|garbage|trash|crap|rubbish|sucks?|terrible|awful|ugly|"
+                          r"lame|loser|moron|idiot)\b")
+FAQ_RUDE = re.compile(r"\b(?:shut up|bite me|piss off|bugger off|screw (?:you|off)|go to hell|get stuffed)\b")
+
+
+def _normalized(text):
+    """Lower case, apostrophes gone, each word without the punctuation round it (idiot! -> idiot) and with the digits
+    and symbols that stand for letters turned back (b1tch, f*ck, $hit)."""
+    return " ".join(w.strip("!?.,;:\"()[]{}").translate(_LEET) for w in text.lower().replace("'", "").split())
 
 
 def faq_abusive(text, extra=(), tolerant=False):
-    """True when the text has a profane or insulting word (letters swapped for digits or stars, stretched
-    letters and capitals do not hide it).  tolerant: plain swearing is let go; only words said to a person count."""
+    """True when the text has a profane or insulting word, or says "you suck" (letters swapped for digits or stars,
+    stretched letters and capitals do not hide it).  tolerant: plain swearing and rude phrases are let go; only
+    insults count."""
+    norm = _normalized(text)
+    if FAQ_DIRECTED.search(norm) or (not tolerant and FAQ_RUDE.search(norm)):
+        return True
     stems = FAQ_INSULT_STEMS if tolerant else FAQ_SWEAR_STEMS + FAQ_INSULT_STEMS
-    for t in re.findall(r"[a-z]+", _squash(text.lower().translate(_LEET))):
+    for t in re.findall(r"[a-z]+", _squash(norm)):
         if t in FAQ_ABUSE_OK:
             continue
         if t in FAQ_ABUSE_WORDS or t in extra or any(t.startswith(s) for s in stems):
@@ -4949,13 +4964,13 @@ def faq_fix(faq, text):
 
 
 def parse_faq(text):
-    faq = {"hello": "", "fallback": "", "thanks": "", "warning": "", "goodbye": "", "entries": []}
+    faq = {"hello": "", "fallback": "", "thanks": "", "warning": "", "goodbye": "", "lost": "", "entries": []}
     cur = None
     for line in text.splitlines():
         s = line.strip()
         if s.startswith("#"):
             continue
-        m = re.match(r"^(Q|A|K|Hello|Fallback|Thanks|Warning|Goodbye)\s*:\s*(.*)$", s)
+        m = re.match(r"^(Q|A|K|Hello|Fallback|Thanks|Warning|Goodbye|Lost)\s*:\s*(.*)$", s)
         if m:
             tag, rest = m.group(1), m.group(2)
             if tag == "Q":
@@ -5063,6 +5078,8 @@ class FloydAdapter(CommandMixin):
         self.abuse_cfg = ("off" if cfg in ("no", "off", "none", "false", "0") else "tolerant" if cfg == "tolerant" else
                           "strict" if cfg in ("yes", "on", "strict", "true", "1") else "")
         self.abuse_extra, self.strikes, self.faq_muted = set(), {}, set()
+        self.misses = {}                                        # chat -> answers missed in a row (max_misses =, default 5)
+        self.max_misses = int(self._number(o.get("max_misses"), 5))
         where = os.path.expanduser((o.get("abuse_words") or "").strip())
         if where:                                               # abuse_words = FILE: more words, one per line
             try:
@@ -5161,6 +5178,8 @@ class FloydAdapter(CommandMixin):
         lm = self.LEVEL_RX.match(body) if direct else None
         if lm:                           # heard at every level, off included
             plan = self._level_cmd(conv, mind, msg, who, lm.group(1))
+        elif direct and self.AI_RX.match(low):       # is he an AI?  (honestly: it depends on who is asking)
+            plan = self._ai_answer(conv, msg, mind)
         elif direct and self.ABOUT_RX.match(low):    # what he is: said at every level too
             plan = mind._say([(0.8, self._about(conv))])
         elif direct and self.STATUS_RX.match(low):   # how he is doing: also at every level
@@ -5331,29 +5350,47 @@ class FloydAdapter(CommandMixin):
         plan = []
         if re.match(r"^!joke\s*$", low):     # the one command he shares with the playful Floyd
             setup, punch = self.mind.joke(plain=True)
-            plan = [(0.5, setup, ""), (3.0, punch, "")]
+            plan = [(0.4, setup, ""), (3.0, punch, "")]
             self._faq_note(conv, text, "joke")
+            self.misses.pop(conv.id, None)
         elif self.FAQ_GREET.match(low):
-            plan = [(0.5, hello, "")]
+            plan = [(0.3, hello, "")]
             self._faq_note(conv, text, "hello")
+            self.misses.pop(conv.id, None)
         elif self.FAQ_THANKS.match(low):
-            plan = [(0.5, faq["thanks"] or "You're welcome!", "")]
+            plan = [(0.3, faq["thanks"] or "You're welcome!", "")]
             self._faq_note(conv, text, "thanks")
+            self.misses.pop(conv.id, None)
         else:
             ranked = faq_rank(faq, text)
             if first:
-                plan.append((0.5, hello, ""))
+                plan.append((0.3, hello, ""))
             if ranked and ranked[0][0] >= self.FAQ_MIN and ranked[0][2] >= self.FAQ_COVER:
                 answer = ranked[0][1]["a"]
                 if len(ranked) > 1 and ranked[1][0] >= 0.8 * ranked[0][0] and ranked[1][0] >= self.FAQ_MIN:
                     answer += '\n(If you meant "%s" just ask me.)' % ranked[1][1]["q"].split("?")[0].strip()
-                plan.append((1.5 if first else 0.8, answer, ""))
+                plan.append((1.2 if first else 0.5, answer, ""))
                 self._faq_note(conv, text, "answer", ranked[0][1]["q"].split("?")[0].strip(), ranked[0][0], ranked[0][2])
+                self.misses.pop(conv.id, None)
             else:
-                plan.append((1.5 if first else 0.8, faq["fallback"] or
-                             "Sorry, I don't have an answer to that one. A person can help.", ""))
                 best = ranked[0] if ranked else (0.0, {"q": ""}, 0.0)
+                n = self.misses[conv.id] = self.misses.get(conv.id, 0) + 1
+                if len(self.misses) > 2000:
+                    self.misses.clear()
+                if self.max_misses and n > self.max_misses:      # lost, or probing: say so, and end the chat (no ban)
+                    self._faq_note(conv, text, "lost", best[1]["q"].split("?")[0].strip(), best[0], best[2])
+                    self.faq_muted.add(conv.id)
+                    self.last_out[conv.id] = now
+                    self._out(conv, [(0.6, faq["lost"] or "You seem to be having an issue getting an answer from me, and "
+                                      "I'm sorry about that. I'll end this chat now. A person can help: please "
+                                      "contact us directly.", "")])
+                    ad = self.chat.adapter(conv.account)
+                    if hasattr(ad, "end_abuse"):
+                        self._later(3.0, lambda: ad.end_abuse(conv, conv.title, "lost", False))
+                    return
                 self._faq_note(conv, text, "miss", best[1]["q"].split("?")[0].strip(), best[0], best[2])
+                plan.append((1.2 if first else 0.5, faq["fallback"] or
+                             "Sorry, I don't have an answer to that one. A person can help.", ""))
         self.last_out[conv.id] = now
         self._out(conv, plan)
 
@@ -5416,6 +5453,27 @@ class FloydAdapter(CommandMixin):
         return ("Floyd is a bot (tvchat's Floyd)%s. He answers !commands and when he is spoken to by name. "
                 "Channel operators: !leave sends him away, !level off keeps him quiet." %
                 (", run by %s" % who if who else ""))
+
+    AI_RX = re.compile(r"^(?:!\s*ai\W*|(?:are|r)\s+(?:you|u)\s+(?:an?\s+|the\s+)?(?:a\.?i\.?|artificial(?:\s+intelligence)?|"
+                       r"chat\s*gpt|gpt|llm|claude|language\s+model)\b.*|(?:is\s+this|do\s+you\s+use|are\s+you\s+using)\s+"
+                       r"(?:an?\s+)?(?:a\.?i\.?|chat\s*gpt|llm)\b.*)$", re.I)
+
+    def _ai_answer(self, conv, msg, mind):
+        """Is he an AI?  Mostly no - rules and jokes - but he has a friend, Claude, whom his admins can ask through
+        him: so the answer depends on whether Claude is on here, and on who asks."""
+        state = self._claude_state(conv, msg.sender)
+        if state.startswith("yes"):
+            more = ("You are an admin, so you can talk to Claude through Floyd: !claude QUESTION."
+                    if self.is_admin(msg.sender) else
+                    "Floyd's admins can talk to Claude through him. You are not one here, so Floyd can't wake Claude for you.")
+            friend = "But Floyd has a friend, Claude, who is an AI. " + more
+        elif "language models" in state:
+            friend = ("Floyd's friend Claude is an AI, but this network does not want bots that use language models, "
+                      "so Floyd asks Claude nothing here.")
+        else:
+            friend = "Floyd has a friend, Claude, who is an AI, but Claude is not awake right now."
+        return mind._say([(0.8, "Mostly no. Floyd is an old-fashioned bot: rules, a list of jokes and a very small "
+                                "brain. There is no language model inside Floyd."), (2.2, friend)])
 
     STATUS_RX = re.compile(r"^!?\s*status\W*$", re.I)
 
@@ -5585,7 +5643,10 @@ class FloydAdapter(CommandMixin):
         return tip
 
     def _out(self, conv, plan):
+        typing = getattr(self.chat.adapter(conv.account), "typing", None)    # Live Helper Chat: "Floyd is typing"
         for delay, text, flags in plan:
+            if typing:
+                self._later(max(0.0, delay - 1.2), lambda: typing(conv, True))
             self._later(delay, lambda t=text, f=flags: self._send_out(conv, t, f))
 
     # -- orders only an admin may give ---------------------------------------
@@ -6455,14 +6516,17 @@ def lhc_ids(text, ident="lhc"):
     return out
 
 
-def lhc_call(p, path, params=None, post=None):
+def lhc_call(p, path, params=None, post=None, put=None):
     """One call to the REST API: the decoded JSON.  Raises UserError with what went wrong."""
     import urllib.error, urllib.parse, urllib.request
     url = p["url"].rstrip("/") + "/restapi/" + path
     if params:
         url += "?" + urllib.parse.urlencode(params)
-    data = urllib.parse.urlencode(post).encode() if post is not None else None
-    req = urllib.request.Request(url, data=data)
+    data = urllib.parse.urlencode(post).encode() if post is not None else (
+        json.dumps(put).encode() if put is not None else None)
+    req = urllib.request.Request(url, data=data, method="PUT" if put is not None else None)
+    if put is not None:
+        req.add_header("Content-Type", "application/json")
     token = base64.b64encode(("%s:%s" % (p["user"], p["password"])).encode()).decode()
     req.add_header("Authorization", "Basic " + token)
     req.add_header("Accept", "application/json")
@@ -6550,6 +6614,16 @@ def lhc_close(p, chat_id):
     lhc_call(p, "setchatstatus", post={"chat_id": chat_id, "status": 2})
 
 
+_TYPING_ON, _TYPING_OFF = object(), object()         # jobs in an LhcAdapter's outbox beside lines to say and None (close)
+
+
+def lhc_typing(p, chat_id, on):
+    """The visitor's widget shows "NAME is typing" while a chat's operator_typing is under a minute old and
+    operator_typing_id is the operator: set both (the REST update of a chat sets any field it is given)."""
+    lhc_call(p, "chat/%d" % chat_id, put={"operator_typing": int(time.time()) if on else 0,
+                                          "operator_typing_id": p["operator_id"] if on else 0})
+
+
 def lhc_say(p, chat_id, text, name):
     lhc_call(p, "addmsgadmin", post={"chat_id": chat_id, "msg": text, "sender": "operator",
                                      **({"operator_name": name} if name else {})})
@@ -6560,12 +6634,14 @@ class LhcAdapter(CommandMixin):
     operator Floyd is), department= (numbers, comma separated; default every department),
     operator_id= (his user number on the site: keeps him shown online, and his chats going across
     a restart), name= (what visitors
-    see him called), poll= (seconds, default 5), verify= (check the site's certificate, default
+    see him called), poll= (seconds between looks, default 2; poll_fast= while a chat is going, default 1), typing= (show
+    "is typing" to the visitor while he answers, default yes), verify= (check the site's certificate, default
     yes).  The operator's API key is found as for any account ($TVCHAT_PASS_NAME, ~/.netrc).
     A visitor is never an admin.  Answers at most MAX_PER_CHAT lines an hour to one chat and
     MAX_TOTAL in all."""
 
-    POLL = 5
+    POLL = 2                             # seconds between looks at the site when nothing is going on ...
+    FAST_FOR = 120                       # ... and poll_fast= (default 1) for this long after a visitor's last line
     MAX_PER_CHAT = 30
     MAX_TOTAL = 300
     KEEPALIVE = 60                       # seconds between "he is still here" calls (with operator_id=)
@@ -6603,19 +6679,37 @@ class LhcAdapter(CommandMixin):
             raise UserError("[account:%s] ban_minutes= must be a number" % account.id)
         self.ips = {}                    # chat id -> the visitor's address, as the site tells it
         self.banned = {}                 # address -> wall-clock time its ban ends (kicked for abuse)
+        try:
+            self.poll_fast = min(float(o.get("poll_fast") or 1.0), self.poll)
+        except ValueError:
+            raise UserError("[account:%s] poll_fast= must be a number of seconds" % account.id)
+        self.last_line = 0.0             # wall-clock time of the last line a visitor said
+        self.typing_opt = _bool(o.get("typing"), True)
+        self.typing_on, self.typing_fail = set(), 0
 
     def abuse_action(self, conv):
         return "close"
 
-    def end_abuse(self, conv, nick, reason):
-        self.kick(conv)
+    def end_abuse(self, conv, nick, reason, ban=True):
+        self.kick(conv, ban)
 
-    def kick(self, conv):
+    def typing(self, conv, on):
+        """Show the visitor "NAME is typing" (it goes off when the next line is said).  Needs operator_id=; given up
+        on after three failures (typing = no turns it off)."""
+        if not (on and self.typing_opt and self.typing_fail < 3 and self.operator_id and self.phase == "up"):
+            return
+        cid = int(conv.target)
+        if cid not in self.typing_on and cid not in self.ignored:
+            self.typing_on.add(cid)
+            self.outbox.append((cid, _TYPING_ON))
+            self._post_next()
+
+    def kick(self, conv, ban=True):
         """End this chat on the site (closed), ignore it from now on, and turn the visitor's address away for
         ban_minutes= (default 60; 0 = only this chat): a fresh chat from it is closed unanswered."""
         cid = int(conv.target)
         ip = self.ips.get(cid)
-        if ip and self.ban_secs > 0:
+        if ip and ban and self.ban_secs > 0:
             self.banned[ip] = self.chat.wall() + self.ban_secs
         self.ignored.add(cid)
         self.convs.pop(cid, None)
@@ -6754,7 +6848,9 @@ class LhcAdapter(CommandMixin):
                 conv = self.convs[cid] = self.chat.ensure_conv(self.account, str(cid), "direct", "%s (#%d)" % (nick, cid))
             self.chat.add_message(conv, Message(self.local_id(), conv.id, time.time(),
                                                 Contact("lhc:%d" % cid, nick, None), text, ""))
-        self.timer = self.loop.call_later(self.poll, self._poll)
+        if lines:
+            self.last_line = now
+        self.timer = self.loop.call_later(self.poll_fast if now - self.last_line < self.FAST_FOR else self.poll, self._poll)
 
     # -- going out: each line is an operator message, in order --------------------
     def speak(self, conv, text):
@@ -6775,6 +6871,9 @@ class LhcAdapter(CommandMixin):
         self.sent_all.append(now)
         self.mine.add(cid)
         self.outbox.append((cid, text))
+        if cid in self.typing_on:                    # what he was "typing" is said: stop showing it
+            self.typing_on.discard(cid)
+            self.outbox.append((cid, _TYPING_OFF))
         self._post_next()
         return mid
 
@@ -6789,16 +6888,26 @@ class LhcAdapter(CommandMixin):
             return
         cid, text = self.outbox.pop(0)
         self.posting, gen, name = True, self.gen, self.name
+        is_typing = text is _TYPING_ON or text is _TYPING_OFF
 
         def done(res, err):
             if gen != self.gen:
                 return
             self.posting = False
-            if err is not None:
+            if err is not None and is_typing:        # an indicator is a nicety: never a complaint, and given up on
+                self.typing_fail += 1
+                _log.debug("%s: could not set typing on chat %d: %s", self.account.id, cid, err)
+            elif err is not None:
                 conv = self.convs.get(cid) or self.server_conv()
                 self.system(conv, "could not send to chat %d: %s" % (cid, err))
             self._post_next()
-        self.loop.run_in_thread((lambda: lhc_close(p, cid)) if text is None else (lambda: lhc_say(p, cid, text, name)), done)
+        if is_typing:
+            job = lambda: lhc_typing(p, cid, text is _TYPING_ON)
+        elif text is None:
+            job = lambda: lhc_close(p, cid)
+        else:
+            job = lambda: lhc_say(p, cid, text, name)
+        self.loop.run_in_thread(job, done)
 
 
 ADAPTERS = {"irc": IrcAdapter, "deltachat": DeltaChatAdapter, "talk": TalkAdapter,
@@ -7696,7 +7805,10 @@ def cmd_faq_report(a):
     out("  answered %d, not answered %d%s; hello %d, thanks %d, jokes %d\n" % (
         kinds["answer"], kinds["miss"], " (%d%% missed)" % round(100.0 * kinds["miss"] / asked) if asked else "",
         kinds["hello"], kinds["thanks"], kinds["joke"]))
-    miss = Counter(r.get("q", "").strip().lower() for r in recs if r.get("r") == "miss")
+    if kinds["abuse"] or kinds["kick"] or kinds["lost"]:
+        out("  flagged for abuse %d, chats ended for abuse %d, chats ended as lost (too many misses) %d\n" % (
+            kinds["abuse"], kinds["kick"], kinds["lost"]))
+    miss = Counter(r.get("q", "").strip().lower() for r in recs if r.get("r") in ("miss", "lost"))
     if miss:
         out("\nNOT ANSWERED (most asked first; the closest entry in brackets):\n")
         closest = dict((r.get("q", "").strip().lower(), r.get("e", "")) for r in recs if r.get("r") == "miss")

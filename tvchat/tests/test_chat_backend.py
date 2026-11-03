@@ -3677,6 +3677,34 @@ class TestFloydAttached(Base):
         again.start()                                      # not in autoconnect, but attached
         self.assertEqual(again.account("floyd").state, "connected")
 
+    def _asks(self, who, account, text):
+        msg = cb.Message("a%d" % len(self.conv.history), self.conv.id, self.clk.t, cb.Contact(who, None, account), text, "")
+        self.chat.add_message(self.conv, msg)
+        for _ in range(40):
+            self.clk.t += 0.25
+            self.chat.loop.run_due()
+        return " ".join(s for s in self.other.said if s.startswith("[Floyd]"))
+
+    def test_asked_if_he_is_an_ai_he_is_honest_and_it_depends_on_who_asks(self):
+        self.other.send(self.conv, "/floyd on")
+        said = self._asks("bob", None, "floyd: are you an AI?")                  # Claude is off in his configuration
+        self.assertIn("old-fashioned bot", said)
+        self.assertIn("no language model inside Floyd", said)
+        self.assertIn("Claude is not awake", said)
+        self.other.said.clear()
+        self.chat.daemon = True                                                 # Claude is on (a program that exists)
+        self.floyd.claude, self.floyd.claude_cmd, self.floyd.admins = True, sys.executable, {"alice"}
+        said = self._asks("alice", "alice", "floyd: are you an AI?")             # an admin may talk to Claude through him
+        self.assertIn("You are an admin", said)
+        self.assertIn("!claude QUESTION", said)
+        self.other.said.clear()
+        said = self._asks("bob", None, "floyd: are you chatgpt?")                # anybody else may not
+        self.assertIn("You are not one here", said)
+        self.other.said.clear()
+        self.net.opts["llm"] = "no"                                              # a network that does not want such bots
+        said = self._asks("bob", None, "floyd: is this AI?")
+        self.assertIn("does not want bots that use language models", said)
+
     def test_silent_until_attached(self):
         self.hear("bob", "!help")
         self.assertEqual(self.other.said, [])
@@ -4795,7 +4823,7 @@ class FakeLhc:
     def __init__(self):
         import http.server
         import urllib.parse
-        self.chats, self.msgs, self.posted, self.calls, self.closed = {}, {}, [], [], []
+        self.chats, self.msgs, self.posted, self.calls, self.closed, self.typing = {}, {}, [], [], [], []
         self.lock = threading.Lock()
         fake = self
 
@@ -4849,6 +4877,15 @@ class FakeLhc:
 
             def do_GET(self):
                 self._go(False)
+
+            def do_PUT(self):
+                u = urllib.parse.urlparse(self.path)
+                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)).decode() or "{}")
+                if self.headers.get("Authorization") != "Basic " + base64.b64encode(b"floyd:k3y").decode():
+                    return self._send(401, {"error": True, "result": "no"})
+                with fake.lock:
+                    fake.typing.append((u.path, body))
+                self._send(200, {"error": False, "result": {}})
 
             def do_POST(self):
                 self._go(True)
@@ -5292,6 +5329,15 @@ class TestFloydPro(Base):
         self.assertIn("how much is a ticket to mars", text)
         self.assertIn("ENTRIES USED", text)
 
+    def test_are_you_ai_is_answered_plainly_and_apart_from_are_you_human(self):
+        for i, q in enumerate(("are you an AI?", "is this ChatGPT", "are you artificial intelligence", "are you a human?")):
+            self.lhc.chat(20 + i, "Pat", q)
+        self.turn(lambda: len(self.lhc.posted) >= 8, timeout=25)
+        said = [q["msg"] for q in self.lhc.posted]
+        self.assertEqual(sum("I'm not an AI model, and I'm not ChatGPT" in m for m in said), 3)
+        self.assertEqual(sum("a computer program, not a person" in m for m in said), 1)
+        self.assertTrue(any("Chats may be reviewed" in m for m in said))
+
     def test_are_you_a_human_is_answered_honestly_even_with_a_typo(self):
         for i, q in enumerate(("arer you a human?", "are you a robot", "is this a bot")):
             self.lhc.chat(10 + i, "Pat", q)
@@ -5347,6 +5393,56 @@ class TestFloydPro(Base):
         self.assertEqual(len(self.lhc.posted), said)
         self.lhc.chat(9, "Sam", "What should I wear?", ip="5.6.7.8")     # somebody else is fine
         self.turn(lambda: len(self.lhc.posted) > said, timeout=15)
+
+    def test_the_word_list_knows_what_testing_found(self):
+        for t in ("bugger off", "you're stupid!", "fsck off", "you suck!!!!", "bite me", "idiot!", "you are so useless", "shut up"):
+            self.assertTrue(cb.faq_abusive(t), t)
+        for t in ("your service is terrible", "this sucks", "is that a stupid question?", "is it foolproof for beginners",
+                  "who is the boss"):
+            self.assertFalse(cb.faq_abusive(t), t)
+        for t in ("you suck", "you're stupid!", "idiot!", "you absolute moron"):         # tolerant: insults only
+            self.assertTrue(cb.faq_abusive(t, tolerant=True), t)
+        for t in ("bite me", "bugger off", "shut up", "this is shit", "fsck"):
+            self.assertFalse(cb.faq_abusive(t, tolerant=True), t)
+
+    def test_a_visitor_who_misses_more_than_five_times_in_a_row_is_told_and_disconnected(self):
+        words = ("zork", "blarg", "quux", "frobnicate", "xyzzy", "plugh")
+        self.lhc.chat(7, "Pat", *words[:5], ip="1.2.3.4")
+        self.turn(lambda: sum("don't have an answer" in m for m in self.said()) >= 5, timeout=20)
+        self.assertEqual(self.lhc.closed, [])                              # five misses: still helped
+        self.lhc.say(7, words[5])                                           # the sixth in a row
+        self.turn(lambda: self.lhc.closed == [7], timeout=20)
+        self.assertTrue(any("You seem to be having an issue" in m and "chris@universal-laughter.com" in m for m in self.said()))
+        self.lhc.chat(8, "Sam", "What should I wear?", ip="1.2.3.4")        # lost is not abuse: the address is not turned away
+        self.turn(lambda: any("comfortable clothing" in m for m in self.said()), timeout=20)
+
+    def test_an_answer_in_between_starts_the_count_again(self):
+        self.lhc.chat(7, "Pat", "zork", "blarg", "quux", "frobnicate", "xyzzy", "What should I wear?",
+                      "plugh", "wibble", "gronk", "snafu", "fubar")
+        self.turn(lambda: len(self.lhc.posted) >= 12, timeout=25)           # hello, 5 misses, an answer, 5 misses
+        self.settle(1.0)
+        self.assertEqual(self.lhc.closed, [])
+
+    def test_he_shows_typing_while_he_answers_and_stops_when_it_is_said(self):
+        self.chat.adapter(self.chat.by_id["lhc"]).operator_id = 1
+        self.lhc.chat(7, "Pat", "What should I wear?")
+        self.turn(lambda: len(self.lhc.posted) >= 2 and len(self.lhc.typing) >= 2, timeout=20)
+        first, last = self.lhc.typing[0], self.lhc.typing[-1]
+        self.assertEqual(first[0], "/restapi/chat/7")
+        self.assertGreater(first[1]["operator_typing"], 0)
+        self.assertEqual(first[1]["operator_typing_id"], 1)
+        self.assertEqual(last[1], {"operator_typing": 0, "operator_typing_id": 0})
+
+    def test_typing_can_be_switched_off_and_needs_the_operator_number(self):
+        ad = self.chat.adapter(self.chat.by_id["lhc"])
+        ad.operator_id, ad.typing_opt = 1, False
+        self.lhc.chat(7, "Pat", "What should I wear?")
+        self.turn(lambda: len(self.lhc.posted) >= 2, timeout=20)
+        self.assertEqual(self.lhc.typing, [])
+
+    def test_the_site_is_watched_closely_while_a_chat_is_going(self):
+        ad = cb.LhcAdapter(self.chat, types.SimpleNamespace(opts={"url": "http://x", "user": "u"}, id="x", display="x"))
+        self.assertEqual((ad.poll, ad.poll_fast), (2.0, 1.0))
 
     def test_abuse_can_be_switched_off(self):
         self.chat.adapter(self.chat.by_id["pro"]).abuse_cfg = "off"

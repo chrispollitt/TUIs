@@ -32,6 +32,8 @@ Picking up: Floyd on Live Helper Chat, and Joy (PLAN.md has the phases; Nov 2, 2
      (TO_BE_RUN/ holds one-shot deploys that move to DONE/; the scripts to run again and again live in
      TO_BE_RUN/REUSABLE/: joy-update-on-cpbee.sh, joy-report.sh, ul-chat-widget-on-whatwelove.sh,
      lhc-pro-sync-on-whatwelove.sh.)
+  e2. The visitor's own widget looks for news only every 3.5 s (the pro admin's chat message update interval,
+     chat_message_sinterval): lower it (say 1.5 s) to shorten the rest of the wait.
   e. Optional: Joy's profile name in the pro admin (still "joy-assistant"; the fun site's is "floyd-bot");
      a privacy line in the widget's start text ("chats may be reviewed to improve our answers"), because
      the questions log keeps what visitors type.
