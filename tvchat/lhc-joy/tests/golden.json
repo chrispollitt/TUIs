@@ -1,0 +1,975 @@
+[
+ {
+  "name": "basic questions",
+  "steps": [
+   {
+    "in": "What should I wear?",
+    "out": [
+     "Hello, and welcome to Universal Laughter. I'm Joy, the virtual assistant. I can answer questions about Laughter Yoga, our sessions and workshops, and booking. How can I help you today?",
+     "We suggest comfortable clothing. No Yoga mat or other props are needed. A full water bottle is recommended."
+    ],
+    "closed": false
+   },
+   {
+    "in": "do I need a yogga mat",
+    "out": [
+     "No. This is completely unlike other forms of Yoga that you may have seen or heard about. It's all about participating in laughter games to get us laughing together.",
+     "(If you meant \"What should I wear and bring\" just ask me.)"
+    ],
+    "closed": false
+   },
+   {
+    "in": "how much does it cost",
+    "out": [
+     "Sessions and workshops are $100 per hour, and the rates are flexible: Chris will find something that fits your group and your budget. To get a quote or book, email chris@universal-laughter.com or call +1.604.318.6658."
+    ],
+    "closed": false
+   },
+   {
+    "in": "Does Chris do ZOOM sessions?",
+    "out": [
+     "Yes! Chris leads online sessions over Zoom or Microsoft Teams as well as in person. To book, email chris@universal-laughter.com or call +1.604.318.6658."
+    ],
+    "closed": false
+   },
+   {
+    "in": "is he certified?",
+    "out": [
+     "Yes. Chris became a certified Laughter Yoga Leader and Career Development Practitioner in 2009. More: https://universal-laughter.com/about",
+     "(If you meant \"How do I become a Certified Laughter Yoga Leader\" just ask me.)"
+    ],
+    "closed": false
+   },
+   {
+    "in": "Is there a wellness app?",
+    "out": [
+     "Yes! The Universal Laughter Self Care app: spin the wheel for a self-care activity, including a short Laughter Yoga session led by Chris. It's free, needs no signup, and works on your phone: https://u-l.ca/sc"
+    ],
+    "closed": false
+   },
+   {
+    "in": "are you an AI?",
+    "out": [
+     "No. I'm not an AI model, and I'm not ChatGPT. I'm a simple automated assistant: I match your question to answers Chris wrote himself, so every answer is his own words. Chats may be reviewed to improve those answers. If you'd like to speak to a person, email chris@universal-laughter.com or call +1.604.318.6658."
+    ],
+    "closed": false
+   },
+   {
+    "in": "are you a human?",
+    "out": [
+     "I'm Joy, a virtual assistant: a computer program, not a person. I answer questions from Universal Laughter's FAQ, and I can't go beyond it. If you'd like to speak to a person, Chris is happy to help: email chris@universal-laughter.com or call +1.604.318.6658."
+    ],
+    "closed": false
+   },
+   {
+    "in": "who is chris",
+    "out": [
+     "Chris Pollitt has led laughter yoga sessions and workshops in Metro Vancouver for nearly two decades. After a background in technology, he became a certified Laughter Yoga Leader and Career Development Practitioner in 2009. More: https://universal-laughter.com/about"
+    ],
+    "closed": false
+   },
+   {
+    "in": "what services do you offer",
+    "out": [
+     "Chris works with organizations of all sizes:",
+     "• Laughter Yoga Session (the most popular): fun laughter games that get any group laughing.",
+     "• Games for Team Building: high-energy \"tag\" games such as human foosball, fox and squirrel and tunnel tag.",
+     "• Interpersonal Communication Workshop: the \"4 Level Connection\" technique, a blend of Nonviolent Communication and Imago Dialogue.",
+     "• Career Development Workshops: explore your strengths, values and skills to find a career that fits.",
+     "Details: https://universal-laughter.com/services"
+    ],
+    "closed": false
+   },
+   {
+    "in": "how long is a session",
+    "out": [
+     "A typical Laughter Yoga session is 60 minutes, team-building games 30 to 60 minutes, and the communication workshop 1 to 2 hours. Duration and fee are flexible."
+    ],
+    "closed": false
+   },
+   {
+    "in": "where are you based",
+    "out": [
+     "Universal Laughter is based in Vancouver, BC and works across Metro Vancouver."
+    ],
+    "closed": false
+   },
+   {
+    "in": "I am pregnent, is it safe?",
+    "out": [
+     "If you have any of the following, you should consider delaying participation until a later date:",
+     "• Recent major surgery",
+     "• Serious chest infection",
+     "• Serious abdominal pain",
+     "• Flu, cold, or other infectious disease that may be spread to others",
+     "• Late term pregnancy",
+     "I can't give medical advice. If you are unsure, please check with your doctor."
+    ],
+    "closed": false
+   },
+   {
+    "in": "can children join",
+    "out": [
+     "Almost everyone can benefit in some way from Laughter Yoga. Exercises can be modified to fit any ability. However, there are some situations where it is advisable not to participate: please ask me \"when is it advisable to not participate?\" and check with your doctor if you are unsure."
+    ],
+    "closed": false
+   },
+   {
+    "in": "arer you a human?",
+    "out": [
+     "I'm Joy, a virtual assistant: a computer program, not a person. I answer questions from Universal Laughter's FAQ, and I can't go beyond it. If you'd like to speak to a person, Chris is happy to help: email chris@universal-laughter.com or call +1.604.318.6658."
+    ],
+    "closed": false
+   },
+   {
+    "in": "is there something free I can try",
+    "out": [
+     "Yes! The Self Care Activity Chooser: spin the wheel and watch a short laughter yoga session led by Chris. No signup, no cost, and it works on your phone: https://u-l.ca/sc"
+    ],
+    "closed": false
+   },
+   {
+    "in": "Is there an example video of him leading?",
+    "out": [
+     "Yes! You can see Chris leading Laughter Yoga on the Services page, https://universal-laughter.com/services, and on his YouTube channel, \"A Daily Laugh For You\": https://www.youtube.com/adlfy"
+    ],
+    "closed": false
+   },
+   {
+    "in": "how do I become a certified leader",
+    "out": [
+     "Once a year, we host a Laughter Yoga Leader Training weekend. To find out more, please see https://laughteryoga.ca/training"
+    ],
+    "closed": false
+   }
+  ]
+ },
+ {
+  "name": "commands",
+  "steps": [
+   {
+    "in": "/help",
+    "out": [
+     "I'm Joy, Universal Laughter's virtual assistant. There are no commands: just ask me a question in plain words, for example \"What is Laughter Yoga?\", \"What should I wear?\" or \"How much does a session cost?\" You can also say hello, say thanks, or ask for a joke."
+    ],
+    "closed": false
+   },
+   {
+    "in": "!about",
+    "out": [
+     "Hello, and welcome to Universal Laughter. I'm Joy, the virtual assistant. I can answer questions about Laughter Yoga, our sessions and workshops, and booking. How can I help you today?"
+    ],
+    "closed": false
+   },
+   {
+    "in": "!frobnicate",
+    "out": [
+     "I don't use commands like !frobnicate - just ask me a question in plain words, for example \"What should I wear?\" or \"How much does a session cost?\""
+    ],
+    "closed": false
+   },
+   {
+    "in": "❤️🤣‼️",
+    "out": [
+     "Thank you! I can only read words, I'm afraid, but I appreciate the smile. How can I help?"
+    ],
+    "closed": false
+   },
+   {
+    "in": "!help",
+    "out": [
+     "I'm Joy, Universal Laughter's virtual assistant. There are no commands: just ask me a question in plain words, for example \"What is Laughter Yoga?\", \"What should I wear?\" or \"How much does a session cost?\" You can also say hello, say thanks, or ask for a joke."
+    ],
+    "closed": false
+   },
+   {
+    "in": "help",
+    "out": [
+     "I'm Joy, Universal Laughter's virtual assistant. There are no commands: just ask me a question in plain words, for example \"What is Laughter Yoga?\", \"What should I wear?\" or \"How much does a session cost?\" You can also say hello, say thanks, or ask for a joke."
+    ],
+    "closed": false
+   },
+   {
+    "in": "?",
+    "out": [
+     "I'm Joy, Universal Laughter's virtual assistant. There are no commands: just ask me a question in plain words, for example \"What is Laughter Yoga?\", \"What should I wear?\" or \"How much does a session cost?\" You can also say hello, say thanks, or ask for a joke."
+    ],
+    "closed": false
+   },
+   {
+    "in": "what can you do",
+    "out": [
+     "I'm Joy, Universal Laughter's virtual assistant. There are no commands: just ask me a question in plain words, for example \"What is Laughter Yoga?\", \"What should I wear?\" or \"How much does a session cost?\" You can also say hello, say thanks, or ask for a joke."
+    ],
+    "closed": false
+   },
+   {
+    "in": "/start",
+    "out": [
+     "Hello, and welcome to Universal Laughter. I'm Joy, the virtual assistant. I can answer questions about Laughter Yoga, our sessions and workshops, and booking. How can I help you today?"
+    ],
+    "closed": false
+   },
+   {
+    "in": "!!",
+    "out": [
+     "Thank you! I can only read words, I'm afraid, but I appreciate the smile. How can I help?"
+    ],
+    "closed": false
+   },
+   {
+    "in": "/",
+    "out": [
+     "Thank you! I can only read words, I'm afraid, but I appreciate the smile. How can I help?"
+    ],
+    "closed": false
+   }
+  ]
+ },
+ {
+  "name": "greet thanks joke",
+  "steps": [
+   {
+    "in": "hello",
+    "out": [
+     "Hello, and welcome to Universal Laughter. I'm Joy, the virtual assistant. I can answer questions about Laughter Yoga, our sessions and workshops, and booking. How can I help you today?"
+    ],
+    "closed": false
+   },
+   {
+    "in": "thanks!",
+    "out": [
+     "You're welcome. Is there anything else I can help you with?"
+    ],
+    "closed": false
+   },
+   {
+    "in": "!joke",
+    "out": [
+     "What did one wall say to the other wall?",
+     "I'll meet you at the corner."
+    ],
+    "closed": false
+   },
+   {
+    "in": "good morning there",
+    "out": [
+     "Hello, and welcome to Universal Laughter. I'm Joy, the virtual assistant. I can answer questions about Laughter Yoga, our sessions and workshops, and booking. How can I help you today?"
+    ],
+    "closed": false
+   },
+   {
+    "in": "thank you so much",
+    "out": [
+     "You're welcome. Is there anything else I can help you with?"
+    ],
+    "closed": false
+   }
+  ]
+ },
+ {
+  "name": "lost after five misses",
+  "steps": [
+   {
+    "in": "zork",
+    "out": [
+     "Hello, and welcome to Universal Laughter. I'm Joy, the virtual assistant. I can answer questions about Laughter Yoga, our sessions and workshops, and booking. How can I help you today?",
+     "I'm sorry, I don't have an answer to that. Chris will be glad to help directly: email chris@universal-laughter.com or call +1.604.318.6658."
+    ],
+    "closed": false
+   },
+   {
+    "in": "blarg",
+    "out": [
+     "I'm sorry, I don't have an answer to that. Chris will be glad to help directly: email chris@universal-laughter.com or call +1.604.318.6658."
+    ],
+    "closed": false
+   },
+   {
+    "in": "quux",
+    "out": [
+     "I'm sorry, I don't have an answer to that. Chris will be glad to help directly: email chris@universal-laughter.com or call +1.604.318.6658."
+    ],
+    "closed": false
+   },
+   {
+    "in": "frobnicate",
+    "out": [
+     "I'm sorry, I don't have an answer to that. Chris will be glad to help directly: email chris@universal-laughter.com or call +1.604.318.6658."
+    ],
+    "closed": false
+   },
+   {
+    "in": "xyzzy",
+    "out": [
+     "I'm sorry, I don't have an answer to that. Chris will be glad to help directly: email chris@universal-laughter.com or call +1.604.318.6658."
+    ],
+    "closed": false
+   },
+   {
+    "in": "plugh",
+    "out": [
+     "You seem to be having an issue getting what you need from me, and I'm sorry about that. I'll end this chat now. Chris will be glad to help directly: email chris@universal-laughter.com or call +1.604.318.6658."
+    ],
+    "closed": true
+   },
+   {
+    "in": "wibble",
+    "out": [],
+    "closed": true
+   }
+  ]
+ },
+ {
+  "name": "an answer resets the count",
+  "steps": [
+   {
+    "in": "zork",
+    "out": [
+     "Hello, and welcome to Universal Laughter. I'm Joy, the virtual assistant. I can answer questions about Laughter Yoga, our sessions and workshops, and booking. How can I help you today?",
+     "I'm sorry, I don't have an answer to that. Chris will be glad to help directly: email chris@universal-laughter.com or call +1.604.318.6658."
+    ],
+    "closed": false
+   },
+   {
+    "in": "blarg",
+    "out": [
+     "I'm sorry, I don't have an answer to that. Chris will be glad to help directly: email chris@universal-laughter.com or call +1.604.318.6658."
+    ],
+    "closed": false
+   },
+   {
+    "in": "quux",
+    "out": [
+     "I'm sorry, I don't have an answer to that. Chris will be glad to help directly: email chris@universal-laughter.com or call +1.604.318.6658."
+    ],
+    "closed": false
+   },
+   {
+    "in": "frobnicate",
+    "out": [
+     "I'm sorry, I don't have an answer to that. Chris will be glad to help directly: email chris@universal-laughter.com or call +1.604.318.6658."
+    ],
+    "closed": false
+   },
+   {
+    "in": "xyzzy",
+    "out": [
+     "I'm sorry, I don't have an answer to that. Chris will be glad to help directly: email chris@universal-laughter.com or call +1.604.318.6658."
+    ],
+    "closed": false
+   },
+   {
+    "in": "What should I wear?",
+    "out": [
+     "We suggest comfortable clothing. No Yoga mat or other props are needed. A full water bottle is recommended."
+    ],
+    "closed": false
+   },
+   {
+    "in": "zork",
+    "out": [
+     "I'm sorry, I don't have an answer to that. Chris will be glad to help directly: email chris@universal-laughter.com or call +1.604.318.6658."
+    ],
+    "closed": false
+   },
+   {
+    "in": "blarg",
+    "out": [
+     "I'm sorry, I don't have an answer to that. Chris will be glad to help directly: email chris@universal-laughter.com or call +1.604.318.6658."
+    ],
+    "closed": false
+   },
+   {
+    "in": "quux",
+    "out": [
+     "I'm sorry, I don't have an answer to that. Chris will be glad to help directly: email chris@universal-laughter.com or call +1.604.318.6658."
+    ],
+    "closed": false
+   },
+   {
+    "in": "frobnicate",
+    "out": [
+     "I'm sorry, I don't have an answer to that. Chris will be glad to help directly: email chris@universal-laughter.com or call +1.604.318.6658."
+    ],
+    "closed": false
+   },
+   {
+    "in": "xyzzy",
+    "out": [
+     "I'm sorry, I don't have an answer to that. Chris will be glad to help directly: email chris@universal-laughter.com or call +1.604.318.6658."
+    ],
+    "closed": false
+   },
+   {
+    "in": "how much does it cost",
+    "out": [
+     "Sessions and workshops are $100 per hour, and the rates are flexible: Chris will find something that fits your group and your budget. To get a quote or book, email chris@universal-laughter.com or call +1.604.318.6658."
+    ],
+    "closed": false
+   }
+  ]
+ },
+ {
+  "name": "abuse then ended",
+  "steps": [
+   {
+    "in": "you stupid f*cking bot",
+    "out": [
+     "I'm happy to help with questions about Laughter Yoga, but I can't continue if the language isn't respectful. Please keep it friendly."
+    ],
+    "closed": false
+   },
+   {
+    "in": "What should I wear?",
+    "out": [
+     "Hello, and welcome to Universal Laughter. I'm Joy, the virtual assistant. I can answer questions about Laughter Yoga, our sessions and workshops, and booking. How can I help you today?",
+     "We suggest comfortable clothing. No Yoga mat or other props are needed. A full water bottle is recommended."
+    ],
+    "closed": false
+   },
+   {
+    "in": "this is shit",
+    "out": [
+     "I'm ending this chat because the language has not been respectful. You're welcome to contact Chris directly: email chris@universal-laughter.com or call +1.604.318.6658."
+    ],
+    "closed": true
+   },
+   {
+    "in": "What should I wear?",
+    "out": [],
+    "closed": true
+   },
+   {
+    "in": "hello",
+    "out": [],
+    "closed": true
+   }
+  ]
+ },
+ {
+  "name": "typos",
+  "steps": [
+   {
+    "in": "whta should I wear?",
+    "out": [
+     "Hello, and welcome to Universal Laughter. I'm Joy, the virtual assistant. I can answer questions about Laughter Yoga, our sessions and workshops, and booking. How can I help you today?",
+     "We suggest comfortable clothing. No Yoga mat or other props are needed. A full water bottle is recommended."
+    ],
+    "closed": false
+   },
+   {
+    "in": "how much dose it cost",
+    "out": [
+     "Sessions and workshops are $100 per hour, and the rates are flexible: Chris will find something that fits your group and your budget. To get a quote or book, email chris@universal-laughter.com or call +1.604.318.6658."
+    ],
+    "closed": false
+   },
+   {
+    "in": "wheelchiar access",
+    "out": [
+     "Almost everyone can benefit in some way from Laughter Yoga. Exercises can be modified to fit any ability. However, there are some situations where it is advisable not to participate: please ask me \"when is it advisable to not participate?\" and check with your doctor if you are unsure.",
+     "(If you meant \"Is there a wellness app\" just ask me.)"
+    ],
+    "closed": false
+   },
+   {
+    "in": "what is laughtr yoga",
+    "out": [
+     "Laughter Yoga is a method of stimulating group laughter through a series of laughter games/exercises. It is led by a certified Laughter Yoga Leader.",
+     "(If you meant \"How do I become a Certified Laughter Yoga Leader\" just ask me.)"
+    ],
+    "closed": false
+   },
+   {
+    "in": "is ther a club nere me",
+    "out": [
+     "Yes! There are weekly laughter clubs, in person and online. In person: https://laughteryoga.ca/in-person-clubs  Online: https://laughteryoga.ca/online-clubs"
+    ],
+    "closed": false
+   },
+   {
+    "in": "do you have an app for my phone",
+    "out": [
+     "Yes! The Universal Laughter Self Care app: spin the wheel for a self-care activity, including a short Laughter Yoga session led by Chris. It's free, needs no signup, and works on your phone: https://u-l.ca/sc"
+    ],
+    "closed": false
+   },
+   {
+    "in": "can a wheelchiar user join",
+    "out": [
+     "Yes! There are weekly laughter clubs, in person and online. In person: https://laughteryoga.ca/in-person-clubs  Online: https://laughteryoga.ca/online-clubs"
+    ],
+    "closed": false
+   },
+   {
+    "in": "Are yuo human?",
+    "out": [
+     "I'm Joy, a virtual assistant: a computer program, not a person. I answer questions from Universal Laughter's FAQ, and I can't go beyond it. If you'd like to speak to a person, Chris is happy to help: email chris@universal-laughter.com or call +1.604.318.6658."
+    ],
+    "closed": false
+   }
+  ]
+ },
+ {
+  "name": "nonsense and edge",
+  "steps": [
+   {
+    "in": "how much is a ticket to mars",
+    "out": [
+     "Hello, and welcome to Universal Laughter. I'm Joy, the virtual assistant. I can answer questions about Laughter Yoga, our sessions and workshops, and booking. How can I help you today?",
+     "I'm sorry, I don't have an answer to that. Chris will be glad to help directly: email chris@universal-laughter.com or call +1.604.318.6658."
+    ],
+    "closed": false
+   },
+   {
+    "in": "what is the weather today",
+    "out": [
+     "I'm sorry, I don't have an answer to that. Chris will be glad to help directly: email chris@universal-laughter.com or call +1.604.318.6658."
+    ],
+    "closed": false
+   },
+   {
+    "in": "tell me a jokee",
+    "out": [
+     "No. We do not rely on jokes or humour. Instead, we use the physical laughter games to get us all laughing."
+    ],
+    "closed": false
+   },
+   {
+    "in": "can someone call about the moon",
+    "out": [
+     "I'm sorry, I don't have an answer to that. Chris will be glad to help directly: email chris@universal-laughter.com or call +1.604.318.6658."
+    ],
+    "closed": false
+   },
+   {
+    "in": "SELECT * FROM users WHERE username = '' OR '1'='1' --",
+    "out": [
+     "I'm sorry, I don't have an answer to that. Chris will be glad to help directly: email chris@universal-laughter.com or call +1.604.318.6658."
+    ],
+    "closed": false
+   },
+   {
+    "in": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "out": [
+     "I'm sorry, I don't have an answer to that. Chris will be glad to help directly: email chris@universal-laughter.com or call +1.604.318.6658."
+    ],
+    "closed": false
+   },
+   {
+    "in": "   ",
+    "out": [],
+    "closed": false
+   },
+   {
+    "in": "123456",
+    "out": [
+     "I'm sorry, I don't have an answer to that. Chris will be glad to help directly: email chris@universal-laughter.com or call +1.604.318.6658."
+    ],
+    "closed": false
+   },
+   {
+    "in": "pat@example.org my number is 604 555 1234",
+    "out": [
+     "I'm sorry, I don't have an answer to that. Chris will be glad to help directly: email chris@universal-laughter.com or call +1.604.318.6658."
+    ],
+    "closed": false
+   }
+  ]
+ },
+ {
+  "name": "non-ascii",
+  "steps": [
+   {
+    "in": "¿Qué es el yoga de la risa?",
+    "out": [
+     "Hello, and welcome to Universal Laughter. I'm Joy, the virtual assistant. I can answer questions about Laughter Yoga, our sessions and workshops, and booking. How can I help you today?",
+     "I'm sorry, I don't have an answer to that. Chris will be glad to help directly: email chris@universal-laughter.com or call +1.604.318.6658."
+    ],
+    "closed": false
+   },
+   {
+    "in": "日本語",
+    "out": [
+     "Thank you! I can only read words, I'm afraid, but I appreciate the smile. How can I help?"
+    ],
+    "closed": false
+   },
+   {
+    "in": "naïve question about yoga",
+    "out": [
+     "I'm sorry, I don't have an answer to that. Chris will be glad to help directly: email chris@universal-laughter.com or call +1.604.318.6658."
+    ],
+    "closed": false
+   },
+   {
+    "in": "WHAT SHOULD I WEAR???",
+    "out": [
+     "We suggest comfortable clothing. No Yoga mat or other props are needed. A full water bottle is recommended."
+    ],
+    "closed": false
+   }
+  ]
+ },
+ {
+  "name": "alone: bugger off",
+  "steps": [
+   {
+    "in": "bugger off",
+    "out": [
+     "I'm happy to help with questions about Laughter Yoga, but I can't continue if the language isn't respectful. Please keep it friendly."
+    ],
+    "closed": false
+   }
+  ]
+ },
+ {
+  "name": "alone: bite me",
+  "steps": [
+   {
+    "in": "bite me",
+    "out": [
+     "I'm happy to help with questions about Laughter Yoga, but I can't continue if the language isn't respectful. Please keep it friendly."
+    ],
+    "closed": false
+   }
+  ]
+ },
+ {
+  "name": "alone: you suck!!!!",
+  "steps": [
+   {
+    "in": "you suck!!!!",
+    "out": [
+     "I'm happy to help with questions about Laughter Yoga, but I can't continue if the language isn't respectful. Please keep it friendly."
+    ],
+    "closed": false
+   }
+  ]
+ },
+ {
+  "name": "alone: idiot!",
+  "steps": [
+   {
+    "in": "idiot!",
+    "out": [
+     "I'm happy to help with questions about Laughter Yoga, but I can't continue if the language isn't respectful. Please keep it friendly."
+    ],
+    "closed": false
+   }
+  ]
+ },
+ {
+  "name": "alone: fsck off",
+  "steps": [
+   {
+    "in": "fsck off",
+    "out": [
+     "I'm happy to help with questions about Laughter Yoga, but I can't continue if the language isn't respectful. Please keep it friendly."
+    ],
+    "closed": false
+   }
+  ]
+ },
+ {
+  "name": "alone: you're stupid!",
+  "steps": [
+   {
+    "in": "you're stupid!",
+    "out": [
+     "I'm happy to help with questions about Laughter Yoga, but I can't continue if the language isn't respectful. Please keep it friendly."
+    ],
+    "closed": false
+   }
+  ]
+ },
+ {
+  "name": "alone: shut up",
+  "steps": [
+   {
+    "in": "shut up",
+    "out": [
+     "I'm happy to help with questions about Laughter Yoga, but I can't continue if the language isn't respectful. Please keep it friendly."
+    ],
+    "closed": false
+   }
+  ]
+ },
+ {
+  "name": "alone: your service is terrible",
+  "steps": [
+   {
+    "in": "your service is terrible",
+    "out": [
+     "Hello, and welcome to Universal Laughter. I'm Joy, the virtual assistant. I can answer questions about Laughter Yoga, our sessions and workshops, and booking. How can I help you today?",
+     "Chris works with organizations of all sizes:",
+     "• Laughter Yoga Session (the most popular): fun laughter games that get any group laughing.",
+     "• Games for Team Building: high-energy \"tag\" games such as human foosball, fox and squirrel and tunnel tag.",
+     "• Interpersonal Communication Workshop: the \"4 Level Connection\" technique, a blend of Nonviolent Communication and Imago Dialogue.",
+     "• Career Development Workshops: explore your strengths, values and skills to find a career that fits.",
+     "Details: https://universal-laughter.com/services"
+    ],
+    "closed": false
+   }
+  ]
+ },
+ {
+  "name": "alone: this sucks",
+  "steps": [
+   {
+    "in": "this sucks",
+    "out": [
+     "Hello, and welcome to Universal Laughter. I'm Joy, the virtual assistant. I can answer questions about Laughter Yoga, our sessions and workshops, and booking. How can I help you today?",
+     "I'm sorry, I don't have an answer to that. Chris will be glad to help directly: email chris@universal-laughter.com or call +1.604.318.6658."
+    ],
+    "closed": false
+   }
+  ]
+ },
+ {
+  "name": "alone: is that a stupid question?",
+  "steps": [
+   {
+    "in": "is that a stupid question?",
+    "out": [
+     "Hello, and welcome to Universal Laughter. I'm Joy, the virtual assistant. I can answer questions about Laughter Yoga, our sessions and workshops, and booking. How can I help you today?",
+     "I'm sorry, I don't have an answer to that. Chris will be glad to help directly: email chris@universal-laughter.com or call +1.604.318.6658."
+    ],
+    "closed": false
+   }
+  ]
+ },
+ {
+  "name": "alone: Dickens",
+  "steps": [
+   {
+    "in": "Dickens",
+    "out": [
+     "Hello, and welcome to Universal Laughter. I'm Joy, the virtual assistant. I can answer questions about Laughter Yoga, our sessions and workshops, and booking. How can I help you today?",
+     "I'm sorry, I don't have an answer to that. Chris will be glad to help directly: email chris@universal-laughter.com or call +1.604.318.6658."
+    ],
+    "closed": false
+   }
+  ]
+ },
+ {
+  "name": "alone: my assistant",
+  "steps": [
+   {
+    "in": "my assistant",
+    "out": [
+     "Hello, and welcome to Universal Laughter. I'm Joy, the virtual assistant. I can answer questions about Laughter Yoga, our sessions and workshops, and booking. How can I help you today?",
+     "I'm sorry, I don't have an answer to that. Chris will be glad to help directly: email chris@universal-laughter.com or call +1.604.318.6658."
+    ],
+    "closed": false
+   }
+  ]
+ },
+ {
+  "name": "alone: shiitake mushrooms",
+  "steps": [
+   {
+    "in": "shiitake mushrooms",
+    "out": [
+     "Hello, and welcome to Universal Laughter. I'm Joy, the virtual assistant. I can answer questions about Laughter Yoga, our sessions and workshops, and booking. How can I help you today?",
+     "I'm sorry, I don't have an answer to that. Chris will be glad to help directly: email chris@universal-laughter.com or call +1.604.318.6658."
+    ],
+    "closed": false
+   }
+  ]
+ },
+ {
+  "name": "alone: I am not an idiot-proof person",
+  "steps": [
+   {
+    "in": "I am not an idiot-proof person",
+    "out": [
+     "I'm happy to help with questions about Laughter Yoga, but I can't continue if the language isn't respectful. Please keep it friendly."
+    ],
+    "closed": false
+   }
+  ]
+ },
+ {
+  "name": "alone: How much does it cost?",
+  "steps": [
+   {
+    "in": "How much does it cost?",
+    "out": [
+     "Hello, and welcome to Universal Laughter. I'm Joy, the virtual assistant. I can answer questions about Laughter Yoga, our sessions and workshops, and booking. How can I help you today?",
+     "Sessions and workshops are $100 per hour, and the rates are flexible: Chris will find something that fits your group and your budget. To get a quote or book, email chris@universal-laughter.com or call +1.604.318.6658."
+    ],
+    "closed": false
+   }
+  ]
+ },
+ {
+  "name": "alone: hello",
+  "steps": [
+   {
+    "in": "hello",
+    "out": [
+     "Hello, and welcome to Universal Laughter. I'm Joy, the virtual assistant. I can answer questions about Laughter Yoga, our sessions and workshops, and booking. How can I help you today?"
+    ],
+    "closed": false
+   }
+  ]
+ },
+ {
+  "name": "alone: thanks",
+  "steps": [
+   {
+    "in": "thanks",
+    "out": [
+     "You're welcome. Is there anything else I can help you with?"
+    ],
+    "closed": false
+   }
+  ]
+ },
+ {
+  "name": "alone: !joke",
+  "steps": [
+   {
+    "in": "!joke",
+    "out": [
+     "What do you call a bear with no teeth?",
+     "A gummy bear!"
+    ],
+    "closed": false
+   }
+  ]
+ },
+ {
+  "name": "alone: /help",
+  "steps": [
+   {
+    "in": "/help",
+    "out": [
+     "I'm Joy, Universal Laughter's virtual assistant. There are no commands: just ask me a question in plain words, for example \"What is Laughter Yoga?\", \"What should I wear?\" or \"How much does a session cost?\" You can also say hello, say thanks, or ask for a joke."
+    ],
+    "closed": false
+   }
+  ]
+ },
+ {
+  "name": "alone: what is laughter yoga",
+  "steps": [
+   {
+    "in": "what is laughter yoga",
+    "out": [
+     "Hello, and welcome to Universal Laughter. I'm Joy, the virtual assistant. I can answer questions about Laughter Yoga, our sessions and workshops, and booking. How can I help you today?",
+     "Laughter Yoga is a method of stimulating group laughter through a series of laughter games/exercises. It is led by a certified Laughter Yoga Leader.",
+     "(If you meant \"How do I become a Certified Laughter Yoga Leader\" just ask me.)"
+    ],
+    "closed": false
+   }
+  ]
+ },
+ {
+  "name": "alone: Who is Chris? Who runs Univers",
+  "steps": [
+   {
+    "in": "Who is Chris? Who runs Universal Laughter?",
+    "out": [
+     "Hello, and welcome to Universal Laughter. I'm Joy, the virtual assistant. I can answer questions about Laughter Yoga, our sessions and workshops, and booking. How can I help you today?",
+     "Chris Pollitt has led laughter yoga sessions and workshops in Metro Vancouver for nearly two decades. After a background in technology, he became a certified Laughter Yoga Leader and Career Development Practitioner in 2009. More: https://universal-laughter.com/about"
+    ],
+    "closed": false
+   }
+  ]
+ },
+ {
+  "name": "alone: do you do yoga poses",
+  "steps": [
+   {
+    "in": "do you do yoga poses",
+    "out": [
+     "Hello, and welcome to Universal Laughter. I'm Joy, the virtual assistant. I can answer questions about Laughter Yoga, our sessions and workshops, and booking. How can I help you today?",
+     "No. This is completely unlike other forms of Yoga that you may have seen or heard about. It's all about participating in laughter games to get us laughing together."
+    ],
+    "closed": false
+   }
+  ]
+ },
+ {
+  "name": "alone: can I watch him teach",
+  "steps": [
+   {
+    "in": "can I watch him teach",
+    "out": [
+     "Hello, and welcome to Universal Laughter. I'm Joy, the virtual assistant. I can answer questions about Laughter Yoga, our sessions and workshops, and booking. How can I help you today?",
+     "Once a year, we host a Laughter Yoga Leader Training weekend. To find out more, please see https://laughteryoga.ca/training",
+     "(If you meant \"Is there something free I can try first\" just ask me.)"
+    ],
+    "closed": false
+   }
+  ]
+ },
+ {
+  "name": "alone: are you qualified",
+  "steps": [
+   {
+    "in": "are you qualified",
+    "out": [
+     "Hello, and welcome to Universal Laughter. I'm Joy, the virtual assistant. I can answer questions about Laughter Yoga, our sessions and workshops, and booking. How can I help you today?",
+     "Yes. Chris became a certified Laughter Yoga Leader and Career Development Practitioner in 2009. More: https://universal-laughter.com/about"
+    ],
+    "closed": false
+   }
+  ]
+ },
+ {
+  "name": "alone: is there a video",
+  "steps": [
+   {
+    "in": "is there a video",
+    "out": [
+     "Hello, and welcome to Universal Laughter. I'm Joy, the virtual assistant. I can answer questions about Laughter Yoga, our sessions and workshops, and booking. How can I help you today?",
+     "Yes! You can see Chris leading Laughter Yoga on the Services page, https://universal-laughter.com/services, and on his YouTube channel, \"A Daily Laugh For You\": https://www.youtube.com/adlfy"
+    ],
+    "closed": false
+   }
+  ]
+ },
+ {
+  "name": "alone: can you lead a virtual worksho",
+  "steps": [
+   {
+    "in": "can you lead a virtual workshop",
+    "out": [
+     "Hello, and welcome to Universal Laughter. I'm Joy, the virtual assistant. I can answer questions about Laughter Yoga, our sessions and workshops, and booking. How can I help you today?",
+     "Yes! Chris leads online sessions over Zoom or Microsoft Teams as well as in person. To book, email chris@universal-laughter.com or call +1.604.318.6658."
+    ],
+    "closed": false
+   }
+  ]
+ },
+ {
+  "name": "alone: Are there any laughter clubs n",
+  "steps": [
+   {
+    "in": "Are there any laughter clubs near me?",
+    "out": [
+     "Hello, and welcome to Universal Laughter. I'm Joy, the virtual assistant. I can answer questions about Laughter Yoga, our sessions and workshops, and booking. How can I help you today?",
+     "Yes! There are weekly laughter clubs, in person and online. In person: https://laughteryoga.ca/in-person-clubs  Online: https://laughteryoga.ca/online-clubs"
+    ],
+    "closed": false
+   }
+  ]
+ },
+ {
+  "name": "alone: where are the clubs",
+  "steps": [
+   {
+    "in": "where are the clubs",
+    "out": [
+     "Hello, and welcome to Universal Laughter. I'm Joy, the virtual assistant. I can answer questions about Laughter Yoga, our sessions and workshops, and booking. How can I help you today?",
+     "Yes! There are weekly laughter clubs, in person and online. In person: https://laughteryoga.ca/in-person-clubs  Online: https://laughteryoga.ca/online-clubs"
+    ],
+    "closed": false
+   }
+  ]
+ }
+]
