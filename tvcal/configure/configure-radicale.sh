@@ -87,7 +87,9 @@ server() {
   fi
   command -v htpasswd >/dev/null 2>&1 || die "htpasswd (apache2-utils) is needed to store the password"
 
-  install -d -m 0750 /etc/radicale /etc/radicale/tls
+  # 0755: the service user must read the config (0750 root:root made Radicale start with its defaults:
+  # plain HTTP on localhost only); nothing secret is in there - the key is 0640 and the passwords 0640
+  install -d -m 0755 /etc/radicale /etc/radicale/tls
   if [ -z "$CERT" ]; then
     CERT=/etc/radicale/tls/cert.pem; KEY=/etc/radicale/tls/key.pem
     if [ ! -s "$CERT" ]; then
@@ -103,8 +105,8 @@ server() {
   # the service user must read the key (a umask that leaks, or one that is too tight, has
   # stopped a service before: check the modes after sudo scripts)
   rad_user=$(id -nu radicale 2>/dev/null || echo root)
-  chown -R "$rad_user" /etc/radicale/tls 2>/dev/null || true
-  chmod 0640 "$KEY" 2>/dev/null || true; chmod 0644 "$CERT" 2>/dev/null || true
+  chown "$rad_user" "$KEY" 2>/dev/null || true
+  chmod 0640 "$KEY" 2>/dev/null || true; chmod 0644 "$CERT" 2>/dev/null || true   # the certificate is public: clients fetch it
 
   if [ -f /etc/radicale/config ] && ! grep -q '^# written by tvcal configure-radicale' /etc/radicale/config; then
     cp -p /etc/radicale/config "/etc/radicale/config.bak.$(date +%Y%m%d%H%M%S)"
@@ -138,17 +140,29 @@ EOF
   install -d -o "$rad_user" -m 0750 /var/lib/radicale/collections 2>/dev/null || true
   systemctl enable radicale >/dev/null 2>&1 || true
   systemctl restart radicale || die "radicale did not start: journalctl -u radicale"
-  sleep 1
-
   url="https://localhost:$PORT/$USER_NAME/calendar/"
-  code=$(curl -sk -u "$USER_NAME:$pw" -o /dev/null -w '%{http_code}' -X MKCALENDAR "$url" || true)
+  code=000
+  for _ in $(seq 1 20); do                      # up when it answers TLS at all
+    code=$(curl -sk -u "$USER_NAME:$pw" -o /dev/null -w '%{http_code}' -X MKCALENDAR "$url" || true)
+    [ "$code" != 000 ] && break
+    sleep 1
+  done
   case "$code" in
     201) log "made the calendar $url" ;;
     405|409) log "the calendar $url is already there" ;;
+    000) journalctl -u radicale --no-pager -n 12 >&2 || true
+         die "Radicale does not answer TLS on port $PORT (is /etc/radicale/config being read? ss -ltn | grep $PORT)" ;;
+    401) die "Radicale refused $USER_NAME's password (the htpasswd file: /etc/radicale/users, bcrypt needs python3-bcrypt)" ;;
     *) warn "could not make the calendar (HTTP $code); try: curl -sk -u $USER_NAME -X MKCALENDAR $url" ;;
   esac
-  if command -v lan-port >/dev/null 2>&1; then lan-port tcp "$PORT" || warn "lan-port could not open $PORT"
-  else log "open TCP $PORT for the LAN yourself (cpbee: add it to /etc/router-setup/lan0-tcp-ports, then setup-router.sh fw)"; fi
+  if [ "$BIND" = 127.0.0.1 ] || [ "$BIND" = localhost ]; then
+    log "listening on this host only: no LAN port opened"
+  else
+    lp=$(command -v lan-port || true)
+    [ -n "$lp" ] || lp=$(ls /home/*/gh_cp/POSIX/net-utils/lan-port 2>/dev/null | head -1 || true)
+    if [ -n "$lp" ]; then "$lp" add "$PORT" "Radicale calendar https (tvcal)" || warn "lan-port could not open $PORT"
+    else log "open TCP $PORT for the LAN yourself (cpbee: add it to /etc/router-setup/lan0-tcp-ports, then setup-router.sh fw)"; fi
+  fi
   echo
   echo "Server ready.  On each machine:  ./configure-radicale.sh client --user $USER_NAME --host $NAME"
   echo "The central Floyd on this host: run the client half as his service user with --host localhost."
@@ -181,7 +195,10 @@ client() {
   log "wrote [server] in $conf"
 
   # the password: ~/.netrc, which tvcal-backend reads (or $TVCAL_PASS)  # allowlist secret
-  if ! grep -qs "machine $HOST .*login $USER_NAME" "$HOME/.netrc"; then
+  if grep -qs "machine $HOST .*login $USER_NAME" "$HOME/.netrc"; then
+    log "~/.netrc already has a login for $USER_NAME at $HOST: tvcal sends that password, so the calendar"
+    log "server must have been given the SAME one (if the login check below says 'refused', re-run the server half)"
+  else
     pw=$(secret)
     ( umask 077; printf 'machine %s login %s password %s\n' "$HOST" "$USER_NAME" "$pw" >> "$HOME/.netrc" )  # allowlist secret
     chmod 0600 "$HOME/.netrc"; log "added the login to ~/.netrc"
