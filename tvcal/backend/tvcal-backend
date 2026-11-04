@@ -553,7 +553,7 @@ class Remote:
     DELETE.  A copy is kept in the state directory: reads within CACHE_SECONDS use it, and
     when the server cannot be reached reads fall back on it (writes then fail, saying so).
     Settings: [server] url, user, ca (a certificate file) or insecure = yes; the password comes
-    from $TVCAL_PASS or ~/.netrc, never the configuration file."""
+    from $TVCAL_PASS, ~/.mu-tickets or ~/.netrc, never the configuration file."""
 
     CACHE_SECONDS = 15
 
@@ -588,6 +588,28 @@ class Remote:
             return pw
         import urllib.parse
         u = urllib.parse.urlparse(self.url)
+        # ~/.mu-tickets first - the file tvmail and tvchat share: https://USER:PASS@HOST[:PORT]  # allowlist secret
+        # (scheme * matches any); only an entry for this very user counts
+        try:
+            with open(os.environ.get("TVMAIL_MU_TICKETS") or os.path.expanduser("~/.mu-tickets"),
+                      encoding="utf-8", errors="replace") as fh:
+                for ln in fh:
+                    ln = ln.strip()
+                    if not ln or ln.startswith("#"):
+                        continue
+                    t = urllib.parse.urlparse(ln)
+                    if (t.scheme in ("https", "http", "*") or ln.startswith("*://")) and \
+                            (ln.split("://", 1)[-1].rpartition("@")[2].split("/")[0].partition(":")[0].lower()
+                             == (u.hostname or "").lower()):
+                        tail = ln.split("://", 1)[-1]
+                        cred = tail.rpartition("@")[0]
+                        user, _, pw = cred.partition(":")
+                        port = tail.rpartition("@")[2].split("/")[0].partition(":")[2]
+                        if urllib.parse.unquote(user) == self.user and pw and (not port or not u.port or
+                                                                             port == str(u.port)):
+                            return urllib.parse.unquote(pw)
+        except OSError:
+            pass
         # ~/.netrc holds other logins for the same machine (mail, IRC): match host AND login exactly,
         # "host:port" first (what configure-radicale.sh writes), then the host alone
         wanted = [("%s:%s" % (u.hostname, u.port)) if u.port else None, u.hostname or ""]
@@ -635,7 +657,7 @@ class Remote:
                 return r.status, r.read()
         except urllib.error.HTTPError as e:
             if e.code in (401, 403):
-                raise UserError("the calendar server refused the login for %s (password: $TVCAL_PASS or ~/.netrc)"
+                raise UserError("the calendar server refused the login for %s (password: $TVCAL_PASS, ~/.mu-tickets or ~/.netrc)"
                                 % (self.user or "(no user)"))
             if e.code == 404 and method == "GET":
                 return 404, b""

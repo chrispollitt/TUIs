@@ -1,5 +1,5 @@
-# tvcal configuration (read by tvcal-backend).  NO PASSWORDS HERE: $TVCAL_PASS or ~/.netrc
-# (machine HOST login USER password PASSWORD, mode 0600).  Nothing in this file is needed for a  # allowlist secret
+# tvcal configuration (read by tvcal-backend).  NO PASSWORDS HERE: $TVCAL_PASS or ~/.mu-tickets
+# (https://USER:PASS@HOST:PORT, percent-encoded, mode 0600; ~/.netrc works too).  Nothing in this file is needed for a  # allowlist secret
 # local calendar (~/.local/share/tvcal/calendar.ics).
 
 [server]

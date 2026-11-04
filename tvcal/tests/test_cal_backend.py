@@ -510,6 +510,17 @@ class RemoteMode(Env):
         self.addCleanup(os.environ.__setitem__, "HOME", old)
         self.assertEqual(self.lines("todos"), [])                 # logged in with the "me" line only
 
+    def test_mu_tickets_come_first_and_match_the_user(self):
+        port = self.dav.srv.server_address[1]
+        tix = os.path.join(self.tmp, "tickets")
+        with open(tix, "w") as fh:
+            fh.write("imaps://me:wrong@127.0.0.1\nhttps://other:wrong2@127.0.0.1:%d\n"  # allowlist secret
+                     "https://me:s%%65cret@127.0.0.1:%d\n" % (port, port))      # allowlist secret
+        self.env.pop("TVCAL_PASS")
+        self.env["TVMAIL_MU_TICKETS"] = tix
+        self.env["HOME"] = os.path.join(self.tmp, "nohome")
+        self.assertEqual(self.lines("todos"), [])                 # logged in: the https line for "me", percent-decoded
+
     def test_settings_say_remote(self):
         rows = {r[0]: r[1] for r in self.lines("settings")}
         self.assertEqual(rows["mode"], "remote")

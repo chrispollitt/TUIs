@@ -23,7 +23,7 @@ static const char *kHelpText =
     "WHERE IT LIVES\n"
     "  On the calendar server (Radicale on the mail and chat host): every machine sees the same\n"
     "  calendar and to-dos.  File > Edit configuration... sets [server] url and user; the password\n"
-    "  is $TVCAL_PASS or ~/.netrc.  Without a [server] the calendar is the local file\n"
+    "  is $TVCAL_PASS or ~/.mu-tickets.  Without a [server] the calendar is the local file\n"
     "  ~/.local/share/tvcal/calendar.ics.  If the server cannot be reached you can still read (a copy\n"
     "  is kept); changes are refused with a message rather than lost.\n"
     "\n"

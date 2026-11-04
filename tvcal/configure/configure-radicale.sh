@@ -12,7 +12,7 @@
 #
 #   client   (as yourself, on each machine that runs tvcal - no root)
 #            writes [server] into ~/.config/tvcal/tvcal.conf ($TVCAL_CONF), puts the
-#            password in ~/.netrc (mode 600), fetches the CA if the server's certificate is
+#            password in ~/.mu-tickets (mode 600), fetches the CA if the server's certificate is
 #            self-signed, and checks that the login works with tvcal-backend.
 #
 # Re-runnable.  Passwords never go into tvcal.conf or onto a command line ($CAL_SETUP_PASS or
@@ -194,15 +194,17 @@ client() {
   rm -f "$tmp"; chmod 0600 "$conf"
   log "wrote [server] in $conf"
 
-  # the password: ~/.netrc, which tvcal-backend reads (or $TVCAL_PASS)  # allowlist secret
-  # keyed "HOST:PORT" so it sits beside your mail and IRC logins for the same host without touching them
-  # (tvcal-backend matches host and login exactly; other programs' lines for "$HOST" are left alone)
-  if grep -qsE "^machine $HOST:$PORT login $USER_NAME( |$)" "$HOME/.netrc"; then
-    log "~/.netrc already has the calendar login for $USER_NAME at $HOST:$PORT"
+  # the password: ~/.mu-tickets, the file tvmail, tvchat and tvcal share (it names the protocol, which  # allowlist secret
+  # ~/.netrc cannot; the tool netrc-to-tickets in POSIX/net-utils moves old logins over)
+  tickets="${TVMAIL_MU_TICKETS:-$HOME/.mu-tickets}"
+  if grep -qsE "^https://$USER_NAME:[^@]*@$HOST:$PORT\$" "$tickets"; then  # allowlist secret
+    log "$tickets already has the calendar login for $USER_NAME at $HOST:$PORT"
   else
     pw=$(secret)
-    ( umask 077; printf 'machine %s:%s login %s password %s\n' "$HOST" "$PORT" "$USER_NAME" "$pw" >> "$HOME/.netrc" )  # allowlist secret
-    chmod 0600 "$HOME/.netrc"; log "added the calendar login to ~/.netrc"
+    ( umask 077; CAL_PW="$pw" CAL_USER="$USER_NAME" CAL_HOST="$HOST" CAL_PORT="$PORT" python3 -c '
+import os, urllib.parse as u
+print("https://%s:%s@%s:%s" % (u.quote(os.environ["CAL_USER"], safe=""), u.quote(os.environ["CAL_PW"], safe=""), os.environ["CAL_HOST"], os.environ["CAL_PORT"]))' >> "$tickets" ) || die "could not write $tickets"  # allowlist secret
+    chmod 0600 "$tickets"; log "added the calendar login to $tickets"
   fi
   if [ "$CHECK" = 1 ]; then
     command -v tvcal-backend >/dev/null 2>&1 || { warn "tvcal-backend is not installed here: skipping the check"; return; }

@@ -35,7 +35,7 @@ tvcal/configure/configure-radicale.sh client --user chris --host cpbee
 ```
 
 Writes `[server]` into `~/.config/tvcal/tvcal.conf`, fetches the server's certificate (scp), puts the
-password in `~/.netrc` (mode 600) and checks that `tvcal-backend` can read the calendar. Or write the file by
+password in `~/.mu-tickets` (mode 600) and checks that `tvcal-backend` can read the calendar. Or write the file by
 hand (File > Edit configuration... in tvcal; F9 verifies).
 
 ## Floyd

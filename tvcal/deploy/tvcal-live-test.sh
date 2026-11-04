@@ -5,7 +5,7 @@
 #      Floyd's !todo / !cal / !event), into /usr/local on this machine;
 #   2. on cpbee: installs and starts Radicale (the calendar server, TLS on port 5232) and makes
 #      your calendar.  You are asked for the sudo password, then for the calendar password (twice; any  # allowlist secret
-#      password you like - it is stored hashed on cpbee and asked for once more here, for ~/.netrc);  # allowlist secret
+#      password you like - it is stored hashed on cpbee and asked for once more here, for ~/.mu-tickets);  # allowlist secret
 #      nothing is written to a file of this repo;
 #   3. here: writes [server] into ~/.config/tvcal/tvcal.conf, fetches cpbee's certificate, checks the login;
 #   4. proves the round trip: adds a test to-do and a test event through the server, reads them back
@@ -14,7 +14,7 @@
 #         /var/lib/radicale/, the radicale service, and port 5232 opened for the LAN if lan-port is there.
 #         Nothing of mail, chat or the web pages is touched.  A changed /etc/radicale/config is backed up first.
 # UNDO:   on cpbee: sudo systemctl disable --now radicale; sudo apt-get remove radicale
-#         here: delete ~/.config/tvcal/ and the "machine cpbee" line in ~/.netrc
+#         here: delete ~/.config/tvcal/ and the https://chris:...@cpbee:5232 line in ~/.mu-tickets  # allowlist secret
 # SAFE:   re-runnable (every step skips what is already done).  DRY_RUN=1 only shows the plan.
 #         Moves itself to TO_BE_RUN/DONE only when called through the stub and it succeeded.
 set -euo pipefail

@@ -124,7 +124,7 @@ void TVCalApp::editConfig()
     }
     if (spec.sample.empty())
         spec.sample = "# tvcal configuration (read by tvcal-backend). NO PASSWORDS HERE:\n"
-                      "# $TVCAL_PASS or ~/.netrc.\n\n[server]\n#url = https://cpbee.cmnet/radicale/you/calendar/\n"
+                      "# $TVCAL_PASS or ~/.mu-tickets.\n\n[server]\n#url = https://cpbee.cmnet/radicale/you/calendar/\n"
                       "#user = you\n\n[cal]\n#remind = 15\n#week_start = mon\n";
     spec.verify = [](const std::string &file, std::string &report)
     {
