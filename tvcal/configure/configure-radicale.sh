@@ -83,7 +83,7 @@ server() {
   if ! command -v radicale >/dev/null 2>&1; then
     command -v apt-get >/dev/null 2>&1 || die "install Radicale and apache2-utils (htpasswd) first, then re-run"
     log "installing radicale and apache2-utils"
-    DEBIAN_FRONTEND=noninteractive apt-get install -y radicale apache2-utils >/dev/null
+    DEBIAN_FRONTEND=noninteractive apt-get install -y radicale apache2-utils python3-bcrypt python3-passlib >/dev/null
   fi
   command -v htpasswd >/dev/null 2>&1 || die "htpasswd (apache2-utils) is needed to store the password"
 
