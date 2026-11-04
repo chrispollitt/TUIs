@@ -766,6 +766,86 @@ public:
     }
 };
 
+// An input line that remembers what was entered, as in a shell: Up goes back through
+// the lines sent before, Down forward again to what was being typed.  The list is kept
+// between sessions in `file` (owner only, the last 500; a line typed with a leading
+// space is not kept, as with HISTCONTROL=ignorespace).
+class TRecallLine : public TFieldLine
+{
+    std::vector<std::string> recall;
+    size_t at = 0;            // an index into recall; recall.size() = not browsing
+    std::string draft;        // what was typed before the first Up
+    std::string path;
+
+    void put(const std::string &s)
+    {
+        size_t n = std::min(s.size(), (size_t)maxLen);
+        memcpy(data, s.data(), n);
+        data[n] = '\0';
+        selStart = selEnd = 0;
+        curPos = (int)n;
+        firstPos = std::max(0, (int)TText::width(TStringView(data, curPos)) - size.x + 2);
+        drawView();
+    }
+
+public:
+    TRecallLine(const TRect &b, int lim, const std::string &file) : TFieldLine(b, lim), path(file)
+    {
+        for (const std::string &l : splitLines(slurp(path)))
+            if (!l.empty())
+                recall.push_back(l);
+        if (recall.size() > 500)
+            recall.erase(recall.begin(), recall.end() - 500);
+        at = recall.size();
+    }
+
+    // call with each line sent
+    void remember(const std::string &line)
+    {
+        at = recall.size();
+        if (line.find_first_not_of(' ') == std::string::npos || line[0] == ' ' ||
+            (!recall.empty() && recall.back() == line))
+            return;
+        recall.push_back(line);
+        if (recall.size() > 500)
+            recall.erase(recall.begin());
+        at = recall.size();
+        for (size_t i = 1; i < path.size(); ++i) // mkdir -p, owner only
+            if (path[i] == '/')
+                ::mkdir(path.substr(0, i).c_str(), 0700);
+        if (FILE *f = std::fopen(path.c_str(), "ab"))
+        {
+            std::fputs((line + "\n").c_str(), f);
+            std::fclose(f);
+            ::chmod(path.c_str(), 0600);
+        }
+    }
+
+    void handleEvent(TEvent &e) override
+    {
+        if (e.what == evKeyDown && (e.keyDown.keyCode == kbUp || e.keyDown.keyCode == kbDown))
+        {
+            bool back = e.keyDown.keyCode == kbUp;
+            clearEvent(e);
+            if (recall.empty() || (back && at == 0) || (!back && at >= recall.size()))
+                return;
+            if (back && at == recall.size())
+                draft = data ? data : "";
+            at += back ? -1 : 1;
+            put(at == recall.size() ? draft : recall[at]);
+            return;
+        }
+        TFieldLine::handleEvent(e);
+    }
+};
+
+// What was said to Floyd in tvmail's and tvcal's windows: one list for both
+inline std::string floydHistoryPath()
+{
+    const char *x = getenv("XDG_STATE_HOME");
+    return (x && *x ? std::string(x) : homePath(".local/state")) + "/tvfloyd/input-history";
+}
+
 // ------------------------------------------------------------- tables ------
 // The left pane of the mail and chat windows (folders, servers) is a small
 // table: a heading row, then one row per item, the columns split by faint

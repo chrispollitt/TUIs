@@ -10,7 +10,7 @@ namespace
 class TFloydWindow : public TViewerWindow
 {
     TTextView *log = nullptr;
-    TFieldLine *input = nullptr;
+    TRecallLine *input = nullptr;
     std::vector<std::string> lines;
 
     void say(const std::string &body, const char *who = "Floyd: ")
@@ -54,7 +54,7 @@ public:
         log = new TTextView(lr, nullptr, v, lines, true);
         insert(log);
         TRect ir(r.a.x, r.b.y - 1, r.b.x, r.b.y);
-        input = new TFieldLine(ir, 240);
+        input = new TRecallLine(ir, 240, floydHistoryPath()); // Up / Down: what was said before
         input->growMode = gfGrowLoY | gfGrowHiY | gfGrowHiX;
         insert(input);
         input->select();
@@ -93,6 +93,7 @@ public:
             clearEvent(e);
             if (t.find_first_not_of(' ') == std::string::npos)
                 return;
+            input->remember(t);
             input->data[0] = '\0';
             input->selectAll(True);
             input->drawView();

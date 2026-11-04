@@ -829,6 +829,10 @@ def floyd_window_answers_and_asks_before_deleting(opts):
     tv.send("empty trash", "Enter", settle=1.0)
     c.check(tv.wait("empty already", 6) or tv.wait("no undo", 6),
             "he did not answer 'empty trash'")
+    up = chr(27) + "[A"
+    tv.send(up, up, up, "Enter", settle=1.0)      # Up x3 recalls "calc 6*7"; Enter sends it again
+    c.check(tv.wait(lambda: tv.text().count("you:   calc 6*7") == 2, 6),
+            "Up did not recall an earlier line")
     tv.send(chr(27), settle=0.8)                  # Esc
     c.check(tv.wait(lambda: not tv.has("Floyd - ask him anything"), 5),
             "Esc did not close Floyd")

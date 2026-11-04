@@ -34,6 +34,8 @@ class Tv(tvscreen.Tv):
         self.env["TVCAL_STATE"] = str(self.tmp / "state")
         self.env["TVCAL_CONF"] = str(self.tmp / "no-tvcal.conf")
         self.env["TV_SPOOL_DIR"] = str(self.tmp / "spool")
+        self.env["XDG_STATE_HOME"] = str(self.tmp / "xdg-state")      # Floyd's input history
+        self.env["XDG_DATA_HOME"] = str(self.tmp / "xdg-data")        # and his memory
 
 
 def backend(tv, *argv):
@@ -128,6 +130,11 @@ def f7_asks_floyd(opts):
     tv.send("!todo add Feed the cat", "Enter")
     c.check(tv.wait(lambda: tv.has("you:   !todo add Feed the cat"), 10), "what was typed is not in the transcript")
     c.check(tv.wait(lambda: "Feed the cat" in backend(tv, "todos"), 10), "Floyd did not add the to-do")
+    tv.send("\x1b[A", "Enter")                           # Up brings the line back; Enter says it again
+    c.check(tv.wait(lambda: backend(tv, "todos").count("Feed the cat") == 2, 10),
+            "Up did not recall the line that was sent")
+    c.check("!todo add Feed the cat" in open(tv.tmp / "xdg-state" / "tvfloyd" / "input-history").read(),
+            "the history file was not written")
 
 
 @case()
