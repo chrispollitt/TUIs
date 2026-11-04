@@ -331,13 +331,13 @@ void connectAccount(const ChatAccount &a); // below, with the dialogs
 
 // The chat pane's two views say when they take the focus, as the lists do,
 // so the window lights the right heading and knows you are reading.
-class TChatInput : public TFieldLine
+class TChatInput : public TRecallLine
 {
 public:
-    TChatInput(const TRect &b, int lim) : TFieldLine(b, lim) {}
+    TChatInput(const TRect &b, int lim, const std::string &historyFile) : TRecallLine(b, lim, historyFile) {}
     void setState(ushort aState, Boolean enable) override
     {
-        TFieldLine::setState(aState, enable);
+        TRecallLine::setState(aState, enable);
         if (enable && (aState & sfFocused) && owner)
             message(owner, evBroadcast, cmPaneFocused, this);
     }
@@ -699,11 +699,8 @@ class TChatMainWindow : public TWindow
     std::string acct, conv, name;                  // shown: account, conversation, its name
     std::map<std::string, std::string> lastConv;   // per account: the conversation last shown
     std::map<std::string, std::string> drafts;     // per conversation: typed, not sent
-    // Up / Down in the input line recall what was sent before, as in a shell: one list for
-    // every conversation, kept between sessions in ~/.local/state/tvchat/input-history
-    std::vector<std::string> recall;
-    size_t recallAt = 0;      // an index into recall; recall.size() = not browsing
-    std::string recallDraft;  // what was typed before the first Up
+    // Up / Down in the input line recall what was sent before, as in a shell (TRecallLine): one
+    // list for every conversation, kept between sessions in ~/.local/state/tvchat/input-history
     std::vector<ChatLine> msgs; // the shown conversation's, oldest first
     std::set<std::string> ids;  // what msgs holds: history and events overlap
     bool noOlder = false;       // `history --before` came back empty
@@ -969,66 +966,10 @@ class TChatMainWindow : public TWindow
                 return true;
         return false;
     }
-    void recallLoad()
-    {
-        for (const std::string &l : splitLines(slurp(recallPath())))
-            if (!l.empty())
-                recall.push_back(l);
-        if (recall.size() > 500)
-            recall.erase(recall.begin(), recall.end() - 500);
-        recallAt = recall.size();
-    }
-    void recallAdd(const std::string &line)
-    {
-        recallAt = recall.size();
-        if (trimmed(line).empty() || recallSecret(line) || (!recall.empty() && recall.back() == line))
-            return;
-        recall.push_back(line);
-        if (recall.size() > 500)
-            recall.erase(recall.begin());
-        recallAt = recall.size();
-        std::string path = recallPath();
-        for (size_t i = 1; i < path.size(); ++i) // mkdir -p, owner only
-            if (path[i] == '/')
-                ::mkdir(path.substr(0, i).c_str(), 0700);
-        if (FILE *f = std::fopen(path.c_str(), "ab"))
-        {
-            std::fputs((line + "\n").c_str(), f);
-            std::fclose(f);
-            ::chmod(path.c_str(), 0600);
-        }
-    }
-    // Up (dir < 0) goes back through what was sent, Down forward again to what was being typed
-    void recallStep(int dir)
-    {
-        if (recall.empty())
-            return;
-        if (dir < 0)
-        {
-            if (recallAt == 0)
-                return;
-            if (recallAt == recall.size())
-                recallDraft = inputText();
-            --recallAt;
-        }
-        else
-        {
-            if (recallAt >= recall.size())
-                return;
-            ++recallAt;
-        }
-        setInput(recallAt == recall.size() ? recallDraft : recall[recallAt]);
-    }
-
     std::string inputText() const { return input && input->data ? input->data : ""; }
     void setInput(const std::string &s)
     {
-        size_t n = std::min(s.size(), (size_t)input->maxLen);
-        std::memcpy(input->data, s.data(), n);
-        input->data[n] = '\0';
-        input->selectAll(False);
-        input->curPos = (int)n;
-        input->drawView();
+        input->setText(s);
     }
 
     void sendInput()
@@ -1073,7 +1014,7 @@ class TChatMainWindow : public TWindow
         }
         setInput(std::string());
         drafts.erase(conv);
-        recallAdd(text);
+        input->remember(text);
         pollNow(); // our line (the backend's copy or the server's echo) now
     }
 
@@ -1139,7 +1080,7 @@ class TChatMainWindow : public TWindow
             talkCur[conv] = talk->cur;
         }
         conv = c;
-        recallAt = recall.size();
+        input->resetBrowse();
         if (!acct.empty())
             lastConv[acct] = conv;
         auto d = drafts.find(conv);
@@ -1271,8 +1212,9 @@ public:
         log->wantOlder = [this]
         { loadOlder(); };
         prompt = new TStaticText(R.prompt, ">");
-        input = new TChatInput(R.input, 2000);
-        recallLoad();
+        input = new TChatInput(R.input, 2000, recallPath());
+        input->secret = [](const std::string &t)
+        { return recallSecret(t); };
         talk = new TTalkView(TRect(R.log.a.x, R.log.a.y, R.input.b.x, R.input.b.y));
         talk->keys = [this](const std::string &k)
         {
@@ -1410,13 +1352,14 @@ public:
             }
             if (k == kbUp || k == kbDown)
             {
-                // Up / Down recall what you sent; Shift-Up / Shift-Down (and PgUp / PgDn) scroll the log
+                // Up / Down recall what you sent (the input line does that); Shift-Up / Shift-Down
+                // (and PgUp / PgDn) scroll the log
                 if (e.keyDown.controlKeyState & kbShift)
+                {
                     log->scrollKey(k);
-                else
-                    recallStep(k == kbUp ? -1 : 1);
-                clearEvent(e);
-                return;
+                    clearEvent(e);
+                    return;
+                }
             }
             if (k == kbPgUp || k == kbPgDn || k == kbCtrlPgUp || k == kbCtrlPgDn)
             {

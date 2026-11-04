@@ -777,7 +777,14 @@ class TRecallLine : public TFieldLine
     std::string draft;        // what was typed before the first Up
     std::string path;
 
-    void put(const std::string &s)
+    void put(const std::string &s) { setText(s); }
+
+public:
+    // lines for which this says true are never kept (a password may be in them)
+    std::function<bool(const std::string &)> secret;
+
+    // replace what is typed; the cursor goes to the end
+    void setText(const std::string &s)
     {
         size_t n = std::min(s.size(), (size_t)maxLen);
         memcpy(data, s.data(), n);
@@ -787,8 +794,8 @@ class TRecallLine : public TFieldLine
         firstPos = std::max(0, (int)TText::width(TStringView(data, curPos)) - size.x + 2);
         drawView();
     }
+    void resetBrowse() { at = recall.size(); } // the next Up starts from the newest line again
 
-public:
     TRecallLine(const TRect &b, int lim, const std::string &file) : TFieldLine(b, lim), path(file)
     {
         for (const std::string &l : splitLines(slurp(path)))
@@ -803,7 +810,7 @@ public:
     void remember(const std::string &line)
     {
         at = recall.size();
-        if (line.find_first_not_of(' ') == std::string::npos || line[0] == ' ' ||
+        if (line.find_first_not_of(' ') == std::string::npos || line[0] == ' ' || (secret && secret(line)) ||
             (!recall.empty() && recall.back() == line))
             return;
         recall.push_back(line);

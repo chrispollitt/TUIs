@@ -452,6 +452,7 @@ def chat_input_history_up_down(opts):
     c = Case(tv)
     started(tv, c)
     open_chat(tv, c, srv)
+    c.check(tv.has("[type here]"), "the empty input line does not say where to type")
     for line in ("first thing", "second thing", "/msg NickServ IDENTIFY hunter2xyz"):
         tv.send(line, "Enter", settle=0.8)
     c.check(tv.wait(lambda: srv.sent("PRIVMSG #e2e :second thing"), 3), "the lines were not sent")
