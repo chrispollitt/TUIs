@@ -123,9 +123,11 @@ def f7_asks_floyd(opts):
     tv, c = tvcal(opts)
     started(tv, c)
     tv.send("\x1b[18~")                                  # F7
-    c.check(tv.wait("Floyd, the assistant", 5), "F7 did not open Floyd's question box")
-    tv.send("Enter")                                     # the default question: help
-    c.check(tv.wait(lambda: tv.has("Floyd helps with"), 10), "Floyd's answer did not appear")
+    c.check(tv.wait("ask him anything", 5), "F7 did not open Floyd's window")
+    c.check(tv.wait(lambda: tv.has("Floyd helps with"), 10), "Floyd's greeting did not appear")
+    tv.send("!todo add Feed the cat", "Enter")
+    c.check(tv.wait(lambda: tv.has("you:   !todo add Feed the cat"), 10), "what was typed is not in the transcript")
+    c.check(tv.wait(lambda: "Feed the cat" in backend(tv, "todos"), 10), "Floyd did not add the to-do")
 
 
 @case()

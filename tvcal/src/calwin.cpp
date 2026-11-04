@@ -1280,23 +1280,9 @@ void exportIcs()
 // answers in tvmail and tvchat, and his !todo is this program's to-do list.
 void floydAsk()
 {
-    static char buf[200] = "help";
-    if (inputBox("Floyd, the assistant", "~S~ay (help, !todo, !cal week, !event fri 14:00 Dentist, 12*7 ...)", buf,
-                 sizeof(buf) - 1) != cmOK ||
-        trimmed(buf).empty())
-        return;
-    std::string body, err;
-    flashStatus("Floyd is thinking...");
-    if (!calAsk("floyd " + shq(trimmed(buf)), body, err))
-    {
-        notify(err, noteError);
-        return;
-    }
-    while (!body.empty() && isspace((unsigned char)body.back()))
-        body.pop_back();
-    messageBox("Floyd: " + body, mfInformation | mfOKButton);
-    if (gWin)
-        gWin->refreshAll(false);
+    TRect r = TProgram::deskTop->getExtent();
+    r.grow(-6, -3);
+    TProgram::deskTop->insert(newFloydWindow(r));
 }
 
 // ------------------------------------------------------------- the polls ---
@@ -1391,6 +1377,12 @@ void calPoll()
         if (gWin)
             gWin->refreshAll(false);
     }
+}
+
+void calWindowRefresh()
+{
+    if (gWin)
+        gWin->refreshAll(false);
 }
 
 bool calCommand(ushort cmd)

@@ -28,7 +28,7 @@ endif()
 include("${TVCOMMON_DIR}/tvcommon.cmake")
 
 add_executable(tvcal
-    src/main.cpp src/app.cpp src/cal.cpp src/calwin.cpp src/help.cpp
+    src/main.cpp src/app.cpp src/cal.cpp src/calwin.cpp src/floydwin.cpp src/help.cpp
     ${TVCOMMON_SOURCES})
 tvcommon_setup(tvcal)
 target_compile_definitions(tvcal PRIVATE TVCAL_VERSION="${PROJECT_VERSION}")

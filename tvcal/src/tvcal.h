@@ -41,7 +41,8 @@ bool calCommand(ushort cmd);   // a cmCal* command; false if not one
 void calPoll();                // requests from other apps, reminders, a refresh when due
 int calIncomingCount();        // for the status line
 void calWindowOnReload();      // File > Reload
-void calFloyd();               // ask Floyd something
+void calWindowRefresh();       // re-read the calendar (Floyd may have changed it)
+TWindow *newFloydWindow(const TRect &bounds);   // floydwin.cpp: Floyd's chat window (F7)
 void calSettingsChanged();     // after the configuration was applied
 std::string calCurrentDate();  // the date shown, YYYY-MM-DD
 
