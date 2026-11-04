@@ -497,6 +497,19 @@ class RemoteMode(Env):
         self.assertEqual(p.returncode, 1)
         self.assertIn("refused the login", p.stderr)
 
+    def test_netrc_matches_host_and_login_exactly(self):
+        home = os.path.join(self.tmp, "home")
+        os.makedirs(home)
+        with open(os.path.join(home, ".netrc"), "w") as fh:
+            fh.write("machine 127.0.0.1 login me-too password wrong1\n"  # allowlist secret
+                     "machine 127.0.0.1 login other\n  password wrong2\n"  # allowlist secret
+                     "machine 127.0.0.1:%d login me password secret\n" % self.dav.srv.server_address[1])  # allowlist secret
+        self.env.pop("TVCAL_PASS")
+        self.env["HOME"] = home
+        os.environ["HOME"], old = home, os.environ.get("HOME")
+        self.addCleanup(os.environ.__setitem__, "HOME", old)
+        self.assertEqual(self.lines("todos"), [])                 # logged in with the "me" line only
+
     def test_settings_say_remote(self):
         rows = {r[0]: r[1] for r in self.lines("settings")}
         self.assertEqual(rows["mode"], "remote")

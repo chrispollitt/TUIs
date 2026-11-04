@@ -4,9 +4,9 @@
 #   1. builds and installs tvcal, and tvmail + tvchat again (they got the calendar menu items and
 #      Floyd's !todo / !cal / !event), into /usr/local on this machine;
 #   2. on cpbee: installs and starts Radicale (the calendar server, TLS on port 5232) and makes
-#      your calendar.  You are asked for the sudo password, then for the calendar password (twice).  # allowlist secret
-#      GIVE THE SAME PASSWORD AS YOUR cpbee MAIL LOGIN: ~/.netrc already holds it for cpbee, and tvcal reads
-#      it from there.  On cpbee it is stored hashed; nothing is written to a file of this repo;
+#      your calendar.  You are asked for the sudo password, then for the calendar password (twice; any  # allowlist secret
+#      password you like - it is stored hashed on cpbee and asked for once more here, for ~/.netrc);  # allowlist secret
+#      nothing is written to a file of this repo;
 #   3. here: writes [server] into ~/.config/tvcal/tvcal.conf, fetches cpbee's certificate, checks the login;
 #   4. proves the round trip: adds a test to-do and a test event through the server, reads them back
 #      with the local copy thrown away, and deletes them again.

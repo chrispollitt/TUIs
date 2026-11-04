@@ -586,14 +586,37 @@ class Remote:
         pw = os.environ.get("TVCAL_PASS")
         if pw:
             return pw
-        import netrc, urllib.parse
-        host = urllib.parse.urlparse(self.url).hostname or ""
+        import urllib.parse
+        u = urllib.parse.urlparse(self.url)
+        # ~/.netrc holds other logins for the same machine (mail, IRC): match host AND login exactly,
+        # "host:port" first (what configure-radicale.sh writes), then the host alone
+        wanted = [("%s:%s" % (u.hostname, u.port)) if u.port else None, u.hostname or ""]
+        found = {}
         try:
-            auth = netrc.netrc().authenticators(host)
-        except (OSError, netrc.NetrcParseError):
-            auth = None
-        if auth and (not self.user or auth[0] == self.user):
-            return auth[2] or ""
+            with open(os.path.expanduser("~/.netrc"), encoding="utf-8", errors="replace") as fh:
+                toks = fh.read().split()
+        except OSError:
+            toks = []
+        cur = None
+        i = 0
+        while i < len(toks):
+            t = toks[i]
+            if t in ("machine", "default") and (t == "default" or i + 1 < len(toks)):
+                cur = {"machine": toks[i + 1] if t == "machine" else "*"}
+                i += 2 if t == "machine" else 1
+                continue
+            if cur is not None and t in ("login", "password", "account") and i + 1 < len(toks):
+                cur[t] = toks[i + 1]
+                if t == "password" and "login" in cur:
+                    found.setdefault((cur["machine"], cur["login"]), cur["password"])
+                i += 2
+                if "login" in cur and "password" in cur:
+                    found.setdefault((cur["machine"], cur["login"]), cur["password"])
+                continue
+            i += 1
+        for m in wanted:
+            if m and (m, self.user) in found:
+                return found[(m, self.user)]
         return ""
 
     def request(self, method, url, body=None, headers=None):

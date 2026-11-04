@@ -195,13 +195,14 @@ client() {
   log "wrote [server] in $conf"
 
   # the password: ~/.netrc, which tvcal-backend reads (or $TVCAL_PASS)  # allowlist secret
-  if grep -qs "machine $HOST .*login $USER_NAME" "$HOME/.netrc"; then
-    log "~/.netrc already has a login for $USER_NAME at $HOST: tvcal sends that password, so the calendar"
-    log "server must have been given the SAME one (if the login check below says 'refused', re-run the server half)"
+  # keyed "HOST:PORT" so it sits beside your mail and IRC logins for the same host without touching them
+  # (tvcal-backend matches host and login exactly; other programs' lines for "$HOST" are left alone)
+  if grep -qsE "^machine $HOST:$PORT login $USER_NAME( |$)" "$HOME/.netrc"; then
+    log "~/.netrc already has the calendar login for $USER_NAME at $HOST:$PORT"
   else
     pw=$(secret)
-    ( umask 077; printf 'machine %s login %s password %s\n' "$HOST" "$USER_NAME" "$pw" >> "$HOME/.netrc" )  # allowlist secret
-    chmod 0600 "$HOME/.netrc"; log "added the login to ~/.netrc"
+    ( umask 077; printf 'machine %s:%s login %s password %s\n' "$HOST" "$PORT" "$USER_NAME" "$pw" >> "$HOME/.netrc" )  # allowlist secret
+    chmod 0600 "$HOME/.netrc"; log "added the calendar login to ~/.netrc"
   fi
   if [ "$CHECK" = 1 ]; then
     command -v tvcal-backend >/dev/null 2>&1 || { warn "tvcal-backend is not installed here: skipping the check"; return; }
