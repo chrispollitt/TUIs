@@ -1484,7 +1484,17 @@ def _load_tvfloyd():
 
 
 FLOYD_HELP = ("Floyd helps with: !todo [add TEXT | done N | rm N | clear], !cal [today | tomorrow | week | DATE], "
-              "!event [DATE] [HH:MM[-HH:MM]] TITLE, !calc 12*7, !convert 5 km to mi, !time in Tokyo, !note TEXT.")
+              "!event [DATE] [HH:MM[-HH:MM]] TITLE, !calc 12*7, !convert 5 km to mi, !time in Tokyo, !note TEXT. "
+              "And himself: !seen NICK, !tell NICK MSG, !quote, !addquote TEXT, !karma, someone++, !8ball Q, !fortune, !joke, "
+              "!about, !learn X is Y, look / take / go north (at chatty), level.")
+
+
+def _whoami():
+    import getpass
+    try:
+        return getpass.getuser()
+    except Exception:
+        return "friend"
 
 
 def cmd_floyd(a):
@@ -1512,6 +1522,11 @@ def cmd_floyd(a):
             out = tvf.natural(text, notes, time.time())
     except tvf.CalcError as e:
         out = "Floyd can't. %s" % e
+    if out is None and hasattr(tvf, "persona"):       # his own voice: !seen !tell !quote !joke !about, play, chat
+        said = tvf.persona(text, level, who=_whoami(), where="tvcal",
+                           path=tvf.persona_memory_path(c.get("floyd", "memory", fallback="")))
+        if said:
+            out = "\n".join(said)
     if out is None:
         out = ("Floyd doesn't understand, but Floyd likes the way you say it. " if tvf.at_least(level, "chatty")
                else "Floyd doesn't know that one. ") + "Say help."

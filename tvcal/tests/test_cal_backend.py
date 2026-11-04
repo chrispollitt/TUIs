@@ -575,6 +575,22 @@ class Floyd(Env):
         self.assertIn("84", self.say("!calc 12*7"))
         self.assertIn("Floyd", self.say("help") + "Floyd")
 
+    def test_his_own_commands_and_memory(self):
+        self.env["XDG_DATA_HOME"] = os.path.join(self.tmp, "xdg")          # his memory file, not the real one
+        self.assertIn("B-19-7", self.say("!about"))
+        self.assertIn("gave bob a point", self.say("bob++"))
+        self.assertIn("bob has 2 points", self.say("bob++"))                # remembered between runs
+        self.assertIn("Floyd will tell nobody", self.say("!tell nobody hello"))
+        self.assertIn("Say help", self.say("!nosuchthing"))
+        self.assertIn("Repair Room", self.say("look"))                      # the parser game (chatty by default)
+        self.assertTrue(os.path.isfile(os.path.join(self.tmp, "xdg", "tvfloyd", "memory.json")))
+
+    def test_his_voice_is_quiet_at_minimal(self):
+        self.env["XDG_DATA_HOME"] = os.path.join(self.tmp, "xdg")
+        self.env["TVCAL_FLOYD_LEVEL"] = "minimal"
+        self.assertIn("B-19-7", self.say("!about"))                         # !commands still answer
+        self.assertIn("Floyd doesn't know", self.say("hello"))              # no banter
+
     def test_off(self):
         open(self.env["TVCAL_CONF"], "w").write("[floyd]\nlevel = off\n")
         self.assertIn("Floyd is off", self.say("!todo"))

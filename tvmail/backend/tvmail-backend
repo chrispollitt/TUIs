@@ -2237,6 +2237,7 @@ class MailFloyd(object):
         "Floyd can: unread | triage | find mail from NAME about WORDS [last week] [in archive] | counts",
         "archive [older than 90 days] | empty trash | unset ooo (or: ooo) | tips",
         "calc 12*7 | convert 5 km to mi | time in Tokyo | todo [add X|done N] | note X | level [NAME]",
+        "himself: !seen NICK | !tell NICK MSG | !quote | !addquote X | !karma | someone++ | !8ball Q | !fortune | !joke | !about",
     ]
 
     def handle(self, text):
@@ -2323,6 +2324,16 @@ class MailFloyd(object):
             return ["Floyd can't. %s" % e]
         if out is not None:
             return out.split("\n")
+        if hasattr(tvf, "persona"):                   # his own voice: !seen !tell !quote !joke !about, play, chat
+            import getpass
+            try:
+                who = getpass.getuser()
+            except Exception:
+                who = "friend"
+            said = tvf.persona(t, self.level, who=who, where="tvmail",
+                               path=tvf.persona_memory_path(_conf().get("floyd", "memory", fallback="")))
+            if said:
+                return said
         if tvf.at_least(self.level, "chatty"):
             return ["Floyd doesn't understand, but Floyd likes the way you say it. Say help."]
         return ["Floyd doesn't know that one. Say help."]

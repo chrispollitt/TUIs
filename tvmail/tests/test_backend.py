@@ -2030,6 +2030,10 @@ class TestFloyd(Base):
             + self._m("Shop <noreply@shop.example>", "Your order has shipped", 2, False)
             + self._m("Alice <alice@x.org>", "lunch?", 1, False))
         self.state = self.tmp / "state"
+        os.environ["TVFLOYD_TVCAL"] = "none"              # an installed tvcal must not take his to-do list
+        self.addCleanup(os.environ.pop, "TVFLOYD_TVCAL", None)
+        os.environ["XDG_DATA_HOME"] = str(self.tmp / "xdg")   # nor his memory file
+        self.addCleanup(os.environ.pop, "XDG_DATA_HOME", None)
         self.f = be.MailFloyd(be.build_parser(), str(self.state))
         self.f.set_level("helpful")
 
