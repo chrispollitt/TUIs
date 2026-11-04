@@ -1395,7 +1395,8 @@ void calPoll()
 
 bool calCommand(ushort cmd)
 {
-    if (cmd <= cmCalPoll || cmd >= cmCalPane)
+    // cmCalPane is a broadcast, not a command; cmFloyd (2233) lies above it
+    if (cmd <= cmCalPoll || cmd == cmCalPane || cmd > cmFloyd)
         return false;
     TCalWindow *w = window();
     switch (cmd)

@@ -119,6 +119,16 @@ def incoming_request_is_added_on_a_yes(opts):
 
 
 @case()
+def f7_asks_floyd(opts):
+    tv, c = tvcal(opts)
+    started(tv, c)
+    tv.send("\x1b[18~")                                  # F7
+    c.check(tv.wait("Floyd, the assistant", 5), "F7 did not open Floyd's question box")
+    tv.send("Enter")                                     # the default question: help
+    c.check(tv.wait(lambda: tv.has("Floyd helps with"), 10), "Floyd's answer did not appear")
+
+
+@case()
 def reminder_reaches_tvmail(opts):
     now = dt.datetime.now()
     if now.hour >= 23 or now.hour < 1:
