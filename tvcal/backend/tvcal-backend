@@ -1,0 +1,1685 @@
+#!/usr/bin/env python3
+
+"""tvcal-backend - calendar and to-do helper for the tvcal Turbo Vision client.
+
+Everything about the data lives here (iCalendar files, repeats, reminders, the
+to-do list, what other programs ask of tvcal); the C++ front end only sees a few
+small TAB-separated replies.  tvcal runs it as a co-process, like tvmail and
+tvchat run theirs.  Stdlib only, Python >= 3.6.
+
+The data is one standard iCalendar file (RFC 5545), VEVENTs and VTODOs, so any
+other calendar program can read it and `import` / `export` / `mail-event` speak
+the same format:  ~/.local/share/tvcal/calendar.ics  ($TVCAL_DATA, or [cal] file
+in the configuration).  Times are the machine's local time ("floating"); an
+imported time with a Z is converted to local, a TZID is taken as local.
+
+With a [server] url in the configuration the calendar lives on a CalDAV server (Radicale
+on the mail/chat host, see configure/configure-radicale.sh): every verb reads it there (a
+copy in ~/.local/state/tvcal/cache.ics serves reads for 15 s and while the server is down)
+and a changed item is PUT back.  Without one, the local file is the calendar.
+
+Configuration (optional - tvcal needs none): ~/.config/tvcal/tvcal.conf
+($TVCAL_CONF).  See configure/tvcal.conf.example.
+
+Replies are TAB-separated lines; a TAB, newline, carriage return or backslash
+inside a field is written \\t \\n \\r \\\\.  Status 0 = ok, 1 = a message for the
+user in the body, 2 = trouble.  Dates are YYYY-MM-DD, times HH:MM.
+
+  ping                      'pong'
+  range FROM TO             every occurrence of an event from FROM to TO (dates,
+                            inclusive), repeats expanded, one line each:
+                            date, start, end, uid, summary, location, repeat, remind
+                            (start/end empty for an all-day event; an event of
+                            several days appears on each of them)
+  show UID                  event: 'event', uid, summary, location, date, start, end,
+                            days, repeat, interval, until, remind, notes
+                            to-do: 'todo', uid, summary, due, prio, status, cats, notes
+  add-event [options] SUMMARY       prints the new uid
+  set-event UID [options]           options: --date --start --end --days --location
+                            --notes --repeat none|daily|weekly|monthly|yearly
+                            --interval N --until DATE --remind MINUTES|off
+                            (an empty value clears; dates take today, tomorrow,
+                            +N, a weekday name, MM-DD, YYYY-MM-DD)
+  todos [--all]             open to-dos (all with --all), ordered by due date then
+                            priority: uid, status, prio, due, summary, cats
+  add-todo [--due D] [--prio 0-9] [--cats C] [--notes N] SUMMARY
+  set-todo UID [same options] [--summary S]
+  done UID [--undo]         tick a to-do off (or back on)
+  rm UID                    delete an event or a to-do
+  find TEXT                 events (a year either side of today) and to-dos that
+                            mention TEXT
+  due                       reminders that fell due since the last call (each is
+                            told once): 'event', uid, date, start, summary, minutes
+                            to go; 'todo', uid, due, summary, 'overdue'|'today'
+  describe UID [DATE]       one line about it, for a chat or a mail
+  ics [UID]                 iCalendar text of one item, or of everything
+  import FILE               add the events and to-dos in an .ics file
+  floyd TEXT                Floyd's answer: !todo / !cal / !event on this calendar, !calc, !convert, !time ...
+  settings                  week_start, remind, file, mode (local | remote)
+  mail-event UID ADDRESS    mail an invitation (an .ics part) through tvmail
+  has-tvmail                'yes' or 'no'
+  requests                  take in what other programs left in the requests
+                            directory; prints 'notice' lines
+  pending                   what is waiting for a yes: id, kind, source, summary, date
+  pending-get ID            the fields, as 'show' (kind 'event' or 'todo')
+  pending-drop ID
+  check-config FILE         errors and warnings for a tvcal.conf
+  serve                     persistent mode: one shell-quoted request per line on
+                            stdin, one framed reply ("STATUS NBYTES\\n" + bytes);
+                            a "0 5\\nready" banner first
+
+Requests (other programs write a one-line file NAME.req into
+$TVCAL_REQUESTS, else ~/.local/state/tvcal/requests):
+  todo TEXT            a to-do
+  event TEXT           an event: [YYYY-MM-DD] [HH:MM[-HH:MM]] title
+  eml PATH             a mail message (its calendar part, else its subject)
+  ics PATH             an .ics file
+  kind@source (todo@tvmail ...) says who asked.  Nothing is added until the
+  user says yes in tvcal (Calendar > Incoming...).
+"""
+import sys, os, io, re, argparse, configparser, datetime as dt, json, shlex, time, uuid
+import calendar as _cal
+import email, email.policy, email.message, email.utils, shutil, subprocess, logging
+
+__version__ = "0.1.0"
+_log = logging.getLogger("tvcal")
+
+
+class UserError(Exception):
+    pass
+
+
+# ------------------------------------------------------------------ places ---
+def conf_path():
+    return os.environ.get("TVCAL_CONF") or os.path.expanduser("~/.config/tvcal/tvcal.conf")
+
+
+def config():
+    c = configparser.ConfigParser(interpolation=None)
+    try:
+        c.read(conf_path(), encoding="utf-8")
+    except (configparser.Error, OSError):
+        pass
+    return c
+
+
+def data_path():
+    p = os.environ.get("TVCAL_DATA") or config().get("cal", "file", fallback="")
+    return os.path.expanduser(p) if p else os.path.expanduser("~/.local/share/tvcal/calendar.ics")
+
+
+def state_dir():
+    d = os.environ.get("TVCAL_STATE")
+    if d:
+        return d
+    base = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+    return os.path.join(base, "tvcal")
+
+
+def requests_dir():
+    return os.environ.get("TVCAL_REQUESTS") or os.path.join(state_dir(), "requests")
+
+
+def default_remind():
+    v = config().get("cal", "remind", fallback="15").strip().lower()
+    if v in ("off", "no", "none", "-1", ""):
+        return None
+    try:
+        return max(0, int(v))
+    except ValueError:
+        return 15
+
+
+def _mkdirs(path):
+    os.makedirs(path, mode=0o700, exist_ok=True)
+
+
+def _write_atomic(path, data, mode=0o600):
+    _mkdirs(os.path.dirname(path) or ".")
+    tmp = "%s.tmp%d" % (path, os.getpid())
+    with open(tmp, "wb") as fh:
+        fh.write(data)
+    try:
+        os.chmod(tmp, mode)
+    except OSError:
+        pass
+    os.replace(tmp, path)
+
+
+# ------------------------------------------------------------- iCalendar ---
+class Comp:
+    """A component: NAME, its properties [name, params, value] (value as in the
+    file, i.e. still escaped) and child components."""
+
+    def __init__(self, name):
+        self.name = name
+        self.props = []
+        self.kids = []
+
+    def get(self, name):
+        for p in self.props:
+            if p[0] == name:
+                return p
+        return None
+
+    def text(self, name, default=""):
+        p = self.get(name)
+        return unesc(p[2]) if p else default
+
+    def set(self, name, value, params=""):
+        """value None removes the property."""
+        self.props = [p for p in self.props if p[0] != name]
+        if value is not None:
+            self.props.append([name, params, value])
+
+
+def esc(s):
+    return (s.replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,")
+            .replace("\r\n", "\\n").replace("\n", "\\n").replace("\r", "\\n"))
+
+
+def unesc(s):
+    out, i = [], 0
+    while i < len(s):
+        c = s[i]
+        if c == "\\" and i + 1 < len(s):
+            n = s[i + 1]
+            out.append("\n" if n in "nN" else n)
+            i += 2
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
+def unfold(text):
+    lines = []
+    for ln in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        if ln[:1] in (" ", "\t") and lines:
+            lines[-1] += ln[1:]
+        else:
+            lines.append(ln)
+    return lines
+
+
+def parse_line(ln):
+    """NAME;PARAMS:VALUE -> (NAME, ";PARAMS", VALUE); the colon inside quotes does not count."""
+    quoted = False
+    for i, c in enumerate(ln):
+        if c == '"':
+            quoted = not quoted
+        elif c == ":" and not quoted:
+            head, value = ln[:i], ln[i + 1:]
+            name, semi, params = head.partition(";")
+            return name.upper(), (";" + params if semi else ""), value
+    return None
+
+
+def parse_ics(text):
+    """The top-level components (VCALENDAR) of an iCalendar text."""
+    roots, stack = [], []
+    for ln in unfold(text):
+        if not ln.strip():
+            continue
+        p = parse_line(ln)
+        if p is None:
+            continue
+        name, params, value = p
+        if name == "BEGIN":
+            c = Comp(value.strip().upper())
+            if stack:
+                stack[-1].kids.append(c)
+            else:
+                roots.append(c)
+            stack.append(c)
+        elif name == "END":
+            if stack:
+                stack.pop()
+        elif stack:
+            stack[-1].props.append([name, params, value])
+    return roots
+
+
+def fold(line):
+    b = line.encode("utf-8")
+    if len(b) <= 75:
+        return line
+    out, cur, n = [], "", 0
+    for ch in line:
+        w = len(ch.encode("utf-8"))
+        if n + w > (75 if not out else 74):
+            out.append(cur)
+            cur, n = "", 0
+        cur += ch
+        n += w
+    out.append(cur)
+    return "\r\n ".join(out)
+
+
+def write_comp(c, out):
+    out.append("BEGIN:" + c.name)
+    for name, params, value in c.props:
+        out.append(fold("%s%s:%s" % (name, params, value)))
+    for k in c.kids:
+        write_comp(k, out)
+    out.append("END:" + c.name)
+
+
+def comp_text(c):
+    out = []
+    write_comp(c, out)
+    return "\r\n".join(out) + "\r\n"
+
+
+# ---------------------------------------------------------------- dates ---
+DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
+TIME_RE = re.compile(r"^(\d{1,2}):(\d{2})$")
+WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+BYDAY = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"]
+
+
+def today():
+    return dt.date.today()
+
+
+def norm_date(s, base=None):
+    """today, tomorrow, +N, a weekday (the next one), MM-DD (the next one), YYYY-MM-DD, YYYYMMDD."""
+    s = (s or "").strip().lower()
+    base = base or today()
+    if not s:
+        raise UserError("a date is needed")
+    if s == "today":
+        return base
+    if s == "tomorrow":
+        return base + dt.timedelta(days=1)
+    if s == "yesterday":
+        return base - dt.timedelta(days=1)
+    m = re.match(r"^\+(\d+)$", s)
+    if m:
+        return base + dt.timedelta(days=int(m.group(1)))
+    if s[:3] in WEEKDAYS and (len(s) == 3 or "monday tuesday wednesday thursday friday saturday sunday".find(s) >= 0):
+        ahead = (WEEKDAYS.index(s[:3]) - base.weekday()) % 7 or 7
+        return base + dt.timedelta(days=ahead)
+    for pat in (r"^(\d{4})-(\d{1,2})-(\d{1,2})$", r"^(\d{4})(\d{2})(\d{2})$"):
+        m = re.match(pat, s)
+        if m:
+            try:
+                return dt.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            except ValueError:
+                raise UserError("not a date: %s" % s)
+    m = re.match(r"^(\d{1,2})-(\d{1,2})$", s)
+    if m:
+        try:
+            d = dt.date(base.year, int(m.group(1)), int(m.group(2)))
+        except ValueError:
+            raise UserError("not a date: %s" % s)
+        return d if d >= base else dt.date(base.year + 1, d.month, d.day)
+    raise UserError("not a date: %s (try 2026-11-05, 11-05, tomorrow, +3, fri)" % s)
+
+
+def norm_time(s):
+    s = (s or "").strip()
+    if not s:
+        return ""
+    m = TIME_RE.match(s)
+    if not m and re.match(r"^\d{3,4}$", s):
+        m = re.match(r"^(\d{1,2})(\d{2})$", s)
+    if not m:
+        raise UserError("not a time: %s (try 14:30)" % s)
+    h, mi = int(m.group(1)), int(m.group(2))
+    if h > 23 or mi > 59:
+        raise UserError("not a time: %s" % s)
+    return "%02d:%02d" % (h, mi)
+
+
+def ics_date(d):
+    return d.strftime("%Y%m%d")
+
+
+def ics_dt(d, t):
+    return "%sT%s00" % (ics_date(d), t.replace(":", ""))
+
+
+def parse_ics_when(prop):
+    """(date, 'HH:MM' or '', allday) from a DTSTART/DTEND/DUE property; None if unreadable."""
+    if prop is None:
+        return None
+    params, v = prop[1].upper(), prop[2].strip()
+    try:
+        if "VALUE=DATE" in params and "DATE-TIME" not in params or len(v) == 8:
+            d = dt.datetime.strptime(v[:8], "%Y%m%d").date()
+            return d, "", True
+        if v.endswith("Z"):
+            u = dt.datetime.strptime(v, "%Y%m%dT%H%M%SZ").replace(tzinfo=dt.timezone.utc)
+            loc = u.astimezone()
+            return loc.date(), loc.strftime("%H:%M"), False
+        x = dt.datetime.strptime(v[:15], "%Y%m%dT%H%M%S")
+        return x.date(), x.strftime("%H:%M"), False
+    except ValueError:
+        return None
+
+
+def parse_rrule(v):
+    r = {}
+    for part in v.split(";"):
+        k, _, x = part.partition("=")
+        r[k.upper()] = x
+    return r
+
+
+def trigger_minutes(v):
+    """-PT15M / -P1D / PT0S -> minutes before the start (>= 0), or None."""
+    m = re.match(r"^(-?)P(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$", v.strip())
+    if not m:
+        return None
+    wk, dy, hr, mi, se = (int(x or 0) for x in m.group(2, 3, 4, 5, 6))
+    n = wk * 10080 + dy * 1440 + hr * 60 + mi + se // 60
+    return n if m.group(1) == "-" or n == 0 else 0
+
+
+# ------------------------------------------------------------ the model ---
+class Item:
+    """Event or to-do view of a Comp."""
+
+    def __init__(self, comp):
+        self.c = comp
+        self.kind = "event" if comp.name == "VEVENT" else "todo"
+        self.uid = comp.text("UID")
+        self.summary = comp.text("SUMMARY")
+        self.notes = comp.text("DESCRIPTION")
+
+    # -- events
+    def read_event(self):
+        c = self.c
+        self.location = c.text("LOCATION")
+        w = parse_ics_when(c.get("DTSTART"))
+        if w is None:
+            self.date, self.start, self.allday = None, "", True
+        else:
+            self.date, self.start, self.allday = w
+        self.end, self.days = "", 1
+        e = parse_ics_when(c.get("DTEND"))
+        if e is not None and self.date is not None:
+            if self.allday:
+                self.days = max(1, (e[0] - self.date).days)
+            elif e[0] == self.date:
+                self.end = e[1]
+            # a timed event ending on a later day: the end is not shown
+        elif self.date is not None and not self.allday and c.get("DURATION"):
+            mins = trigger_minutes("-" + c.get("DURATION")[2].lstrip("+")) or 0
+            if mins:
+                x = dt.datetime.combine(self.date, dt.time(int(self.start[:2]), int(self.start[3:]))) \
+                    + dt.timedelta(minutes=mins)
+                if x.date() == self.date:
+                    self.end = x.strftime("%H:%M")
+        rr = c.get("RRULE")
+        self.rrule = parse_rrule(rr[2]) if rr else None
+        self.exdates = set()
+        for p in c.props:
+            if p[0] == "EXDATE":
+                for v in p[2].split(","):
+                    d = parse_ics_when(["EXDATE", p[1], v])
+                    if d:
+                        self.exdates.add(d[0])
+        self.remind = None
+        for k in c.kids:
+            if k.name == "VALARM":
+                t = k.get("TRIGGER")
+                if t:
+                    self.remind = trigger_minutes(t[2])
+                    break
+        return self
+
+    def repeat_fields(self):
+        r = self.rrule
+        if not r:
+            return "none", 1, ""
+        freq = r.get("FREQ", "").lower()
+        if freq not in ("daily", "weekly", "monthly", "yearly"):
+            return "none", 1, ""
+        until = ""
+        if r.get("UNTIL"):
+            w = parse_ics_when(["UNTIL", "", r["UNTIL"]])
+            until = w[0].isoformat() if w else ""
+        return freq, int(r.get("INTERVAL", "1") or 1), until
+
+    # -- to-dos
+    def read_todo(self):
+        c = self.c
+        w = parse_ics_when(c.get("DUE"))
+        self.due = w[0] if w else None
+        try:
+            self.prio = int(c.text("PRIORITY", "0") or 0)
+        except ValueError:
+            self.prio = 0
+        st = c.text("STATUS").upper()
+        self.done = st == "COMPLETED" or c.text("PERCENT-COMPLETE") == "100"
+        self.cats = c.text("CATEGORIES")
+        return self
+
+
+def occurrences(ev, lo, hi):
+    """Start dates of event ev (read) within lo..hi, repeats expanded; an event
+    spanning days is returned by its first day, the caller covers the rest."""
+    d0 = ev.date
+    if d0 is None:
+        return []
+    r = ev.rrule
+    out = []
+    if not r or r.get("FREQ", "") not in ("DAILY", "WEEKLY", "MONTHLY", "YEARLY"):
+        if lo <= d0 <= hi:
+            out.append(d0)
+        return out
+    freq = r["FREQ"]
+    try:
+        step = max(1, int(r.get("INTERVAL", "1") or 1))
+    except ValueError:
+        step = 1
+    count = int(r["COUNT"]) if r.get("COUNT", "").isdigit() else None
+    end = hi
+    if r.get("UNTIL"):
+        w = parse_ics_when(["UNTIL", "", r["UNTIL"]])
+        if w:
+            end = min(end, w[0])
+    cap = 20000
+
+    def emit(d, i):
+        if count is not None and i >= count:
+            return False
+        if d > end:
+            return False
+        if d >= lo and d not in ev.exdates:
+            out.append(d)
+        return True
+
+    if freq == "DAILY":
+        n = 0
+        if count is None and lo > d0:
+            n = (lo - d0).days // step
+        d = d0 + dt.timedelta(days=n * step)
+        while cap > 0 and emit(d, n):
+            n, cap = n + 1, cap - 1
+            d = d0 + dt.timedelta(days=n * step)
+    elif freq == "WEEKLY":
+        days = sorted(BYDAY.index(x[-2:]) for x in r.get("BYDAY", "").split(",") if x[-2:] in BYDAY) \
+            or [d0.weekday()]
+        wk0 = d0 - dt.timedelta(days=d0.weekday())
+        w, i = 0, 0
+        if count is None and lo > d0:
+            w = max(0, ((lo - wk0).days // 7) // step - 1)
+        done = False
+        while not done and cap > 0:
+            for wd in days:
+                d = wk0 + dt.timedelta(days=7 * step * w + wd)
+                if d < d0:
+                    continue
+                if not emit(d, i):
+                    done = True
+                    break
+                i += 1
+            w, cap = w + 1, cap - 1
+            if wk0 + dt.timedelta(days=7 * step * w) > end:
+                break
+    elif freq == "MONTHLY":
+        n, i = 0, 0
+        while cap > 0:
+            mi = d0.month - 1 + n * step
+            y, m = d0.year + mi // 12, mi % 12 + 1
+            if dt.date(y, m, 1) > end:
+                break
+            if d0.day <= _cal.monthrange(y, m)[1]:
+                if not emit(dt.date(y, m, d0.day), i):
+                    break
+                i += 1
+            n, cap = n + 1, cap - 1
+    else:  # YEARLY
+        n, i = 0, 0
+        while cap > 0:
+            y = d0.year + n * step
+            if y > end.year:
+                break
+            if d0.month != 2 or d0.day != 29 or _cal.isleap(y):
+                if not emit(dt.date(y, d0.month, d0.day), i):
+                    break
+                i += 1
+            n, cap = n + 1, cap - 1
+    return out
+
+
+# ---------------------------------------------------------- the server ---
+class Remote:
+    """The calendar on the server (a CalDAV collection, Radicale on cpbee): the whole
+    collection is one GET (an .ics of everything), a changed item one PUT, a removed one a
+    DELETE.  A copy is kept in the state directory: reads within CACHE_SECONDS use it, and
+    when the server cannot be reached reads fall back on it (writes then fail, saying so).
+    Settings: [server] url, user, ca (a certificate file) or insecure = yes; the password comes
+    from $TVCAL_PASS or ~/.netrc, never the configuration file."""
+
+    CACHE_SECONDS = 15
+
+    def __init__(self, url, user, ca="", insecure=False):
+        self.url = url if url.endswith("/") else url + "/"
+        self.user = user
+        self.ca, self.insecure = ca, insecure
+        self.offline = False
+
+    @staticmethod
+    def configured():
+        c = config()
+        url = c.get("server", "url", fallback="").strip()
+        mode = c.get("server", "mode", fallback="").strip().lower()
+        if mode == "local" or not url or os.environ.get("TVCAL_DATA"):
+            return None
+        return Remote(url, c.get("server", "user", fallback="").strip(), c.get("server", "ca", fallback="").strip(),
+                      c.get("server", "insecure", fallback="no").strip().lower() in ("yes", "true", "1", "y"))
+
+    def cache_path(self):
+        return os.path.join(state_dir(), "cache.ics")
+
+    def touch(self):
+        try:
+            os.utime(self.cache_path(), None)
+        except OSError:
+            pass
+
+    def password(self):
+        pw = os.environ.get("TVCAL_PASS")
+        if pw:
+            return pw
+        import netrc, urllib.parse
+        host = urllib.parse.urlparse(self.url).hostname or ""
+        try:
+            auth = netrc.netrc().authenticators(host)
+        except (OSError, netrc.NetrcParseError):
+            auth = None
+        if auth and (not self.user or auth[0] == self.user):
+            return auth[2] or ""
+        return ""
+
+    def request(self, method, url, body=None, headers=None):
+        import urllib.request, urllib.error, ssl, base64
+        req = urllib.request.Request(url, data=body, method=method, headers=headers or {})
+        tok = base64.b64encode(("%s:%s" % (self.user, self.password())).encode("utf-8")).decode("ascii")
+        req.add_header("Authorization", "Basic " + tok)
+        ctx = None
+        if url.startswith("https"):
+            ctx = ssl.create_default_context(cafile=os.path.expanduser(self.ca) if self.ca else None)
+            if self.insecure:
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+        try:
+            with urllib.request.urlopen(req, timeout=8, context=ctx) as r:
+                return r.status, r.read()
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 403):
+                raise UserError("the calendar server refused the login for %s (password: $TVCAL_PASS or ~/.netrc)"
+                                % (self.user or "(no user)"))
+            if e.code == 404 and method == "GET":
+                return 404, b""
+            raise UserError("the calendar server said %d %s" % (e.code, e.reason))
+        except (urllib.error.URLError, OSError) as e:
+            raise ConnectionError(str(getattr(e, "reason", e)))
+
+    def fetch(self):
+        cache = self.cache_path()
+        try:
+            if time.time() - os.path.getmtime(cache) < self.CACHE_SECONDS:
+                with open(cache, "rb") as fh:
+                    return fh.read().decode("utf-8", "replace")
+        except OSError:
+            pass
+        try:
+            st, data = self.request("GET", self.url, headers={"Accept": "text/calendar"})
+        except ConnectionError as e:
+            self.offline = True
+            try:
+                with open(cache, "rb") as fh:
+                    return fh.read().decode("utf-8", "replace")
+            except OSError:
+                raise UserError("cannot reach the calendar server (%s) and there is no copy yet" % e)
+        text = data.decode("utf-8", "replace") if st == 200 else ""
+        _write_atomic(cache, text.encode("utf-8"))
+        return text
+
+    def item_url(self, uid):
+        import urllib.parse
+        return self.url + urllib.parse.quote(uid, safe="") + ".ics"
+
+    def wrap(self, comp):
+        cal = Comp("VCALENDAR")
+        cal.props = [["VERSION", "", "2.0"], ["PRODID", "", "-//chrispollitt//tvcal %s//EN" % __version__]]
+        cal.kids = [comp]
+        return comp_text(cal).encode("utf-8")
+
+    def put(self, uid, comp):
+        if self.offline:
+            raise UserError("the calendar server cannot be reached: nothing was saved")
+        try:
+            self.request("PUT", self.item_url(uid), self.wrap(comp), {"Content-Type": "text/calendar; charset=utf-8"})
+        except ConnectionError as e:
+            raise UserError("the calendar server cannot be reached (%s): nothing was saved" % e)
+
+    def delete(self, uid):
+        if self.offline:
+            raise UserError("the calendar server cannot be reached: nothing was deleted")
+        try:
+            self.request("DELETE", self.item_url(uid))
+        except ConnectionError as e:
+            raise UserError("the calendar server cannot be reached (%s): nothing was deleted" % e)
+        except UserError as e:
+            if " 404 " not in str(e):
+                raise
+
+
+# ----------------------------------------------------------------- store ---
+class Store:
+    def __init__(self, path=None):
+        self.path = path or data_path()
+        self.root = None
+        self.remote = Remote.configured() if path is None else None
+        if self.remote:
+            self.path = self.remote.cache_path()
+        self.load()
+
+    def load(self):
+        try:
+            if self.remote:
+                text = self.remote.fetch()
+            else:
+                with open(self.path, "rb") as fh:
+                    text = fh.read().decode("utf-8", "replace")
+            roots = parse_ics(text)
+        except FileNotFoundError:
+            roots = []
+        except OSError as e:
+            raise UserError("cannot read %s: %s" % (self.path, e))
+        self.before = {}
+        cals = [r for r in roots if r.name == "VCALENDAR"]
+        if cals:
+            self.root = cals[0]
+            for extra in cals[1:]:
+                self.root.kids.extend(extra.kids)
+        else:
+            self.root = Comp("VCALENDAR")
+            self.root.props = [["VERSION", "", "2.0"], ["PRODID", "", "-//chrispollitt//tvcal %s//EN" % __version__]]
+        if self.remote:     # what the server held, to send only what changed
+            self.before = {k.text("UID"): comp_text(k) for k in self.root.kids if k.name in ("VEVENT", "VTODO")}
+
+    def save(self):
+        if self.remote:
+            now = {k.text("UID"): k for k in self.root.kids if k.name in ("VEVENT", "VTODO")}
+            for uid, k in now.items():
+                if self.before.get(uid) != comp_text(k):
+                    self.remote.put(uid, k)
+            for uid in self.before:
+                if uid not in now:
+                    self.remote.delete(uid)
+            self.before = {u: comp_text(k) for u, k in now.items()}
+        _write_atomic(self.path, comp_text(self.root).encode("utf-8"))
+        if self.remote:
+            self.remote.touch()
+
+    def items(self, kind=None):
+        for k in self.root.kids:
+            if k.name in ("VEVENT", "VTODO"):
+                it = Item(k)
+                if kind is None or it.kind == kind:
+                    yield it
+
+    def find(self, uid):
+        for it in self.items():
+            if it.uid == uid:
+                return it
+        raise UserError("no event or to-do %s" % uid)
+
+    def add(self, comp):
+        self.root.kids.append(comp)
+
+    def remove(self, uid):
+        n = len(self.root.kids)
+        self.root.kids = [k for k in self.root.kids if not (k.name in ("VEVENT", "VTODO") and k.text("UID") == uid)]
+        if len(self.root.kids) == n:
+            raise UserError("no event or to-do %s" % uid)
+
+
+def stamp():
+    return dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def new_uid():
+    host = os.uname().nodename if hasattr(os, "uname") else "tvcal"
+    return "%s@%s" % (uuid.uuid4(), host)
+
+
+def new_comp(name):
+    c = Comp(name)
+    c.set("UID", new_uid())
+    c.set("DTSTAMP", stamp())
+    return c
+
+
+# ------------------------------------------------------- editing options ---
+def apply_event(c, o, creating):
+    """Set the VEVENT c from the options o (argparse namespace: None = leave alone)."""
+    if o.summary is not None:
+        s = o.summary.strip()
+        if not s:
+            raise UserError("an event needs a title")
+        c.set("SUMMARY", esc(s))
+    cur = Item(c).read_event() if not creating else None
+    date = cur.date if cur else None
+    start = cur.start if cur else ""
+    end = cur.end if cur else ""
+    days = cur.days if cur else 1
+    allday = cur.allday if cur else True
+    if o.date is not None:
+        date = norm_date(o.date)
+    if date is None:
+        raise UserError("an event needs a date")
+    if o.start is not None:
+        start = norm_time(o.start)
+        allday = not start
+        if allday:
+            end = ""
+    if o.end is not None:
+        end = norm_time(o.end)
+        if end and not start:
+            raise UserError("an end time needs a start time")
+    if o.days is not None:
+        days = max(1, int(o.days or 1))
+    if start and end and end <= start:
+        raise UserError("the event ends (%s) before it starts (%s)" % (end, start))
+    if allday:
+        c.set("DTSTART", ics_date(date), ";VALUE=DATE")
+        c.set("DTEND", ics_date(date + dt.timedelta(days=days)), ";VALUE=DATE")
+    else:
+        c.set("DTSTART", ics_dt(date, start))
+        if end:
+            c.set("DTEND", ics_dt(date, end))
+        else:
+            c.set("DTEND", None)
+    if o.location is not None:
+        c.set("LOCATION", esc(o.location.strip()) if o.location.strip() else None)
+    if o.notes is not None:
+        c.set("DESCRIPTION", esc(o.notes.strip()) if o.notes.strip() else None)
+    if o.repeat is not None or o.interval is not None or o.until is not None:
+        old = Item(c).read_event() if not creating else None
+        rep, interval, until = old.repeat_fields() if old and old.rrule else ("none", 1, "")
+        if o.repeat is not None:
+            rep = (o.repeat or "none").lower()
+            if rep not in ("none", "daily", "weekly", "monthly", "yearly"):
+                raise UserError("repeat is none, daily, weekly, monthly or yearly")
+        if o.interval is not None:
+            interval = max(1, int(o.interval or 1))
+        if o.until is not None:
+            until = norm_date(o.until, date).isoformat() if o.until.strip() else ""
+        if rep == "none":
+            c.set("RRULE", None)
+            c.set("EXDATE", None)
+        else:
+            rule = "FREQ=%s" % rep.upper()
+            if interval > 1:
+                rule += ";INTERVAL=%d" % interval
+            if until:
+                rule += ";UNTIL=%s" % until.replace("-", "")
+            keep = old.rrule.get("BYDAY") if old and old.rrule and old.rrule.get("FREQ", "").lower() == rep else None
+            if keep:
+                rule += ";BYDAY=" + keep
+            c.set("RRULE", rule)
+    if o.remind is not None:
+        c.kids = [k for k in c.kids if k.name != "VALARM"]
+        v = o.remind.strip().lower()
+        if v not in ("", "off", "no", "none", "-1"):
+            try:
+                mins = int(v)
+            except ValueError:
+                raise UserError("remind is a number of minutes before, or off")
+            a = Comp("VALARM")
+            a.props = [["ACTION", "", "DISPLAY"], ["DESCRIPTION", "", "Reminder"],
+                       ["TRIGGER", "", "-PT%dM" % mins if mins else "PT0S"]]
+            c.kids.append(a)
+    c.set("LAST-MODIFIED", stamp())
+
+
+def apply_todo(c, o, creating):
+    if o.summary is not None:
+        s = o.summary.strip()
+        if not s:
+            raise UserError("a to-do needs some text")
+        c.set("SUMMARY", esc(s))
+    if o.due is not None:
+        c.set("DUE", ics_date(norm_date(o.due)) if o.due.strip() else None, ";VALUE=DATE")
+        if not o.due.strip():
+            c.set("DUE", None)
+    if o.prio is not None:
+        p = int(o.prio or 0)
+        if not 0 <= p <= 9:
+            raise UserError("priority is 0 (none) to 9; 1 is the highest")
+        c.set("PRIORITY", str(p) if p else None)
+    if o.cats is not None:
+        c.set("CATEGORIES", ",".join(esc(x.strip()) for x in o.cats.split(",") if x.strip()) or None)
+    if o.notes is not None:
+        c.set("DESCRIPTION", esc(o.notes.strip()) if o.notes.strip() else None)
+    if creating:
+        c.set("STATUS", "NEEDS-ACTION")
+    c.set("LAST-MODIFIED", stamp())
+
+
+# -------------------------------------------------------------- output ---
+def field(s):
+    return str(s).replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n").replace("\r", "\\r")
+
+
+def row(*fields):
+    sys.stdout.write("\t".join(field(f) for f in fields) + "\n")
+
+
+def prio_sort(p):
+    return p if p else 10          # 1 first, none last
+
+
+def todo_row(it):
+    return ("done" if it.done else "open", it.prio, it.due.isoformat() if it.due else "", it.summary, it.cats)
+
+
+# ------------------------------------------------------------- commands ---
+def cmd_ping(a):
+    sys.stdout.write("pong\n")
+    return 0
+
+
+def cover(ev, d):
+    """All days an occurrence starting at d covers."""
+    return [d + dt.timedelta(days=i) for i in range(ev.days if ev.allday else 1)]
+
+
+def range_rows(store, lo, hi):
+    rows = []
+    for it in store.items("event"):
+        ev = it.read_event()
+        if ev.date is None:
+            continue
+        rep = ev.repeat_fields()[0]
+        for s in occurrences(ev, lo - dt.timedelta(days=max(0, ev.days - 1)), hi):
+            for d in cover(ev, s):
+                if lo <= d <= hi:
+                    rows.append((d.isoformat(), ev.start, ev.end, ev.uid, ev.summary, ev.location, rep,
+                                 "" if ev.remind is None else ev.remind))
+    rows.sort(key=lambda r: (r[0], r[1] or "00:00", r[4].lower()))
+    return rows
+
+
+def cmd_range(a):
+    lo, hi = norm_date(a.frm), norm_date(a.to)
+    if hi < lo or (hi - lo).days > 3700:
+        raise UserError("that range is not sensible")
+    for r in range_rows(Store(), lo, hi):
+        row(*r)
+    return 0
+
+
+def cmd_show(a):
+    it = Store().find(a.uid)
+    if it.kind == "event":
+        ev = it.read_event()
+        rep, interval, until = ev.repeat_fields()
+        row("event", ev.uid, ev.summary, ev.location, ev.date.isoformat() if ev.date else "", ev.start, ev.end,
+            ev.days, rep, interval, until, "" if ev.remind is None else ev.remind, ev.notes)
+    else:
+        t = it.read_todo()
+        row("todo", t.uid, t.summary, t.due.isoformat() if t.due else "", t.prio, "done" if t.done else "open",
+            t.cats, t.notes)
+    return 0
+
+
+def cmd_add_event(a):
+    a.summary = " ".join(a.words)
+    if a.date is None:
+        a.date = "today"
+    if a.remind is None:
+        d = default_remind()
+        a.remind = "off" if d is None else str(d)
+    s = Store()
+    c = new_comp("VEVENT")
+    apply_event(c, a, True)
+    s.add(c)
+    s.save()
+    sys.stdout.write(c.text("UID") + "\n")
+    return 0
+
+
+def cmd_set_event(a):
+    s = Store()
+    it = s.find(a.uid)
+    if it.kind != "event":
+        raise UserError("%s is a to-do" % a.uid)
+    a.summary = " ".join(a.words) if a.words else None
+    apply_event(it.c, a, False)
+    s.save()
+    return 0
+
+
+def cmd_todos(a):
+    its = [i.read_todo() for i in Store().items("todo")]
+    if not a.all:
+        its = [i for i in its if not i.done]
+    its.sort(key=lambda t: (t.done, t.due.isoformat() if t.due else "9999", prio_sort(t.prio), t.summary.lower()))
+    for t in its:
+        row(t.uid, *todo_row(t))
+    return 0
+
+
+def cmd_add_todo(a):
+    a.summary = " ".join(a.words)
+    s = Store()
+    c = new_comp("VTODO")
+    apply_todo(c, a, True)
+    s.add(c)
+    s.save()
+    sys.stdout.write(c.text("UID") + "\n")
+    return 0
+
+
+def cmd_set_todo(a):
+    s = Store()
+    it = s.find(a.uid)
+    if it.kind != "todo":
+        raise UserError("%s is an event" % a.uid)
+    apply_todo(it.c, a, False)
+    s.save()
+    return 0
+
+
+def cmd_done(a):
+    s = Store()
+    it = s.find(a.uid)
+    if it.kind != "todo":
+        raise UserError("%s is an event" % a.uid)
+    c = it.c
+    if a.undo:
+        c.set("STATUS", "NEEDS-ACTION")
+        c.set("COMPLETED", None)
+        c.set("PERCENT-COMPLETE", None)
+    else:
+        c.set("STATUS", "COMPLETED")
+        c.set("COMPLETED", stamp())
+        c.set("PERCENT-COMPLETE", "100")
+    c.set("LAST-MODIFIED", stamp())
+    s.save()
+    return 0
+
+
+def cmd_rm(a):
+    s = Store()
+    s.remove(a.uid)
+    s.save()
+    return 0
+
+
+def cmd_find(a):
+    needle = " ".join(a.words).lower()
+    if not needle:
+        raise UserError("find what?")
+    s = Store()
+    t = today()
+    for r in range_rows(s, t - dt.timedelta(days=365), t + dt.timedelta(days=365)):
+        it = s.find(r[3])
+        if needle in (r[4] + "\n" + r[5] + "\n" + it.notes).lower():
+            row("event", *r[:8])
+    for it in s.items("todo"):
+        td = it.read_todo()
+        if needle in (td.summary + "\n" + td.notes + "\n" + td.cats).lower():
+            row("todo", td.uid, *todo_row(td))
+    return 0
+
+
+def describe(it, date=None):
+    if it.kind == "event":
+        ev = it.read_event()
+        d = date or ev.date.isoformat()
+        day = dt.date.fromisoformat(d)
+        s = "%s %s" % (WEEKDAYS[day.weekday()].capitalize(), d)
+        if ev.start:
+            s += " " + ev.start + ("-" + ev.end if ev.end else "")
+        s = "%s - %s" % (ev.summary, s)
+        return s + (" (%s)" % ev.location if ev.location else "")
+    t = it.read_todo()
+    return "to do: %s%s" % (t.summary, " (due %s)" % t.due.isoformat() if t.due else "")
+
+
+def cmd_describe(a):
+    sys.stdout.write("tvcal: " + describe(Store().find(a.uid), a.date) + "\n")
+    return 0
+
+
+def fired_path():
+    return os.path.join(state_dir(), "fired.json")
+
+
+def cmd_due(a):
+    """Reminders that fell due; each is reported once."""
+    now = dt.datetime.now()
+    try:
+        with open(fired_path(), encoding="utf-8") as fh:
+            fired = json.load(fh)
+    except (OSError, ValueError):
+        fired = {}
+    fired = {k: v for k, v in fired.items() if now.timestamp() - v < 4 * 86400}
+    s = Store()
+    out = []
+    t = now.date()
+    for it in s.items("event"):
+        ev = it.read_event()
+        if ev.remind is None or ev.date is None:
+            continue
+        for d in occurrences(ev, t - dt.timedelta(days=1), t + dt.timedelta(days=1)):
+            begin = dt.datetime.combine(d, dt.time(int(ev.start[:2]), int(ev.start[3:]))) if ev.start \
+                else dt.datetime.combine(d, dt.time(9, 0))
+            fire = begin - dt.timedelta(minutes=ev.remind)
+            over = begin + dt.timedelta(hours=1) if ev.start else dt.datetime.combine(d, dt.time(23, 59))
+            key = "e:%s:%s" % (ev.uid, d.isoformat())
+            if fire <= now < over and key not in fired:
+                fired[key] = now.timestamp()
+                out.append(("event", ev.uid, d.isoformat(), ev.start, ev.summary,
+                            max(0, int((begin - now).total_seconds() // 60))))
+    for it in s.items("todo"):
+        td = it.read_todo()
+        if td.done or td.due is None or td.due > t:
+            continue
+        key = "t:%s:%s" % (td.uid, t.isoformat())
+        if key not in fired:
+            fired[key] = now.timestamp()
+            out.append(("todo", td.uid, td.due.isoformat(), td.summary, "today" if td.due == t else "overdue"))
+    if out:
+        _write_atomic(fired_path(), json.dumps(fired).encode("utf-8"))
+    for r in out:
+        row(*r)
+    return 0
+
+
+def cmd_ics(a):
+    s = Store()
+    if a.uid:
+        it = s.find(a.uid)
+        cal = Comp("VCALENDAR")
+        cal.props = [["VERSION", "", "2.0"], ["PRODID", "", "-//chrispollitt//tvcal %s//EN" % __version__]]
+        cal.kids = [it.c]
+        sys.stdout.write(comp_text(cal))
+    else:
+        sys.stdout.write(comp_text(s.root))
+    return 0
+
+
+def merge_into(store, comps):
+    """Add VEVENT/VTODO comps (an update to a uid already here replaces it); count."""
+    n = 0
+    for c in comps:
+        if c.name not in ("VEVENT", "VTODO"):
+            continue
+        uid = c.text("UID")
+        if not uid:
+            c.set("UID", new_uid())
+        else:
+            store.root.kids = [k for k in store.root.kids
+                               if not (k.name in ("VEVENT", "VTODO") and k.text("UID") == uid)]
+        if not c.get("DTSTAMP"):
+            c.set("DTSTAMP", stamp())
+        if c.name == "VEVENT" and Item(c).read_event().date is None:
+            continue
+        store.add(c)
+        n += 1
+    return n
+
+
+def comps_of(roots):
+    out = []
+    for r in roots:
+        if r.name == "VCALENDAR":
+            out.extend(k for k in r.kids if k.name in ("VEVENT", "VTODO"))
+        elif r.name in ("VEVENT", "VTODO"):
+            out.append(r)
+    return out
+
+
+def read_small(path, limit=2 * 1024 * 1024):
+    try:
+        if os.path.getsize(path) > limit:
+            raise UserError("%s is too big" % path)
+        with open(path, "rb") as fh:
+            return fh.read()
+    except OSError as e:
+        raise UserError("cannot read %s: %s" % (path, e))
+
+
+def cmd_import(a):
+    s = Store()
+    comps = comps_of(parse_ics(read_small(os.path.expanduser(a.file)).decode("utf-8", "replace")))
+    n = merge_into(s, comps)
+    if n:
+        s.save()
+    sys.stdout.write("imported %d\n" % n)
+    return 0
+
+
+def find_tvmail_backend():
+    found = shutil.which("tvmail-backend")
+    if found:
+        return found
+    for d in ("/usr/local/bin", "~/bin", "~/.local/bin"):
+        p = os.path.join(os.path.expanduser(d), "tvmail-backend")
+        if os.path.isfile(p) and os.access(p, os.X_OK):
+            return p
+    return None
+
+
+def cmd_has_tvmail(a):
+    sys.stdout.write("yes\n" if find_tvmail_backend() else "no\n")
+    return 0
+
+
+def cmd_mail_event(a):
+    tvmail = find_tvmail_backend()
+    if not tvmail:
+        raise UserError("tvmail is not installed here: this hands the invitation to tvmail to send")
+    if "@" not in a.address or " " in a.address:
+        raise UserError("not an address: %s" % a.address)
+    s = Store()
+    it = s.find(a.uid)
+    cal = Comp("VCALENDAR")
+    cal.props = [["VERSION", "", "2.0"], ["PRODID", "", "-//chrispollitt//tvcal %s//EN" % __version__],
+                 ["METHOD", "", "REQUEST" if it.kind == "event" else "PUBLISH"]]
+    cal.kids = [it.c]
+    msg = email.message.EmailMessage()
+    msg["Subject"] = "Invitation: " + it.summary if it.kind == "event" else "To do: " + it.summary
+    msg["To"] = a.address
+    msg.set_content("%s\n\nThe calendar entry is attached (an .ics file any calendar program opens).\n"
+                    % describe(it))
+    msg.add_attachment(comp_text(cal).encode("utf-8"), maintype="text", subtype="calendar",
+                       filename="invite.ics", params={"method": "REQUEST" if it.kind == "event" else "PUBLISH"})
+    p = subprocess.run([tvmail, "send", "--to", a.address], input=msg.as_bytes(), stdout=subprocess.PIPE,
+                       stderr=subprocess.STDOUT, timeout=90)
+    if p.returncode != 0:
+        raise UserError((p.stdout.decode("utf-8", "replace").strip() or "tvmail-backend send failed")[:300])
+    sys.stdout.write("sent to %s\n" % a.address)
+    return 0
+
+
+# -------------------------------------------- requests from other programs ---
+def pending_path():
+    return os.path.join(state_dir(), "pending.json")
+
+
+def pending_load():
+    try:
+        with open(pending_path(), encoding="utf-8") as fh:
+            v = json.load(fh)
+        return v if isinstance(v, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def pending_save(lst):
+    _write_atomic(pending_path(), json.dumps(lst).encode("utf-8"))
+
+
+PENDING_MAX = 50
+ONE_LINER = re.compile(r"^\s*(?:(\d{4}-\d{2}-\d{2}|\d{2}-\d{2}|today|tomorrow)\s+)?"
+                       r"(?:(\d{1,2}:\d{2})(?:-(\d{1,2}:\d{2}))?\s+)?(.*)$", re.I | re.S)
+
+
+def pending_from_comp(c, source):
+    it = Item(c)
+    if c.name == "VEVENT":
+        ev = it.read_event()
+        if ev.date is None:
+            return None
+        return {"kind": "event", "source": source, "summary": ev.summary or "(no title)", "date": ev.date.isoformat(),
+                "start": ev.start, "end": ev.end, "location": ev.location, "notes": ev.notes, "uid": ev.uid,
+                "ics": comp_text(c)}
+    td = it.read_todo()
+    return {"kind": "todo", "source": source, "summary": td.summary or "(no title)",
+            "date": td.due.isoformat() if td.due else "", "notes": td.notes, "prio": td.prio, "cats": td.cats,
+            "uid": td.uid, "ics": comp_text(c)}
+
+
+def requests_once():
+    """Take in the request files; returns notices."""
+    d = requests_dir()
+    try:
+        names = sorted(n for n in os.listdir(d) if n.endswith(".req"))
+    except OSError:
+        return []
+    notes = []
+    pend = pending_load()
+    for n in names[:30]:
+        path = os.path.join(d, n)
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                line = fh.readline().strip()
+        except OSError:
+            continue
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        kind, _, arg = line.partition(" ")
+        kind, _, source = kind.partition("@")
+        source = source or "another program"
+        arg = arg.strip()
+        new = []
+        try:
+            if kind == "todo" and arg:
+                new.append({"kind": "todo", "source": source, "summary": " ".join(arg.split())[:300], "date": "",
+                            "notes": "", "prio": 0, "cats": ""})
+            elif kind == "event" and arg:
+                m = ONE_LINER.match(arg)
+                day, t0, t1, title = m.group(1), m.group(2), m.group(3), " ".join(m.group(4).split())
+                new.append({"kind": "event", "source": source, "summary": title[:300] or "(no title)",
+                            "date": norm_date(day).isoformat() if day else today().isoformat(),
+                            "start": norm_time(t0) if t0 else "", "end": norm_time(t1) if t1 else "",
+                            "location": "", "notes": ""})
+            elif kind in ("eml", "ics") and arg:
+                raw = read_small(arg)
+                if kind == "eml":
+                    msg = email.message_from_bytes(raw, policy=email.policy.default)
+                    comps = []
+                    for part in msg.walk():
+                        if part.get_content_type() == "text/calendar":
+                            comps += comps_of(parse_ics(part.get_content()))
+                    if comps:
+                        new += [x for x in (pending_from_comp(c, source) for c in comps) if x]
+                    else:
+                        subj = " ".join(str(msg.get("Subject", "")).split()) or "(no subject)"
+                        who = str(msg.get("From", ""))
+                        when = None
+                        try:
+                            when = email.utils.parsedate_to_datetime(str(msg.get("Date", ""))).date()
+                        except (TypeError, ValueError):
+                            pass
+                        new.append({"kind": "event", "source": source, "summary": subj[:300],
+                                    "date": max(when, today()).isoformat() if when else today().isoformat(),
+                                    "start": "", "end": "", "location": "",
+                                    "notes": "From: %s\nDate: %s" % (who, msg.get("Date", ""))})
+                    # a copy tvmail left in our own state directory is ours to remove
+                    if os.path.abspath(arg).startswith(os.path.abspath(state_dir()) + os.sep):
+                        try:
+                            os.unlink(arg)
+                        except OSError:
+                            pass
+                else:
+                    new += [x for x in (pending_from_comp(c, source)
+                                        for c in comps_of(parse_ics(raw.decode("utf-8", "replace")))) if x]
+            else:
+                notes.append("ignored a request I do not understand: %s" % line[:60])
+                continue
+        except UserError as e:
+            notes.append("request '%s' failed: %s" % (line[:50], e))
+            continue
+        for x in new:
+            if len(pend) >= PENDING_MAX:
+                notes.append("too many requests are waiting - Calendar > Incoming...")
+                break
+            x["id"] = uuid.uuid4().hex[:8]
+            pend.append(x)
+            notes.append("%s asks to add %s \"%s\" - Calendar > Incoming..." %
+                         (source, "a to-do" if x["kind"] == "todo" else "an event", x["summary"][:50]))
+    if names:
+        pending_save(pend)
+    return notes
+
+
+def cmd_requests(a):
+    for n in requests_once():
+        row("notice", n)
+    return 0
+
+
+def cmd_pending(a):
+    for p in pending_load():
+        row(p["id"], p["kind"], p["source"], p["summary"], p.get("date", ""))
+    return 0
+
+
+def cmd_pending_get(a):
+    for p in pending_load():
+        if p["id"] == a.id:
+            if p["kind"] == "event":
+                row("event", p["id"], p["summary"], p.get("location", ""), p.get("date", ""), p.get("start", ""),
+                    p.get("end", ""), 1, "none", 1, "", "", p.get("notes", ""))
+            else:
+                row("todo", p["id"], p["summary"], p.get("date", ""), p.get("prio", 0), "open", p.get("cats", ""),
+                    p.get("notes", ""))
+            return 0
+    raise UserError("that request is gone")
+
+
+def cmd_pending_drop(a):
+    pend = pending_load()
+    pending_save([p for p in pend if p["id"] != a.id])
+    return 0
+
+
+# --------------------------------------------------------- configuration ---
+KNOWN = {"cal": {"file", "remind", "week_start"},
+         "floyd": {"level"},
+         "server": {"url", "user", "ca", "insecure", "mode"},
+         "ui": {"share", "beep", "mesg", "idle"}}
+
+
+def check_config(path):
+    errors, warnings = [], []
+    c = configparser.ConfigParser(interpolation=None)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            c.read_file(fh)
+    except configparser.Error as e:
+        return ["%s" % str(e).splitlines()[0]], [], ""
+    except OSError as e:
+        return ["cannot read %s: %s" % (path, e)], [], ""
+    for sec in c.sections():
+        if sec not in KNOWN:
+            warnings.append("unknown section [%s]" % sec)
+            continue
+        for k in c[sec]:
+            if k not in KNOWN[sec]:
+                warnings.append("[%s] %s is not a setting" % (sec, k))
+    r = c.get("cal", "remind", fallback="15").strip().lower()
+    if r not in ("off", "no", "none", "-1", "") and not r.isdigit():
+        errors.append("[cal] remind is a number of minutes, or off")
+    w = c.get("cal", "week_start", fallback="mon").strip().lower()
+    if w not in ("mon", "sun", "monday", "sunday"):
+        errors.append("[cal] week_start is mon or sun")
+    u = c.get("server", "url", fallback="").strip()
+    if u and not u.startswith(("http://", "https://")):
+        errors.append("[server] url is an http:// or https:// address of the calendar collection")
+    if u and not c.get("server", "user", fallback="").strip():
+        errors.append("[server] user is needed with a url")
+    if c.get("server", "mode", fallback="").strip().lower() not in ("", "local", "remote"):
+        errors.append("[server] mode is local or remote")
+    f = c.get("cal", "file", fallback="")
+    if f and not os.path.isdir(os.path.dirname(os.path.expanduser(f)) or "."):
+        warnings.append("[cal] file: the directory does not exist yet (it is made when something is saved)")
+    return errors, warnings, "calendar in %s" % (os.path.expanduser(f) if f else data_path())
+
+
+def cmd_check_config(a):
+    errors, warnings, summary = check_config(a.file)
+    for e in errors:
+        sys.stdout.write("error: %s\n" % e)
+    for w in warnings:
+        sys.stdout.write("warning: %s\n" % w)
+    if not errors:
+        sys.stdout.write("ok: %s\n" % summary)
+    return 1 if errors else 0
+
+
+# --------------------------------------------------------------- Floyd ---
+# Floyd, the assistant of tvmail and tvchat, answers here too: the calculator, units, time zones,
+# notes, and - because it is the calendar's own program - !todo, !cal and !event on the very list
+# and calendar tvcal shows.  His words come from tvcommon's tvfloyd.py (beside this file, in
+# ../../tvcommon/py in the source tree, or in ../share/tvcal once installed).
+def _load_tvfloyd():
+    import importlib.util
+    here = os.path.dirname(os.path.realpath(__file__))
+    for d in (here, os.path.join(here, "..", "..", "tvcommon", "py"), os.path.join(here, "..", "share", "tvcal"),
+              "/usr/local/share/tvcal", "/usr/share/tvcal"):
+        path = os.path.join(d, "tvfloyd.py")
+        if os.path.isfile(path):
+            try:
+                spec = importlib.util.spec_from_file_location("tvfloyd", path)
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                return mod
+            except Exception:
+                _log.debug("cannot load %s", path, exc_info=True)
+    return None
+
+
+FLOYD_HELP = ("Floyd helps with: !todo [add TEXT | done N | rm N | clear], !cal [today | tomorrow | week | DATE], "
+              "!event [DATE] [HH:MM[-HH:MM]] TITLE, !calc 12*7, !convert 5 km to mi, !time in Tokyo, !note TEXT.")
+
+
+def cmd_floyd(a):
+    """floyd TEXT: what Floyd says to that (one line each)."""
+    tvf = _load_tvfloyd()
+    text = " ".join(a.words).strip()
+    if tvf is None:
+        raise UserError("Floyd's words (tvfloyd.py) are not installed beside tvcal-backend")
+    c = config()
+    level = tvf.parse_level(os.environ.get("TVCAL_FLOYD_LEVEL") or c.get("floyd", "level", fallback=""), None) \
+        or tvf.DEFAULT_LEVEL
+    if level == "off":
+        sys.stdout.write("Floyd is off. Set [floyd] level in tvcal.conf to wake him.\n")
+        return 0
+    notes = tvf.CalNotes(os.path.join(state_dir(), "notes.json"), tvcal=os.path.abspath(sys.argv[0]))
+    verb, _, rest = text.lstrip("!").partition(" ")
+    verb = verb.lower()
+    if verb in ("help", "?", ""):
+        sys.stdout.write(FLOYD_HELP + "\n")
+        return 0
+    try:
+        arg = rest if verb not in ("todo", "note", "notes", "event", "appointment") else text.lstrip("!").partition(" ")[2]
+        out = tvf.run_tool(verb, arg, notes, time.time())
+        if out is None and tvf.at_least(level, "helpful"):
+            out = tvf.natural(text, notes, time.time())
+    except tvf.CalcError as e:
+        out = "Floyd can't. %s" % e
+    if out is None:
+        out = ("Floyd doesn't understand, but Floyd likes the way you say it. " if tvf.at_least(level, "chatty")
+               else "Floyd doesn't know that one. ") + "Say help."
+    sys.stdout.write(out + "\n")
+    return 0
+
+
+def cmd_norm_date(a):
+    """norm-date TEXT: the YYYY-MM-DD for today / tomorrow / +N / fri / 11-05 / 2026-11-05."""
+    sys.stdout.write(norm_date(" ".join(a.words)).isoformat() + "\n")
+    return 0
+
+
+def cmd_settings(a):
+    """week_start and file, for the UI."""
+    c = config()
+    row("week_start", c.get("cal", "week_start", fallback="mon").strip().lower()[:3])
+    row("remind", "off" if default_remind() is None else default_remind())
+    r = Remote.configured()
+    row("file", data_path() if not r else r.url)
+    row("mode", "remote" if r else "local")
+    return 0
+
+
+# ----------------------------------------------------------------- serve ---
+class _Cap:
+    def __init__(self):
+        self.buffer = io.BytesIO()
+
+    def write(self, s):
+        self.buffer.write(s.encode("utf-8", "replace") if isinstance(s, str) else s)
+        return len(s)
+
+    def flush(self):
+        pass
+
+    def isatty(self):
+        return False
+
+
+class _ArgParser(argparse.ArgumentParser):
+    def error(self, message):
+        raise SystemExit("%s: %s" % (self.prog, message))
+
+
+def dispatch(parser, argv):
+    if argv and argv[0] == "serve":
+        return 2, b"tvcal-backend: 'serve' is not available in serve mode\n"
+    real, cap = sys.stdout, _Cap()
+    sys.stdout = cap
+    try:
+        ns = parser.parse_args(argv)
+        return (ns.fn(ns) or 0), cap.buffer.getvalue()
+    except UserError as e:
+        return 1, (str(e) + "\n").encode("utf-8", "replace")
+    except SystemExit as e:
+        code = e.code
+        if isinstance(code, str):
+            cap.write(code if code.endswith("\n") else code + "\n")
+            return 2, cap.buffer.getvalue()
+        return (int(code) if code else 0), cap.buffer.getvalue()
+    except Exception as e:
+        _log.exception("request %r failed", argv)
+        cap.write("tvcal-backend: %s: %s\n" % (type(e).__name__, e))
+        return 2, cap.buffer.getvalue()
+    finally:
+        sys.stdout = real
+
+
+def cmd_serve(a):
+    raw_out = getattr(sys.stdout, "buffer", sys.stdout)
+    try:
+        sys.stderr = open(os.devnull, "w")
+    except OSError:
+        pass
+    parser = build_parser()
+
+    def emit(status, body):
+        raw_out.write(("%d %d\n" % (status, len(body))).encode("ascii") + body)
+        raw_out.flush()
+
+    emit(0, b"ready")
+    for text in sys.stdin:
+        text = text.strip()
+        if not text:
+            continue
+        if text in ("quit", "exit"):
+            break
+        try:
+            argv = shlex.split(text)
+        except ValueError:
+            emit(2, b"tvcal-backend serve: unparseable request line\n")
+            continue
+        t0 = time.monotonic()
+        st, body = dispatch(parser, argv)
+        emit(st, body)
+        if argv[:1] != ["due"] or body:
+            _log.debug("request: %s -> %d, %d bytes, %.1f ms", text[:200], st, len(body),
+                       (time.monotonic() - t0) * 1000)
+    return 0
+
+
+def build_parser():
+    ap = _ArgParser(prog="tvcal-backend", add_help=True)
+    ap.add_argument("--version", action="version", version="tvcal-backend %s" % __version__)
+    ap.add_argument("--debug", nargs="?", const="debug.tvcal.backend.log", metavar="FILE")
+    ap.add_argument("--trace", nargs="?", const="trace.tvcal.backend.log", metavar="FILE")
+    sub = ap.add_subparsers(dest="cmd", parser_class=_ArgParser)
+    sub.required = True
+
+    def ev_opts(p):
+        for o in ("date", "start", "end", "days", "location", "notes", "repeat", "interval", "until", "remind"):
+            p.add_argument("--" + o, default=None)
+
+    def todo_opts(p):
+        for o in ("due", "prio", "cats", "notes"):
+            p.add_argument("--" + o, default=None)
+
+    def add(name, fn, *args, **kw):
+        p = sub.add_parser(name)
+        for x in args:
+            p.add_argument(x)
+        p.set_defaults(fn=fn)
+        return p
+
+    add("serve", cmd_serve)
+    add("ping", cmd_ping)
+    add("range", cmd_range, "frm", "to")
+    add("show", cmd_show, "uid")
+    p = add("add-event", cmd_add_event)
+    ev_opts(p)
+    p.add_argument("words", nargs="*")
+    p = add("set-event", cmd_set_event, "uid")
+    ev_opts(p)
+    p.add_argument("words", nargs="*")
+    p = add("todos", cmd_todos)
+    p.add_argument("--all", action="store_true")
+    p = add("add-todo", cmd_add_todo)
+    todo_opts(p)
+    p.add_argument("words", nargs="*")
+    p = add("set-todo", cmd_set_todo, "uid")
+    todo_opts(p)
+    p.add_argument("--summary", default=None)
+    p = add("done", cmd_done, "uid")
+    p.add_argument("--undo", action="store_true")
+    add("rm", cmd_rm, "uid")
+    p = add("find", cmd_find)
+    p.add_argument("words", nargs="*")
+    add("due", cmd_due)
+    p = add("describe", cmd_describe, "uid")
+    p.add_argument("date", nargs="?", default=None)
+    p = add("ics", cmd_ics)
+    p.add_argument("uid", nargs="?", default="")
+    add("import", cmd_import, "file")
+    add("mail-event", cmd_mail_event, "uid", "address")
+    add("has-tvmail", cmd_has_tvmail)
+    add("requests", cmd_requests)
+    add("pending", cmd_pending)
+    add("pending-get", cmd_pending_get, "id")
+    add("pending-drop", cmd_pending_drop, "id")
+    add("check-config", cmd_check_config, "file")
+    add("settings", cmd_settings)
+    p = add("norm-date", cmd_norm_date)
+    p.add_argument("words", nargs="*")
+    p = add("floyd", cmd_floyd)
+    p.add_argument("words", nargs="*")
+    return ap
+
+
+_COMMANDS = frozenset(("serve", "ping", "range", "show", "add-event", "set-event", "todos", "add-todo",
+                       "set-todo", "done", "rm", "find", "due", "describe", "ics", "import", "mail-event",
+                       "has-tvmail", "requests", "pending", "pending-get", "pending-drop", "check-config",
+                       "settings", "norm-date", "floyd"))
+
+
+def _normalize_cli(argv):
+    out = []
+    for i, value in enumerate(argv):
+        if value in ("--debug", "--trace"):
+            nxt = argv[i + 1] if i + 1 < len(argv) else None
+            if nxt is None or nxt.startswith("-") or nxt in _COMMANDS:
+                out.append(value + ("=debug.tvcal.backend.log" if value == "--debug" else "=trace.tvcal.backend.log"))
+                continue
+        out.append(value)
+    return out
+
+
+def main():
+    a = build_parser().parse_args(_normalize_cli(sys.argv[1:]))
+    if a.debug:
+        logging.basicConfig(filename=a.debug, level=logging.DEBUG,
+                            format="%(asctime)s %(levelname)s %(message)s")
+        _log.debug("tvcal-backend %s, python %s: %s", __version__, sys.version.split()[0], " ".join(sys.argv[1:]))
+
+    def run():
+        try:
+            sys.exit(a.fn(a))
+        except UserError as e:
+            sys.exit("tvcal-backend: %s" % e)
+        except BrokenPipeError:
+            sys.exit(0)
+        except KeyboardInterrupt:
+            sys.exit(130)
+
+    if a.trace:
+        import cProfile
+        profiler = cProfile.Profile()
+        try:
+            profiler.enable()
+            run()
+        finally:
+            profiler.disable()
+            profiler.dump_stats(a.trace)
+    else:
+        run()
+
+
+if __name__ == "__main__":
+    main()

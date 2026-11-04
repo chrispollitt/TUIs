@@ -50,6 +50,8 @@ TMenuBar *TVMailApp::initMenuBar(TRect r)
                             *new TMenuItem("Cha~t~ with sender", cmChatWith, kbNoKey, hcNoContext) +
                             *new TMenuItem("Open chat ~i~nvite", cmChatInvite, kbNoKey, hcNoContext) +
                             *new TMenuItem("S~h~are in chat", cmShareChat, kbNoKey, hcNoContext) +
+                            *new TMenuItem("Add to ca~l~endar", cmToCal, kbNoKey, hcNoContext) +
+                            *new TMenuItem("Add as ~t~o-do", cmToTodo, kbNoKey, hcNoContext) +
                             *new TSubMenu("~E~dit", kbAltE) +
                             *new TMenuItem("~U~ndo", cmUndo, kbNoKey, hcNoContext) +
                             newLine() +
@@ -278,6 +280,16 @@ std::string stripped(std::string s)
     return s.substr(i);
 }
 
+// where tvcal keeps its state (the backend's rule): $TVCAL_STATE, else $XDG_STATE_HOME/tvcal
+std::string tvcalStateDir()
+{
+    if (const char *d = getenv("TVCAL_STATE"))
+        if (*d)
+            return d;
+    const char *x = getenv("XDG_STATE_HOME");
+    return (x && *x ? std::string(x) : homePath(".local/state")) + "/tvcal";
+}
+
 bool tvchatInstalled()
 {
     return !stripped(shCapture("command -v tvchat-backend || ls /usr/local/bin/tvchat-backend "
@@ -458,6 +470,56 @@ void TVMailApp::shareInChat(int row)
     else
         notify("Asked tvchat to share this message in chat. You say yes there (Chat > Share from tvmail...), "
                "within 10 minutes; only sender and subject go.");
+}
+
+// Message > Add to calendar / Add as to-do: left for tvcal as a request file, which asks you before it
+// adds anything.  A to-do is "Subject (from Name)".  An event hands over the whole message (a copy in tvcal's
+// own state directory, which tvcal removes): an invitation in it (an .ics part) arrives with its time and
+// place filled in; any other mail becomes an event named for its subject, for you to give a day and time.
+void TVMailApp::toCalendar(int row, bool todo)
+{
+    if (row < 0)
+        return;
+    const MsgRow &m = gRows[row];
+    std::string who = m.from;
+    size_t lt = who.find('<');
+    if (lt != std::string::npos && lt > 0)
+        who = who.substr(0, lt);
+    who = stripped(who);
+    if (who.empty())
+        who = addressOf(m.from);
+    std::string line, err;
+    if (todo)
+    {
+        std::string t = stripped(m.subj) + (who.empty() ? "" : " (from " + who + ")");
+        for (char &c : t)
+            if (c == '\n' || c == '\r' || c == '\t')
+                c = ' ';
+        if (t.size() > 300)
+            t.resize(300);
+        line = "todo@tvmail " + t;
+    }
+    else
+    {
+        std::string dir = tvcalStateDir() + "/inbox";
+        shCapture("mkdir -p " + shq(dir));
+        static int n = 0;
+        std::string path = dir + "/" + std::to_string((long)time(nullptr)) + "-" + std::to_string((long)getpid()) +
+                           "-" + std::to_string(++n) + ".eml";
+        std::string out = stripped(shCapture(backendCommand("raw " + std::to_string(m.idx) + " " + gMbox) + " > " +
+                                             shq(path) + " 2>&1"));
+        if (!out.empty())
+        {
+            notify(out, noteError);
+            return;
+        }
+        line = "eml@tvmail " + path;
+    }
+    if (!peerRequest("tvcal", line, err))
+        notify(err, noteError);
+    else
+        notify(std::string("Asked tvcal to add this as ") + (todo ? "a to-do" : "an event") +
+               ". It asks you first: tvcal's Calendar > Incoming... (it need not be running).");
 }
 
 // File > Save message as...: the raw RFC822 message (headers, attachments and
@@ -1067,6 +1129,12 @@ void TVMailApp::handleEvent(TEvent &e)
         break;
     case cmShareChat:
         shareInChat(currentRow());
+        break;
+    case cmToCal:
+        toCalendar(currentRow(), false);
+        break;
+    case cmToTodo:
+        toCalendar(currentRow(), true);
         break;
     case cmOutOfOffice:
         outOfOffice();

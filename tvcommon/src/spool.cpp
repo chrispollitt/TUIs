@@ -28,7 +28,8 @@
 
 namespace
 {
-std::string gSelf, gPeer;
+std::string gSelf;
+std::vector<std::string> gPeers; // who gets what this app sends: one app, or several (tvcal)
 bool gOff = false;
 NoteLevel gMin = noteError;
 bool gReading = false; // showing a note that came in: it is not sent on
@@ -92,7 +93,15 @@ time_t expiryOf(const std::string &name)
 void spoolFromConf(const std::string &confPath, const char *self, const char *peer)
 {
     gSelf = self;
-    gPeer = peer;
+    gPeers.clear();
+    for (const char *p = peer; p && *p;) // `peer` may name several apps, comma-separated
+    {
+        const char *e = strchr(p, ',');
+        std::string one = e ? std::string(p, e - p) : std::string(p);
+        if (!one.empty())
+            gPeers.push_back(one);
+        p = e ? e + 1 : nullptr;
+    }
     std::string v = lowered(confValue(confPath, "ui", "share"));
     gOff = v == "off" || v == "no" || v == "n" || v == "none" || v == "0";
     gMin = v == "info" || v == "all" ? noteInfo : v == "warn" ? noteWarn : noteError;
@@ -102,7 +111,7 @@ void spoolFromConf(const std::string &confPath, const char *self, const char *pe
 // the level, the app means this one to be seen (still not with share = off).
 void spoolSend(NoteLevel level, const std::string &text, int ttl, bool always)
 {
-    if (gPeer.empty() || gOff || gReading || text.empty())
+    if (gPeers.empty() || gOff || gReading || text.empty())
         return;
     if (!always && level < gMin)
         return;
@@ -114,31 +123,74 @@ void spoolSend(NoteLevel level, const std::string &text, int ttl, bool always)
         gRecent.clear();
     gRecent[text] = now;
 
-    std::string dir = root() + "/" + gPeer;
-    mkdirs(dir);
-    std::vector<std::string> have = notes(dir);
-    size_t live = 0;
-    for (const std::string &n : have)
-        if (expiryOf(n) <= now)
-            ::remove((dir + "/" + n).c_str()); // sweep what nobody came for
-        else
-            ++live;
-    if (live >= kInboxMax)
-        return;
     std::string flat = text;
     for (char &c : flat)
         if (c == '\t' || c == '\n' || c == '\r')
             c = ' ';
-    std::string name = std::to_string((long long)now + std::max(ttl, 1)) + "-" + std::to_string((long)::getpid()) +
-                       "-" + std::to_string(++gCounter);
-    std::string tmp = dir + "/.tmp-" + name, fin = dir + "/" + name + ".note";
-    if (FILE *f = ::fopen(tmp.c_str(), "w"))
+    for (const std::string &peer : gPeers)
     {
-        ::fprintf(f, "1\t%s\t%s\t%s\n", gSelf.c_str(), levelName(level), flat.c_str());
-        ::fclose(f);
-        if (::rename(tmp.c_str(), fin.c_str()) != 0)
-            ::remove(tmp.c_str());
+        std::string dir = root() + "/" + peer;
+        mkdirs(dir);
+        std::vector<std::string> have = notes(dir);
+        size_t live = 0;
+        for (const std::string &n : have)
+            if (expiryOf(n) <= now)
+                ::remove((dir + "/" + n).c_str()); // sweep what nobody came for
+            else
+                ++live;
+        if (live >= kInboxMax)
+            continue;
+        std::string name = std::to_string((long long)now + std::max(ttl, 1)) + "-" + std::to_string((long)::getpid()) +
+                           "-" + std::to_string(++gCounter);
+        std::string tmp = dir + "/.tmp-" + name, fin = dir + "/" + name + ".note";
+        if (FILE *f = ::fopen(tmp.c_str(), "w"))
+        {
+            ::fprintf(f, "1\t%s\t%s\t%s\n", gSelf.c_str(), levelName(level), flat.c_str());
+            ::fclose(f);
+            if (::rename(tmp.c_str(), fin.c_str()) != 0)
+                ::remove(tmp.c_str());
+        }
     }
+}
+
+// A one-line request for another app (tvchat, tvcal): written whole under a temp name,
+// then renamed, so the other never reads half of it.
+//   $TVCHAT_REQUESTS / $TVCAL_REQUESTS, else $XDG_STATE_HOME/<app>/requests,
+//   else ~/.local/state/<app>/requests
+bool peerRequest(const char *peer, const std::string &line, std::string &err)
+{
+    std::string up = peer;
+    for (char &c : up)
+        c = (char)toupper((unsigned char)c);
+    std::string dir;
+    if (const char *e = ::getenv((up + "_REQUESTS").c_str()))
+        dir = e;
+    if (dir.empty())
+    {
+        const char *x = ::getenv("XDG_STATE_HOME");
+        dir = (x && *x ? std::string(x) : homePath(".local/state")) + "/" + peer + "/requests";
+    }
+    mkdirs(dir);
+    static unsigned n = 0;
+    std::string base = dir + "/" + std::to_string((long)::time(nullptr)) + "-" + std::to_string((long)::getpid()) + "-" +
+                       std::to_string(++n);
+    bool ok = false;
+    if (FILE *f = ::fopen((base + ".tmp").c_str(), "w"))
+    {
+        ok = ::fprintf(f, "%s\n", line.c_str()) > 0;
+        ok = ::fclose(f) == 0 && ok;
+    }
+    if (!ok)
+    {
+        err = "cannot write " + base + ".tmp";
+        return false;
+    }
+    if (::rename((base + ".tmp").c_str(), (base + ".req").c_str()) != 0)
+    {
+        err = "cannot rename the request file in " + dir;
+        return false;
+    }
+    return true;
 }
 
 // Called from idle: at most every 2 seconds, show what was left for this app

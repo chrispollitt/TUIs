@@ -206,9 +206,11 @@ void beepFromConf(const std::string &confPath); // goes in main(), like mesgFrom
 void notifyBeep();
 void notifyAlert(const std::string &text, NoteLevel level = noteInfo);
 // spool.cpp: toasts for the other app (tvmail <-> tvchat) as files in its inbox; see there.
-void spoolFromConf(const std::string &confPath, const char *self, const char *peer); // goes in main()
+void spoolFromConf(const std::string &confPath, const char *self, const char *peer); // goes in main(); peer: one app or "a,b"
 void spoolSend(NoteLevel level, const std::string &text, int ttl = 900, bool always = false);
 void spoolTick(); // idle() calls it: show what was left for this app
+// A request line for another app's requests directory (tvchat, tvcal); false + err if it cannot be written.
+bool peerRequest(const char *peer, const std::string &line, std::string &err);
 // The last key or mouse click, from TTvApp::getEvent: "idle" for the chat toast.
 void inputSeen();
 int idleSeconds();

@@ -46,6 +46,7 @@ private:
     void chatWithSender(int row);
     void openChatInvite(int row);
     void shareInChat(int row);
+    void toCalendar(int row, bool todo);
     void outOfOffice();
     void moveMsg(int row);
     void viewParts(int row);

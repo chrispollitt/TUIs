@@ -1,0 +1,27 @@
+# tvcal configuration (read by tvcal-backend).  NO PASSWORDS HERE: $TVCAL_PASS or ~/.netrc
+# (machine HOST login USER password PASSWORD, mode 0600).  Nothing in this file is needed for a  # allowlist secret
+# local calendar (~/.local/share/tvcal/calendar.ics).
+
+[server]
+# The calendar on the server (Radicale on the mail / chat host; see configure-radicale.sh).
+# One collection per calendar: https://HOST/radicale/USER/calendar/
+#url = https://cpbee.cmnet/radicale/chris/calendar/
+#user = chris
+# A self-signed server: its certificate file, or (not recommended) insecure = yes
+#ca = ~/.config/tvcal/cpbee-ca.pem
+#insecure = no
+# mode = local ignores the url for one machine
+#mode = remote
+
+[cal]
+# default reminder for a new event: minutes before, or off
+#remind = 15
+# mon or sun
+#week_start = mon
+
+[ui]
+# which toasts go to tvmail and tvchat on their own: error (default), warn, info, off.
+# Reminders always go.
+#share = error
+#beep = n
+#mesg = n

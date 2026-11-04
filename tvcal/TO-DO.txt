@@ -1,0 +1,21 @@
+tvcal - features and wishes not done yet
+
+ 1. Run configure-radicale.sh on cpbee for real (the server half has only been syntax-checked) and
+    fix what it finds; then the client half on cmlaptop / cmdesktop.
+ 2. Time zones: a TZID is taken as local time and a Z is converted, but a new event has no zone.
+    Needs VTIMEZONE or a zoneinfo lookup.
+ 3. Editing one occurrence of a repeating event (an exception), or ending the series from a day on.
+    Today editing changes the whole series; EXDATEs from other programs are honoured, none written.
+ 4. Replying to an invitation (RSVP, iTIP REPLY by mail) - tvmail's Add to calendar only imports.
+ 5. Attendees: shown nowhere, kept when the item is saved.
+ 6. Sync across a dropped connection: writes are refused while offline; an offline queue would be better.
+ 7. Two machines changing one item at once: last save wins (an If-Match / ETag check would say so).
+ 8. A week view and a "next 7 days" mode; several calendars (one collection per calendar).
+ 9. Reminders fire only while some tvcal or `tvcal-backend due` runs: a small cron / systemd timer on cpbee
+    could run `tvcal-backend due` and mail or chat the result when no tvcal is open.
+10. The to-do list: sub-tasks, sort choices, a due time (not only a date), recurring to-dos.
+11. A man page (tvcal.1, tvcal-backend.1); the screenshots in images/ (tests/screenshot.py like the others).
+12. Notes are one line in the dialog; a multi-line editor for them.
+13. Floyd's clippy tips in tvcal (the "Floyd, not clippy, but ..." ones) - only his commands are in.
+14. tvchat's Add selection offers the lines as they are; picking a time out of the text ("lunch at 12:30
+    tomorrow") would save a step.

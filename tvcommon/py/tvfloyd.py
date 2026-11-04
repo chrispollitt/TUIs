@@ -315,6 +315,113 @@ class Notes(object):
         return "Noted as number %d." % self._add("notes", r)
 
 
+# -- the calendar (tvcal) -----------------------------------------------------
+def find_tvcal():
+    """tvcal's helper, if tvcal is installed (the link is optional)."""
+    import shutil
+    found = shutil.which("tvcal-backend")
+    if found:
+        return found
+    for d in ("/usr/local/bin", "~/bin", "~/.local/bin"):
+        path = os.path.join(os.path.expanduser(d), "tvcal-backend")
+        if os.path.isfile(path) and os.access(path, os.X_OK):
+            return path
+    return None
+
+
+class CalNotes(Notes):
+    """The owner's notes, with the to-do list in tvcal - the same list tvcal shows, on the
+    calendar server - and the calendar itself: !todo, !cal, !event.  Only ever made for the
+    owner (tvmail's Floyd; tvchat's, for his admins): other people's lists stay in JSON files.
+    A to-do is numbered by its place in tvcal's open list, so 'done 2' ticks off what !todo showed."""
+
+    def __init__(self, path=None, tvcal=None):
+        Notes.__init__(self, path)
+        self.tvcal = tvcal or find_tvcal()
+
+    def _run(self, *argv):
+        import subprocess
+        try:
+            p = subprocess.run([self.tvcal] + list(argv), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                               timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            raise CalcError("tvcal does not answer")
+        out = p.stdout.decode("utf-8", "replace").strip()
+        if p.returncode != 0:
+            raise CalcError(out.replace("tvcal-backend: ", "")[:200] or "tvcal failed")
+        return out
+
+    def _open(self):
+        rows = []
+        for ln in self._run("todos").splitlines():
+            f = ln.split("\t")
+            if len(f) >= 5:
+                rows.append((f[0], f[3], f[4]))          # uid, due, summary
+        return rows
+
+    def todo(self, rest):
+        word, _, arg = rest.strip().partition(" ")
+        word, arg = word.lower(), arg.strip()
+        rows = self._open()
+        if word in ("", "list", "show"):
+            if not rows:
+                return "Nothing to do. Floyd likes that. Floyd also likes doing things."
+            return "; ".join("%d. %s%s" % (i, t, " (due %s)" % d[5:] if d else "")
+                             for i, (_, d, t) in enumerate(rows, 1))
+        if word in ("add", "+") or word not in ("done", "rm", "del", "delete", "x", "clear"):
+            text = arg if word in ("add", "+") else rest.strip()
+            text = " ".join(text.split())[:300]
+            if not text:
+                raise CalcError("add what?")
+            self._run("add-todo", "--", text)
+            return "Added as number %d, in tvcal." % (len(rows) + 1)
+        if word == "clear":
+            for uid, _, _ in rows:
+                self._run("done", uid)
+            return "Ticked off %d thing%s." % (len(rows), "" if len(rows) == 1 else "s")
+        if not arg.isdigit() or not 1 <= int(arg) <= len(rows):
+            raise CalcError("which number?")
+        uid, _, text = rows[int(arg) - 1]
+        if word in ("done", "x"):
+            self._run("done", uid)
+            return "Done: %s. Floyd is proud of you." % text
+        self._run("rm", uid)
+        return "Removed: %s." % text
+
+    def cal(self, rest):
+        """!cal [today|tomorrow|week|DATE]: what is on."""
+        import datetime
+        arg = rest.strip().lower() or "today"
+        today = datetime.date.today()
+        if arg == "week":
+            lo, hi = today, today + datetime.timedelta(days=6)
+        else:
+            lo = hi = datetime.date.fromisoformat(self._run("norm-date", arg))
+        out = []
+        for ln in self._run("range", lo.isoformat(), hi.isoformat()).splitlines():
+            f = ln.split("\t")
+            if len(f) >= 5:
+                out.append(("%s %s %s" % (f[0][5:] if lo != hi else "", f[1] or "all day", f[4])).strip())
+        return "; ".join(out) if out else "Nothing on. Floyd checked twice."
+
+    def event(self, rest):
+        """!event [DATE] [HH:MM[-HH:MM]] TITLE"""
+        m = re.match(r"^\s*(\d{4}-\d{2}-\d{2}|\d{1,2}-\d{1,2}|today|tomorrow|\+\d+|mon|tue|wed|thu|fri|sat|sun)?\s*"
+                     r"(?:(\d{1,2}:\d{2})(?:-(\d{1,2}:\d{2}))?)?\s*(.*)$", rest, re.I)
+        day, t0, t1, title = m.group(1) or "today", m.group(2) or "", m.group(3) or "", m.group(4).strip()
+        if not title:
+            raise CalcError("Floyd needs a title: !event tomorrow 14:00 Dentist")
+        self._run("add-event", "--date=" + day, "--start=" + t0, "--end=" + t1, "--", title)
+        return "Floyd put \"%s\" in the calendar." % title
+
+
+def make_notes(path=None, calendar=False):
+    """The notes for one person; the owner's (calendar=True) go to tvcal when it is installed."""
+    if calendar and find_tvcal():
+        return CalNotes(path)
+    return Notes(path)
+
+
 # -- the tools, by name ------------------------------------------------------
 def run_tool(verb, rest, notes=None, now=None):
     """The answer to a !verb or a verb said to Floyd, or None when it is not
@@ -337,6 +444,10 @@ def run_tool(verb, rest, notes=None, now=None):
         return notes.todo(rest)
     if verb in ("note", "notes") and notes is not None:
         return notes.note(rest)
+    if verb in ("cal", "agenda", "calendar") and isinstance(notes, CalNotes):
+        return notes.cal(rest)
+    if verb in ("event", "appointment") and isinstance(notes, CalNotes):
+        return notes.event(rest)
     return None
 
 

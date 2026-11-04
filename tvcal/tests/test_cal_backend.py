@@ -1,0 +1,562 @@
+#!/usr/bin/env python3
+"""Unit and verb tests for tvcal-backend: iCalendar round trip, repeats, to-dos,
+reminders, the requests directory and the serve framing.  No network; every test
+runs on its own temp data, state and config.
+
+    python3 -m unittest discover -s tests -p 'test_cal_backend.py'
+"""
+import datetime as dt
+import importlib.machinery
+import importlib.util
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+BACKEND = os.path.join(HERE, "..", "backend", "tvcal-backend")
+
+
+def load():
+    loader = importlib.machinery.SourceFileLoader("tvcal_backend", BACKEND)
+    spec = importlib.util.spec_from_loader("tvcal_backend", loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
+
+
+tb = load()
+D = dt.date
+
+
+class Env(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="tvcal-test-")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.env = dict(os.environ, TVCAL_DATA=os.path.join(self.tmp, "cal.ics"),
+                        TVCAL_STATE=os.path.join(self.tmp, "state"),
+                        TVCAL_CONF=os.path.join(self.tmp, "tvcal.conf"),
+                        TVCAL_REQUESTS=os.path.join(self.tmp, "state", "requests"))
+        for k in ("TVCAL_DATA", "TVCAL_STATE", "TVCAL_CONF", "TVCAL_REQUESTS"):
+            os.environ[k] = self.env[k]
+            self.addCleanup(os.environ.pop, k, None)
+
+    def run_be(self, *argv, stdin=None, check=True):
+        p = subprocess.run([sys.executable, BACKEND] + list(argv), env=self.env, input=stdin,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+        if check and p.returncode != 0:
+            self.fail("tvcal-backend %s -> %d: %s%s" % (" ".join(argv), p.returncode, p.stdout, p.stderr))
+        return p
+
+    def lines(self, *argv):
+        out = self.run_be(*argv).stdout
+        return [l.split("\t") for l in out.splitlines() if l]
+
+
+class Parsing(unittest.TestCase):
+    def test_fold_roundtrip_and_escapes(self):
+        c = tb.Comp("VEVENT")
+        long = "x" * 200 + "é,;\\ and more"
+        c.set("SUMMARY", tb.esc(long))
+        text = tb.comp_text(c)
+        self.assertTrue(all(len(l.encode()) <= 75 for l in text.split("\r\n")))
+        back = tb.parse_ics(text)[0]
+        self.assertEqual(back.text("SUMMARY"), long)
+
+    def test_multiline_note(self):
+        self.assertEqual(tb.unesc(tb.esc("a\nb;c,d\\e")), "a\nb;c,d\\e")
+
+    def test_dates(self):
+        base = D(2026, 11, 3)                       # a Tuesday
+        self.assertEqual(tb.norm_date("tomorrow", base), D(2026, 11, 4))
+        self.assertEqual(tb.norm_date("+10", base), D(2026, 11, 13))
+        self.assertEqual(tb.norm_date("fri", base), D(2026, 11, 6))
+        self.assertEqual(tb.norm_date("tue", base), D(2026, 11, 10))      # the next one, not today
+        self.assertEqual(tb.norm_date("1-5", base), D(2027, 1, 5))
+        self.assertEqual(tb.norm_date("2026-12-25", base), D(2026, 12, 25))
+        for bad in ("2026-02-30", "soon", "13-45"):
+            with self.assertRaises(tb.UserError):
+                tb.norm_date(bad, base)
+
+    def test_times(self):
+        self.assertEqual(tb.norm_time("9:05"), "09:05")
+        self.assertEqual(tb.norm_time("1430"), "14:30")
+        with self.assertRaises(tb.UserError):
+            tb.norm_time("25:00")
+
+    def test_utc_converted_to_local(self):
+        d, t, allday = tb.parse_ics_when(["DTSTART", "", "20261103T120000Z"])
+        want = dt.datetime(2026, 11, 3, 12, tzinfo=dt.timezone.utc).astimezone()
+        self.assertEqual((d, t, allday), (want.date(), want.strftime("%H:%M"), False))
+
+    def test_triggers(self):
+        self.assertEqual(tb.trigger_minutes("-PT15M"), 15)
+        self.assertEqual(tb.trigger_minutes("-P1D"), 1440)
+        self.assertEqual(tb.trigger_minutes("-PT1H30M"), 90)
+        self.assertEqual(tb.trigger_minutes("PT0S"), 0)
+
+
+def ev_from(rrule, start="20261103", exdate=None, allday=True):
+    c = tb.Comp("VEVENT")
+    c.set("UID", "t")
+    c.set("SUMMARY", "t")
+    if allday:
+        c.set("DTSTART", start, ";VALUE=DATE")
+    else:
+        c.set("DTSTART", start)
+    if rrule:
+        c.set("RRULE", rrule)
+    if exdate:
+        c.set("EXDATE", exdate, ";VALUE=DATE")
+    return tb.Item(c).read_event()
+
+
+class Repeats(unittest.TestCase):
+    def test_single(self):
+        e = ev_from(None)
+        self.assertEqual(tb.occurrences(e, D(2026, 11, 1), D(2026, 11, 30)), [D(2026, 11, 3)])
+        self.assertEqual(tb.occurrences(e, D(2026, 11, 4), D(2026, 11, 30)), [])
+
+    def test_daily_interval_far_window(self):
+        e = ev_from("FREQ=DAILY;INTERVAL=3")
+        got = tb.occurrences(e, D(2027, 3, 1), D(2027, 3, 10))
+        self.assertTrue(got and all((d - D(2026, 11, 3)).days % 3 == 0 for d in got))
+        self.assertEqual(len(got), 3)
+
+    def test_daily_count_and_until(self):
+        self.assertEqual(len(tb.occurrences(ev_from("FREQ=DAILY;COUNT=4"), D(2026, 1, 1), D(2030, 1, 1))), 4)
+        got = tb.occurrences(ev_from("FREQ=DAILY;UNTIL=20261106"), D(2026, 1, 1), D(2030, 1, 1))
+        self.assertEqual(got[-1], D(2026, 11, 6))
+
+    def test_weekly_byday(self):
+        e = ev_from("FREQ=WEEKLY;BYDAY=MO,WE,FR")          # starts Tue 3 Nov
+        got = tb.occurrences(e, D(2026, 11, 1), D(2026, 11, 14))
+        self.assertEqual(got, [D(2026, 11, 4), D(2026, 11, 6), D(2026, 11, 9), D(2026, 11, 11), D(2026, 11, 13)])
+
+    def test_weekly_biweekly_plain(self):
+        e = ev_from("FREQ=WEEKLY;INTERVAL=2")
+        got = tb.occurrences(e, D(2026, 11, 1), D(2026, 12, 31))
+        self.assertEqual(got, [D(2026, 11, 3), D(2026, 11, 17), D(2026, 12, 1), D(2026, 12, 15), D(2026, 12, 29)])
+
+    def test_weekly_far_window_keeps_phase(self):
+        e = ev_from("FREQ=WEEKLY;INTERVAL=2")
+        got = tb.occurrences(e, D(2028, 1, 1), D(2028, 2, 28))
+        self.assertTrue(got)
+        self.assertTrue(all((d - D(2026, 11, 3)).days % 14 == 0 for d in got))
+
+    def test_monthly_skips_short_months(self):
+        e = ev_from("FREQ=MONTHLY", start="20260131")
+        got = tb.occurrences(e, D(2026, 1, 1), D(2026, 6, 30))
+        self.assertEqual(got, [D(2026, 1, 31), D(2026, 3, 31), D(2026, 5, 31)])
+
+    def test_yearly_leap_day(self):
+        e = ev_from("FREQ=YEARLY", start="20240229")
+        got = tb.occurrences(e, D(2024, 1, 1), D(2032, 12, 31))
+        self.assertEqual(got, [D(2024, 2, 29), D(2028, 2, 29), D(2032, 2, 29)])
+
+    def test_exdate(self):
+        e = ev_from("FREQ=DAILY;COUNT=3", exdate="20261104")
+        self.assertEqual(tb.occurrences(e, D(2026, 11, 1), D(2026, 11, 30)), [D(2026, 11, 3), D(2026, 11, 5)])
+
+
+class Verbs(Env):
+    def test_event_lifecycle(self):
+        uid = self.run_be("add-event", "--date", "2026-11-05", "--start", "14:00", "--end", "15:00",
+                          "--location", "Room 4", "--remind", "10", "Dentist").stdout.strip()
+        r = self.lines("range", "2026-11-01", "2026-11-30")
+        self.assertEqual(r[0][:7], ["2026-11-05", "14:00", "15:00", uid, "Dentist", "Room 4", "none"])
+        self.assertEqual(r[0][7], "10")
+        show = self.lines("show", uid)[0]
+        self.assertEqual(show[:7], ["event", uid, "Dentist", "Room 4", "2026-11-05", "14:00", "15:00"])
+        self.run_be("set-event", uid, "--date", "2026-11-06", "--repeat", "weekly", "--interval", "2", "Dentist again")
+        r = self.lines("range", "2026-11-01", "2026-12-31")
+        self.assertEqual([x[0] for x in r], ["2026-11-06", "2026-11-20", "2026-12-04", "2026-12-18"])
+        self.assertEqual(r[0][4], "Dentist again")
+        self.run_be("set-event", uid, "--repeat", "none")
+        self.assertEqual(len(self.lines("range", "2026-11-01", "2026-12-31")), 1)
+        self.run_be("rm", uid)
+        self.assertEqual(self.lines("range", "2026-11-01", "2026-12-31"), [])
+
+    def test_all_day_spanning_days(self):
+        self.run_be("add-event", "--date", "2026-12-24", "--days", "3", "Holiday")
+        r = self.lines("range", "2026-12-20", "2026-12-31")
+        self.assertEqual([x[0] for x in r], ["2026-12-24", "2026-12-25", "2026-12-26"])
+        self.assertEqual(r[0][1], "")
+        r = self.lines("range", "2026-12-26", "2026-12-26")     # a window starting inside the span
+        self.assertEqual(len(r), 1)
+
+    def test_bad_input(self):
+        p = self.run_be("add-event", "--date", "2026-02-30", "x", check=False)
+        self.assertEqual(p.returncode, 1)
+        p = self.run_be("add-event", "--start", "10:00", "--end", "09:00", "x", check=False)
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("before it starts", p.stderr)
+        p = self.run_be("add-event", check=False)
+        self.assertIn("title", p.stderr)
+
+    def test_todos(self):
+        a = self.run_be("add-todo", "--due", "2026-11-09", "--prio", "2", "Write report").stdout.strip()
+        b = self.run_be("add-todo", "--due", "2026-11-04", "--cats", "home,garden", "Mow lawn").stdout.strip()
+        c = self.run_be("add-todo", "No date at all").stdout.strip()
+        t = self.lines("todos")
+        self.assertEqual([x[0] for x in t], [b, a, c])                 # by due date, undated last
+        self.assertEqual(t[0][1:], ["open", "0", "2026-11-04", "Mow lawn", "home,garden"])
+        self.run_be("done", b)
+        self.assertEqual([x[0] for x in self.lines("todos")], [a, c])
+        self.assertEqual([x[0] for x in self.lines("todos", "--all")][-1], b)       # done ones last
+        self.run_be("done", b, "--undo")
+        self.assertEqual(len(self.lines("todos")), 3)
+        self.run_be("set-todo", a, "--prio", "1", "--due", "", "--summary", "Write the report")
+        row = [x for x in self.lines("todos") if x[0] == a][0]
+        self.assertEqual(row[2:5], ["1", "", "Write the report"])
+        self.run_be("rm", c)
+        self.assertEqual(len(self.lines("todos")), 2)
+
+    def test_file_is_standard_ics(self):
+        self.run_be("add-event", "--date", "2026-11-05", "--start", "09:30", "Meet; with, odd\\chars")
+        self.run_be("add-todo", "--due", "2026-11-06", "Call")
+        text = open(self.env["TVCAL_DATA"], "rb").read().decode()
+        self.assertTrue(text.startswith("BEGIN:VCALENDAR\r\nVERSION:2.0\r\n"))
+        for want in ("BEGIN:VEVENT", "DTSTART:20261105T093000", "BEGIN:VALARM", "TRIGGER:-PT15M",
+                     "BEGIN:VTODO", "DUE;VALUE=DATE:20261106", "STATUS:NEEDS-ACTION", "SUMMARY:Meet\\; with\\, odd\\\\chars"):
+            self.assertIn(want, text)
+        self.assertTrue(text.rstrip().endswith("END:VCALENDAR"))
+
+    def test_unknown_properties_survive_an_edit(self):
+        open(self.env["TVCAL_DATA"], "w").write(
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:x1\r\nSUMMARY:Imported\r\n"
+            "DTSTART;TZID=Europe/London:20261110T100000\r\nATTENDEE;CN=Bob:mailto:bob@example.com\r\n"
+            "X-CUSTOM:keep me\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
+        self.assertEqual(self.lines("range", "2026-11-10", "2026-11-10")[0][:2], ["2026-11-10", "10:00"])
+        self.run_be("set-event", "x1", "--location", "Pub")
+        text = open(self.env["TVCAL_DATA"]).read()
+        self.assertIn("ATTENDEE;CN=Bob:mailto:bob@example.com", text)
+        self.assertIn("X-CUSTOM:keep me", text)
+        self.assertIn("LOCATION:Pub", text)
+
+    def test_import_replaces_by_uid_and_export(self):
+        src = os.path.join(self.tmp, "in.ics")
+        open(src, "w").write("BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:u1\r\nSUMMARY:One\r\nDTSTART:20261201T080000\r\n"
+                             "END:VEVENT\r\nBEGIN:VTODO\r\nUID:u2\r\nSUMMARY:Task\r\nDUE:20261202\r\nEND:VTODO\r\n"
+                             "END:VCALENDAR\r\n")
+        self.assertEqual(self.run_be("import", src).stdout.strip(), "imported 2")
+        self.assertEqual(self.run_be("import", src).stdout.strip(), "imported 2")
+        self.assertEqual(len(self.lines("range", "2026-12-01", "2026-12-01")), 1)      # not doubled
+        self.assertEqual(len(self.lines("todos")), 1)
+        one = self.run_be("ics", "u1").stdout
+        self.assertIn("SUMMARY:One", one)
+        self.assertNotIn("Task", one)
+
+    def test_find_and_describe(self):
+        t = D.today().isoformat()
+        uid = self.run_be("add-event", "--date", t, "--start", "11:00", "--location", "Cafe", "Lunch with Ann").stdout.strip()
+        self.run_be("add-todo", "Buy ann a card")
+        hits = self.lines("find", "ANN")
+        self.assertEqual(sorted(h[0] for h in hits), ["event", "todo"])
+        d = self.run_be("describe", uid).stdout
+        self.assertIn("Lunch with Ann", d)
+        self.assertIn("11:00", d)
+        self.assertIn("(Cafe)", d)
+
+    def test_due_tells_each_reminder_once(self):
+        now = dt.datetime.now()
+        if now.hour == 23 or now.hour == 0:
+            self.skipTest("too near midnight for a same-day reminder")
+        start = (now + dt.timedelta(minutes=5)).strftime("%H:%M")
+        uid = self.run_be("add-event", "--date", "today", "--start", start, "--remind", "10", "Soon").stdout.strip()
+        far = (now + dt.timedelta(hours=3)).strftime("%H:%M")
+        if (now + dt.timedelta(hours=3)).date() == now.date():
+            self.run_be("add-event", "--date", "today", "--start", far, "--remind", "10", "Later")
+        tid = self.run_be("add-todo", "--due", "yesterday", "Overdue thing").stdout.strip()
+        first = self.lines("due")
+        kinds = sorted((r[0], r[1]) for r in first)
+        self.assertEqual(kinds, sorted([("event", uid), ("todo", tid)]))
+        self.assertEqual(self.lines("due"), [])
+
+    def test_remind_off(self):
+        now = dt.datetime.now() + dt.timedelta(minutes=2)
+        if now.date() != dt.date.today():
+            self.skipTest("near midnight")
+        self.run_be("add-event", "--date", "today", "--start", now.strftime("%H:%M"), "--remind", "off", "Quiet")
+        self.assertEqual(self.lines("due"), [])
+
+    def test_default_remind_from_config(self):
+        open(self.env["TVCAL_CONF"], "w").write("[cal]\nremind = 30\n")
+        uid = self.run_be("add-event", "--date", "2026-11-05", "x").stdout.strip()
+        self.assertEqual(self.lines("range", "2026-11-05", "2026-11-05")[0][7], "30")
+        open(self.env["TVCAL_CONF"], "w").write("[cal]\nremind = off\n")
+        uid2 = self.run_be("add-event", "--date", "2026-11-06", "y").stdout.strip()
+        self.assertEqual(self.lines("range", "2026-11-06", "2026-11-06")[0][7], "")
+
+    def test_check_config(self):
+        good = os.path.join(self.tmp, "g.conf")
+        open(good, "w").write("[cal]\nremind = 10\nweek_start = sun\n[ui]\nshare = error\n")
+        self.assertIn("ok:", self.run_be("check-config", good).stdout)
+        bad = os.path.join(self.tmp, "b.conf")
+        open(bad, "w").write("[cal]\nremind = soon\nweek_start = wed\nwhat = 1\n")
+        p = self.run_be("check-config", bad, check=False)
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("remind", p.stdout)
+        self.assertIn("week_start", p.stdout)
+        self.assertIn("warning: [cal] what", p.stdout)
+
+
+class Requests(Env):
+    def drop(self, name, line):
+        d = self.env["TVCAL_REQUESTS"]
+        os.makedirs(d, exist_ok=True)
+        open(os.path.join(d, name + ".req"), "w").write(line + "\n")
+
+    def test_todo_and_event_wait_for_a_yes(self):
+        self.drop("a", "todo@tvmail Reply to  Bob")
+        self.drop("b", "event@tvchat 2026-12-01 14:00-15:30 Planning call")
+        self.drop("c", "nonsense")
+        out = self.lines("requests")
+        self.assertEqual(len(out), 3)
+        self.assertTrue(all(o[0] == "notice" for o in out))
+        self.assertIn("tvmail asks to add a to-do", out[0][1])
+        self.assertEqual(self.lines("todos"), [])                   # nothing added by itself
+        self.assertEqual(self.lines("range", "2026-12-01", "2026-12-01"), [])
+        pend = self.lines("pending")
+        self.assertEqual([p[1:4] for p in pend], [["todo", "tvmail", "Reply to Bob"],
+                                                  ["event", "tvchat", "Planning call"]])
+        got = self.lines("pending-get", pend[1][0])[0]
+        self.assertEqual(got[:7], ["event", pend[1][0], "Planning call", "", "2026-12-01", "14:00", "15:30"])
+        self.run_be("pending-drop", pend[0][0])
+        self.assertEqual(len(self.lines("pending")), 1)
+        self.assertEqual(self.lines("requests"), [])                # consumed
+
+    def test_eml_with_a_calendar_part(self):
+        eml = os.path.join(self.tmp, "m.eml")
+        open(eml, "w").write(
+            "From: Ann <ann@example.com>\nTo: me@example.com\nSubject: Lunch?\nDate: Mon, 02 Nov 2026 10:00:00 +0000\n"
+            "MIME-Version: 1.0\nContent-Type: multipart/mixed; boundary=B\n\n--B\nContent-Type: text/plain\n\nSee invite.\n"
+            "--B\nContent-Type: text/calendar; method=REQUEST\n\nBEGIN:VCALENDAR\nMETHOD:REQUEST\nBEGIN:VEVENT\n"
+            "UID:inv1\nSUMMARY:Team lunch\nLOCATION:Canteen\nDTSTART:20261120T120000\nDTEND:20261120T130000\n"
+            "END:VEVENT\nEND:VCALENDAR\n--B--\n")
+        self.drop("e", "eml@tvmail " + eml)
+        self.lines("requests")
+        pend = self.lines("pending")
+        self.assertEqual(pend[0][1:5], ["event", "tvmail", "Team lunch", "2026-11-20"])
+        got = self.lines("pending-get", pend[0][0])[0]
+        self.assertEqual((got[3], got[5], got[6]), ("Canteen", "12:00", "13:00"))
+
+    def test_eml_without_one_uses_the_subject(self):
+        eml = os.path.join(self.tmp, "n.eml")
+        open(eml, "w").write("From: Bob <bob@example.com>\nSubject: Quarterly figures\n"
+                             "Date: Fri, 01 Jan 2021 10:00:00 +0000\n\nbody\n")
+        self.drop("e", "eml@tvmail " + eml)
+        self.lines("requests")
+        p = self.lines("pending")[0]
+        self.assertEqual((p[1], p[3], p[4]), ("event", "Quarterly figures", D.today().isoformat()))   # a past date is not used
+        got = self.lines("pending-get", p[0])[0]
+        self.assertIn("bob@example.com", got[12])
+
+    def test_a_request_for_a_missing_file_is_reported(self):
+        self.drop("x", "ics /no/such/file.ics")
+        out = self.lines("requests")
+        self.assertIn("failed", out[0][1])
+        self.assertEqual(self.lines("pending"), [])
+
+
+class Serve(Env):
+    def test_framing(self):
+        p = subprocess.Popen([sys.executable, BACKEND, "serve"], env=self.env, stdin=subprocess.PIPE,
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+
+        def frame():
+            head = p.stdout.readline().decode().split()
+            return int(head[0]), p.stdout.read(int(head[1])).decode()
+
+        try:
+            self.assertEqual(frame(), (0, "ready"))
+            p.stdin.write(b"ping\n"); p.stdin.flush()
+            self.assertEqual(frame(), (0, "pong\n"))
+            p.stdin.write(b"add-event --date 2026-11-05 'Quoted  title'\n"); p.stdin.flush()
+            st, body = frame()
+            self.assertEqual(st, 0)
+            uid = body.strip()
+            p.stdin.write(("range 2026-11-05 2026-11-05\n").encode()); p.stdin.flush()
+            st, body = frame()
+            self.assertIn("Quoted  title", body)
+            p.stdin.write(b"show nosuchuid\n"); p.stdin.flush()
+            st, body = frame()
+            self.assertEqual(st, 1)
+            p.stdin.write(b"bogus-verb\n"); p.stdin.flush()
+            self.assertEqual(frame()[0], 2)
+            p.stdin.write(b"ping\n"); p.stdin.flush()               # still alive
+            self.assertEqual(frame(), (0, "pong\n"))
+        finally:
+            p.stdin.close()
+            p.wait(5)
+
+
+class FakeCalDav:
+    """The bits of a CalDAV collection tvcal uses: GET of the whole collection, PUT / DELETE of
+    one item, basic auth."""
+
+    def __init__(self):
+        import http.server, threading, base64
+        self.items = {}                 # file name -> VEVENT/VTODO text
+        self.log = []
+        self.auth = "Basic " + base64.b64encode(b"me:secret").decode()
+        outer = self
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def _ok(self):
+                if self.headers.get("Authorization") != outer.auth:
+                    self.send_response(401)
+                    self.end_headers()
+                    return False
+                return True
+
+            def do_GET(self):
+                if not self._ok():
+                    return
+                outer.log.append("GET")
+                body = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n" + "".join(outer.items.values()) + "END:VCALENDAR\r\n"
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body.encode())))
+                self.end_headers()
+                self.wfile.write(body.encode())
+
+            def do_PUT(self):
+                if not self._ok():
+                    return
+                n = int(self.headers.get("Content-Length", 0))
+                text = self.rfile.read(n).decode()
+                inner = text.split("VERSION:2.0\r\n", 1)[1].rsplit("END:VCALENDAR", 1)[0]
+                outer.items[self.path] = inner
+                outer.log.append("PUT " + self.path)
+                self.send_response(201)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def do_DELETE(self):
+                if not self._ok():
+                    return
+                outer.log.append("DELETE " + self.path)
+                self.send_response(204 if outer.items.pop(self.path, None) is not None else 404)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+        self.srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+        self.url = "http://127.0.0.1:%d/me/cal/" % self.srv.server_address[1]
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+
+    def close(self):
+        self.srv.shutdown()
+        self.srv.server_close()
+
+
+class RemoteMode(Env):
+    def setUp(self):
+        super().setUp()
+        self.dav = FakeCalDav()
+        self.addCleanup(self.dav.close)
+        self.env.pop("TVCAL_DATA")
+        os.environ.pop("TVCAL_DATA", None)
+        self.env["TVCAL_PASS"] = "secret"
+        with open(self.env["TVCAL_CONF"], "w") as fh:
+            fh.write("[server]\nurl = %s\nuser = me\n" % self.dav.url)
+
+    def test_items_go_to_the_server_and_come_back(self):
+        uid = self.run_be("add-event", "--date", "2026-11-05", "--start", "10:00", "Standup").stdout.strip()
+        self.assertEqual(len(self.dav.items), 1)
+        self.assertIn("SUMMARY:Standup", list(self.dav.items.values())[0])
+        # another machine's view: no cache, same server
+        shutil.rmtree(self.env["TVCAL_STATE"])
+        self.assertEqual(self.lines("range", "2026-11-05", "2026-11-05")[0][4], "Standup")
+        self.run_be("add-todo", "Water plants")
+        self.assertEqual(len(self.dav.items), 2)
+        self.dav.log.clear()
+        self.run_be("set-event", uid, "--location", "Room 1")
+        self.assertEqual([l for l in self.dav.log if l != "GET"].__len__(), 1)      # only the changed item is sent
+        self.run_be("rm", uid)
+        self.assertTrue(any(l.startswith("DELETE") for l in self.dav.log))
+        self.assertEqual(len(self.dav.items), 1)
+
+    def test_reads_use_a_fresh_copy_and_survive_the_server_going(self):
+        self.run_be("add-event", "--date", "2026-11-05", "Kept")
+        self.dav.close()
+        self.assertEqual(self.lines("range", "2026-11-05", "2026-11-05")[0][4], "Kept")   # the copy
+        os.utime(os.path.join(self.env["TVCAL_STATE"], "cache.ics"), (1, 1))                 # stale: it tries the server
+        self.assertEqual(self.lines("range", "2026-11-05", "2026-11-05")[0][4], "Kept")   # ... and falls back
+        p = self.run_be("add-event", "--date", "2026-11-06", "Lost", check=False)
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("nothing was saved", p.stderr)
+
+    def test_wrong_password(self):
+        self.env["TVCAL_PASS"] = "nope"
+        p = self.run_be("todos", check=False)
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("refused the login", p.stderr)
+
+    def test_settings_say_remote(self):
+        rows = {r[0]: r[1] for r in self.lines("settings")}
+        self.assertEqual(rows["mode"], "remote")
+        self.assertEqual(rows["file"], self.dav.url)
+
+
+class Floyd(Env):
+    """Floyd on the calendar: the `floyd` verb, and tvfloyd's CalNotes - which is what tvmail's and
+    tvchat's Floyd use for their owner - working on the same list and calendar."""
+
+    def say(self, text):
+        return self.run_be("floyd", text).stdout.strip()
+
+    def test_todo_is_the_calendars_list(self):
+        self.assertIn("Added as number 1", self.say("!todo add Buy milk"))
+        self.assertIn("Added as number 2", self.say("!todo Call Bob"))
+        self.assertEqual(self.say("!todo"), "1. Buy milk; 2. Call Bob")
+        self.assertEqual([t[4] for t in self.lines("todos")], ["Buy milk", "Call Bob"])     # tvcal's list
+        self.assertIn("Done: Buy milk", self.say("!todo done 1"))
+        self.assertEqual(self.say("!todo"), "1. Call Bob")
+        self.assertIn("which number", self.say("!todo done 9"))
+        self.assertIn("Removed: Call Bob", self.say("!todo rm 1"))
+        self.assertIn("Nothing to do", self.say("!todo"))
+
+    def test_event_and_cal(self):
+        self.assertIn("Dentist", self.say("!event 2026-11-05 14:00-15:00 Dentist"))
+        r = self.lines("range", "2026-11-05", "2026-11-05")
+        self.assertEqual((r[0][1], r[0][2], r[0][4]), ("14:00", "15:00", "Dentist"))
+        self.assertIn("14:00 Dentist", self.say("!cal 2026-11-05"))
+        self.assertIn("Nothing on", self.say("!cal 2026-12-24"))
+        self.run_be("add-event", "--date", "today", "Standup")
+        self.assertIn("Standup", self.say("!cal week"))
+        self.assertIn("needs a title", self.say("!event tomorrow"))
+
+    def test_the_tools_still_work(self):
+        self.assertIn("84", self.say("!calc 12*7"))
+        self.assertIn("Floyd", self.say("help") + "Floyd")
+
+    def test_off(self):
+        open(self.env["TVCAL_CONF"], "w").write("[floyd]\nlevel = off\n")
+        self.assertIn("Floyd is off", self.say("!todo"))
+
+    def test_calnotes_only_for_the_owner(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("tvfloyd", os.path.join(HERE, "..", "..", "tvcommon", "py", "tvfloyd.py"))
+        tvf = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(tvf)
+        plain = tvf.make_notes(None, calendar=False)
+        self.assertNotIsInstance(plain, tvf.CalNotes)
+        old = os.environ.get("PATH", "")
+        os.environ["PATH"] = os.path.dirname(os.path.abspath(BACKEND)) + os.pathsep + old
+        self.addCleanup(os.environ.__setitem__, "PATH", old)
+        owner = tvf.make_notes(None, calendar=True)
+        self.assertIsInstance(owner, tvf.CalNotes)
+        self.assertIn("Added", tvf.run_tool("todo", "add Write tests", owner))
+        self.assertEqual(self.lines("todos")[0][4], "Write tests")
+        self.assertIn("Added", tvf.run_tool("todo", "add Mine only", plain))     # a stranger's list is JSON
+        self.assertEqual(len(self.lines("todos")), 1)
+        self.assertIsNone(tvf.run_tool("cal", "", plain))                       # and has no calendar
+
+
+if __name__ == "__main__":
+    unittest.main()

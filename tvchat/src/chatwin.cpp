@@ -2046,6 +2046,36 @@ void acceptInviteDialog()
 // Mail selection...: the lines selected in the log (Shift-arrows or a drag), as
 // one email through tvmail's account - to the person's `email:` address in the
 // [people] table (or their Delta Chat address) if known, else one you type.
+// Chat > Add selection to calendar... / as to-do...: the lines selected in the log, as one line, left for
+// tvcal (a request file, like tvmail's); tvcal asks you about it - the time, the day - before it adds anything.
+void selectionToCal(bool todo)
+{
+    if (!chatInFront() || gChatWin->showingServer())
+    {
+        flashStatus("Show a conversation and select lines in the log first (Shift-Up / Shift-Down, or drag)");
+        return;
+    }
+    int lines = 0;
+    std::string text = gChatWin->logSelection(lines);
+    for (char &c : text)
+        if (c == '\n' || c == '\r' || c == '\t')
+            c = ' ';
+    text = trimmed(text);
+    if (text.empty())
+    {
+        flashStatus("Select lines in the log first (Shift-Up / Shift-Down, or drag)");
+        return;
+    }
+    if (text.size() > 300)
+        text.resize(300);
+    std::string err;
+    if (!peerRequest("tvcal", std::string(todo ? "todo@tvchat " : "event@tvchat ") + text, err))
+        notify(err, noteError);
+    else
+        notify(std::string("Asked tvcal to add this as ") + (todo ? "a to-do" : "an event") +
+               ". It asks you first: tvcal's Calendar > Incoming... (it need not be running).");
+}
+
 void mailSelectionDialog()
 {
     if (!chatInFront() || gChatWin->showingServer())
@@ -2428,6 +2458,8 @@ TMenu *buildChatMenu()
     add(new TMenuItem("~L~eave", cmChatLeave, kbNoKey, hcNoContext));
     add(new TMenuItem("~M~ail selection...", cmChatMailSelection, kbNoKey, hcNoContext));
     add(new TMenuItem("S~h~are from tvmail...", cmChatShares, kbNoKey, hcNoContext));
+    add(new TMenuItem("Add selection to ~c~alendar...", cmChatToCal, kbNoKey, hcNoContext));
+    add(new TMenuItem("Add selection as ~t~o-do...", cmChatToTodo, kbNoKey, hcNoContext));
     add(&newLine());
     add(new TMenuItem("New ~g~roup...", cmChatNewGroup, kbNoKey, hcNoContext));
     add(new TMenuItem("Add m~e~mber...", cmChatGroupAdd, kbNoKey, hcNoContext));
@@ -2491,7 +2523,8 @@ void chatMenuGrey()
     for (TMenuItem *p = gChatItem->subMenu->items; p; p = p->next)
         if (p->name && p->command)
             p->disabled = Boolean(!on || p->command == cmChatOff ||
-                                  ((p->command == cmChatLeave || p->command == cmChatMailSelection) && !inChat) ||
+                                  ((p->command == cmChatLeave || p->command == cmChatMailSelection || p->command == cmChatToCal ||
+                                   p->command == cmChatToTodo) && !inChat) ||
                                   (p->command == cmChatAnswer && !call) ||
                                   ((p->command == cmChatGroupAdd || p->command == cmChatGroupRemove ||
                                     p->command == cmChatGroupRename) && deltaGroupShown().empty()));
@@ -2499,7 +2532,7 @@ void chatMenuGrey()
 
 bool chatCommand(ushort command)
 {
-    if (!(command >= cmChatInvite && command <= cmChatShares) &&
+    if (!(command >= cmChatInvite && command <= cmChatToTodo) &&
         (command < cmChatConnect || command >= cmChatAccount + kChatMaxAccounts))
         return false;
     if (command == cmChatOff)
@@ -2546,6 +2579,10 @@ bool chatCommand(ushort command)
         break;
     case cmChatShares:
         sharesDialog();
+        break;
+    case cmChatToCal:
+    case cmChatToTodo:
+        selectionToCal(command == cmChatToTodo);
         break;
     case cmChatAnswer:
     case cmChatTalkView:

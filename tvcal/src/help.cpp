@@ -1,0 +1,53 @@
+// help.cpp - the in-app help (F1).
+#include "tvcal.h"
+
+static const char *kHelpText =
+    "tvcal  -  a Turbo Vision calendar and to-do manager            (Esc / Alt-F3 closes)\n"
+    "\n"
+    "THE THREE PANES\n"
+    "  Month (top left)  .  To-do (below it)  .  Agenda (right).  Tab / Shift-Tab move between them.\n"
+    "  Month: arrows pick a day (Left / Right a day, Up / Down a week), PgUp / PgDn a month,\n"
+    "  Home today, Enter to the agenda, Ins or n a new event on that day.  A day with something\n"
+    "  on it is bold with a * ; today is on blue.\n"
+    "  Agenda: the days from the one picked, a heading for each day that has something.\n"
+    "  Enter edits the event under the bar, Del deletes it, Ins or n adds one.\n"
+    "  To-do: Space ticks a to-do off (and back), Enter edits, Ins or n adds, Del deletes.\n"
+    "  The Due column is MM-DD, P is the priority (1 highest) or ! when it is overdue.\n"
+    "\n"
+    "EVENTS\n"
+    "  Title, date, start and end (an empty start is an all-day event), days (an all-day event\n"
+    "  can span several), place, notes, a repeat (daily, weekly, monthly, yearly, every N, until a\n"
+    "  date) and a reminder in minutes before (or off).  Dates: 2026-11-05, 11-05, tomorrow, +3, fri.\n"
+    "  Editing a repeating event changes the whole series.\n"
+    "\n"
+    "WHERE IT LIVES\n"
+    "  On the calendar server (Radicale on the mail and chat host): every machine sees the same\n"
+    "  calendar and to-dos.  File > Edit configuration... sets [server] url and user; the password\n"
+    "  is $TVCAL_PASS or ~/.netrc.  Without a [server] the calendar is the local file\n"
+    "  ~/.local/share/tvcal/calendar.ics.  If the server cannot be reached you can still read (a copy\n"
+    "  is kept); changes are refused with a message rather than lost.\n"
+    "\n"
+    "WITH TVMAIL AND TVCHAT\n"
+    "  tvmail: Message > Add to calendar / Add as to-do.  tvchat: Chat > Add to calendar / to-do.\n"
+    "  They leave a request; \"N incoming\" shows at the bottom right, and Calendar > Incoming...\n"
+    "  opens each with its dialog filled in: Add, Skip or Discard.  Nothing is added without your yes.\n"
+    "  A mail with an invitation (an .ics part) arrives with its time and place filled in.\n"
+    "  Reminders and due to-dos show here and as toasts in tvmail and tvchat as well.\n"
+    "  Share > Mail invitation... sends an .ics through tvmail; Share in chat asks tvchat to say\n"
+    "  the title, day, time and place in its channel (you agree there first).\n"
+    "  Share > Import / Export .ics moves whole files to and from any other calendar program.\n"
+    "\n"
+    "FLOYD\n"
+    "  F7 (File > Floyd, the assistant...) asks him.  He is the same Floyd as in tvmail and tvchat,\n"
+    "  and here he knows the calendar: !todo, !todo add TEXT, !todo done N, !cal week, !event fri 14:00\n"
+    "  Dentist - the same to-do list and calendar you see here.  In tvmail, and in tvchat for his\n"
+    "  admins, those commands work on it too, wherever the calendar is.  [floyd] level in tvcal.conf.\n"
+    "\n"
+    "KEYS AT A GLANCE\n"
+    "  F1 help    F5 reload    F6 next window    Alt-0 window list    F10 menu\n"
+    "  Ctrl-N new event   Ctrl-T new to-do   Ctrl-G go to date   Ctrl-F find   Alt-X quit   Ctrl-L redraw\n";
+
+TWindow *newHelpWindow(const TRect &bounds)
+{
+    return newTextWindow(bounds, "Help", kHelpText);
+}

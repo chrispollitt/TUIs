@@ -5422,7 +5422,8 @@ class FloydAdapter(CommandMixin):
     SHOO_RX = re.compile(r"^(?:shoo|no tips|stop (?:the )?tips|be quiet|not now)\W*$")
     CATCHUP_RX = re.compile(r"\b(?:catch me up|what did i miss|what have i missed|catch ?up)\b", re.I)
     TOOL_VERBS = frozenset(("calc", "calculate", "compute", "math", "convert", "conv", "units",
-                            "tz", "time", "clock", "todo", "note", "notes"))
+                            "tz", "time", "clock", "todo", "note", "notes",
+                            "cal", "agenda", "calendar", "event", "appointment"))
 
     BANG_WORD = re.compile(r"^!([A-Za-z][\w-]*)")
 
@@ -5580,16 +5581,19 @@ class FloydAdapter(CommandMixin):
         plan = mind.command(body)         # the errands, the parser
         return plan or mind._say([(0.8, "Floyd only does commands at level %s. Try !help." % lvl)])
 
-    def _notes_for(self, sender, who):
+    def _notes_for(self, sender, who, msg=None):
         key = re.sub(r"[^a-z0-9_.-]", "_",
                      (getattr(sender, "account", None) or who or "x").lower())[:40]
+        # the owner (an admin, or you in a session of your own) keeps the to-do list in tvcal, with the calendar
+        owner = msg is not None and bool(self.is_admin(sender) or (not self.chat.daemon and "s" in msg.flags))
+        key = ("cal-" if owner else "") + key
         n = self.notes.get(key)
         if n is None:
             base = self.memory.path
             if len(self.notes) > 100:
                 self.notes.clear()
-            n = self.notes[key] = tvf.Notes(
-                os.path.join(os.path.dirname(base), "notes-%s.json" % key) if base else None)
+            n = self.notes[key] = tvf.make_notes(
+                os.path.join(os.path.dirname(base), "notes-%s.json" % key) if base else None, calendar=owner)
         return n
 
     def _tool(self, conv, mind, msg, who, body, bang, lvl):
@@ -5607,9 +5611,9 @@ class FloydAdapter(CommandMixin):
                 return mind._say([(0.8 + 0.8 * i, ln) for i, ln in enumerate(lines)])
             if verb in self.TOOL_VERBS and (bang or tvf.at_least(lvl, "helpful")) \
                     and not (verb in ("time", "clock") and not rest.strip()):
-                text = tvf.run_tool(verb, rest, self._notes_for(msg.sender, who), now)
+                text = tvf.run_tool(verb, rest, self._notes_for(msg.sender, who, msg), now)
             if text is None and not bang and tvf.at_least(lvl, "helpful"):
-                text = tvf.natural(t, self._notes_for(msg.sender, who), now)
+                text = tvf.natural(t, self._notes_for(msg.sender, who, msg), now)
         except tvf.CalcError as e:
             text = "Floyd can't. %s" % e
         if text is None:

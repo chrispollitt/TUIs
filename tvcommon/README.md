@@ -1,6 +1,6 @@
 # tvcommon
 
-What [tvmail](../tvmail/README.md) and [tvchat](../tvchat/README.md) share.
+What [tvmail](../tvmail/README.md), [tvchat](../tvchat/README.md) and [tvcal](../tvcal/README.md) share.
 It is not an app: each app's `CMakeLists.txt` includes `tvcommon.cmake` and
 compiles `src/` into its own executable. Nothing here knows about mail or chat.
 
@@ -17,6 +17,8 @@ so one raised while a dialog is open still goes away on time. An app's own `idle
 `TTvApp::idle()`.
 
 ### Toasts for the other app (spool.cpp)
+
+(tvcal sends to both of them: `spoolFromConf(conf, "tvcal", "tvmail,tvchat")` takes several peers, comma-separated. `peerRequest(app, line, err)` writes a one-line request file into another app's requests directory - `$TVCHAT_REQUESTS` / `$TVCAL_REQUESTS`, else `~/.local/state/<app>/requests` - the way tvmail asks tvchat, tvmail and tvchat ask tvcal.)
 
 tvmail and tvchat are full-screen apps, so one is usually out of sight. A note worth a
 glance in the other is a one-line file in the other's inbox - `$TV_SPOOL_DIR`, else
@@ -75,7 +77,7 @@ tvcommon has no build of its own: build and test through an app (`./build.sh`,
 Both Floyds (tvchat's bot, tvmail's assistant) share one stdlib-only module, `py/tvfloyd.py`: the
 **levels** (`off`, `minimal`, `helpful`, `chatty`, `clippy`), a calculator that parses arithmetic
 with `ast` and never evaluates anything else, unit and time-zone conversion, a per-person to-do
-list and notes (one small JSON file), and the "Floyd not clippy but ..." tips. It is pure: no
+list and notes (one small JSON file; for the owner, `CalNotes`/`make_notes(path, calendar=True)` keep the to-do list in tvcal instead and add `!cal` and `!event`), and the "Floyd not clippy but ..." tips. It is pure: no
 sockets, no UI. Each backend finds it by path - beside itself, in `../../tvcommon/py` in the source
 tree, or in `../share/<app>` once installed (each app's CMake installs its own copy) - and falls
 back to levels without tools if it is missing. Tests: `tests/test_tvfloyd.py`.

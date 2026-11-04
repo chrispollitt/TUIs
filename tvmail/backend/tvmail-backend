@@ -2141,7 +2141,8 @@ class MailFloyd(object):
                            r"password reset|\bsale\b|% off|webinar", re.I)
     PENDING_TTL = 300
     TOOL_VERBS = frozenset(("calc", "calculate", "compute", "math", "convert", "conv", "units",
-                            "tz", "time", "clock", "todo", "note", "notes"))
+                            "tz", "time", "clock", "todo", "note", "notes",
+                            "cal", "agenda", "calendar", "event", "appointment"))
     FOLDERS = {"inbox": "spool", "archive": "mbox", "trash": "trash", "sent": "sent",
                "spam": "spam", "junk": "spam", "drafts": "drafts"}
     VOICE = {
@@ -2158,7 +2159,7 @@ class MailFloyd(object):
         self.state_dir = state_dir
         self.pending = None              # (when, what, action) waiting for "yes"
         self.tip_seen = {}               # tip -> when it was last given
-        self.notes = tvf.Notes(os.path.join(state_dir, "notes.json") if state_dir else None)
+        self.notes = tvf.make_notes(os.path.join(state_dir, "notes.json") if state_dir else None, calendar=True)
         self.level = self._initial_level()
 
     # -- level, kept in a small file ------------------------------------------
@@ -2315,7 +2316,7 @@ class MailFloyd(object):
         try:
             out = None
             if verb in self.TOOL_VERBS and not (verb in ("time", "clock") and not rest.strip()):
-                out = tvf.run_tool(verb, rest if verb not in ("note", "notes", "todo") else t.partition(" ")[2], self.notes, self.clock())
+                out = tvf.run_tool(verb, rest if verb not in ("note", "notes", "todo", "event", "appointment") else t.partition(" ")[2], self.notes, self.clock())
             if out is None and helpful:
                 out = tvf.natural(t, self.notes, self.clock())
         except tvf.CalcError as e:
