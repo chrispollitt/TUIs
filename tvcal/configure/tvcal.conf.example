@@ -25,3 +25,18 @@
 #share = error
 #beep = n
 #mesg = n
+
+# Floyd, the assistant (F7).  level: off | minimal | helpful | chatty (the default) | clippy
+[floyd]
+#level = chatty
+# !claude QUESTION in his window asks the Claude CLI (read-only: only the tools named in claude_tools, no
+# MCP servers, no skills); the answer appears in the window when it is ready.  claude = no turns it off.
+#claude = yes
+#claude_cmd = claude
+#claude_tools = Read,Grep,Glob
+#claude_model =
+#claude_timeout = 120
+#claude_lines = 10
+#claude_dir = ~
+# where he keeps what he learns (!learn, !addquote); "none" = nowhere
+#memory = ~/.local/share/tvfloyd/memory.json

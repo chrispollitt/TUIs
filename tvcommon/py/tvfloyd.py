@@ -1257,7 +1257,8 @@ def persona_memory_path(configured=""):
 
 def persona(text, level, who="friend", where="here", path=None):
     """What Floyd says to TEXT in his own voice: a list of lines, or None when it
-    is nothing he knows (the caller then says so in its own words)."""
+    is nothing he knows (the caller then says so in its own words).  What only makes
+    sense among people in a channel (!seen, !tell, karma, !leave) is not offered here."""
     if level == "off" or not text.strip():
         return None
     mind = _MINDS.get(path)
@@ -1265,20 +1266,160 @@ def persona(text, level, who="friend", where="here", path=None):
         mind = _MINDS[path] = FloydMind(nick=who, memory=FloydMemory(path))
     mind.nick = who
     t = text.strip()
-    plan = list(mind.observe(who, t, where) or [])
     got = None
     if t.lower().rstrip("?!. ") in ("!about", "about"):
         got = mind._say([(0.0, mind.ABOUT)])
     elif t.startswith("!"):
+        if t[1:].split(" ")[0].lower() in IRC_ONLY:
+            return None
         got = mind.botcmd(t, who)
-    elif at_least(level, "helpful") and mind.KARMA.match(t):
-        got = mind.botcmd(t, who)
-    elif at_least(level, "chatty"):
+    elif at_least(level, "chatty") and not mind.KARMA.match(t):
         got = mind.command(t) or mind.reply(t)
     if got is None:
         return None
     lines = []
-    for entry in plan + list(got):
+    for entry in got:
         say, kind = entry[1], (entry[2] if len(entry) > 2 else "")
         lines.append("* Floyd " + say if kind == "a" else say)
     return lines
+
+
+IRC_ONLY = ("seen", "tell", "karma", "leave")
+
+
+def status_lines(app, level, cfg, path=None):
+    """!status: how he is, in a few lines."""
+    mind = _MINDS.get(path)
+    mem = mind.memory.data if mind else FloydMemory(path).data
+    fort = (mind.fortune_prog() if mind else
+            (shutil.which("fortune") or shutil.which("fortune", path="/usr/games:/usr/local/games")))
+    return [
+        "Floyd in %s is at level %s: %s" % (app, level, LEVEL_BLURB.get(level, level)),
+        "Claude: %s." % claude_state(cfg),
+        "Fortunes: %s." % ("the system's fortune program (%s)" % fort if fort
+                           else "his own, built in - no fortune program is installed"),
+        "He remembers %d quotes and %d facts. !about says more, help lists his commands." % (
+            len(mem.get("quotes", [])), len(mem.get("facts", {})))]
+
+
+# -- Claude, asked by the owner -----------------------------------------------
+# `!claude QUESTION` consults the Claude CLI, read-only, as tvchat's Floyd does for his admins.
+# Here there is no admin to check: it is the user's own session.  The answer takes many
+# seconds, so it is not waited for: the question starts a background job whose files live in
+# ~/.local/state/tvfloyd/claude/ and the window asks claude_poll() until it is done.
+CLAUDE_RX = re.compile(r"^(?:!\s*claude|(?:ask\s+)?claude\s*[:,]?)\s+(\S.*)$", re.I | re.S)
+CLAUDE_CHARS = 1500
+
+
+def claude_settings(get):
+    """get(key, default) reads the app's [floyd] section."""
+    import shlex
+
+    def num(key, default):
+        try:
+            return int(str(get(key, "") or default).strip())
+        except ValueError:
+            return default
+    where = (get("claude_dir", "") or "").strip()
+    return {"on": (get("claude", "") or "yes").strip().lower() not in ("no", "off", "false", "0"),
+            "cmd": (get("claude_cmd", "") or "").strip() or "claude",
+            "tools": (get("claude_tools", "") or "").strip() or "Read,Grep,Glob",
+            "model": (get("claude_model", "") or "").strip(),
+            "extra": shlex.split(get("claude_args", "") or ""),
+            "timeout": num("claude_timeout", 120), "lines": num("claude_lines", 10),
+            "dir": os.path.expanduser(where) if where else None}
+
+
+def _claude_jobs():
+    return os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"),
+                        "tvfloyd", "claude")
+
+
+def claude_state(cfg):
+    """Can he ask Claude?  One short sentence."""
+    if not cfg["on"]:
+        return "no - it is off in his configuration ([floyd] claude = no)"
+    cmd = cfg["cmd"]
+    if not (shutil.which(cmd) or (os.path.isfile(cmd) and os.access(cmd, os.X_OK))):
+        return "no - the program %s was not found" % cmd
+    busy = os.path.isdir(_claude_jobs()) and os.listdir(_claude_jobs())
+    return "yes%s - ask with !claude QUESTION" % (", busy with a question" if busy else "")
+
+
+def claude_argv(cfg):
+    """The CLI, read-only: only the named built-in tools exist, anything else is refused, no MCP
+    servers (not even the account's connectors) and no skills."""
+    argv = [cfg["cmd"], "-p", "--output-format", "text",
+            "--tools", cfg["tools"], "--allowedTools", cfg["tools"],
+            "--permission-mode", "dontAsk",
+            "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
+            "--disable-slash-commands"]
+    if cfg["model"]:
+        argv += ["--model", cfg["model"]]
+    return argv + cfg["extra"]
+
+
+def claude_start(prompt, cfg):
+    """Start the question in the background; the lines to say now."""
+    state = claude_state(cfg)
+    if not state.startswith("yes"):
+        return ["Claude is asleep: %s." % state.split(" - ", 1)[-1]]
+    if "busy" in state:
+        return ["Floyd is still waiting for Claude. Claude is slow. Floyd is patient."]
+    d = os.path.join(_claude_jobs(), "%d" % int(time.time() * 1000))
+    os.makedirs(d, mode=0o700)
+    with open(os.path.join(d, "prompt"), "w", encoding="utf-8") as fh:
+        fh.write(prompt)
+    env = dict(os.environ, ENABLE_CLAUDEAI_MCP_SERVERS="false")      # no connectors from the account
+    script = ('cd "$1" && shift; d=$1; shift; t=$1; shift; '
+              'if command -v timeout >/dev/null 2>&1; then timeout "$t" "$@"; else "$@"; fi '
+              '< "$d/prompt" > "$d/out" 2> "$d/err"; echo $? > "$d/rc"')
+    subprocess.Popen(["sh", "-c", script, "sh", cfg["dir"] or os.getcwd(), d, str(cfg["timeout"])] + claude_argv(cfg),
+                     env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     start_new_session=True)
+    return ["Floyd will ask Claude. Floyd has to climb a ladder. Floyd will be back."]
+
+
+def claude_poll(cfg):
+    """The answer, as lines, once the question is done; None while it is still running (or none was asked)."""
+    base = _claude_jobs()
+    if not os.path.isdir(base):
+        return None
+    for name in sorted(os.listdir(base)):
+        d = os.path.join(base, name)
+        rc_file = os.path.join(d, "rc")
+
+        def read(n):
+            try:
+                with open(os.path.join(d, n), encoding="utf-8", errors="replace") as fh:
+                    return fh.read()
+            except OSError:
+                return ""
+        if not os.path.exists(rc_file):
+            if time.time() - int(name) / 1000.0 > cfg["timeout"] + 20:
+                lines = ["Claude took too long"]
+            else:
+                continue
+        else:
+            rc = read("rc").strip()
+            out = re.sub(r"[\x00-\x08\x0b-\x1f\x7f]", "", read("out")).strip()
+            if rc == "124":
+                lines = ["Claude took too long"]
+            elif rc not in ("", "0") and not out:
+                tail = read("err").strip().splitlines()
+                lines = ["Claude could not be reached (%s)" % ((tail[-1] if tail else "exit status " + rc)[:120])]
+            else:
+                lines = [l.rstrip() for l in out.splitlines() if l.strip()] or ["(Claude said nothing)"]
+                if sum(len(l) for l in lines) > CLAUDE_CHARS:
+                    kept, n = [], 0
+                    for l in lines:
+                        if n + len(l) > CLAUDE_CHARS:
+                            break
+                        kept.append(l)
+                        n += len(l)
+                    lines = (kept or [lines[0][:CLAUDE_CHARS]]) + ["... (cut short)"]
+                if len(lines) > cfg["lines"]:
+                    lines = lines[:cfg["lines"]] + ["... (%d more lines)" % (len(lines) - cfg["lines"])]
+        shutil.rmtree(d, ignore_errors=True)
+        return [("Claude: " if i == 0 else "  ") + l for i, l in enumerate(lines)]
+    return None

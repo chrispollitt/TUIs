@@ -33,10 +33,33 @@ class TFloydWindow : public TViewerWindow
         log->drawView();
     }
 
+    // !claude QUESTION takes many seconds: the backend starts it and answers at once, and this
+    // window asks `floyd --poll` once a second until Claude's answer is there
+    TTimerId pollTimer = nullptr;
+
+    void stopPolling()
+    {
+        if (pollTimer && TProgram::application)
+            TProgram::application->killTimer(pollTimer);
+        pollTimer = nullptr;
+    }
+
     void ask(const std::string &text)
     {
         lines.push_back("you:   " + text);
-        say(backendRun("floyd " + shq(text)));
+        std::string body = backendRun("floyd " + shq(text));
+        say(body);
+        if (!pollTimer && body.find("will ask Claude") != std::string::npos)
+            pollTimer = TProgram::application->setTimer(1000, 1000);
+    }
+
+    void pollClaude()
+    {
+        std::string body = backendRun("floyd --poll");
+        if (body.find_first_not_of(" \r\n\t") == std::string::npos)
+            return;
+        stopPolling();
+        say(body, "");
     }
 
 public:
@@ -84,8 +107,16 @@ public:
         return TView::mapColor(i);
     }
 
+    ~TFloydWindow() { stopPolling(); }
+
     void handleEvent(TEvent &e) override
     {
+        if (e.what == evBroadcast && e.message.command == cmTimerExpired && pollTimer && e.message.infoPtr == pollTimer)
+        {
+            clearEvent(e);
+            pollClaude();
+            return;
+        }
         TViewerWindow::handleEvent(e);
         if (e.what == evKeyDown && e.keyDown.keyCode == kbEnter && input->state & sfFocused)
         {

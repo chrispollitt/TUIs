@@ -2168,6 +2168,37 @@ class TestFloyd(Base):
         finally:
             del os.environ["TVMAIL_FLOYD_LEVEL"]
 
+    def test_status_has_the_counts_and_him(self):
+        out = self.say("status")
+        self.assertIn("5 messages", out)                       # the mailbox counts, as before
+        self.assertIn("Floyd in tvmail is at level", out)
+        self.assertIn("Claude:", out)
+
+    def test_claude_is_asked_in_the_background_and_polled(self):
+        os.environ["XDG_STATE_HOME"] = str(self.tmp / "xdg-state")
+        self.addCleanup(os.environ.pop, "XDG_STATE_HOME", None)
+        fake = self.tmp / "claude"
+        fake.write_text('#!/bin/sh\ncat > "%s/asked"\necho "the fake answer"\n' % self.tmp)
+        fake.chmod(0o755)
+        conf = self.tmp / "tvmail.conf"
+        conf.write_text("[floyd]\nclaude_cmd = %s\n" % fake)
+        os.environ["TVMAIL_CONF"] = str(conf)
+        self.assertIn("will ask Claude", self.say("!claude what is 2+2?"))
+        cfg = be.tvf.claude_settings(lambda k, d: be._conf().get("floyd", k, fallback=d))
+        answer = None
+        for _ in range(50):
+            answer = be.tvf.claude_poll(cfg)
+            if answer:
+                break
+            time.sleep(0.2)
+        self.assertEqual(answer, ["Claude: the fake answer"])
+        self.assertEqual((self.tmp / "asked").read_text(), "what is 2+2?")
+
+    def test_channel_things_are_not_offered(self):
+        for irc in ("!seen bob", "!tell bob hi", "bob++", "!karma"):
+            self.assertNotIn("point", self.say(irc), irc)
+            self.assertNotIn("remember", self.say(irc), irc)
+
     def test_tools_and_todos(self):
         self.assertIn("12*7 = 84", self.say("calc 12*7"))
         self.assertIn("5 km is 3.10686 mi", self.say("convert 5 km to mi"))

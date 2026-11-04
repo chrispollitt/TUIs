@@ -30,6 +30,10 @@ class Tv(tvscreen.Tv):
 
     def prepare(self):
         shutil.copy2(os.path.join(self.opts.backend_dir, "tvcal-backend"), self.bindir / "tvcal-backend")
+        for d in (HERE.parent.parent / "tvcommon" / "py", HERE.parent / "tvcommon" / "py"):    # Floyd's words, ours
+            if (d / "tvfloyd.py").exists():
+                shutil.copy2(d / "tvfloyd.py", self.bindir / "tvfloyd.py")
+                break
         self.env["TVCAL_DATA"] = str(self.tmp / "cal.ics")
         self.env["TVCAL_STATE"] = str(self.tmp / "state")
         self.env["TVCAL_CONF"] = str(self.tmp / "no-tvcal.conf")
@@ -136,6 +140,25 @@ def f7_asks_floyd(opts):
             "Up did not recall the line that was sent")
     c.check("!todo add Feed the cat" in open(tv.tmp / "xdg-state" / "tvfloyd" / "input-history").read(),
             "the history file was not written")
+
+
+@case()
+def floyd_asks_claude_and_the_answer_arrives_by_itself(opts):
+    def setup(t):
+        fake = t.tmp / "claude"
+        fake.write_text('#!/bin/sh\ncat > /dev/null\nsleep 2\necho "four"\n')
+        fake.chmod(0o755)
+        (t.tmp / "tvcal.conf").write_text("[floyd]\nclaude_cmd = %s\n" % fake)
+        t.env["TVCAL_CONF"] = str(t.tmp / "tvcal.conf")
+    tv, c = tvcal(opts, setup=setup)
+    started(tv, c)
+    tv.send("\x1b[18~")                                  # F7
+    c.check(tv.wait("ask him anything", 5), "F7 did not open Floyd's window")
+    tv.send("!claude what is 2+2?", "Enter")
+    c.check(tv.wait(lambda: tv.has("will ask Claude"), 8), "he did not say he would ask")
+    c.check(tv.wait(lambda: tv.has("Claude: four"), 20), "Claude's answer did not arrive in the window")
+    tv.send("!status", "Enter")
+    c.check(tv.wait(lambda: tv.has("Calendar: a local file"), 8), "!status did not answer")
 
 
 @case()

@@ -62,7 +62,7 @@ INBOX/Archive/Trash/Drafts/Sent/Junk):
                             the master) postfix's generic map.  'addresses'
                             prints that table.  --force replaces whatever
                             other Sieve script is active
-  floyd [--tips|--status] [TEXT...]
+  floyd [--tips|--status|--poll] [TEXT...]
                             say TEXT to Floyd, the assistant (unread, triage, find,
                             archive, empty trash, unset ooo, calc, todo, level ...);
                             he asks before anything that deletes.  --tips: his
@@ -2237,7 +2237,7 @@ class MailFloyd(object):
         "Floyd can: unread | triage | find mail from NAME about WORDS [last week] [in archive] | counts",
         "archive [older than 90 days] | empty trash | unset ooo (or: ooo) | tips",
         "calc 12*7 | convert 5 km to mi | time in Tokyo | todo [add X|done N] | note X | level [NAME]",
-        "himself: !seen NICK | !tell NICK MSG | !quote | !addquote X | !karma | someone++ | !8ball Q | !fortune | !joke | !about",
+        "!claude QUESTION (the answer comes when it is ready) | status | himself: !quote | !addquote X | !8ball Q | !fortune | !joke | !about",
     ]
 
     def handle(self, text):
@@ -2259,6 +2259,14 @@ class MailFloyd(object):
                 return ["Okay. Floyd did nothing. Floyd is good at that."]
         if not bare:
             return ["Hi! Floyd is at level %s." % self.level] + self.HELP[:1]
+        if hasattr(tvf, "claude_start"):
+            cfg = tvf.claude_settings(lambda k, d: _conf().get("floyd", k, fallback=d))
+            m = tvf.CLAUDE_RX.match(t)
+            if m:
+                return tvf.claude_start(m.group(1).strip(), cfg)
+            if bare == "status":
+                path = tvf.persona_memory_path(_conf().get("floyd", "memory", fallback=""))
+                return self._counts() + tvf.status_lines("tvmail", self.level, cfg, path)
         try:
             return self._intent(t, bare)
         except ValueError as e:
@@ -2503,7 +2511,11 @@ def cmd_floyd(a):
     if a.status:
         sys.stdout.write("%s\t%s\n" % (f.level, tvf.LEVEL_BLURB[f.level]))
         return 0
-    lines = f.tips() if a.tips else f.handle(" ".join(a.text))
+    if a.poll:     # Claude answer to the last !claude, once it is ready
+        cfg = tvf.claude_settings(lambda k, d: _conf().get("floyd", k, fallback=d)) if hasattr(tvf, "claude_settings") else None
+        lines = (tvf.claude_poll(cfg) or []) if cfg else []
+    else:
+        lines = f.tips() if a.tips else f.handle(" ".join(a.text))
     for ln in lines:
         sys.stdout.write(ln.replace("\t", " ") + "\n")
     return 0
@@ -2712,6 +2724,7 @@ def build_parser():
     p = sub.add_parser("host"); p.set_defaults(fn=cmd_host)
     p = sub.add_parser("floyd"); p.add_argument("text", nargs="*")
     p.add_argument("--tips", action="store_true"); p.add_argument("--status", action="store_true")
+    p.add_argument("--poll", action="store_true")
     p.set_defaults(fn=cmd_floyd)
     p = sub.add_parser("serve"); p.set_defaults(fn=cmd_serve)
     return ap

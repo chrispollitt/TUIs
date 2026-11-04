@@ -578,12 +578,46 @@ class Floyd(Env):
     def test_his_own_commands_and_memory(self):
         self.env["XDG_DATA_HOME"] = os.path.join(self.tmp, "xdg")          # his memory file, not the real one
         self.assertIn("B-19-7", self.say("!about"))
-        self.assertIn("gave bob a point", self.say("bob++"))
-        self.assertIn("bob has 2 points", self.say("bob++"))                # remembered between runs
-        self.assertIn("Floyd will tell nobody", self.say("!tell nobody hello"))
+        self.assertIn("learned", self.say("!learn tea is hot"))
+        self.assertIn("tea is hot", self.say("!tea"))                       # remembered between runs
+        for irc in ("!seen bob", "!tell bob hi", "bob++", "!karma"):        # channel things are not offered here
+            self.assertIn("Say help", self.say(irc), irc)
         self.assertIn("Say help", self.say("!nosuchthing"))
         self.assertIn("Repair Room", self.say("look"))                      # the parser game (chatty by default)
         self.assertTrue(os.path.isfile(os.path.join(self.tmp, "xdg", "tvfloyd", "memory.json")))
+
+    def test_status(self):
+        self.env["XDG_DATA_HOME"] = os.path.join(self.tmp, "xdg")
+        out = self.say("!status")
+        for word in ("Floyd in tvcal is at level", "Claude:", "Fortunes:", "Calendar: a local file"):
+            self.assertIn(word, out)
+
+    def _fake_claude(self, body="the fake answer"):
+        path = os.path.join(self.tmp, "claude")
+        open(path, "w").write('#!/bin/sh\ncat > "%s/asked"\necho "%s"\n' % (self.tmp, body))
+        os.chmod(path, 0o755)
+        open(self.env["TVCAL_CONF"], "w").write("[floyd]\nclaude_cmd = %s\n" % path)
+        self.env["XDG_STATE_HOME"] = os.path.join(self.tmp, "xdg-state")
+
+    def test_claude_is_asked_in_the_background_and_polled(self):
+        self._fake_claude()
+        self.assertIn("will ask Claude", self.say("!claude what is 2+2?"))
+        answer = ""
+        for _ in range(50):
+            answer = self.run_be("floyd-poll").stdout.strip()
+            if answer:
+                break
+            time.sleep(0.2)
+        self.assertEqual(answer, "Claude: the fake answer")
+        self.assertEqual(open(os.path.join(self.tmp, "asked")).read(), "what is 2+2?")      # on stdin, not argv
+        self.assertEqual(self.run_be("floyd-poll").stdout.strip(), "")                      # said once
+
+    def test_claude_when_it_is_off_or_missing(self):
+        open(self.env["TVCAL_CONF"], "w").write("[floyd]\nclaude = no\n")
+        self.assertIn("asleep", self.say("!claude hi"))
+        open(self.env["TVCAL_CONF"], "w").write("[floyd]\nclaude_cmd = /nonexistent/claude\n")
+        self.assertIn("not found", self.say("!claude hi"))
+        self.assertIn("Claude: no - the program", self.say("!status"))
 
     def test_his_voice_is_quiet_at_minimal(self):
         self.env["XDG_DATA_HOME"] = os.path.join(self.tmp, "xdg")

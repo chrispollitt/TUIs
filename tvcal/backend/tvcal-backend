@@ -1409,7 +1409,8 @@ def cmd_pending_drop(a):
 
 # --------------------------------------------------------- configuration ---
 KNOWN = {"cal": {"file", "remind", "week_start"},
-         "floyd": {"level"},
+         "floyd": {"level", "memory", "claude", "claude_cmd", "claude_tools", "claude_model", "claude_args",
+                   "claude_timeout", "claude_lines", "claude_dir"},
          "server": {"url", "user", "ca", "insecure", "mode"},
          "ui": {"share", "beep", "mesg", "idle"}}
 
@@ -1485,8 +1486,8 @@ def _load_tvfloyd():
 
 FLOYD_HELP = ("Floyd helps with: !todo [add TEXT | done N | rm N | clear], !cal [today | tomorrow | week | DATE], "
               "!event [DATE] [HH:MM[-HH:MM]] TITLE, !calc 12*7, !convert 5 km to mi, !time in Tokyo, !note TEXT. "
-              "And himself: !seen NICK, !tell NICK MSG, !quote, !addquote TEXT, !karma, someone++, !8ball Q, !fortune, !joke, "
-              "!about, !learn X is Y, look / take / go north (at chatty), level.")
+              "!claude QUESTION (asks Claude; the answer comes when it is ready), !status. And himself: !quote, "
+              "!addquote TEXT, !8ball Q, !fortune, !joke, !about, !learn X is Y, look / take / go north (at chatty).")
 
 
 def _whoami():
@@ -1515,6 +1516,17 @@ def cmd_floyd(a):
     if verb in ("help", "?", ""):
         sys.stdout.write(FLOYD_HELP + "\n")
         return 0
+    mem_path = tvf.persona_memory_path(c.get("floyd", "memory", fallback=""))
+    cfg = tvf.claude_settings(lambda k, d: c.get("floyd", k, fallback=d))
+    if verb == "status":
+        sys.stdout.write("\n".join(tvf.status_lines("tvcal", level, cfg, mem_path)
+                                   + ["Calendar: " + ("the server " + c.get("server", "url", fallback="")
+                                                      if c.get("server", "url", fallback="") else "a local file") + "."]) + "\n")
+        return 0
+    m = tvf.CLAUDE_RX.match(text)
+    if m:
+        sys.stdout.write("\n".join(tvf.claude_start(m.group(1).strip(), cfg)) + "\n")
+        return 0
     try:
         arg = rest if verb not in ("todo", "note", "notes", "event", "appointment") else text.lstrip("!").partition(" ")[2]
         out = tvf.run_tool(verb, arg, notes, time.time())
@@ -1531,6 +1543,18 @@ def cmd_floyd(a):
         out = ("Floyd doesn't understand, but Floyd likes the way you say it. " if tvf.at_least(level, "chatty")
                else "Floyd doesn't know that one. ") + "Say help."
     sys.stdout.write(out + "\n")
+    return 0
+
+
+def cmd_floyd_poll(a):
+    """floyd-poll: Claude's answer to the last !claude question once it is ready (nothing before)."""
+    tvf = _load_tvfloyd()
+    if tvf is None or not hasattr(tvf, "claude_poll"):
+        return 0
+    c = config()
+    lines = tvf.claude_poll(tvf.claude_settings(lambda k, d: c.get("floyd", k, fallback=d)))
+    if lines:
+        sys.stdout.write("\n".join(lines) + "\n")
     return 0
 
 
@@ -1693,13 +1717,14 @@ def build_parser():
     p.add_argument("words", nargs="*")
     p = add("floyd", cmd_floyd)
     p.add_argument("words", nargs="*")
+    add("floyd-poll", cmd_floyd_poll)
     return ap
 
 
 _COMMANDS = frozenset(("serve", "ping", "range", "show", "add-event", "set-event", "todos", "add-todo",
                        "set-todo", "done", "rm", "find", "due", "describe", "ics", "import", "mail-event",
                        "has-tvmail", "requests", "pending", "pending-get", "pending-drop", "check-config",
-                       "settings", "norm-date", "floyd"))
+                       "settings", "norm-date", "floyd", "floyd-poll"))
 
 
 def _normalize_cli(argv):
