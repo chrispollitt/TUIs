@@ -19,3 +19,10 @@ tvcal - features and wishes not done yet
 13. Floyd's clippy tips in tvcal (the "Floyd, not clippy, but ..." ones) - only his commands are in.
 14. tvchat's Add selection offers the lines as they are; picking a time out of the text ("lunch at 12:30
     tomorrow") would save a step.
+15. Floyd (F7) could talk to the real, central Floyd on cpbee (tvchat-floyd) instead of being a local helper:
+    one Floyd with one memory (!learn, quotes) and Claude from the server.  Optional (a setting such as
+    [floyd] server = cpbee; the local Floyd stays the default and the fallback when cpbee is out of reach).
+    Needs a way to ask him: a direct message over IRC / Delta Chat through tvchat's backend, or a small
+    helper on cpbee (local socket or ssh) that runs the same FloydMind.  Today tvcal and tvmail share only
+    the code (tvcommon/py/tvfloyd.py) with him and, for tvcal, the calendar on Radicale.  Decide the
+    transport, then add it to tvfloyd.py's persona() / claude_*() so both apps get it.  (Pinned 2026-11-04.)

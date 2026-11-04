@@ -59,3 +59,6 @@ Pinned ideas (Chris, Nov 2, 2026; not started, not designed)
 28 An amalgamated view: the recent messages (last N hours or N days) from ALL accounts in
    one list, newest first, each marked with its account. Same idea for tvchat
    (tvchat/TO-DO.txt, "Picking up"); share the design through tvcommon.
+29 Floyd (F7) could talk to the real, central Floyd on cpbee instead of being a local helper: one Floyd
+   with one memory and Claude from the server.  Optional ([floyd] server = ...; local stays the default and
+   the fallback).  Same item as tvcal/TO-DO.txt 15: decide the transport once, in tvcommon/py/tvfloyd.py.
