@@ -821,6 +821,26 @@ public:
         }
     }
 
+    // Always visible, focused or not (a plain TFieldLine is the window's own colour until it
+    // is focused), and "[type here]" in it while it is empty.
+    TColorAttr mapColor(uchar index) override
+    {
+        if (index == 1 || index == 2)
+            return cCur();
+        return TFieldLine::mapColor(index);
+    }
+
+    void draw() override
+    {
+        TFieldLine::draw();
+        if (data && data[0])
+            return;
+        TDrawBuffer b;
+        b.moveChar(0, ' ', cCur(), size.x);
+        b.moveStr(1, "[type here]", vga(0xB8)); // dark grey on light cyan
+        writeLine(0, 0, size.x, 1, b);
+    }
+
     void handleEvent(TEvent &e) override
     {
         if (e.what == evKeyDown && (e.keyDown.keyCode == kbUp || e.keyDown.keyCode == kbDown))

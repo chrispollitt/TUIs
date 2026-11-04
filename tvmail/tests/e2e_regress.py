@@ -820,6 +820,7 @@ def floyd_window_answers_and_asks_before_deleting(opts):
     tv.send(chr(27) + "[18~", settle=1.0)         # F7
     c.check(tv.wait("Floyd - ask him anything", 6) and tv.wait("Floyd is at level chatty", 6),
             "F7 did not open Floyd, or he did not greet")
+    c.check(tv.has("[type here]"), "the empty input line does not say where to type")
     tv.send("calc 6*7", "Enter", settle=1.0)
     c.check(tv.wait("6*7 = 42", 6) and tv.has("you:   calc 6*7"),
             "he did not answer a sum")
