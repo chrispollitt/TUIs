@@ -521,6 +521,22 @@ class RemoteMode(Env):
         self.env["HOME"] = os.path.join(self.tmp, "nohome")
         self.assertEqual(self.lines("todos"), [])                 # logged in: the https line for "me", percent-decoded
 
+    def test_mu_tickets_host_may_be_bare_or_qualified(self):
+        tix = os.path.join(self.tmp, "tickets2")
+        with open(tix, "w") as fh:
+            fh.write("https://me:from-ticket@cpbee.cmnet:5232\nhttps://me:other-host@cpvax.cmnet\n")  # allowlist secret
+        old_home = os.environ.get("HOME", "")
+        self.addCleanup(os.environ.__setitem__, "HOME", old_home)
+        os.environ["TVMAIL_MU_TICKETS"] = tix
+        os.environ["HOME"] = os.path.join(self.tmp, "nohome")
+        os.environ.pop("TVCAL_PASS", None)
+        self.addCleanup(os.environ.pop, "TVMAIL_MU_TICKETS", None)
+        r = tb.Remote("https://cpbee:5232/me/cal/", "me")
+        self.assertEqual(r.password(), "from-ticket")                      # bare in the url, qualified in the ticket
+        self.assertEqual(tb.Remote("https://cpbee.cmnet:5232/me/cal/", "me").password(), "from-ticket")
+        self.assertEqual(tb.Remote("https://cpbee:5232/me/cal/", "someone").password(), "")
+        self.assertEqual(tb.Remote("https://cpbee.other:5232/me/cal/", "me").password(), "")
+
     def test_settings_say_remote(self):
         rows = {r[0]: r[1] for r in self.lines("settings")}
         self.assertEqual(rows["mode"], "remote")

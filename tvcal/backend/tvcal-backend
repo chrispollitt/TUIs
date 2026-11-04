@@ -598,9 +598,12 @@ class Remote:
                     if not ln or ln.startswith("#"):
                         continue
                     t = urllib.parse.urlparse(ln)
-                    if (t.scheme in ("https", "http", "*") or ln.startswith("*://")) and \
-                            (ln.split("://", 1)[-1].rpartition("@")[2].split("/")[0].partition(":")[0].lower()
-                             == (u.hostname or "").lower()):
+                    tail_host = ln.split("://", 1)[-1].rpartition("@")[2].split("/")[0].partition(":")[0].lower()
+                    mine = (u.hostname or "").lower()
+                    # cpbee and cpbee.cmnet are one machine here (netrc-to-tickets writes the qualified name)
+                    same = (tail_host == mine or ("." not in tail_host and mine.partition(".")[0] == tail_host)
+                            or ("." not in mine and tail_host.partition(".")[0] == mine))
+                    if (t.scheme in ("https", "http", "*") or ln.startswith("*://")) and same:
                         tail = ln.split("://", 1)[-1]
                         cred = tail.rpartition("@")[0]
                         user, _, pw = cred.partition(":")
