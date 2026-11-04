@@ -10,6 +10,12 @@
 #            file, makes USER's calendar collection, starts it at boot and opens the port
 #            for the LAN when net-utils' lan-port is there.
 #
+#   share    (root, on the same host) lets a second user work on the owner's calendar - the central
+#            Floyd's !todo / !cal / !event: that user gets its own random password (from $CAL_SHARE_PW, or made
+#            here and printed once) and read-write on /OWNER/calendar/ only, nothing else of the owner's.
+#            Checked afterwards (the sharer gets in, cannot see the owner's other collections); if the check
+#            fails the old configuration is put back.  Needs the server half to have run once.
+#
 #   client   (as yourself, on each machine that runs tvcal - no root)
 #            writes [server] into ~/.config/tvcal/tvcal.conf ($TVCAL_CONF), puts the
 #            password in ~/.mu-tickets (mode 600), fetches the CA if the server's certificate is
@@ -21,6 +27,7 @@
 #
 # Usage:
 #   sudo ./configure-radicale.sh server --user chris [options]
+#   sudo ./configure-radicale.sh share --user chris --with floyd
 #   ./configure-radicale.sh client --user chris [options]
 #
 # Server options:
@@ -31,6 +38,8 @@
 #   --cert FILE --key FILE   the certificate to serve (default: made here, self-signed, in
 #                    /etc/radicale/tls, valid 10 years, for the host's name)
 #   --name HOST      the name clients use (default: the host's short name)
+# Share options:
+#   --user OWNER     whose calendar          --with USER   who may work on it (a login of its own)
 # Client options:
 #   --host HOST      the server (default: cpbee)       --port N   (default: 5232)
 #   --ca FILE        a local copy of the CA / certificate (default: scp HOST:/etc/radicale/tls/cert.pem)
@@ -40,7 +49,7 @@
 set -euo pipefail
 
 mode="${1:-}"; [ $# -gt 0 ] && shift
-USER_NAME=""; PORT=5232; BIND=0.0.0.0; CERT=""; KEY=""; NAME=""; HOST=cpbee; CA=""; CHECK=1
+USER_NAME=""; WITH=""; PORT=5232; BIND=0.0.0.0; CERT=""; KEY=""; NAME=""; HOST=cpbee; CA=""; CHECK=1
 
 log()  { printf '  %s\n' "$*"; }
 warn() { printf 'WARNING: %s\n' "$*" >&2; }
@@ -50,6 +59,7 @@ usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; }
 while [ $# -gt 0 ]; do
   case "$1" in
     --user)     USER_NAME="${2:?}"; shift 2 ;;
+    --with)     WITH="${2:?}"; shift 2 ;;
     --port)     PORT="${2:?}"; shift 2 ;;
     --bind)     BIND="${2:?}"; shift 2 ;;
     --cert)     CERT="${2:?}"; shift 2 ;;
@@ -77,6 +87,42 @@ secret() {   # the password: $CAL_SETUP_PASS, else asked for (twice)
 }
 
 # ------------------------------------------------------------------ server ---
+# /etc/radicale/rights: everyone has their own calendars (what owner_only did) and, for each line
+# "OWNER WITH" of /etc/radicale/shares, WITH may read and write OWNER/calendar and nothing else of OWNER's.
+write_rights() {
+  if [ -f /etc/radicale/rights ] && ! grep -q '^# written by tvcal configure-radicale' /etc/radicale/rights; then
+    cp -p /etc/radicale/rights "/etc/radicale/rights.bak.$(date +%Y%m%d%H%M%S)"
+  fi
+  {
+    cat <<'RIGHTS'
+# written by tvcal configure-radicale.sh (the "share" mode adds to /etc/radicale/shares; re-run to rebuild)
+[root]
+user: .+
+collection:
+permissions: R
+
+[principal]
+user: .+
+collection: {user}
+permissions: RW
+
+[calendars]
+user: .+
+collection: {user}/[^/]+
+permissions: rw
+RIGHTS
+    n=0
+    if [ -f /etc/radicale/shares ]; then
+      while read -r owner with _; do
+        case "$owner" in ""|\#*) continue ;; esac
+        n=$((n + 1))
+        printf '\n[share-%s]\nuser: %s\ncollection: %s/calendar\npermissions: rw\n' "$n" "$with" "$owner"
+      done < /etc/radicale/shares
+    fi
+  } > /etc/radicale/rights
+  chmod 0644 /etc/radicale/rights
+}
+
 server() {
   [ "$(id -u)" = 0 ] || die "the server half needs root (sudo)"
   NAME="${NAME:-$(hostname -s)}"
@@ -128,10 +174,12 @@ htpasswd_encryption = bcrypt
 filesystem_folder = /var/lib/radicale/collections
 
 [rights]
-type = owner_only
+type = from_file
+file = /etc/radicale/rights
 EOF
   chmod 0644 /etc/radicale/config
 
+  write_rights
   pw=$(secret)
   touch /etc/radicale/users; chmod 0640 /etc/radicale/users; chown "root:$rad_user" /etc/radicale/users 2>/dev/null || true
   printf '%s\n' "$pw" | htpasswd -iB /etc/radicale/users "$USER_NAME" >/dev/null
@@ -166,6 +214,49 @@ EOF
   echo
   echo "Server ready.  On each machine:  ./configure-radicale.sh client --user $USER_NAME --host $NAME"
   echo "The central Floyd on this host: run the client half as his service user with --host localhost."
+}
+
+# ------------------------------------------------------------------- share ---
+share() {
+  [ "$(id -u)" = 0 ] || die "the share mode needs root (sudo)"
+  [ -n "$WITH" ] || die "--with USER is required (who may work on $USER_NAME's calendar)"
+  case "$WITH" in *[!A-Za-z0-9._-]*) die "--with: letters, digits . _ - only" ;; esac
+  [ "$WITH" != "$USER_NAME" ] || die "--with is the owner already"
+  [ -f /etc/radicale/config ] && command -v htpasswd >/dev/null 2>&1 || die "run the server half first"
+  rad_user=$(id -nu radicale 2>/dev/null || echo root)
+  stamp=$(date +%Y%m%d%H%M%S)
+  for f in config rights users shares; do [ -f "/etc/radicale/$f" ] && cp -p "/etc/radicale/$f" "/etc/radicale/$f.share-bak.$stamp"; done
+  restore() {
+    for f in config rights users shares; do
+      if [ -f "/etc/radicale/$f.share-bak.$stamp" ]; then cp -p "/etc/radicale/$f.share-bak.$stamp" "/etc/radicale/$f"; else rm -f "/etc/radicale/$f"; fi
+    done
+    systemctl restart radicale || true
+  }
+  if grep -q '^type = owner_only' /etc/radicale/config; then      # a server half from before this mode
+    sed -i 's|^type = owner_only|type = from_file\nfile = /etc/radicale/rights|' /etc/radicale/config
+  fi
+  grep -qxF "$USER_NAME $WITH" /etc/radicale/shares 2>/dev/null || echo "$USER_NAME $WITH" >> /etc/radicale/shares
+  chmod 0644 /etc/radicale/shares
+  write_rights
+  pw="${CAL_SHARE_PW:-}"
+  if [ -z "$pw" ]; then pw=$(openssl rand -base64 24 | tr -d '/+=\n' | cut -c1-24); echo "  made a password for $WITH: $pw   (shown once)"; fi
+  printf '%s\n' "$pw" | htpasswd -iB /etc/radicale/users "$WITH" >/dev/null
+  chown "root:$rad_user" /etc/radicale/users 2>/dev/null || true; chmod 0640 /etc/radicale/users
+  systemctl restart radicale || { restore; die "radicale did not restart; the old configuration is back"; }
+  base="https://localhost:$PORT"
+  code=000
+  for _ in $(seq 1 20); do
+    code=$(curl -sk -u "$WITH:$pw" -o /dev/null -w '%{http_code}' "$base/$USER_NAME/calendar/" || true)
+    [ "$code" != 000 ] && break
+    sleep 1
+  done
+  other=$(curl -sk -u "$WITH:$pw" -o /dev/null -w '%{http_code}' "$base/$USER_NAME/" || true)
+  if [ "$code" != 200 ]; then
+    restore; die "$WITH could not read $USER_NAME/calendar/ (HTTP $code); the old configuration is back"
+  fi
+  case "$other" in 403|404) ;; *) restore; die "$WITH can see more of $USER_NAME than the calendar (HTTP $other on /$USER_NAME/); the old configuration is back" ;; esac
+  log "$WITH can read and write /$USER_NAME/calendar/ (HTTP $code) and nothing else of $USER_NAME's (HTTP $other)"
+  rm -f /etc/radicale/*.share-bak."$stamp"
 }
 
 # ------------------------------------------------------------------ client ---
@@ -215,7 +306,8 @@ print("https://%s:%s@%s:%s" % (u.quote(os.environ["CAL_USER"], safe=""), u.quote
 
 case "$mode" in
   server) server ;;
+  share)  [ -n "$USER_NAME" ] || die "--user OWNER is required"; share ;;
   client) client ;;
   -h|--help|"") usage ;;
-  *) die "say 'server' or 'client' (try --help)" ;;
+  *) die "say 'server', 'share' or 'client' (try --help)" ;;
 esac
