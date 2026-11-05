@@ -273,5 +273,29 @@ class TestAdmin(unittest.TestCase):
         self.assertIn("has data", self.run_cli("list")[1])
 
 
+class TestCommandLine(unittest.TestCase):
+    def test_conf_is_accepted_before_and_after_the_subcommand(self):
+        """The systemd unit says `dcgw serve --conf FILE`; an admin may say `dcgw --conf FILE list`."""
+        import contextlib
+        import io
+        tmp = Path(tempfile.mkdtemp(prefix="dcgw-cli-"))
+        self.addCleanup(shutil.rmtree, str(tmp), True)
+        conf = str(tmp / "dcgw.conf")
+        for argv in (["--conf", conf, "add-user", "a", "--addr", "a@x.y"], ["add-user", "b", "--addr", "b@x.y", "--conf", conf],
+                     ["list", "--conf", conf], ["--conf", conf, "list"]):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(dcgw.main(argv), 0, argv)
+        text = Path(conf).read_text()
+        self.assertIn("[user:a]", text)
+        self.assertIn("[user:b]", text)
+        # `serve` parses too (the unit's exact form): only the parsing is checked, so stop at a conf with no users
+        err = io.StringIO()
+        empty = str(tmp / "empty.conf")
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(dcgw.main(["serve", "--conf", empty]), 1)
+        self.assertIn("has no [user:NAME]", err.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

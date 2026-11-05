@@ -554,7 +554,11 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="dcgw", description="the Delta Chat gateway")
     ap.add_argument("--version", action="version", version="dcgw " + VERSION)
     ap.add_argument("--conf", default=os.environ.get("DCGW_CONF", CONF))
+    common = argparse.ArgumentParser(add_help=False)       # --conf may also come after the subcommand (the systemd unit)
+    common.add_argument("--conf", default=argparse.SUPPRESS)
     sub = ap.add_subparsers(dest="cmd", required=True)
+    _add = sub.add_parser
+    sub.add_parser = lambda *a, **k: _add(*a, parents=[common], **k)
     p = sub.add_parser("serve"); p.set_defaults(fn=cmd_serve)
     p = sub.add_parser("add-user"); p.add_argument("name"); p.add_argument("--addr", required=True); p.set_defaults(fn=cmd_add_user)
     p = sub.add_parser("token"); p.add_argument("name"); p.set_defaults(fn=cmd_token)
