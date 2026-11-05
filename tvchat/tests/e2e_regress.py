@@ -543,6 +543,66 @@ def delta_invite_join_and_send(opts):
 
 
 @case()
+def delta_second_device_offer(opts):
+    # Chat > Add second device...: the code to give the other machine, and Done ends the offer
+    import json
+    core = HERE / "fake_deltachat_rpc.py"
+
+    def setup(t):
+        d = t.tmp / "xdg" / "tvchat" / "deltachat" / "delta"
+        d.mkdir(parents=True)
+        (d / "world.json").write_text(json.dumps({"contacts": {}, "chats": {}, "messages": {}}))
+        (d / "state.json").write_text(json.dumps({"accounts": [1], "configured": True}))
+        conf = t.tmp / "tvchat.conf"
+        conf.write_text("[chat]\nautoconnect = delta\n\n[account:delta]\nprotocol = deltachat\n"
+                        "display = Delta\naddr = me@example.org\nrpc_server = %s\n" % core)
+        t.env["TVCHAT_CONF"] = str(conf)
+        t.core = d
+    tv = Tv(opts, setup=setup)
+    c = Case(tv)
+    started(tv, c)
+    c.check(tv.wait(lambda: re.search(r"Delta\b.*\bYes\b", tv.text()), 15), "the Delta Chat account did not connect")
+    tv.send(alt("c"), "s", settle=1.0)
+    c.check(tv.wait("DCBACKUP2:fake-backup-token", 8), "Chat > Add second device... did not show the code")
+    c.check(tv.has("Add second device"), "the dialog has no title")
+    tv.send("Enter", settle=1.0)                  # Done
+    c.check(tv.wait(lambda: not tv.has("DCBACKUP2:fake"), 5), "Done did not close the dialog")
+    reqs = (tv.core / "requests.jsonl").read_text()
+    c.check("provide_backup" in reqs, "the core was never asked to offer the account")
+    c.check("stop_ongoing_process" in reqs, "Done did not end the offer (the mail traffic would stay paused)")
+    return tv
+
+
+@case()
+def delta_second_device_use(opts):
+    # Chat > Use account from another device...: the code typed, the account arrives whole (no setup against the mail server)
+    import json
+    core = HERE / "fake_deltachat_rpc.py"
+
+    def setup(t):
+        d = t.tmp / "xdg" / "tvchat" / "deltachat" / "delta"
+        d.mkdir(parents=True)
+        (d / "world.json").write_text(json.dumps({"contacts": {}, "chats": {}, "messages": {}}))
+        conf = t.tmp / "tvchat.conf"
+        conf.write_text("[account:delta]\nprotocol = deltachat\ndisplay = Delta\n"
+                        "addr = me@example.org\nrpc_server = %s\n" % core)
+        t.env["TVCHAT_CONF"] = str(conf)
+        t.core = d
+    tv = Tv(opts, setup=setup)
+    c = Case(tv)
+    started(tv, c)
+    tv.send(alt("c"), "u", settle=1.0)
+    c.check(tv.wait("Use account from another device", 5), "Chat > Use account from another device... opened no dialog")
+    tv.send("DCBACKUP2:fake-backup-token", "Enter", settle=1.0)
+    c.check(tv.wait(lambda: re.search(r"Delta\b.*\bYes\b", tv.text()), 15),
+            "the account did not arrive and connect after the code was given")
+    reqs = (tv.core / "requests.jsonl").read_text()
+    c.check("get_backup" in reqs and "DCBACKUP2:fake-backup-token" in reqs, "the core was never given the code")
+    c.check("add_or_update_transport" not in reqs, "a password-based setup ran although the account came whole")
+    return tv
+
+
+@case()
 def delta_group_rename_and_leave(opts):
     # Chat > New group..., Rename group... and Leave (which asks first) against
     # tests/fake_deltachat_rpc.py

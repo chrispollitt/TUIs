@@ -92,7 +92,7 @@ Picking up: Floyd on Live Helper Chat, and Joy (PLAN.md has the phases; Nov 2, 2
 Next
 1 Delta Chat, what is left (tvchat/DESIGN.md "Delta Chat adapter"; tried live on
   cpbee with two mailboxes, and on cmlaptop and cmdesktop):
-  - Attachments (shown as `[attachment: NAME]`), reactions, multi-device setup,
+  - Attachments (shown as `[attachment: NAME]`), reactions,
     a chat renamed on another device (the title is refreshed but no event tells the
     UI), a group's picture and description, broadcast channels.
   - Groups: the member picker could list the people you already hold keys for

@@ -537,5 +537,179 @@ class TestSentinel(unittest.TestCase):
         self.assertEqual(notes, ["1\tcpbee\terror\tErgo is down: unit is failed\n"])
 
 
+
+class TestWizard(unittest.TestCase):
+    """Floyd as a setup wizard: !setup join / !setup / !setup N / !setup all."""
+    TOKEN = "wiz-secret-token"  # allowlist secret: test value
+
+    def setUp(self):
+        import json
+        self.tmp = tempfile.mkdtemp()
+        self.old = dict(os.environ)
+        for k in ("TVCAL_CONF", "TVMAIL_CONF", "TVCHAT_CONF", "TV_SPOOL_DIR"):
+            os.environ.pop(k, None)
+        os.environ["HOME"] = os.path.join(self.tmp, "home")
+        os.environ["XDG_STATE_HOME"] = os.path.join(self.tmp, "state")
+        os.environ["TVFLOYD_RELAY"] = "none"
+        tvf._DOWN.clear()
+        tvf._SOURCE["last"] = None
+        tvf._MASTER = None
+        tvf._BAKED.clear()
+        self.cfgdir = os.path.join(self.tmp, "home", ".config")
+        for app in ("tvcal", "tvmail", "tvchat"):
+            os.makedirs(os.path.join(self.cfgdir, app))
+        self.write("tvcal", "[server]\nurl = https://old.example/\n# my comment\n")
+        self.write("tvmail", "[service]\nmode = remote\n")
+        self.write("tvchat", "[chat]\nautoconnect = a\n\n[account:a]\nprotocol = talk\nhost = x\n")
+        ca1, ca2 = os.path.join(self.tmp, "ca-cal.pem"), os.path.join(self.tmp, "ca-chat.pem")
+        for f, name in ((ca1, "TESTPEM-CAL"), (ca2, "TESTPEM-CHAT")):
+            with open(f, "w") as fh:
+                fh.write("-----BEGIN CERTIFICATE-----\n%s\n-----END CERTIFICATE-----\n" % name)
+        self.manifest = {
+            "calendar": {"url": "https://cpbee:5232/chris/calendar/", "user": "chris"},
+            "cas": {"cal": {"file": ca1, "name": "cpbee-ca.pem"}, "chat": {"file": ca2, "name": "chat-ca.pem"}},
+            "delta_owner": "cpbee",
+            "accounts": [
+                {"id": "lan_chat", "protocol": "irc", "display": "LAN group chat", "autoconnect": True,
+                 "opts": {"host": "cpbee", "port": "6697", "tls": "true", "cafile": "@CA@", "nick": "chris-pollitt",
+                          "sasl": "chris-pollitt"}},
+                {"id": "delta_chris", "protocol": "deltachat", "display": "Delta Chat (chris)", "autoconnect": True,
+                 "opts": {"addr": "chris@cpbee.cmnet", "imap_server": "cpbee", "imap_user": "chris", "rpc_server": "@RPC@"}}]}
+        self.setup_file = os.path.join(self.tmp, "floyd-setup.json")
+        with open(self.setup_file, "w") as fh:
+            json.dump(self.manifest, fh)
+        self.loop = _Loop()
+        self.gate = tvf.FloydGate(self.loop, tvf.FloydMemory(None), self.TOKEN,
+                                  tvf.claude_settings(lambda k, d: "no" if k == "claude" else d), "127.0.0.1", 0,
+                                  setup_file=self.setup_file)
+        self.gate.start()
+        self.server = "127.0.0.1:%d" % self.gate.sock.getsockname()[1]
+
+    def tearDown(self):
+        self.gate.stop()
+        os.environ.clear()
+        os.environ.update(self.old)
+        tvf._MASTER = None
+
+    def path(self, app):
+        return os.path.join(self.cfgdir, app, app + ".conf")
+
+    def write(self, app, text):
+        with open(self.path(app), "w") as fh:
+            fh.write(text)
+
+    def read(self, app):
+        with open(self.path(app)) as fh:
+            return fh.read()
+
+    def say(self, text, app="tvcal", master=None):
+        return "\n".join(tvf.persona(text, "chatty", where=app, master=master if master is not None else {"server": ""}) or ["(nothing)"])
+
+    def join(self):
+        out = self.say("!setup join %s %s" % (self.server, self.TOKEN))
+        return out, tvf.master_settings(lambda k, d: {"server": self.server, "token": self.TOKEN,  # allowlist secret
+                                                       "machine": "cmlaptop"}.get(k, d))
+
+    def test_without_a_master_it_asks_for_the_name_and_token_once(self):
+        out = self.say("!setup")
+        self.assertIn("!setup join HOST TOKEN", out)
+        self.assertIn("Usage: !setup join", self.say("!setup join"))
+
+    def test_join_checks_the_token_writes_it_and_never_echoes_it(self):
+        bad = self.say("!setup join %s nope" % self.server)
+        self.assertIn("did not accept that token", bad)
+        self.assertEqual(self.read("tvcal").count("token"), 0)
+        out, m = self.join()
+        self.assertIn("Joined:", out)
+        self.assertNotIn(self.TOKEN, out)                                       # the token is never repeated
+        self.assertEqual(tvf.conf_get(self.path("tvcal"), "floyd", "server"), self.server)
+        self.assertEqual(tvf.conf_get(self.path("tvcal"), "floyd", "token"), self.TOKEN)
+        self.assertIn("# my comment", self.read("tvcal"))                       # comments survive
+        dead = self.say("!setup join 127.0.0.1:1 x")
+        self.assertIn("is not answering", dead)
+
+    def test_the_report_lists_ok_todo_and_you_then_all_fixes_what_it_can(self):
+        out, m = self.join()
+        rep = self.say("!setup", master=m)
+        self.assertIn("Setup check (master", rep)
+        self.assertIn("ok   tvcal talks to the master Floyd", rep)
+        self.assertIn("todo tvmail has no (or another) master Floyd", rep)
+        self.assertIn("todo tvchat has no (or another) master Floyd", rep)
+        self.assertIn("todo tvcal's calendar server is not https://cpbee:5232/chris/calendar/ here", rep)
+        self.assertIn("todo tvchat lacks the LAN group chat account (irc)", rep)
+        self.assertIn("todo tvchat lacks the Delta Chat (chris) account (deltachat)", rep)
+        self.assertIn("you  no password for chris on cpbee", rep)
+        self.assertIn("you  no password for chris-pollitt on cpbee", rep)
+        self.assertNotIn(self.TOKEN, rep)
+        done = self.say("!setup all", master=m)
+        self.assertIn("Done: tvmail now has server =", done)
+        self.assertIn("Done: tvcal: calendar https://cpbee:5232/chris/calendar/", done)
+        self.assertIn("Done: tvchat: added the Delta Chat (chris) account", done)
+        self.assertIn("Chat > Use account from another device", done)
+        self.assertNotIn(self.TOKEN, done)
+        # the files
+        self.assertEqual(tvf.conf_get(self.path("tvmail"), "floyd", "token"), self.TOKEN)
+        self.assertEqual(tvf.conf_get(self.path("tvcal"), "server", "url"), "https://cpbee:5232/chris/calendar/")
+        self.assertEqual(tvf.conf_get(self.path("tvcal"), "server", "user"), "chris")
+        ca = tvf.conf_get(self.path("tvcal"), "server", "ca")
+        self.assertTrue(os.path.isfile(ca))
+        self.assertIn("TESTPEM-CAL", open(ca).read())                            # the public CA came from the master
+        self.assertEqual(tvf.conf_get(self.path("tvchat"), "chat", "autoconnect"), "a, lan_chat, delta_chris")
+        self.assertEqual(tvf.conf_get(self.path("tvchat"), "account:lan_chat", "cafile"),
+                         os.path.join(self.cfgdir, "tvchat", "chat-ca.pem"))
+        self.assertIn("TESTPEM-CHAT", open(os.path.join(self.cfgdir, "tvchat", "chat-ca.pem")).read())
+        self.assertEqual(tvf.conf_get(self.path("tvchat"), "account:delta_chris", "addr"), "chris@cpbee.cmnet")
+        self.assertNotIn("@RPC@", self.read("tvchat"))
+        self.assertNotIn("@CA@", self.read("tvchat"))
+        for app in ("tvcal", "tvmail", "tvchat"):                                # a backup of every file that changed
+            self.assertTrue(os.listdir(os.path.join(self.cfgdir, app, "BAK")), app)
+        # the second look: only what is not Floyd's to fix remains
+        again = self.say("!setup", master=m)
+        self.assertNotIn("todo tvmail", again)
+        self.assertNotIn("todo tvchat lacks", again)
+        self.assertNotIn("todo tvcal's calendar", again)
+        self.assertIn("you  no password", again)
+        second = self.say("!setup all", master=m)                                 # nothing is left that Floyd may change
+        self.assertNotIn("Done: tvmail", second)
+        self.assertNotIn("Done: tvchat", second)
+
+    def test_one_step_by_number_and_the_password_notice_goes_when_one_exists(self):
+        out, m = self.join()
+        rep = self.say("!setup", master=m).split("\n")
+        n = next(i for i, l in enumerate(rep, 0) if "todo tvmail has no" in l)       # " 2. todo ..." (line 0 is the header)
+        self.assertIn("Done: tvmail now has server", self.say("!setup %d" % n, master=m))
+        self.assertEqual(tvf.conf_get(self.path("tvchat"), "floyd", "server"), "")  # only that step
+        self.assertIn("!setup N does step N", self.say("!setup 99", master=m))
+        with open(os.path.join(self.tmp, "home", ".netrc"), "w") as fh:
+            fh.write("machine cpbee login chris-pollitt password hunter2\n")  # allowlist secret: test value
+        os.chmod(os.path.join(self.tmp, "home", ".netrc"), 0o600)
+        rep = self.say("!setup", master=m)
+        self.assertNotIn("no password for chris-pollitt on cpbee", rep)             # present: only the fact is checked
+        self.assertIn("no password for chris on cpbee", rep)
+        self.assertNotIn("hunter2", rep)
+
+    def test_the_owner_machine_does_not_get_a_delta_account_step(self):
+        self.say("!setup join %s %s" % (self.server, self.TOKEN))
+        m = tvf.master_settings(lambda k, d: {"server": self.server, "token": self.TOKEN, "machine": "cpbee"}.get(k, d))  # allowlist secret
+        rep = self.say("!setup", master=m)
+        self.assertNotIn("Delta Chat (chris)", rep)
+
+    def test_an_older_master_without_a_setup_file_says_so(self):
+        out, m = self.join()
+        os.remove(self.setup_file)
+        rep = self.say("!setup", master=m)
+        self.assertIn("the master did not send its setup", rep)
+
+    def test_conf_helpers_keep_comments_and_do_not_duplicate(self):
+        p = self.path("tvmail")
+        self.assertTrue(tvf.conf_set(p, "service", "mode", "local"))
+        self.assertFalse(tvf.conf_set(p, "service", "mode", "local"))
+        self.assertTrue(tvf.conf_add_account(self.path("tvchat"), "n", [("protocol", "irc")]))
+        self.assertFalse(tvf.conf_add_account(self.path("tvchat"), "n", [("protocol", "irc")]))
+        self.assertFalse(tvf.conf_autoconnect_add(self.path("tvchat"), "a"))
+        self.assertTrue(tvf.conf_autoconnect_add(self.path("tvchat"), "n"))
+        self.assertEqual(tvf.conf_get(self.path("tvchat"), "chat", "autoconnect"), "a, n")
+
+
 if __name__ == "__main__":
     unittest.main()

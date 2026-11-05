@@ -1267,6 +1267,10 @@ def persona(text, level, who="friend", where="here", path=None, master=None):
     if level == "off" or not text.strip():
         return None
     m = master if master is not None else _MASTER
+    if where in WIZ_APPS and re.match(r"^!setup\b", text.strip(), re.I):
+        got = wizard_command(text, where, m if m else {"server": "", "token": "", "machine": ""})
+        if got is not None:
+            return got
     sm = re.match(r"^!send(?:\s+(\S+)(?:\s+(\S.*))?)?$", text.strip(), re.I | re.S)
     if sm:                                                  # !send MACHINE|all text: a toast on another machine
         if not (sm.group(1) and sm.group(2)):
@@ -1604,7 +1608,8 @@ class FloydGate(object):
     request is answered in a moment (Claude runs as a background job, polled with op=poll)."""
     MINDS_MAX = 64
 
-    def __init__(self, loop, memory, token, claude_cfg, host, port=GATE_PORT, level=DEFAULT_LEVEL, log=None):
+    def __init__(self, loop, memory, token, claude_cfg, host, port=GATE_PORT, level=DEFAULT_LEVEL, log=None, setup_file=""):
+        self.setup_file = setup_file
         self.loop, self.memory, self.token = loop, memory, token
         self.claude_cfg, self.host, self.port, self.level = claude_cfg, host, int(port), level
         self.log = log or _log
@@ -1704,10 +1709,21 @@ class FloydGate(object):
             if not os.path.isdir(os.path.join(_claude_jobs(), job)):
                 return {"ok": True, "done": True, "lines": ["Claude: that question is gone (already collected?)"]}
             return {"ok": True, "done": False}
+        if op == "setup":                        # what the wizard compares a machine with: the manifest and the public CA
+            try:
+                with open(self.setup_file, encoding="utf-8") as fh:
+                    manifest = json.load(fh)
+                cas = {}
+                for key, spec in (manifest.get("cas") or {}).items():      # key -> {"file": on the server, "name": here}
+                    with open(spec["file"], encoding="utf-8") as fh:
+                        cas[key] = {"name": spec.get("name") or os.path.basename(spec["file"]), "pem": fh.read()}
+                return {"ok": True, "manifest": manifest, "cas": cas}
+            except (OSError, ValueError) as e:
+                return {"ok": False, "error": "no setup file (%s)" % (getattr(e, "strerror", None) or e)}
         if op == "publish":
             n = self.hub.publish(str(req.get("kind") or "note"), text, str(req.get("level") or "info"),
                                  origin=str(req.get("machine") or who), to=str(req.get("to") or "all"),
-                                 key=str(req.get("key") or ""), ttl=req.get("ttl"))
+                                 key=str(req.get("key") or ""), ttl=req.get("ttl"), data=str(req.get("data") or ""))
             return {"ok": bool(n), "seq": n, "error": "" if n else "empty"}
         if op == "events":
             since = req.get("since")
@@ -1735,7 +1751,7 @@ class EventHub(object):
         n = re.sub(r"[^\w.-]", "", str(text or "")).lower()[:32]
         return n or default
 
-    def publish(self, kind, text, level="info", origin="cpbee", to="all", key="", ttl=None):
+    def publish(self, kind, text, level="info", origin="cpbee", to="all", key="", ttl=None, data=""):
         """Add an event; its number, or 0 when it has no text.  A `key` makes it sticky until a "recover" with the same key."""
         text = self.clean(text)
         if not text:
@@ -1748,7 +1764,7 @@ class EventHub(object):
         ev = {"seq": self.seq, "ts": int(self.clock()), "kind": self.name(kind, "note")[:16],
               "level": level if level in ("info", "warn", "error") else "info",
               "text": text, "origin": self.name(origin, "cpbee"), "to": self.name(to, "all"),
-              "key": self.clean(key, 40), "ttl": ttl}
+              "key": self.clean(key, 80), "ttl": ttl, "data": self.clean(data, 2000)}
         self.ring.append(ev)
         del self.ring[:-self.RING]
         if ev["key"]:
@@ -1956,6 +1972,327 @@ def send_note(m, target, text, level="info"):
     if not r.get("ok"):
         return "The master refused it (%s)." % (r.get("error") or "no")
     return "Sent to %s." % ("every other machine" if target == "all" else target)
+
+
+
+# -- the setup wizard (Floyd, in any app: `!setup`) -----------------------------------
+# A new machine needs only the master Floyd's name and token (`!setup join HOST TOKEN`, once).  After that Floyd
+# compares this machine with what the master knows (the manifest in /etc/tvchat/floyd-setup.json on the server, with
+# the public CA certificate): the link of every tv* app to the master, tvcal's calendar server, tvchat's accounts,
+# the Delta Chat account, the notification relay, and which passwords are missing.  `!setup` lists what is ok, what
+# Floyd can fix ("todo") and what only you can ("you"); `!setup N` or `!setup all` does it.  Every file he changes is
+# first copied to BAK/ beside it.  He never handles a password: a missing one is only reported.
+WIZ_APPS = ("tvcal", "tvmail", "tvchat")
+_BAKED = set()
+
+
+def wiz_conf_path(app):
+    env = os.environ.get(app.upper() + "_CONF")
+    return env if env else os.path.expanduser("~/.config/%s/%s.conf" % (app, app))
+
+
+def _conf_lines(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read().split("\n")
+    except OSError:
+        return []
+
+
+def conf_get(path, section, key, default=""):
+    import configparser
+    c = configparser.ConfigParser(interpolation=None, strict=False)
+    try:
+        c.read(path, encoding="utf-8")
+        return c.get(section, key, fallback=default)
+    except (configparser.Error, OSError):
+        return default
+
+
+def conf_sections(path):
+    import configparser
+    c = configparser.ConfigParser(interpolation=None, strict=False)
+    try:
+        c.read(path, encoding="utf-8")
+        return c.sections()
+    except (configparser.Error, OSError):
+        return []
+
+
+def _conf_write(path, lines):
+    d = os.path.dirname(path)
+    os.makedirs(d, exist_ok=True)
+    if os.path.exists(path) and path not in _BAKED:           # one backup per run, before the first change
+        _BAKED.add(path)
+        bak = os.path.join(d, "BAK")
+        os.makedirs(bak, exist_ok=True)
+        shutil.copy2(path, os.path.join(bak, os.path.basename(path) + "." + time.strftime("%Y%m%d-%H%M%S")))
+    with open(path, "w", encoding="utf-8", newline="") as fh:
+        fh.write("\n".join(lines))
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
+def conf_set(path, section, key, value):
+    """KEY = VALUE in [SECTION], keeping every comment; the section is added when missing.  True when it changed."""
+    lines = _conf_lines(path)
+    head = re.compile(r"^\[%s\]\s*$" % re.escape(section), re.I)
+    start = next((i for i, l in enumerate(lines) if head.match(l)), None)
+    if start is None:
+        while lines and not lines[-1].strip():
+            lines.pop()
+        lines += ["", "[%s]" % section, "%s = %s" % (key, value), ""]
+        _conf_write(path, lines)
+        return True
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("[")), len(lines))
+    rx = re.compile(r"^\s*%s\s*=\s*(.*?)\s*$" % re.escape(key), re.I)
+    for i in range(start + 1, end):
+        m = rx.match(lines[i])
+        if m:
+            if m.group(1) == str(value):
+                return False
+            lines[i] = "%s = %s" % (key, value)
+            _conf_write(path, lines)
+            return True
+    at = end
+    while at > start + 1 and not lines[at - 1].strip():
+        at -= 1
+    lines.insert(at, "%s = %s" % (key, value))
+    _conf_write(path, lines)
+    return True
+
+
+def conf_add_account(path, ident, items):
+    """Append [account:IDENT] with the given (key, value) pairs unless an active one exists.  True when added."""
+    if ("account:" + ident) in conf_sections(path):
+        return False
+    lines = _conf_lines(path)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    lines += ["", "[account:%s]" % ident] + ["%s = %s" % kv for kv in items] + [""]
+    _conf_write(path, lines)
+    return True
+
+
+def conf_autoconnect_add(path, ident):
+    cur = [x.strip() for x in conf_get(path, "chat", "autoconnect").split(",") if x.strip()]
+    if ident in cur:
+        return False
+    return conf_set(path, "chat", "autoconnect", ", ".join(cur + [ident]))
+
+
+def _has_secret(host, user):
+    """Is there a password for USER on HOST in ~/.netrc or ~/.mu-tickets?  Only the fact is looked at, never the value."""
+    for name in ("~/.netrc", "~/.mu-tickets"):
+        try:
+            text = open(os.path.expanduser(name), encoding="utf-8", errors="replace").read()
+        except OSError:
+            continue
+        if name.endswith("netrc"):
+            if re.search(r"machine\s+%s\s+login\s+%s\s+password\s+\S" % (re.escape(host), re.escape(user)), text):
+                return True
+        elif re.search(r"^\S*://%s:[^@\s]+@%s\b" % (re.escape(user), re.escape(host)), text, re.M):  # allowlist secret: a pattern
+            return True
+    return False
+
+
+class WizStep(object):
+    def __init__(self, state, title, fix=None, detail=""):
+        self.state, self.title, self.fix, self.detail = state, title, fix, detail     # state: ok | todo | you
+
+
+def _wiz_installed(app):
+    return os.path.isdir(os.path.dirname(wiz_conf_path(app))) or bool(shutil.which(app) or shutil.which(app + "-backend"))
+
+
+def _setup_for_apps(m):
+    """[(app, conf path)] of the tv* apps on this machine."""
+    return [(a, wiz_conf_path(a)) for a in WIZ_APPS if _wiz_installed(a)]
+
+
+def wizard_steps(app, m, manifest=None, cas=None):
+    """The checks, as WizStep objects; MANIFEST / CAS (name -> {name, pem}) are what the master sent (None: not asked)."""
+    cas = cas or {}
+    steps = []
+    host = m["server"].rpartition(":")[0] if m["server"].endswith(":%d" % GATE_PORT) else m["server"]
+    apps = _setup_for_apps(m)
+    for a, path in apps:
+        ok = (conf_get(path, "floyd", "server") == host and conf_get(path, "floyd", "token") == m["token"])
+        if ok:
+            steps.append(WizStep("ok", "%s talks to the master Floyd" % a))
+        else:
+            def fix(a=a, path=path):
+                conf_set(path, "floyd", "server", host)
+                conf_set(path, "floyd", "token", m["token"])
+                conf_set(path, "floyd", "machine", m["machine"])
+                return "%s now has server = %s, token and machine = %s in %s" % (a, host, m["machine"], path)
+            steps.append(WizStep("todo", "%s has no (or another) master Floyd in %s" % (a, path), fix))
+    if manifest is None:
+        steps.append(WizStep("you", "the master did not send its setup (an older master, or no setup file on the server)"))
+        return steps
+
+    def ca_path(a, key):
+        return os.path.join(os.path.dirname(wiz_conf_path(a)), (cas.get(key) or {}).get("name") or "cpbee-ca.pem")
+
+    def put_ca(a, key):
+        if not (cas.get(key) or {}).get("pem"):
+            return None
+        p = ca_path(a, key)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w", encoding="utf-8", newline="") as fh:
+            fh.write(cas[key]["pem"])
+        return p
+    cal = manifest.get("calendar")
+    if cal and any(a == "tvcal" for a, _ in apps):
+        path = wiz_conf_path("tvcal")
+        cur = (conf_get(path, "server", "url"), conf_get(path, "server", "user"), conf_get(path, "server", "ca"))
+        want_ca = ca_path("tvcal", "cal") if "cal" in cas else ""
+        if cur[0] == cal["url"] and cur[1] == cal.get("user", "") and (not want_ca or (cur[2] == want_ca and os.path.isfile(want_ca))):
+            steps.append(WizStep("ok", "tvcal's calendar server is %s" % cal["url"]))
+        else:
+            def fix(path=path, cal=cal):
+                conf_set(path, "server", "url", cal["url"])
+                if cal.get("user"):
+                    conf_set(path, "server", "user", cal["user"])
+                p = put_ca("tvcal", "cal")
+                if p:
+                    conf_set(path, "server", "ca", p)
+                return "tvcal: calendar %s (user %s), certificate %s" % (cal["url"], cal.get("user", "-"), p or "unchanged")
+            steps.append(WizStep("todo", "tvcal's calendar server is not %s here" % cal["url"], fix))
+        if cal.get("user") and not _has_secret(cal["url"].split("/")[2].split(":")[0], cal["user"]):
+            steps.append(WizStep("you", "no password for %s on %s in ~/.netrc or ~/.mu-tickets: add it with your auth vault "
+                                        "(I never handle passwords)" % (cal["user"], cal["url"].split("/")[2].split(":")[0])))
+    tvchat_path = wiz_conf_path("tvchat")
+    if any(a == "tvchat" for a, _ in apps):
+        for acc in manifest.get("accounts") or []:
+            ident, proto = acc["id"], acc.get("protocol", "")
+            if proto == "deltachat" and manifest.get("delta_owner") == m["machine"]:
+                continue                                        # the owner machine runs the account as it is
+            if ("account:" + ident) in conf_sections(tvchat_path):
+                steps.append(WizStep("ok", "tvchat has the %s account (%s)" % (acc.get("display", ident), proto)))
+            else:
+                def fix(acc=acc, ident=ident):
+                    items = []
+                    for k, v in acc.get("opts", {}).items():
+                        v = str(v)
+                        mca = re.search(r"@CA(?::(\w+))?@", v)
+                        if mca:                                  # @CA@ = the "chat" certificate, @CA:key@ another one
+                            key = mca.group(1) or "chat"
+                            v = v.replace(mca.group(0), put_ca("tvchat", key) or ca_path("tvchat", key))
+                        if "@RPC@" in v:
+                            v = v.replace("@RPC@", _rpc_server_path())
+                        items.append((k, v))
+                    items = [("protocol", acc.get("protocol", "")), ("display", acc.get("display", ident))] + \
+                            [kv for kv in items if kv[0] not in ("protocol", "display")]
+                    conf_add_account(tvchat_path, ident, items)
+                    if acc.get("autoconnect", True):
+                        conf_autoconnect_add(tvchat_path, ident)
+                    more = ""
+                    if acc.get("protocol") == "deltachat":
+                        more = " Next, in tvchat: Chat > Use account from another device... (cpbee shows Chat > Add second device first)."
+                    return "tvchat: added the %s account%s.%s" % (acc.get("display", ident), " and autoconnect" if acc.get("autoconnect", True) else "", more)
+                steps.append(WizStep("todo", "tvchat lacks the %s account (%s)" % (acc.get("display", ident), proto), fix))
+            who = (acc.get("opts") or {}).get("sasl") or (acc.get("opts") or {}).get("imap_user")
+            h = (acc.get("opts") or {}).get("host") or (acc.get("opts") or {}).get("imap_server")
+            if who and h and not _has_secret(h, who):
+                steps.append(WizStep("you", "no password for %s on %s in ~/.netrc or ~/.mu-tickets (the %s account): add it with "
+                                            "your auth vault" % (who, h, acc.get("display", ident))))
+    if any(conf_get(p, "floyd", "server") for _a, p in apps):
+        if _relay_pid():
+            steps.append(WizStep("ok", "the notification relay runs"))
+        else:
+            steps.append(WizStep("todo", "the notification relay is not running (toasts from the server and other machines)",
+                                 lambda: "relay started" if ensure_relay(m) else "could not start the relay"))
+    return steps
+
+
+def _rpc_server_path():
+    if sys.platform == "cygwin" or sys.platform.startswith("win"):
+        return "/usr/local/bin/deltachat-rpc-server.exe"
+    for p in (os.path.expanduser("~/delta-venv/bin/deltachat-rpc-server"), shutil.which("deltachat-rpc-server") or ""):
+        if p and os.path.exists(p):
+            return p
+    return "deltachat-rpc-server"
+
+
+def _wiz_fetch(m):
+    """(manifest, cas) from the master, or (None, None)."""
+    r = master_call(m, {"op": "setup"})
+    if r and r.get("ok"):
+        return r.get("manifest"), r.get("cas") or {}
+    return None, None
+
+
+def wizard_command(text, app, m):
+    """!setup ... -> reply lines, or None when TEXT is not for the wizard.  M = master settings (server may be empty)."""
+    mt = re.match(r"^!setup(?:\s+(.*))?$", text.strip(), re.I | re.S)
+    if not mt:
+        return None
+    arg = (mt.group(1) or "").strip()
+    jn = re.match(r"^join\s+(\S+)\s+(\S+)$", arg, re.I)
+    if arg.lower().startswith("join") and not jn:
+        return ["Usage: !setup join HOST TOKEN  (the master Floyd's name and the token from its floyd-gate.token; asked once)"]
+    if jn:
+        host, token = jn.group(1), jn.group(2)
+        probe = master_settings(lambda k, d: {"server": host, "token": token}.get(k, d))
+        r = master_call(probe, {"op": "hello"}, cached=False)
+        if r is None:
+            return ["%s is not answering on port %d: check the name, and that this machine is on the LAN." % (host, GATE_PORT)]
+        if not r.get("ok"):
+            return ["%s answered, but did not accept that token." % host]
+        path = wiz_conf_path(app)
+        conf_set(path, "floyd", "server", host)
+        conf_set(path, "floyd", "token", token)
+        conf_set(path, "floyd", "machine", probe["machine"])
+        global _MASTER
+        _MASTER = m = probe
+        _DOWN.pop(probe["server"], None)
+        head = ["Joined: %s answers (%s quotes, %s facts); this machine is called %s." % (host, r.get("quotes", "?"),
+                                                                                         r.get("facts", "?"), probe["machine"])]
+        return head + _wiz_report(app, m, "")
+    if not m or not m.get("server"):
+        return ["I do not know the master Floyd yet.  Say: !setup join HOST TOKEN  (e.g. !setup join cpbee ...; the token is "
+                "in ~/floyd-gate.token on the server).  Then !setup checks everything else."]
+    return _wiz_report(app, m, arg)
+
+
+def _wiz_report(app, m, arg):
+    manifest, cas = _wiz_fetch(m)
+    steps = wizard_steps(app, m, manifest, cas)
+    if manifest is None and master_call(m, {"op": "hello"}) is None:
+        return ["The master Floyd (%s) is not reachable now, so I cannot compare.  Try again when it is." % m["server"]]
+    pick = None
+    if arg and arg.lower() != "all":
+        if not arg.isdigit() or not (1 <= int(arg) <= len(steps)):
+            return ["!setup N does step N (1-%d); !setup lists them, !setup all does every todo." % len(steps)]
+        pick = int(arg)
+    out = []
+    if arg:
+        for i, st in enumerate(steps, 1):
+            if (pick == i or arg.lower() == "all") and st.state == "todo" and st.fix:
+                try:
+                    out.append("Done: " + st.fix())
+                except OSError as e:
+                    out.append("Could not do step %d: %s" % (i, e.strerror or e))
+        if not out:
+            out.append("Nothing to do there.")
+        out.append("Restart the app(s) I changed to pick it up.")
+        return out
+    out.append("Setup check (master %s, this machine %s):" % (m["server"], m["machine"]))
+    label = {"ok": "ok  ", "todo": "todo", "you": "you "}
+    for i, st in enumerate(steps, 1):
+        out.append(" %d. %s %s" % (i, label[st.state], st.title))
+    todo = sum(1 for st in steps if st.state == "todo")
+    you = sum(1 for st in steps if st.state == "you")
+    if todo:
+        out.append("!setup N does one, !setup all does the %d todo (a backup of each file goes to BAK/ first)." % todo)
+    if you:
+        out.append("%d need%s you (passwords or the server's side); I never handle passwords." % (you, "" if you > 1 else "s"))
+    if not todo and not you:
+        out.append("Everything matches the master.")
+    return out
 
 
 if __name__ == "__main__":

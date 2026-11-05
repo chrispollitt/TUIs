@@ -1727,6 +1727,122 @@ void showLink(const std::string &link)
     TObject::destroy(d);
 }
 
+std::vector<int> deltaAccounts(bool live)
+{
+    std::vector<int> out;
+    const auto &as = chat().accounts();
+    for (int i : accountsWhere(live))
+        if (as[i].protocol == "deltachat")
+            out.push_back(i);
+    return out;
+}
+
+// Add second device...: offer a connected Delta Chat account to another machine (the same account on both: groups
+// and chats are shared).  Shows the code to give there; the offer stands while this window is open.
+void deviceAddDialog()
+{
+    std::vector<int> cand = deltaAccounts(true);
+    if (cand.empty())
+    {
+        notify("Connect a Delta Chat account first (Chat > Connect...).", noteInfo);
+        return;
+    }
+    int i = pickAccount("Add second device for", cand);
+    if (i < 0)
+        return;
+    const std::string id = chat().accounts()[i].id;
+    std::string body, err;
+    if (!ask("device-add " + shq(id), body, err))
+    {
+        notify(err, noteError);
+        return;
+    }
+    std::vector<std::string> got = splitLines(body); // "auto" or "manual", then the code
+    bool autoSent = !got.empty() && trimmed(got[0]) == "auto";
+    std::string code = got.size() > 1 ? trimmed(got[1]) : std::string();
+    TDialog *d = new TDialog(TRect(0, 0, 72, 17), "Add second device");
+    d->options |= ofCentered;
+    d->insert(new TStaticText(TRect(3, 2, 69, 6),
+                              autoSent ? "On the other machine: Chat > Use account from another\n"
+                                         "device... and press Use - it finds this offer by itself.\n"
+                                         "Works once, only while this window is open.  Mail here\n"
+                                         "is paused until it has the account; press Done after that."
+                                       : "On the other machine: Chat > Use account from another\n"
+                                         "device... and give it this code.  It works once, and only\n"
+                                         "while this window is open.  Mail here is paused until the\n"
+                                         "other machine has the account; press Done after that."));
+    d->insert(new TStaticText(TRect(3, 7, 69, 12), autoSent ? "(the code is passed through the master Floyd;\n"
+                                                              "Copy code is there in case it is needed)"
+                                                            : code.c_str()));
+    d->insert(new TButton(TRect(20, 13, 34, 15), "Cop~y~ code", cmYes, bfNormal));
+    TButton *done = new TButton(TRect(36, 13, 50, 15), "~D~one", cmOK, bfDefault);
+    d->insert(done);
+    done->select(); // Enter means Done, not Copy
+    ushort r;
+    while ((r = TProgram::deskTop->execView(d)) == cmYes)
+    {
+        systemClipboard(code);
+        flashStatus("Code copied to the clipboard");
+    }
+    TObject::destroy(d);
+    ask("device-cancel " + shq(id), body, err); // a no-op if the other machine already has it
+    pollNow();
+}
+
+// Use account from another device...: take the account that machine offers (its Chat > Add second device...).
+void deviceUseDialog()
+{
+    std::vector<int> cand = deltaAccounts(false);
+    if (cand.empty())
+    {
+        notify("No Delta Chat account in tvchat.conf: add an [account:NAME] with protocol = deltachat first.", noteInfo);
+        return;
+    }
+    int i = pickAccount("Use account from another device", cand);
+    if (i < 0)
+        return;
+    const std::string id = chat().accounts()[i].id;
+    TDialog *d = new TDialog(TRect(0, 0, 72, 11), "Use account from another device");
+    d->options |= ofCentered;
+    TInputLine *il = new TInputLine(TRect(3, 5, 69, 6), 500);
+    d->insert(il);
+    d->insert(new TLabel(TRect(2, 4, 69, 5), "~C~ode (blank: look for the offer through the master Floyd)", il));
+    d->insert(new TStaticText(TRect(3, 2, 69, 4), "On the machine that has the account: Chat > Add second\ndevice..., then press Use here."));
+    d->insert(new TButton(TRect(20, 7, 34, 9), "~U~se", cmOK, bfDefault));
+    d->insert(new TButton(TRect(36, 7, 50, 9), "Cancel", cmCancel, bfNormal));
+    d->selectNext(False);
+    il->select();
+    ushort r = TProgram::deskTop->execView(d);
+    std::string code = trimmed(il->data ? il->data : "");
+    TObject::destroy(d);
+    if (r == cmCancel)
+        return;
+    std::string body, err;
+    if (!ask("device-use " + shq(id) + (code.empty() ? std::string() : " " + shq(code)), body, err))
+    {
+        notify(err, noteError);
+        return;
+    }
+    if (trimmed(body) == "confirm")
+    {
+        if (messageBox(mfConfirmation | mfYesButton | mfNoButton,
+                       "This machine already has a Delta Chat account (%s).\n"
+                       "Using the other machine's replaces it: the old chats and keys\n"
+                       "here are set aside in a folder, not deleted, but this machine\n"
+                       "stops being that identity.  Replace it?",
+                       menuSafe(chat().accounts()[i].display).c_str()) != cmYes)
+            return;
+        if (!ask("device-use " + shq(id) + (code.empty() ? std::string() : " " + shq(code)) + " --replace", body, err))
+        {
+            notify(err, noteError);
+            return;
+        }
+    }
+    notify("Receiving the account from the other machine; this can take a minute (progress shows in the account's server messages).",
+           noteInfo);
+    pollNow();
+}
+
 // The people in a channel or group, but us: rows of address, name, role.
 std::vector<std::vector<std::string>> inviteesOf(const std::string &cv)
 {
@@ -2417,6 +2533,9 @@ TMenu *buildChatMenu()
     add(new TMenuItem("~R~emove member...", cmChatGroupRemove, kbNoKey, hcNoContext));
     add(new TMenuItem("Re~n~ame group...", cmChatGroupRename, kbNoKey, hcNoContext));
     add(&newLine());
+    add(new TMenuItem("Add ~s~econd device...", cmChatDeviceAdd, kbNoKey, hcNoContext));
+    add(new TMenuItem("~U~se account from another device...", cmChatDeviceUse, kbNoKey, hcNoContext));
+    add(&newLine());
     const auto &as = chat().accounts();
     if (!chatOn() || as.empty())
         add(new TMenuItem(chatOn() ? "(no chat accounts)" : offReason(), cmChatOff, kbNoKey, hcNoContext));
@@ -2483,7 +2602,7 @@ void chatMenuGrey()
 
 bool chatCommand(ushort command)
 {
-    if (!(command >= cmChatInvite && command <= cmChatToTodo) &&
+    if (!(command >= cmChatInvite && command <= cmChatDeviceUse) &&
         (command < cmChatConnect || command >= cmChatAccount + kChatMaxAccounts))
         return false;
     if (command == cmChatOff)
@@ -2509,6 +2628,12 @@ bool chatCommand(ushort command)
         break;
     case cmChatAcceptInvite:
         acceptInviteDialog();
+        break;
+    case cmChatDeviceAdd:
+        deviceAddDialog();
+        break;
+    case cmChatDeviceUse:
+        deviceUseDialog();
         break;
     case cmChatNewGroup:
         newGroupDialog();

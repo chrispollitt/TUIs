@@ -3037,6 +3037,122 @@ class TestMailReplies(Base):
         self.assertEqual(f("", "Re: !coin"), "!coin")
 
 
+
+class TestDeltaSecondDevice(DeltaBase):
+    """The same Delta Chat account on two machines: one offers it (Chat > Add second device), the other takes it."""
+    CODE = "DCBACKUP2:fake-backup-token"
+
+    def test_offering_shows_the_code_pauses_mail_and_ends_when_taken(self):
+        self.setup_dc()
+        self.up()
+        st, body = self.verb("device-add", "delta")
+        self.assertEqual((st, body.decode().splitlines()), (0, ["manual", self.CODE]))   # no master: the code is shown
+        self.assertEqual(self.ad.offer, self.CODE)
+        self.assertEqual([r["params"] for r in self.requests("provide_backup")], [[1]])
+        self.assertIn([1, "bcc_self", "1"], [r["params"] for r in self.requests("set_config")])
+        starts = len(self.requests("start_io"))
+        self.order(backup_taken=1)                                            # the other device fetched it
+        self.turn(lambda: self.ad.offer is None)
+        self.turn(lambda: len(self.requests("start_io")) > starts)            # mail traffic resumes
+        texts = [m.text for m in self.acct.convs["delta/*"].history]
+        self.assertTrue(any("the other device has this account now" in t for t in texts), texts)
+
+    def test_cancelling_the_offer(self):
+        self.setup_dc()
+        self.up()
+        self.verb("device-add", "delta")
+        starts = len(self.requests("start_io"))
+        self.assertEqual(self.verb("device-cancel", "delta")[0], 0)
+        self.turn(lambda: self.ad.offer is None)
+        self.turn(lambda: len(self.requests("start_io")) > starts)
+        self.assertTrue(any("cancelled" in m.text for m in self.acct.convs["delta/*"].history))
+        self.assertEqual(self.verb("device-cancel", "delta")[0], 0)           # nothing offered: harmless
+
+    def test_taking_the_account_on_a_new_machine(self):
+        self.setup_dc(configured=False)                                       # no account here yet
+        st, body = self.verb("device-use", "delta", self.CODE)
+        self.assertEqual((st, body.decode().strip()), (0, "started"))
+        self.turn(lambda: self.acct.state == "connected")
+        self.assertEqual([r["params"] for r in self.requests("get_backup")], [[1, self.CODE]])
+        self.assertEqual(self.requests("add_or_update_transport"), [])        # no password was needed: the account came whole
+        self.assertTrue(any(r["params"][1:] == ["bcc_self", "1"] for r in self.requests("set_config")))
+        self.assertTrue(any("same Delta Chat account" in m.text for m in self.acct.convs["delta/*"].history))
+
+    def test_the_code_is_checked_and_never_logged(self):
+        self.setup_dc(configured=False)
+        st, body = self.verb("device-use", "delta", "https://example.org/not-a-backup")
+        self.assertEqual(st, 1)
+        self.assertIn("not the code", body.decode())
+        st, body = self.verb("device-use", "delta")                           # no code and no master to ask
+        self.assertEqual(st, 1)
+        self.assertIn("no machine is offering", body.decode())
+        self.verb("device-use", "delta", self.CODE)
+        self.turn(lambda: self.acct.state == "connected")
+        self.assertNotIn(self.CODE, "\n".join(str(f) for f in self.chat.events.items))
+
+    def test_a_wrong_code_says_so(self):
+        self.setup_dc(configured=False)
+        self.verb("device-use", "delta", "DCBACKUP2:not-the-right-one")
+        self.turn(lambda: self.acct.state == "error")
+        self.assertIn("receiving the account from the other device failed", self.acct.detail)
+        self.assertIn("not a valid backup code", self.acct.detail)
+
+    def test_an_existing_account_is_replaced_only_when_confirmed_and_is_kept_aside(self):
+        self.setup_dc()
+        self.up()
+        st, body = self.verb("device-use", "delta", self.CODE)
+        self.assertEqual(body.decode().strip(), "confirm")                    # nothing happened yet
+        self.assertEqual(self.acct.state, "connected")
+        self.assertEqual(self.requests("get_backup"), [])
+        st, body = self.verb("device-use", "delta", self.CODE, "--replace")
+        self.assertEqual(body.decode().strip(), "started")
+        kept = [p.name for p in self.dir.parent.iterdir() if ".replaced-" in p.name]
+        self.assertEqual(len(kept), 1)                                        # the old data is moved, not deleted
+        self.assertTrue((self.dir.parent / kept[0] / "world.json").exists())
+        self.turn(lambda: self.acct.state == "connected" and bool(self.requests("get_backup")))
+
+    def test_the_code_travels_through_the_master_floyd_and_is_not_a_toast(self):
+        import selectors
+        import threading
+        sel, stop = selectors.DefaultSelector(), []
+
+        class Loop(object):
+            def add_reader(s, sock, fn):
+                sel.register(sock, selectors.EVENT_READ, fn)
+
+            def remove_reader(s, sock):
+                stop.append(1)
+
+        def pump():
+            while not stop:
+                for key, _ in sel.select(0.05):
+                    key.data()
+        gate = cb.tvf.FloydGate(Loop(), cb.tvf.FloydMemory(None), "tok", cb.tvf.claude_settings(lambda k, d: "no" if k == "claude" else d),
+                                "127.0.0.1", 0)
+        gate.start()
+        threading.Thread(target=pump, daemon=True).start()
+        self.addCleanup(gate.stop)
+        self.setup_dc()
+        with open(cb._conf_path(), "a") as fh:
+            fh.write("\n[floyd]\nserver = 127.0.0.1:%d\ntoken = tok\nmachine = cpbee\n" % gate.sock.getsockname()[1])
+        cb.tvf._DOWN.clear()
+        self.up()
+        st, body = self.verb("device-add", "delta")
+        self.assertEqual(body.decode().splitlines()[0], "auto")                # the other machine finds it by itself
+        seen = gate.hub.since(None, "cmlaptop")[1]
+        self.assertEqual([(e["kind"], e["key"], e["data"]) for e in seen], [("device", "device:me@example.org", self.CODE)])
+        self.assertNotIn(self.CODE, seen[0]["text"])                           # the toast text carries no code
+        # the other machine, asking: finds the code with no typing
+        other = dict(cb.tvf.master_settings(lambda k, d: {"server": "127.0.0.1:%d" % gate.sock.getsockname()[1],
+                                                           "token": "tok", "machine": "cmlaptop"}.get(k, d)))
+        self.ad._master = lambda: other
+        self.assertEqual(self.ad._find_offer(), self.CODE)
+        self.ad._master = type(self.ad)._master.__get__(self.ad)
+        self.order(backup_taken=1)                                             # taken: the offer is withdrawn from the hub
+        self.turn(lambda: self.ad.offer is None)
+        self.assertEqual([e for e in gate.hub.since(None, "cmlaptop")[1] if e["kind"] == "device"], [])
+
+
 class TestDeltaInvitations(DeltaBase):
     """Joining an address you hold no key for mails an invitation; one found in
     the INBOX is offered, accepted or declined."""

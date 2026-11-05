@@ -27,6 +27,7 @@ import time
 
 D = os.environ.get("DC_ACCOUNTS_PATH") or "."
 LOCK = threading.Lock()
+PENDING = {}                             # the provide_backup request waiting for a device to take it
 OUT = threading.Lock()
 
 
@@ -107,6 +108,10 @@ def control():
                             WORLD.setdefault(k, {}).update(v)
                         else:
                             WORLD[k] = v
+                elif "backup_taken" in obj:          # a second device fetched the offered backup
+                    pr = PENDING.pop("provide", None)
+                    if pr is not None:
+                        reply(pr, None)
                 elif "exit" in obj:
                     os._exit(int(obj["exit"]))
                 else:
@@ -270,6 +275,22 @@ def handle(rid, method, p):
                                                     "msgId": mid}})
             reply(rid, mid)
             return None
+        if method == "provide_backup":
+            PENDING["provide"] = rid         # answered when a device takes it ({"backup_taken": 1}) or it is stopped
+            return None
+        if method == "get_backup_qr":
+            return reply(rid, "DCBACKUP2:fake-backup-token")
+        if method == "stop_ongoing_process":
+            pr = PENDING.pop("provide", None)
+            if pr is not None:
+                reply(pr, error="backup provider canceled")
+            return reply(rid, None)
+        if method == "get_backup":
+            if p[1] != "DCBACKUP2:fake-backup-token":
+                return reply(rid, error="not a valid backup code")
+            STATE["configured"] = True
+            save_state()
+            return reply(rid, None)
         return reply(rid, error="method not found: %s" % method)
 
 

@@ -606,6 +606,19 @@ def load_people(accounts, path=None):
 # mu share), then ~/.netrc (machine <host> login <user> password <p>, chmod
 # 600).  In each, only an entry for the SASL login counts (bug #46).
 # --------------------------------------------------------------------------
+def _floyd_section_master():
+    """The master Floyd's settings from tvchat.conf's [floyd] section (server =, token =, machine =), or None."""
+    if not hasattr(tvf, "master_settings"):
+        return None
+    try:
+        c = configparser.ConfigParser(interpolation=None)
+        c.read(_conf_path(), encoding="utf-8")
+    except configparser.Error:
+        return None
+    m = tvf.master_settings(lambda k, d: c.get("floyd", k, fallback=d))
+    return m if m.get("server") else None
+
+
 def _refused_hint(host, ips):
     """Words to add to a refused connection when a NAME points at this very machine: the usual cause is the server
     listening on the LAN address only while the machine's own name resolves to loopback (Debian's 127.0.1.1)."""
@@ -3106,6 +3119,8 @@ class DeltaChatAdapter(CommandMixin):
         self.t_up = None
         self.link = None                 # last (state, detail) told for the connectivity
         self.requests = set()            # chat ids that are contact requests
+        self.offer = None                # the "add second device" code while this account is offered
+        self.want_backup = None          # a code from another device: fetch its account instead of setting one up
 
     def local_id(self):
         self._ids += 1
@@ -3293,7 +3308,7 @@ class DeltaChatAdapter(CommandMixin):
     def _write(self, obj):
         method = obj.get("method", "")
         _log.debug("%s >> %s%s", self.account.id, method,
-                   "" if method == "add_or_update_transport" else " " + json.dumps(obj["params"]))
+                   "" if method in ("add_or_update_transport", "get_backup") else " " + json.dumps(obj["params"]))
         self.wbuf += json.dumps(obj).encode("utf-8") + b"\n"
         self._flush()
 
@@ -3416,13 +3431,180 @@ class DeltaChatAdapter(CommandMixin):
         try:
             ids = self.call("get_all_account_ids")
             self.acct = ids[0] if ids else self.call("add_account")
-            if self.call("is_configured", self.acct):
+            configured = self.call("is_configured", self.acct)
+            if self.want_backup and configured:
+                self.want_backup = None
+                raise UserError("this machine already has a Delta Chat account set up; use Chat > Use account from "
+                                "another device... and confirm the replacement")
+            if self.want_backup:
+                self._receive_backup()
+            elif configured:
                 self._go()
             else:
                 self._configure()
         except (RpcError, UserError) as e:
             if self.proc is not None:
                 self._fail(str(e))
+
+    # -- a second device: the same account on two machines (Delta Chat's "add second device") ------
+    BACKUP_QR = re.compile(r"^DCBACKUP\d*:\S+$", re.I)
+
+    def _receive_backup(self):
+        """This machine is new to the account: fetch it from the other device (keys, chats, mail settings)."""
+        qr, self.want_backup = self.want_backup, None
+        self.phase = "setup"
+        gen = self.gen
+        self.timer = self.loop.call_later(
+            self.SETUP_TIMEOUT,
+            lambda: gen == self.gen and self._fail(
+                "receiving the account took too long (is the other device still showing its code, and can the two "
+                "machines reach each other over the network?)"))
+        self.chat.set_state(self.account, "connecting", "receiving the account from the other device")
+        self._request("get_backup", [self.acct, qr], self._backup_done)
+
+    def _backup_done(self, res, err):
+        self.loop.cancel(self.timer)
+        if err is not None:
+            self._fail("receiving the account from the other device failed: %s (the code works once, and only "
+                       "while the other device shows it; ask for a new one)" % err)
+            return
+        try:
+            try:                         # so that what one device sends shows on the other
+                self.call("set_config", self.acct, "bcc_self", "1")
+            except RpcError:
+                pass
+            got = (self.call("get_config", self.acct, "configured_addr") or "").strip()
+            self._go()
+            self.system(self.server_conv(), "This machine now uses the same Delta Chat account as the other device%s."
+                        % (" (%s)" % got if got else ""))
+            if got and self.addr and got.lower() != self.addr.lower():
+                self.system(self.server_conv(), "note: the account is %s but [account:%s] says addr = %s; "
+                            "change addr = so they agree" % (got, self.account.id, self.addr))
+        except (RpcError, UserError) as e:
+            if self.proc is not None:
+                self._fail(str(e))
+
+    def _master(self):
+        """The master Floyd's settings from tvchat.conf's [floyd] section (server =, token =, machine =), or None."""
+        return _floyd_section_master()
+
+    def _offer_key(self):
+        return "device:" + (self.addr or self.account.id).lower()
+
+    def _publish_offer(self, qr):
+        """Tell the master that this account is on offer, so the other machine finds the code by itself.  The code is
+        carried in the event's hidden data (never shown as a toast) and the event ends with the offer."""
+        m = self._master()
+        if not m:
+            return False
+        r = tvf.master_call(m, {"op": "publish", "kind": "device", "key": self._offer_key(), "data": qr, "ttl": 600,
+                                "text": "%s offers %s to a second device: Chat > Use account from another device..."
+                                        % (m["machine"], self.addr or self.account.id),
+                                "machine": m["machine"], "to": "all"})
+        return bool(r and r.get("ok"))
+
+    def _retract_offer(self):
+        m = self._master()
+        if m:
+            tvf.master_call(m, {"op": "publish", "kind": "recover", "key": self._offer_key(), "ttl": 60,
+                                "text": "the offer of %s to a second device is over" % (self.addr or self.account.id),
+                                "machine": m["machine"], "to": "all"})
+
+    def _find_offer(self):
+        """The code another machine offers for this account, through the master; '' when there is none."""
+        m = self._master()
+        if not m:
+            return ""
+        r = tvf.master_call(m, {"op": "events", "since": None, "machine": m["machine"]})
+        best = ""
+        for ev in (r or {}).get("events") or []:
+            if ev.get("kind") == "device" and ev.get("key") == self._offer_key() and ev.get("data"):
+                best = ev["data"]
+        return best
+
+    def device_offer(self):
+        """Chat > Add second device: offer this account to another machine.  Returns the code to type there.
+        The core stops its mail traffic while the offer stands (until the other device has it, or it is cancelled)."""
+        self._need_up()
+        if self.offer:
+            return self.offer
+        try:
+            self.call("set_config", self.acct, "bcc_self", "1")
+        except RpcError:
+            pass
+        self._request("provide_backup", [self.acct], self._offer_done)
+        old, self.CALL_TIMEOUT = self.CALL_TIMEOUT, 25
+        try:
+            qr = self.call("get_backup_qr", self.acct)
+        except RpcError as e:
+            self._offer_stop()
+            raise UserError("cannot offer this account: %s" % e)
+        finally:
+            self.CALL_TIMEOUT = old
+        self.offer = qr
+        self.published = self._publish_offer(qr)
+        self.system(self.server_conv(), "offering this account to a second device%s; mail traffic here is paused "
+                    "until the other device has it or the offer is cancelled"
+                    % (" (the other machine finds the code through the master Floyd)" if self.published else ""))
+        return qr
+
+    def _offer_stop(self):
+        try:
+            self.call("stop_ongoing_process", self.acct)
+        except RpcError:
+            pass
+
+    def device_cancel(self):
+        if self.offer:
+            self._offer_stop()           # _offer_done follows, and starts the mail traffic again
+
+    def _offer_done(self, res, err):
+        self.offer = None
+        if getattr(self, "published", False):
+            self.published = False
+            self._retract_offer()
+        self.system(self.server_conv(), "the offer to a second device ended: %s" % (
+            ("cancelled (%s)" % err) if err is not None else "the other device has this account now"))
+        if self.proc is not None and self.phase == "up":
+            self._request("start_io", [self.acct], lambda r, e: None)
+
+    @staticmethod
+    def _has_data(d):
+        for _root, _dirs, files in os.walk(d):
+            if "dc.db" in files:
+                return True
+        return False
+
+    def device_use(self, qr, replace=False):
+        """Chat > Use account from another device: fetch the account the code names.  'confirm' when this machine
+        already has a Delta Chat account (it is kept aside, not deleted, if the user confirms), 'started' otherwise."""
+        qr = (qr or "").strip()
+        if not qr:                       # no code typed: ask the master Floyd whether some machine offers this account
+            qr = self._find_offer()
+            if not qr:
+                raise UserError("no machine is offering %s right now (looked through the master Floyd): on the machine that "
+                                "has it, use Chat > Add second device...; or paste its code here%s"
+                                % (self.addr or self.account.id, "" if self._master() else
+                                   " ([floyd] server = and token = in tvchat.conf would find it by itself)"))
+        if not self.BACKUP_QR.match(qr):
+            raise UserError("that is not the code of 'Add second device' (it starts with DCBACKUP); copy it whole")
+        d = self._dir()
+        has = self.phase != "down" or self._has_data(d)
+        if has and not replace:
+            return "confirm"
+        if has:
+            self.disconnect()
+            kept = d + ".replaced-" + time.strftime("%Y%m%d-%H%M%S")
+            try:
+                os.rename(d, kept)
+            except OSError as e:
+                raise UserError("cannot set the old Delta Chat data aside (%s): %s" % (d, e.strerror or e))
+            self._dir()
+        self.want_backup = qr
+        self.connect()
+        if has:
+            self.system(self.server_conv(), "the old Delta Chat data of this machine is kept in %s" % kept)
+        return "started"
 
     def _login(self):
         o = self.account.opts
@@ -4574,6 +4756,10 @@ class FloydAdapter(CommandMixin):
                     plan += got
                 elif "a" in msg.flags:
                     pass                 # an action is not addressed to him
+                elif bang and not self.chat.daemon and hasattr(tvf, "wizard_command") and re.match(r"^!setup\b", body, re.I):
+                    got = tvf.wizard_command(body, "tvchat", self.master if (self.master and self.master.get("server")) else
+                                             (_floyd_section_master() or {"server": "", "token": "", "machine": ""}))
+                    plan += mind._say([(0.8 + 0.6 * i, ln) for i, ln in enumerate(got or [])])
                 elif bang:
                     plan += (self._master_say(mind, body, who, lvl) or mind.botcmd(body, who)
                              or self._unknown_bang(mind, body))
@@ -7101,6 +7287,35 @@ def cmd_invite(a):
     return 0
 
 
+def _delta(chat, account):
+    acct = chat.account(account)
+    ad = chat.adapter(acct)
+    if not hasattr(ad, "device_offer"):
+        raise UserError("%s is not a Delta Chat account" % acct.display)
+    return ad
+
+
+def cmd_device_add(a):
+    """device-add ACCOUNT: offer the account to a second device; prints the code to type there."""
+    ad = _delta(_chat(), a.account)
+    code = ad.device_offer()
+    sys.stdout.write("%s\n%s\n" % ("auto" if getattr(ad, "published", False) else "manual", code))   # how it travels, the code
+    return 0
+
+
+def cmd_device_cancel(a):
+    """device-cancel ACCOUNT: stop offering (the mail traffic resumes)."""
+    _delta(_chat(), a.account).device_cancel()
+    return 0
+
+
+def cmd_device_use(a):
+    """device-use ACCOUNT CODE [--replace]: take the account another device offers.  Prints confirm (this machine
+    has one already: ask the user, then repeat with --replace) or started."""
+    sys.stdout.write(_delta(_chat(), a.account).device_use(a.code, a.replace) + "\n")
+    return 0
+
+
 def cmd_mail_address(a):
     """mail-address CONV: where to mail this chat's person ('' = unknown)."""
     chat = _chat()
@@ -7884,7 +8099,8 @@ def cmd_floyd_daemon(a):
         cfg = tvf.claude_settings(lambda k, d, o=o: (o.get(k) or ("no" if k == "claude" else d)))
         try:
             gate = tvf.FloydGate(loop, ad.memory, token, cfg, (o.get("gate_listen") or "127.0.0.1").strip(),
-                                 int(port), ad.level, _log)
+                                 int(port), ad.level, _log,
+                                 setup_file=os.path.expanduser((o.get("gate_setup") or "/etc/tvchat/floyd-setup.json").strip()))
             gate.start()
         except (ValueError, OSError) as e:
             raise UserError("%s: the gate cannot start: %s" % (x.id, e))
@@ -7926,6 +8142,10 @@ def build_parser():
     p = sub.add_parser("convs"); p.add_argument("account", nargs="?"); p.set_defaults(fn=cmd_convs)
     p = sub.add_parser("join"); p.add_argument("account"); p.add_argument("target"); p.set_defaults(fn=cmd_join)
     p = sub.add_parser("invite"); p.add_argument("account"); p.add_argument("channel", nargs="?", default=""); p.set_defaults(fn=cmd_invite)
+    p = sub.add_parser("device-add"); p.add_argument("account"); p.set_defaults(fn=cmd_device_add)
+    p = sub.add_parser("device-cancel"); p.add_argument("account"); p.set_defaults(fn=cmd_device_cancel)
+    p = sub.add_parser("device-use"); p.add_argument("account"); p.add_argument("code", nargs="?", default="")
+    p.add_argument("--replace", action="store_true"); p.set_defaults(fn=cmd_device_use)
     p = sub.add_parser("people"); p.set_defaults(fn=cmd_people)
     p = sub.add_parser("roles"); p.set_defaults(fn=cmd_roles)
     p = sub.add_parser("shares"); p.set_defaults(fn=cmd_shares)

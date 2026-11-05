@@ -151,3 +151,37 @@ other app").  That spool stays the only thing the C++ apps read, so **no C++ cha
 2. Which events should cross machines by default: new mail, direct chat messages, reminders - more or fewer?
 3. u-l.ca: which hosts/ports mean "up", and does its mail go through cpbee's Postfix?
 4. Quiet hours wanted?  Per-machine tokens now (phase 1) or later (phase 5)?
+
+---
+
+# Part 3: Floyd as setup wizard, and the second Delta Chat device (2026-11-04)
+
+Chris asked for the back-and-forth and the configuration to be hidden and automated as far as possible, and for Floyd to
+have "setup wizard" powers.
+
+## `!setup` (tvfloyd.py `wizard_command`, in the Floyd window of tvcal and tvmail, and of a local floyd account in tvchat)
+- **Once per machine:** `!setup join HOST TOKEN` checks the token against the master, writes `[floyd] server / token /
+  machine` into that app's conf, and shows the report.  The line is never kept in the input history (`TRecallLine`).
+- **After that:** `!setup` compares this machine with the master's *manifest* (`/etc/tvchat/floyd-setup.json`, served by the
+  gate's `setup` op together with the public CA certificates) and lists steps as `ok`, `todo` (Floyd can fix it) or `you`
+  (only the user can: a missing password).  `!setup N` does one step, `!setup all` every todo.
+- **What it checks:** every tv* app's link to the master (and copies server/token/machine into the confs that lack them);
+  tvcal's calendar URL, user and CA file; tvchat's accounts from the manifest (appended with the CA file placed beside the
+  conf, `autoconnect` extended); the Delta Chat account (not on the owner machine; the step says to use Chat > Use account
+  from another device); the notification relay; and whether `~/.netrc` / `~/.mu-tickets` hold a password for each account
+  (only the fact is looked at, never the value; the wizard never handles a password).
+- **Safe:** conf edits keep comments, add a missing section, and copy the old file to `BAK/` first (once per run); a
+  second `!setup all` finds nothing to change.
+- **The manifest** is built from Chris's working configs by `tvchat/deploy/floyd-wizard-on-cpbee.sh` (no passwords; refuses
+  a key that looks like one).  Machine names: `[floyd] machine`, default the host name; `delta_owner` names the machine that
+  runs the account as it is (cpbee).
+
+## Second Delta Chat device
+- tvchat: Chat > Add second device... (on the machine that has the account) offers it with the core's `provide_backup`;
+  Chat > Use account from another device... (on the new machine) takes it with `get_backup`; the new machine's old Delta data
+  is moved to `deltachat/<account>.replaced-<time>`, never deleted, after a confirmation.  `bcc_self` is switched on on both.
+- **No copy and paste:** the offer is published to the master hub as a sticky `device` event whose code travels in the event's
+  hidden `data` (never in the toast text, never written to the spool); the other machine's blank-code "Use" finds it there.
+  The event ends with the offer (a `recover` with the same key).  The code is a one-time secret that rides the same plain LAN
+  TCP as the gate's token.  Without a master it is shown in the dialog to type by hand.
+- The core stops its mail traffic while an offer stands; Done in the dialog ends the offer and restarts it.

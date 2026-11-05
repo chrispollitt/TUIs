@@ -37,6 +37,8 @@ const ushort cmChatMailSelection = 2148; // Chat > Mail selection...: the lines 
 const ushort cmChatShares = 2149;        // Chat > Share from tvmail...: a message tvmail asked to share, said only on your yes
 const ushort cmChatToCal = 2150;       // Chat > Add selection to calendar...: tvcal asks, with the lines selected in the log
 const ushort cmChatToTodo = 2151;      // Chat > Add selection as to-do...
+const ushort cmChatDeviceAdd = 2152;   // Chat > Add second device...: offer a Delta Chat account to another machine
+const ushort cmChatDeviceUse = 2153;   // Chat > Use account from another device...: take the account that machine offers
 const ushort cmChatAcctPicked = 2140; // broadcast: the chat window's server pane moved
 const ushort cmChatConvPicked = 2141; // broadcast: its conversation pane moved
 

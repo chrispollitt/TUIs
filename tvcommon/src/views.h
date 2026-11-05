@@ -5,6 +5,8 @@
 #pragma once
 #include "tvcommon.h"
 #include <sys/stat.h> // mkdir, chmod (TRecallLine::remember): Linux does not pull it in through the others
+#include <strings.h> // strncasecmp
+
 
 // ------------------------------------------------------- mail text view ----
 // Read-only text for the body pane and the Source / Help / Purge-preview
@@ -811,7 +813,9 @@ public:
     void remember(const std::string &line)
     {
         at = recall.size();
-        if (line.find_first_not_of(' ') == std::string::npos || line[0] == ' ' || (secret && secret(line)) ||
+        // "!setup join HOST TOKEN" carries the master Floyd's token: never kept in the history file
+        bool joins = line.size() > 11 && strncasecmp(line.c_str(), "!setup join", 11) == 0;
+        if (line.find_first_not_of(' ') == std::string::npos || line[0] == ' ' || joins || (secret && secret(line)) ||
             (!recall.empty() && recall.back() == line))
             return;
         recall.push_back(line);
