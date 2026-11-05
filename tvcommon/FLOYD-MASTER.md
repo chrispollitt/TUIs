@@ -44,3 +44,96 @@ Extend `tvchat/deploy/floyd-voice-on-cpbee.sh` (or a sibling script): install ne
 ## Open decisions for Chris
 1. Token over plain LAN TCP (proposed) vs ssh.
 2. Port number (7077 proposed).
+
+---
+
+# Part 2: the master as the suite's event hub (design 2026-11-04, not built)
+
+Chris asked for: server issues relayed to the clients as toasts (cpbee about to go down, u-l.ca unreachable,
+a cpbee service down), toasts relayed between LAN machines (tvmail on cmdesktop -> tvcal on cmlaptop), and
+whatever else is worth centralizing.  Same rules as part 1: all of it optional, a solo app or an unreachable
+master changes nothing, and no feature needs the master to be up for the local parts to work.
+
+## The shape: an event hub on the gate, one small relay per machine, the existing spool as the last hop
+The apps already show toasts from `~/.local/state/tvcommon/spool/<app>/` (tvcommon/README.md, "Toasts for the
+other app").  That spool stays the only thing the C++ apps read, so **no C++ change is needed to receive**.
+
+- **Hub (cpbee, inside tvchat-floyd, same single-thread loop as the gate).** New ops: `publish` (an event in)
+  and `events` (a client asks for everything after its sequence number; long-poll up to 25 s so a toast
+  arrives in about a second without a busy loop).  A ring of the last 200 events is kept in memory; events
+  with a `key` ("svc:radicale") are *sticky*: a machine that connects later is told what is down right now.
+- **Event:** `{seq, ts, kind, level, text, origin, to, key, ttl}`.  kind: outage | recover | shutdown | mail |
+  reminder | note | digest.  level: info | warn | error (the toast colours).  to: "all" or a machine name.
+  Text is plain, control characters stripped, 200 characters, as the spool already does.
+- **Relay (each machine, `tvfloyd-relay`, a ~100-line stdlib Python program, started on demand).**  It long-polls
+  the hub with that machine's id and token, keeps its last sequence number in `~/.local/state/tvfloyd/relay`, and
+  writes each event as a spool note for tvmail, tvchat and tvcal, with `from` = "cpbee".  Started by the
+  backends (tvmail, tvcal, tvchat) when `[floyd] server` is set; one copy per user thanks to a lock file; it
+  exits when no app has run for an hour.  It also *detects losing cpbee*: a relay that had contact and now has
+  none for 60 s writes a local "lost contact with cpbee" toast (a power cut or a dead network, as opposed to an
+  announced shutdown).  Without `server` there is no relay.
+- **Sending from a machine.**  The relay also publishes: the apps drop what they want shared into
+  `~/.local/state/tvcommon/outbox/` and the relay posts it.  This is the one small C++ change (spool.cpp's
+  `spoolSend` writes an outbox note too when `[ui] share_remote = yes`; default off) and is only needed for the
+  cross-machine part.  A note that arrived via the hub is never sent back (an `origin` check plus the spool's
+  existing "a note that came in is never sent on"), and the spool's 30 s same-text rule removes duplicates.
+
+## Server issues (the sentinel, a timer on the hub's loop; checks run on threads, never blocking the loop)
+- **Services:** every 30 s `systemctl is-active` for ergo, talkd, dovecot, postfix, radicale, and the gate's own
+  unit; the list is `[sentinel] services =` in floyd.conf.  A service must fail twice in a row to be "down"
+  (one `outage` event, sticky) and one `recover` event when it returns; still down after 30 min -> a reminder.
+  A TCP check on the service's port runs beside it, so "active but not answering" is caught too.
+- **cpbee about to go down:** `/run/systemd/shutdown/scheduled` (a `shutdown +10` has a time in it) and a queued
+  shutdown/reboot job in `systemctl list-jobs`, polled every 5 s: `shutdown` event "cpbee goes down in 10
+  minutes" (warn), then the final "cpbee is shutting down now" from the daemon's stop handler when the system is
+  stopping.  A plain `systemctl restart tvchat-floyd` sends nothing.  The relay's lost-contact toast covers the
+  case where no warning was possible.
+- **u-l.ca unreachable (external mail):** two checks, so the toast says which part is broken: (1) the mail path:
+  TCP to the domain's MX on 25 (and, for reading, the IMAP host on 993) from cpbee; (2) cpbee's own queue:
+  `postqueue -j` counting deferred messages for u-l.ca (postqueue lists to anyone by default).  "u-l.ca mail is
+  unreachable (3 messages waiting on cpbee)" is more useful than a bare port failure.  *Needs from Chris:* the
+  host names and ports that mean "u-l.ca is up", and whether mail to/from it goes through cpbee's Postfix.
+- **Also cheap, same machinery:** the internet (the net_telus / net_host probes of the servers page), disk over 90 %,
+  a certificate (Radicale, Dovecot, the CA) expiring in 14 days, a failed systemd unit, an old backup
+  (backup-cpbee.sh), the VAX state, and LibreNMS alerts (the SNMP rollout exists; lnms can list alerts).  Each is
+  one function returning (key, ok?, text).
+
+## Toasts across LAN machines
+- Machine ids: `[floyd] machine = cmlaptop` (default: the host name).  Events carry `origin`; `to = all` means
+  every other machine, `to = cmdesktop` one.  Nothing is delivered back to its origin.
+- What crosses by default: tvmail's *new mail* and tvchat's *direct messages and invitations* (the notes the apps
+  already mark `always`), and tvcal's due reminders.  Errors stay on the machine they happened on.  Per-kind
+  switches in `[floyd] share_out = mail, chat, reminder` and `share_in = ...`, plus **quiet hours**
+  (`quiet = 22:00-07:00`: the hub holds non-urgent events and delivers a count in the morning).
+- The same mailbox read on two machines would toast twice; the spool's same-text rule hides the second.  The
+  better fix is in the next section: the hub detects mail once and tells everyone.
+
+## Other things worth centralizing (in the order I would do them)
+1. **Reminders from the server, not from whichever tvcal is open:** the hub reads Radicale (it already can, for
+   `!todo`/`!cal`) and publishes "Dentist in 15 min" to every machine.  This closes tvcal/TO-DO.txt 9
+   (reminders fire only while some tvcal runs).
+2. **New-mail watcher:** the hub keeps one IMAP IDLE (or a 30 s poll) on Dovecot for each configured mailbox and
+   publishes "mail from X: subject" once, instead of N clients each polling.
+3. **Morning digest** (`kind = digest`, once a day at the first contact after 07:00): unread, today's events,
+   open to-dos, anything down, backup age.  `!digest` asks for it any time.
+4. **`!send MACHINE text`:** push a line or a URL to another machine's toasts (a poor man's clipboard between
+   cmdesktop and cmlaptop), and `!where`: which machines have a relay up right now (presence).
+5. **Per-machine tokens** instead of one shared secret, so a lost laptop is revoked alone
+   (`/etc/tvchat/floyd-gate.tokens`: `machine token`), and **TLS** on the gate if it ever leaves the LAN.
+6. **One memory of settings:** Floyd's level per user, quiet hours and share switches held on the hub, so a new
+   machine only needs `server` and `token` to behave like the others.
+
+## Phases
+1. Hub + relay: `publish`/`events` ops, ring and sticky keys, `tvfloyd-relay`, auto-start from the backends,
+   lost-contact toast.  Tests: hub with a fake client; relay against the hub writing a temp spool; two relays
+   (two machine ids) exchanging a note; kill the hub -> lost contact.
+2. Sentinel on cpbee: services, shutdown, u-l.ca, internet, disk, certs.  Deploy script like floyd-gate-on-cpbee.sh.
+3. Cross-machine: the outbox in spool.cpp (C++), the `share_*` switches, quiet hours.
+4. Server-side watchers: Radicale reminders, Dovecot new mail, digest, `!send`, `!where`, LibreNMS alerts.
+5. Per-machine tokens.
+
+## Open questions for Chris
+1. Machine names to expect: cmlaptop, cmdesktop - any others (a phone is out of scope for now)?
+2. Which events should cross machines by default: new mail, direct chat messages, reminders - more or fewer?
+3. u-l.ca: which hosts/ports mean "up", and does its mail go through cpbee's Postfix?
+4. Quiet hours wanted?  Per-machine tokens now (phase 1) or later (phase 5)?
