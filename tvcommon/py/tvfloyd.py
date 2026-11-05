@@ -1317,15 +1317,19 @@ def status_lines(app, level, cfg, path=None):
     fort = (mind.fortune_prog() if mind else
             (shutil.which("fortune") or shutil.which("fortune", path="/usr/games:/usr/local/games")))
     m = cfg.get("master") if cfg else None
+    hello = master_call(m, {"op": "hello"}) if m and m.get("server") else None
+    up = bool(hello and hello.get("ok"))
+    quotes, facts = ((hello.get("quotes", 0), hello.get("facts", 0)) if up
+                     else (len(mem.get("quotes", [])), len(mem.get("facts", {}))))
     return [
         "Floyd in %s is at level %s: %s" % (app, level, LEVEL_BLURB.get(level, level)),
-        "Master Floyd: %s." % master_state(m),
-        "Claude: %s." % (claude_state(cfg) if not (m and master_alive(m)) else
+        "Master Floyd: %s." % master_state(m, hello),
+        "Claude: %s." % (claude_state(cfg) if not up else
                          "yes, on the master (%s) - ask with !claude QUESTION" % m["server"]),
         "Fortunes: %s." % ("the system's fortune program (%s)" % fort if fort
                            else "his own, built in - no fortune program is installed"),
-        "He remembers %d quotes and %d facts. !about says more, help lists his commands." % (
-            len(mem.get("quotes", [])), len(mem.get("facts", {})))]
+        "He remembers %s quotes and %s facts%s. !about says more, help lists his commands." % (
+            quotes, facts, " (the master's: that is the memory in use)" if up else "")]
 
 
 # -- Claude, asked by the owner -----------------------------------------------
@@ -1536,11 +1540,12 @@ def master_alive(m):
     return bool(r and r.get("ok"))
 
 
-def master_state(m):
-    """One short phrase for !status."""
+def master_state(m, r=None):
+    """One short phrase for !status.  R = the master's hello reply, when the caller already has it."""
     if not m or not m.get("server"):
         return "none set ([floyd] server), the local Floyd answers"
-    r = master_call(m, {"op": "hello"})
+    if r is None:
+        r = master_call(m, {"op": "hello"})
     if r is None:
         return "%s is not reachable, so the local Floyd answers" % m["server"]
     if not r.get("ok"):

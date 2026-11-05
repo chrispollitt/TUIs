@@ -627,7 +627,10 @@ class Floyd(Env):
         conf = self.env["TVCAL_CONF"]
         open(conf, "w").write("[floyd]\nserver = 127.0.0.1:%d\ntoken = tok\n" % port)
         self.assertIn("master tea is hot", self.say("!tea"))               # only the master knows it
-        self.assertIn("answers", self.say("!status"))
+        st = self.say("!status")
+        self.assertIn("answers", st)
+        self.assertIn("answers (0 quotes, 1 facts)", st)                    # the master's numbers ...
+        self.assertIn("He remembers 0 quotes and 1 facts (the master's", st)   # ... in both places, not the local file's
         open(conf, "w").write("[floyd]\nserver = 127.0.0.1:%d\ntoken = wrong\n" % port)
         out = self.say("!status")
         self.assertIn("refused", out)                                      # wrong token: local Floyd, and it says so

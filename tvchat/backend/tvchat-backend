@@ -4878,16 +4878,20 @@ class FloydAdapter(CommandMixin):
                 if a.protocol in ("irc", "mail", "deltachat", "lhc") and a.state == "connected"]
         fort = mind.fortune_prog()
         d = self.memory.data
-        mline = ([(1.2, "Master Floyd: %s." % tvf.master_state(self.master))]
-                 if self.master and not self.chat.daemon and hasattr(tvf, "master_state") else [])
+        mline, hello = [], None
+        if self.master and not self.chat.daemon and hasattr(tvf, "master_state"):
+            hello = tvf.master_call(self.master, {"op": "hello"}) if self.master.get("server") else None
+            mline = [(1.2, "Master Floyd: %s." % tvf.master_state(self.master, hello))]
+        up = bool(hello and hello.get("ok"))
         return mind._say([
             (0.8, "Floyd %s has been up %s%s. Level here: %s (%s)." % (
                 __version__, up, " on " + ", ".join(nets) if nets else "", lvl, tvf.LEVEL_BLURB[lvl]))] + mline + [
             (1.6, "Claude: %s." % self._claude_state(conv, msg.sender)),
             (2.4, "Fortunes: %s." % ("the system's fortune program (%s)" % fort if fort
                                      else "his own, built in - no fortune program is installed")),
-            (3.2, "He remembers %d quotes, %d facts, %d tells waiting, %d people seen; listening in %d conversations." % (
-                len(d["quotes"]), len(d["facts"]), len(d["tells"]), len(d["seen"]),
+            (3.2, "He remembers %s quotes, %s facts%s, %d tells waiting, %d people seen; listening in %d conversations." % (
+                hello.get("quotes", 0) if up else len(d["quotes"]), hello.get("facts", 0) if up else len(d["facts"]),
+                " (the master's)" if up else "", len(d["tells"]), len(d["seen"]),
                 sum(1 for a in self.chat.accounts for c in a.convs.values() if self.attached(c)))),
             (4.0, "He is a bot%s. !about says more, !help lists his commands." % (
                 (", run by " + self._contact(conv)) if self._contact(conv) else ""))])
