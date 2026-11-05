@@ -4,6 +4,7 @@
 // composer and others use.
 #pragma once
 #include "tvcommon.h"
+#include <sys/stat.h> // mkdir, chmod (TRecallLine::remember): Linux does not pull it in through the others
 
 // ------------------------------------------------------- mail text view ----
 // Read-only text for the body pane and the Source / Help / Purge-preview
