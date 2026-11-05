@@ -4391,6 +4391,10 @@ class FloydAdapter(CommandMixin):
         self.claude_timeout = self._number(o.get("claude_timeout"), 180)
         self.claude_lines = int(self._number(o.get("claude_lines"), 10))
         self.claude_busy = False
+        # the master Floyd on the server (server = HOST, token = ..., server_timeout = 1): asked first when set and
+        # reachable; otherwise this local Floyd answers.  Not used by the daemon, which IS the master.
+        self.master = (tvf.master_settings(lambda k, d: (o.get(k) or d) if k != "server_timeout" else (o.get(k) or "1"))
+                       if hasattr(tvf, "master_settings") else None)
         # how much he does: off, minimal, helpful, chatty, clippy (tvfloyd.py); !level
         # changes it per conversation
         self.level = tvf.parse_level(o.get("level"), tvf.DEFAULT_LEVEL)
@@ -4538,7 +4542,8 @@ class FloydAdapter(CommandMixin):
             c = self.CLAUDE_RX.match(body) if direct else None
             order = bool(c)
             if order:
-                plan += self._order(conv, msg.sender, who, c.group(1))
+                plan += self._order(conv, msg.sender, who, c.group(1),
+                                    own=("s" in msg.flags and not self.chat.daemon))
             elif direct and low in ("!whoami", "whoami"):
                 plan += mind._say([(0.8, self._whoami(msg.sender, who))])
             elif direct and lvl == "clippy" and self.SHOO_RX.match(low):
@@ -4551,9 +4556,10 @@ class FloydAdapter(CommandMixin):
                 elif "a" in msg.flags:
                     pass                 # an action is not addressed to him
                 elif bang:
-                    plan += mind.botcmd(body, who) or self._unknown_bang(mind, body)
+                    plan += (self._master_say(mind, body, who, lvl) or mind.botcmd(body, who)
+                             or self._unknown_bang(mind, body))
                 elif to_him:
-                    plan += self._talk(mind, body, who, lvl)
+                    plan += self._master_say(mind, body, who, lvl) or self._talk(mind, body, who, lvl)
                 elif tvf.at_least(lvl, "helpful") and mind.KARMA.match(text):
                     plan += mind.botcmd(text, who) or []
             if not plan and lvl == "clippy" and not direct and "a" not in msg.flags:
@@ -4851,6 +4857,9 @@ class FloydAdapter(CommandMixin):
         """Can he ask Claude here, and may this asker?  One short sentence."""
         if not _bool(conv.account.opts.get("llm"), True):
             return "no - this network does not want bots that use language models"
+        m = self._master_for()
+        if m and tvf.master_alive(m):
+            return "yes, on the master (%s) - ask with !claude QUESTION" % m["server"]
         if not self.claude:
             return "no - it is off in his configuration"
         if not self.chat.daemon:
@@ -4869,9 +4878,11 @@ class FloydAdapter(CommandMixin):
                 if a.protocol in ("irc", "mail", "deltachat", "lhc") and a.state == "connected"]
         fort = mind.fortune_prog()
         d = self.memory.data
+        mline = ([(1.2, "Master Floyd: %s." % tvf.master_state(self.master))]
+                 if self.master and not self.chat.daemon and hasattr(tvf, "master_state") else [])
         return mind._say([
             (0.8, "Floyd %s has been up %s%s. Level here: %s (%s)." % (
-                __version__, up, " on " + ", ".join(nets) if nets else "", lvl, tvf.LEVEL_BLURB[lvl])),
+                __version__, up, " on " + ", ".join(nets) if nets else "", lvl, tvf.LEVEL_BLURB[lvl]))] + mline + [
             (1.6, "Claude: %s." % self._claude_state(conv, msg.sender)),
             (2.4, "Fortunes: %s." % ("the system's fortune program (%s)" % fort if fort
                                      else "his own, built in - no fortune program is installed")),
@@ -4906,6 +4917,57 @@ class FloydAdapter(CommandMixin):
             self.memory.save()
         self._later(3.0, lambda: ad.part(conv))
         return mind._say([(0.8, "Okay, %s. Floyd is going now. Bye, everybody! Floyd will wait outside." % who)])
+
+    # -- the master Floyd (tvcommon/FLOYD-MASTER.md): first choice when set and reachable; he is the fall-back ---
+    def _master_for(self):
+        m = self.master
+        return m if (m and m.get("server") and not self.chat.daemon) else None
+
+    def _master_say(self, mind, body, who, lvl):
+        """The master's answer as a plan, or None (not set, out of reach, refused, or something he does not
+        know - the IRC-only things such as !seen and !tell stay local)."""
+        m = self._master_for()
+        if not m:
+            return None
+        r = tvf.master_call(m, {"op": "say", "text": body, "level": lvl, "who": who, "app": "tvchat"})
+        if not (r and r.get("ok")):
+            tvf._note_source("local", m)
+            return None
+        lines = r.get("lines")
+        note = tvf._note_source("master", m)
+        if not lines:
+            return None
+        if note:
+            lines = [note] + lines
+        return mind._say([(0.8 + 0.6 * i, ln) for i, ln in enumerate(lines[:self.ATTACH_MAX_LINES])])
+
+    def _master_claude(self, conv, who, prompt):
+        """!claude through the master (he runs the CLI): the plan to say now, or None when he is out of reach."""
+        m = self._master_for()
+        if not m:
+            return None
+        r = tvf.master_call(m, {"op": "claude", "text": prompt, "who": who})
+        if not (r and r.get("ok")):
+            return None
+        if r.get("job"):
+            until = time.time() + self.claude_timeout + 60
+            self._later(3.0, lambda: self._master_poll(conv, who, str(r["job"]), until))
+        return self.mind._say([(0.8 + 0.6 * i, ln) for i, ln in enumerate((r.get("lines") or [])[:3])])
+
+    def _master_poll(self, conv, who, job, until):
+        m = self._master_for()
+        r = tvf.master_call(m, {"op": "poll", "job": job}) if m else None
+        if r and r.get("ok") and not r.get("done"):
+            if time.time() < until:
+                self._later(3.0, lambda: self._master_poll(conv, who, job, until))
+                return
+            lines = ["Claude took too long"]
+        elif r and r.get("ok"):
+            lines = r.get("lines") or ["(Claude said nothing)"]
+        else:
+            lines = ["Claude could not be reached on the master"]
+        pre = "" if conv.kind == "direct" else "%s: " % who
+        self._out(conv, [(0.6 * i, (pre if i == 0 else "") + ln, "") for i, ln in enumerate(lines)])
 
     def _talk(self, mind, body, who, lvl):
         """Something said to him that is not a !command or a tool."""
@@ -5026,12 +5088,17 @@ class FloydAdapter(CommandMixin):
         return "Floyd knows %s as account %s%s." % (
             who, acct, ", an admin" if self.is_admin(sender) else ", not an admin")
 
-    def _order(self, conv, sender, who, prompt):
-        """Consult the Claude CLI for an admin; the plan to say meanwhile."""
+    def _order(self, conv, sender, who, prompt, own=False):
+        """Consult the Claude CLI for an admin (or, in his own session, for you); the plan to say meanwhile.
+        With a master Floyd set and reachable, HE runs the CLI (own sessions only: the master's token is yours)."""
         if not _bool(conv.account.opts.get("llm"), True):
             _log.info("floyd: claude refused in %s (llm = no on that account)", conv.id)
             return self.mind._say([(0.8, "Floyd can't ask Claude here, %s. This network does not want bots that use "
                                     "language models. Floyd checked the rules. Floyd follows rules." % who)])
+        if own:
+            got = self._master_claude(conv, who, prompt)
+            if got is not None:
+                return got
         if not self.is_admin(sender):
             _log.info("floyd: refused claude for %s (account %s) in %s", who,
                       getattr(sender, "account", None), conv.id)

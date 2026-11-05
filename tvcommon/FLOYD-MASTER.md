@@ -1,16 +1,12 @@
 # Master Floyd link (design 2026-11-04; approved, built for tvmail and tvcal)
 
-**Status:** gate (`FloydGate`, tvfloyd.py + `floyd-daemon` keys `gate`, `gate_listen`, `gate_token_file`) and client
-(`master_*`, used by `persona()`, `claude_start/poll`, `!status`) are written and tested (tvcommon, tvcal, tvmail tests);
-`tvchat/deploy/floyd-gate-on-cpbee.sh` deploys it (token, conf, restart, LAN check) - NOT yet run.  Still open: tvchat's
-own Floyd window using the master as a fallback chain, and a "Floyd gate" card on the servers page.  Decisions taken:
-token over plain LAN TCP, port 7077.
-
-Rule: every suite app (tvmail, tvchat, tvcal) has
-1. a **local Floyd** (tvfloyd.py `persona()`, `claude_*()`), always present, and
-2. a **link to the master Floyd** (tvchat-floyd on cpbee) used when cpbee answers.
-
-Solo installs must keep working: no `[floyd] server` set, or cpbee out of reach, means the local Floyd answers, silently.
+**Status:** built and deployed for tvmail, tvcal and tvchat.  Gate: `FloydGate` in tvfloyd.py, started by
+`tvchat-backend floyd-daemon` (`gate`, `gate_listen`, `gate_token_file` on the floyd account).  Client: `master_*` in
+tvfloyd.py used by `persona()`, `claude_start/poll` and `!status` (tvmail, tvcal), and by tvchat's local Floyd
+(`_master_say`, `_master_claude`; keys `server`, `token`, `server_timeout` on its `protocol = floyd` account; its
+`!claude` for YOUR OWN lines goes to the master, other people's stay admin-only).  Deploy: `tvchat/deploy/floyd-gate-on-cpbee.sh`
+(opens the port with POSIX/net-utils/lan-port).  Servers page card: `cpbee-servers-add-floyd-gate.sh`.
+Decisions taken: token over plain LAN TCP, port 7077.
 
 ## What "master" adds
 One memory (quotes, facts, `!learn`), the IRC-side knowledge, and Claude run on the server (so other machines need no Claude CLI).

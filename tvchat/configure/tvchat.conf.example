@@ -97,6 +97,12 @@ talk_view = classic
 #display  = Floyd
 # what Floyd calls you (default: your login name)
 #nick     = yourname
+# The master Floyd on the server (tvcommon/FLOYD-MASTER.md), as in tvmail and tvcal: with `server` set and
+# reachable HE answers (one memory, Claude from the server, !claude for you); otherwise this local Floyd does,
+# so tvchat still works alone.  !status says which.  The token is in ~/floyd-gate.token on the server.
+#server   = cpbee
+#token    = ...
+#server_timeout = 1
 # seconds of quiet before Floyd speaks up by himself (default 180, 0 = never)
 #idle     = 180
 # conversations he is attached to every time (comma-separated conversation ids,

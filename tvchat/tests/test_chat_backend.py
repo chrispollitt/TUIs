@@ -3705,6 +3705,86 @@ class TestFloydAttached(Base):
         said = self._asks("bob", None, "floyd: is this AI?")
         self.assertIn("does not want bots that use language models", said)
 
+    def _gate(self):
+        """A master Floyd's gate on a free local port, its own memory and a fake Claude; the Floyd here points at it."""
+        import selectors
+        import threading
+        sel, stop = selectors.DefaultSelector(), []
+
+        class Loop(object):
+            def add_reader(s, sock, fn):
+                sel.register(sock, selectors.EVENT_READ, fn)
+
+            def remove_reader(s, sock):
+                stop.append(1)
+
+        def pump():
+            while not stop:
+                for key, _ in sel.select(0.05):
+                    key.data()
+        fake = self.tmp / "masterclaude"
+        fake.write_text("#!/bin/sh\ncat >/dev/null\necho the master says four\n")
+        fake.chmod(0o755)
+        state = self.tmp / "master-state"
+        os.environ["XDG_STATE_HOME"] = str(state)
+        self.addCleanup(os.environ.pop, "XDG_STATE_HOME", None)
+        mem = cb.tvf.FloydMemory(str(self.tmp / "master.json"))
+        mem.data["facts"]["tea"] = "master tea is hot"
+        gate = cb.tvf.FloydGate(Loop(), mem, "tok", cb.tvf.claude_settings(
+            lambda k, d: {"claude_cmd": str(fake)}.get(k, d)), "127.0.0.1", 0)
+        gate.start()
+        threading.Thread(target=pump, daemon=True).start()
+        self.addCleanup(gate.stop)
+        cb.tvf._DOWN.clear()
+        cb.tvf._SOURCE["last"] = None
+        port = gate.sock.getsockname()[1]
+
+        def point(token="tok", port=port):
+            self.floyd.master = cb.tvf.master_settings(lambda k, d: {
+                "server": "127.0.0.1:%d" % port, "token": token, "server_timeout": "0.5"}.get(k, d))  # allowlist secret: test value
+        point()
+        return gate, point
+
+    @unittest.skipIf(os.name == "nt", "fake claude is a shell script")
+    def test_the_master_answers_first_and_the_local_floyd_is_the_fallback(self):
+        self.other.send(self.conv, "/floyd on")
+        gate, point = self._gate()
+        self.hear("bob", "!tea")
+        self.assertTrue(any("master tea is hot" in t for t in self.other.said), self.other.said)
+        self.other.said.clear()
+        point(token="wrong")                                   # refused: the local Floyd answers, the master's fact is not his
+        self.hear("bob", "!tea")
+        self.hear("bob", "!8ball ok")
+        self.assertFalse(any("master tea" in t for t in self.other.said))
+        self.assertTrue(any(t.startswith("[Floyd]") for t in self.other.said))
+        self.other.said.clear()
+        point()
+        cb.tvf._DOWN.clear()
+        self.hear("bob", "!status")
+        said = " | ".join(self.other.said)
+        self.assertIn("Master Floyd: 127.0.0.1:", said)
+        self.assertIn("answers", said)
+        self.assertIn("Claude: yes, on the master", said)
+        self.other.said.clear()
+        gate.stop()
+        cb.tvf._DOWN.clear()
+        self.hear("bob", "!8ball ok")                          # cpbee gone: still himself
+        self.assertTrue(any(t.startswith("[Floyd]") for t in self.other.said))
+
+    @unittest.skipIf(os.name == "nt", "fake claude is a shell script")
+    def test_my_own_claude_question_goes_to_the_master(self):
+        self.other.send(self.conv, "/floyd on")
+        gate, point = self._gate()
+        self.hear("me", "!claude what is 2+2?", flags="s")
+        for _ in range(30):                                    # the job runs in real time; the loop polls on the fake clock
+            time.sleep(0.1)
+            self.clk.t += 3.5
+            self.chat.loop.run_due()
+        self.assertTrue(any("the master says four" in t for t in self.other.said), self.other.said)
+        self.other.said.clear()
+        self.hear("bob", "!claude what is 2+2?")               # somebody else's question is not mine to forward
+        self.assertTrue(any("Only Floyd's admins" in t for t in self.other.said), self.other.said)
+
     def test_silent_until_attached(self):
         self.hear("bob", "!help")
         self.assertEqual(self.other.said, [])

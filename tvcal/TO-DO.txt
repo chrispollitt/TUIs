@@ -19,7 +19,7 @@ tvcal - features and wishes not done yet
 13. Floyd's clippy tips in tvcal (the "Floyd, not clippy, but ..." ones) - only his commands are in.
 14. tvchat's Add selection offers the lines as they are; picking a time out of the text ("lunch at 12:30
     tomorrow") would save a step.
-15. Floyd (F7) could talk to the real, central Floyd on cpbee (tvchat-floyd) instead of being a local helper:
+15. DONE 2026-11-04 (tvcommon/FLOYD-MASTER.md; not yet deployed to your conf). Floyd (F7) could talk to the real, central Floyd on cpbee (tvchat-floyd) instead of being a local helper:
     one Floyd with one memory (!learn, quotes) and Claude from the server.  Suite rule (2026-11-04): EVERY
     app (tvmail, tvchat, tvcal) has a local Floyd as the fall-back AND a link to the master Floyd on cpbee
     when it is reachable (a setting such as [floyd] server = cpbee; try the master first, quietly drop to
