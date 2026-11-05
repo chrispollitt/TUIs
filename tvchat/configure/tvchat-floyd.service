@@ -12,6 +12,10 @@
 # User= is the account the Claude CLI (!claude ...) runs as, and so what it can read:
 # floyd, a system user with no login shell (systemd does not need one).  He needs his
 # own login to Claude:  sudo -u floyd -H bash -l, then  claude
+#
+# The sentinel's mail-queue check runs `postqueue -p`; NoNewPrivileges below stops that setgid program gaining
+# the postdrop group, so give the SERVICE the group (not the user):  SupplementaryGroups=postdrop  in a drop-in
+# /etc/systemd/system/tvchat-floyd.service.d/mailq.conf  (tvchat/deploy/floyd-mailq-on-cpbee.sh does it).
 [Unit]
 Description=Floyd, the central tvchat bot (IRC)
 After=network-online.target ergo.service

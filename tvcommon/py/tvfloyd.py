@@ -2020,8 +2020,15 @@ def mail_queue_length():
     return int(m.group(1)) if m else None
 
 
+_QUEUE_WARNED = []
+
+
 def check_queue(limit):
     n = mail_queue_length()
+    if n is None and not _QUEUE_WARNED:                   # say so once: otherwise a stuck queue would never be noticed
+        _QUEUE_WARNED.append(1)
+        _log.warning("sentinel: cannot read the mail queue (postqueue -p failed); the queue check is off. "
+                     "Under systemd the service needs SupplementaryGroups=postdrop (NoNewPrivileges blocks the setgid postqueue).")
     if n is None or n < limit:
         return True, ""
     return False, "%d message%s waiting in the mail queue (mail to the outside is stuck)" % (n, "" if n == 1 else "s")
