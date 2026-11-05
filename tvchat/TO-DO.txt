@@ -136,6 +136,13 @@ Smaller things
    protocol so nobody has to know the keys - and a Verify that tries each account's
    login (IMAP / SMTP / SASL) without joining anything. The window and plumbing are
    tvcommon's (configwin.cpp); tvmail has the same (tvmail/TO-DO.txt 24).
+14 FUTURE (2026-11-05; start only once the Delta Chat gateway work - dcgw on cpbee, thin clients, several people -
+   is in a satisfactory working state): central contacts and mail groups for the whole suite on Radicale's CardDAV
+   (LDAP was considered and rejected as too heavy).  A shared `tvcontacts` library in tvcommon (CardDAV client, ETag cache,
+   offline reads); one book per person plus shared groups (vCards with KIND:group); tvmail completion and group expansion,
+   tvchat email -> Delta contact lookup (a group may seed a Delta group once), tvcal attendee completion, a sentinel check;
+   extend configure-radicale.sh for per-user books and rights.  Design: tvcommon/CONTACTS-DESIGN.md (not started; how tvmail
+   stores addresses today and where Chris's existing contacts live are unchecked).
 
 Open questions
 - Should IRC logs persist to disk between sessions? Not for now: the log is
