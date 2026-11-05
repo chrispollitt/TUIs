@@ -1792,7 +1792,11 @@ void deviceAddDialog()
 // Use account from another device...: take the account that machine offers (its Chat > Add second device...).
 void deviceUseDialog()
 {
-    std::vector<int> cand = deltaAccounts(false);
+    std::vector<int> cand; // every Delta Chat account, connected or not (taking over a connected one replaces it, after a confirm)
+    const auto &all = chat().accounts();
+    for (size_t k = 0; k < all.size(); ++k)
+        if (all[k].protocol == "deltachat")
+            cand.push_back((int)k);
     if (cand.empty())
     {
         notify("No Delta Chat account in tvchat.conf: add an [account:NAME] with protocol = deltachat first.", noteInfo);

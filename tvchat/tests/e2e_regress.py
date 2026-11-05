@@ -603,6 +603,43 @@ def delta_second_device_use(opts):
 
 
 @case()
+def delta_second_device_use_on_a_connected_account(opts):
+    # a Delta Chat account that is already connected is still offered by Chat > Use account from another device...
+    # (it is replaced after a confirmation, and its old data is kept aside)
+    import json
+    core = HERE / "fake_deltachat_rpc.py"
+
+    def setup(t):
+        d = t.tmp / "xdg" / "tvchat" / "deltachat" / "delta"
+        d.mkdir(parents=True)
+        (d / "world.json").write_text(json.dumps({"contacts": {}, "chats": {}, "messages": {}}))
+        (d / "state.json").write_text(json.dumps({"accounts": [1], "configured": True}))
+        (d / "dc.db").write_text("old")                       # data this machine already has
+        conf = t.tmp / "tvchat.conf"
+        conf.write_text("[chat]\nautoconnect = delta\n\n[account:delta]\nprotocol = deltachat\n"
+                        "display = Delta\naddr = me@example.org\nrpc_server = %s\n" % core)
+        t.env["TVCHAT_CONF"] = str(conf)
+        t.core = d
+        t.accounts = d.parent
+    tv = Tv(opts, setup=setup)
+    c = Case(tv)
+    started(tv, c)
+    c.check(tv.wait(lambda: re.search(r"Delta\b.*\bYes\b", tv.text()), 15), "the Delta Chat account did not connect")
+    tv.send(alt("c"), "u", settle=1.0)
+    c.check(not tv.has("No Delta Chat account"), "Use account said there is no Delta Chat account although one is connected")
+    c.check(tv.wait("Use account from another device", 5), "Chat > Use account from another device... opened no dialog")
+    tv.send("DCBACKUP2:fake-backup-token", "Enter", settle=1.0)
+    c.check(tv.wait("This machine already has", 8), "no confirmation before replacing the connected account")
+    tv.send("Enter", settle=1.5)                              # Yes
+    c.check(tv.wait(lambda: any(".replaced-" in p.name for p in tv.accounts.iterdir()), 10),
+            "the old Delta Chat data was not set aside")
+    c.check(tv.wait(lambda: re.search(r"Delta\b.*\bYes\b", tv.text()) is not None
+                    and "get_backup" in (tv.accounts / "delta" / "requests.jsonl").read_text(), 20),
+            "the account was not taken from the other machine after the confirmation")
+    return tv
+
+
+@case()
 def delta_group_rename_and_leave(opts):
     # Chat > New group..., Rename group... and Leave (which asks first) against
     # tests/fake_deltachat_rpc.py
