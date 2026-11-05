@@ -145,6 +145,20 @@ PYEOF
   say "  added (backup: $CONF.bak.$stamp)"
 fi
 
+say "  opening $PORT to the LAN in the firewall (cpbee's way: /etc/router-setup/lan0-tcp-ports + setup-router.sh fw) ..."
+PORTS=/etc/router-setup/lan0-tcp-ports
+sudo touch "$PORTS"
+if ! sudo grep -Eq "^[[:space:]]*$PORT([[:space:]]|\$)" "$PORTS"; then
+  printf '%s  # Floyd gate (tvchat-floyd; tvcal/tvmail ask the master Floyd)\n' "$PORT" | sudo tee -a "$PORTS" >/dev/null
+fi
+SR=$HOME/cmpi-router/bin/setup-router.sh
+if [[ -x $SR ]]; then
+  sudo "$SR" fw || die "setup-router.sh fw failed"
+else
+  say "  (no $SR; opening the port in the live firewall only - run setup-router.sh fw later to keep it)"
+  sudo nft add rule inet filter input iifname lan0 tcp dport "$PORT" accept
+fi
+
 say "step 4/4: restarting tvchat-floyd ..."
 sudo systemctl restart tvchat-floyd
 sleep 6
