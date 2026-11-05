@@ -18,7 +18,9 @@ import operator
 import os
 import random
 import re
+import hmac
 import shutil
+import socket
 import subprocess
 import time
 from collections import Counter
@@ -1255,15 +1257,30 @@ def persona_memory_path(configured=""):
                         "tvfloyd", "memory.json")
 
 
-def persona(text, level, who="friend", where="here", path=None):
+def persona(text, level, who="friend", where="here", path=None, master=None):
     """What Floyd says to TEXT in his own voice: a list of lines, or None when it
     is nothing he knows (the caller then says so in its own words).  What only makes
-    sense among people in a channel (!seen, !tell, karma, !leave) is not offered here."""
+    sense among people in a channel (!seen, !tell, karma, !leave) is not offered here.
+    The master Floyd on the server answers first when [floyd] server is set and it
+    is reachable; otherwise (or on any failure) the local Floyd does."""
     if level == "off" or not text.strip():
         return None
+    m = master if master is not None else _MASTER
+    if m and m.get("server"):
+        r = master_call(m, {"op": "say", "text": text, "level": level, "who": who, "app": where})
+        if r is not None and r.get("ok"):
+            lines = r.get("lines")
+            note = _note_source("master", m)
+            return ([note] + lines if note and lines else lines)
+        _note_source("local", m)
     mind = _MINDS.get(path)
     if mind is None:
         mind = _MINDS[path] = FloydMind(nick=who, memory=FloydMemory(path))
+    return _persona_mind(mind, text, level, who)
+
+
+def _persona_mind(mind, text, level, who):
+    """persona() with the mind already chosen (the local one, or the gate's)."""
     mind.nick = who
     t = text.strip()
     got = None
@@ -1293,9 +1310,12 @@ def status_lines(app, level, cfg, path=None):
     mem = mind.memory.data if mind else FloydMemory(path).data
     fort = (mind.fortune_prog() if mind else
             (shutil.which("fortune") or shutil.which("fortune", path="/usr/games:/usr/local/games")))
+    m = cfg.get("master") if cfg else None
     return [
         "Floyd in %s is at level %s: %s" % (app, level, LEVEL_BLURB.get(level, level)),
-        "Claude: %s." % claude_state(cfg),
+        "Master Floyd: %s." % master_state(m),
+        "Claude: %s." % (claude_state(cfg) if not (m and master_alive(m)) else
+                         "yes, on the master (%s) - ask with !claude QUESTION" % m["server"]),
         "Fortunes: %s." % ("the system's fortune program (%s)" % fort if fort
                            else "his own, built in - no fortune program is installed"),
         "He remembers %d quotes and %d facts. !about says more, help lists his commands." % (
@@ -1321,7 +1341,9 @@ def claude_settings(get):
         except ValueError:
             return default
     where = (get("claude_dir", "") or "").strip()
-    return {"on": (get("claude", "") or "yes").strip().lower() not in ("no", "off", "false", "0"),
+    global _MASTER
+    _MASTER = master_settings(get)
+    return {"master": _MASTER, "on": (get("claude", "") or "yes").strip().lower() not in ("no", "off", "false", "0"),
             "cmd": (get("claude_cmd", "") or "").strip() or "claude",
             "tools": (get("claude_tools", "") or "").strip() or "Read,Grep,Glob",
             "model": (get("claude_model", "") or "").strip(),
@@ -1361,12 +1383,28 @@ def claude_argv(cfg):
 
 def claude_start(prompt, cfg):
     """Start the question in the background; the lines to say now."""
+    m = cfg.get("master")
+    if m and m.get("server"):                       # the master runs Claude, if he is there
+        r = master_call(m, {"op": "claude", "text": prompt, "who": "tvfloyd"})
+        if r is not None and r.get("ok"):
+            if r.get("job"):
+                d = _master_jobs()
+                os.makedirs(d, mode=0o700, exist_ok=True)
+                with open(os.path.join(d, str(r["job"])), "w") as fh:
+                    fh.write(str(int(time.time())))
+            return r.get("lines") or []
     state = claude_state(cfg)
     if not state.startswith("yes"):
         return ["Claude is asleep: %s." % state.split(" - ", 1)[-1]]
     if "busy" in state:
         return ["Floyd is still waiting for Claude. Claude is slow. Floyd is patient."]
-    d = os.path.join(_claude_jobs(), "%d" % int(time.time() * 1000))
+    return _claude_launch(prompt, cfg)[0]
+
+
+def _claude_launch(prompt, cfg):
+    """Start the CLI in the background: (lines to say now, job name)."""
+    name = "%d" % int(time.time() * 1000)
+    d = os.path.join(_claude_jobs(), name)
     os.makedirs(d, mode=0o700)
     with open(os.path.join(d, "prompt"), "w", encoding="utf-8") as fh:
         fh.write(prompt)
@@ -1377,15 +1415,23 @@ def claude_start(prompt, cfg):
     subprocess.Popen(["sh", "-c", script, "sh", cfg["dir"] or os.getcwd(), d, str(cfg["timeout"])] + claude_argv(cfg),
                      env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                      start_new_session=True)
-    return ["Floyd will ask Claude. Floyd has to climb a ladder. Floyd will be back."]
+    return ["Floyd will ask Claude. Floyd has to climb a ladder. Floyd will be back."], name
 
 
-def claude_poll(cfg):
-    """The answer, as lines, once the question is done; None while it is still running (or none was asked)."""
+def claude_poll(cfg, only=None):
+    """The answer, as lines, once the question is done; None while it is still running (or none was asked).
+    ONLY names one job (the gate serves several people); otherwise any local job, or a question asked of the master."""
+    m = cfg.get("master") if cfg else None
+    if only is None and m and os.path.isdir(_master_jobs()):
+        got = _master_poll(m, cfg)
+        if got is not None:
+            return got
     base = _claude_jobs()
     if not os.path.isdir(base):
         return None
     for name in sorted(os.listdir(base)):
+        if only is not None and name != only:
+            continue
         d = os.path.join(base, name)
         rc_file = os.path.join(d, "rc")
 
@@ -1423,3 +1469,214 @@ def claude_poll(cfg):
         shutil.rmtree(d, ignore_errors=True)
         return [("Claude: " if i == 0 else "  ") + l for i, l in enumerate(lines)]
     return None
+
+
+# -- the master Floyd (see tvcommon/FLOYD-MASTER.md) -----------------------------
+# Every app has this local Floyd as the fall-back; when [floyd] server = HOST[:PORT] is set and the
+# master (tvchat-floyd on the server, with its `gate`) answers, he answers instead: one memory, one
+# Claude.  Any failure -> the local code path, quietly.  The wire: one JSON line each way, token-checked.
+GATE_PORT = 7077
+_MASTER = None                                  # the settings last read by claude_settings()
+_DOWN = {}                                      # server -> time until which it is not tried again
+_SOURCE = {"last": None}                        # "master" or "local": who answered last
+DOWN_FOR = 60
+
+
+def master_settings(get):
+    """get(key, default) reads the app's [floyd] section.  Empty server = local only."""
+    server = (get("server", "") or "").strip()
+    if not server or server.lower() in ("no", "none", "off", "local"):
+        return {"server": "", "token": "", "timeout": 2.0}
+    if ":" not in server:
+        server += ":%d" % GATE_PORT
+    try:
+        t = float(str(get("server_timeout", "") or 2).strip())
+    except ValueError:
+        t = 2.0
+    return {"server": server, "token": (get("token", "") or "").strip(), "timeout": max(0.2, min(t, 30.0))}
+
+
+def master_call(m, req):
+    """One request to the master: his reply (a dict) or None when he is not there / not understood."""
+    key = m["server"]
+    if _DOWN.get(key, 0) > time.time():
+        return None
+    host, _, port = key.rpartition(":")
+    try:
+        s = socket.create_connection((host, int(port)), timeout=m["timeout"])
+        try:
+            s.settimeout(m["timeout"])
+            s.sendall((json.dumps(dict(req, v=1, token=m["token"])) + "\n").encode("utf-8"))
+            buf = b""
+            while b"\n" not in buf and len(buf) < 262144:
+                chunk = s.recv(8192)
+                if not chunk:
+                    break
+                buf += chunk
+        finally:
+            s.close()
+        r = json.loads(buf.split(b"\n")[0].decode("utf-8"))
+        return r if isinstance(r, dict) else None
+    except (OSError, ValueError):
+        _DOWN[key] = time.time() + DOWN_FOR
+        return None
+
+
+def master_alive(m):
+    r = master_call(m, {"op": "hello"}) if m and m.get("server") else None
+    return bool(r and r.get("ok"))
+
+
+def master_state(m):
+    """One short phrase for !status."""
+    if not m or not m.get("server"):
+        return "none set ([floyd] server), the local Floyd answers"
+    r = master_call(m, {"op": "hello"})
+    if r is None:
+        return "%s is not reachable, so the local Floyd answers" % m["server"]
+    if not r.get("ok"):
+        return "%s refused us (check [floyd] token), so the local Floyd answers" % m["server"]
+    return "%s answers (%s quotes, %s facts)" % (m["server"], r.get("quotes", "?"), r.get("facts", "?"))
+
+
+def _note_source(src, m):
+    """The one line said when Floyd changes from the master to the local one or back; else None."""
+    last, _SOURCE["last"] = _SOURCE["last"], src
+    if last is None or last == src:
+        return None
+    return ("* Floyd is back on the master (%s)" % m["server"]) if src == "master" else \
+           "* Floyd is on his own now: the master is out of reach"
+
+
+def _master_jobs():
+    return _claude_jobs() + "-master"
+
+
+def _master_poll(m, cfg):
+    d = _master_jobs()
+    for name in sorted(os.listdir(d)):
+        path = os.path.join(d, name)
+        try:
+            with open(path) as fh:
+                started = int(fh.read().strip() or 0)
+        except (OSError, ValueError):
+            started = 0
+        r = master_call(m, {"op": "poll", "job": name})
+        if r is not None and r.get("ok") and not r.get("done"):
+            continue
+        if r is None and time.time() - started < cfg["timeout"] + 60:
+            continue
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        if r is not None and r.get("ok"):
+            return r.get("lines") or ["(Claude said nothing)"]
+        return ["Claude could not be reached on the master"]
+    return None
+
+
+class FloydGate(object):
+    """The master's door: listens for the one-line JSON requests of master_call().  It runs on the
+    daemon's own loop (loop.add_reader), so there is one thread, one FloydMemory and no locking; a
+    request is answered in a moment (Claude runs as a background job, polled with op=poll)."""
+    MINDS_MAX = 64
+
+    def __init__(self, loop, memory, token, claude_cfg, host, port=GATE_PORT, level=DEFAULT_LEVEL, log=None):
+        self.loop, self.memory, self.token = loop, memory, token
+        self.claude_cfg, self.host, self.port, self.level = claude_cfg, host, int(port), level
+        self.log = log or _log
+        self.minds = {}
+        self.sock = None
+        self.served = 0
+
+    def start(self):
+        if not self.token:
+            raise ValueError("the gate needs a token (gate_token)")
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.bind((self.host, self.port))
+        s.listen(8)
+        s.setblocking(False)
+        self.sock = s
+        self.loop.add_reader(s, self.accept)
+        self.log.info("floyd gate: listening on %s:%d", self.host, self.port)
+
+    def stop(self):
+        if self.sock is not None:
+            self.loop.remove_reader(self.sock)
+            self.sock.close()
+            self.sock = None
+
+    def accept(self):
+        try:
+            conn, addr = self.sock.accept()
+        except OSError:
+            return
+        try:
+            conn.settimeout(0.5)
+            buf = b""
+            while b"\n" not in buf and len(buf) < 65536:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    break
+                buf += chunk
+            reply = self.handle(buf.split(b"\n")[0], addr[0])
+            conn.sendall((json.dumps(reply) + "\n").encode("utf-8"))
+        except (OSError, ValueError):
+            pass
+        finally:
+            conn.close()
+
+    def mind(self, who):
+        m = self.minds.pop(who, None)
+        if m is None:
+            m = FloydMind(nick=who, memory=self.memory)
+        self.minds[who] = m                      # most recently used last
+        while len(self.minds) > self.MINDS_MAX:
+            self.minds.pop(next(iter(self.minds)))
+        return m
+
+    def handle(self, raw, peer="?"):
+        try:
+            req = json.loads(raw.decode("utf-8"))
+            if not isinstance(req, dict):
+                raise ValueError("not an object")
+        except ValueError:
+            return {"ok": False, "error": "bad request"}
+        if not hmac.compare_digest(str(req.get("token", "")).encode("utf-8"), self.token.encode("utf-8")):
+            self.log.warning("floyd gate: refused %s (wrong token)", peer)
+            return {"ok": False, "error": "token"}
+        self.served += 1
+        op = req.get("op") or "say"
+        who = re.sub(r"[^\w.@-]", "", str(req.get("who") or "friend"))[:32] or "friend"
+        text = str(req.get("text") or "")[:4000]
+        if op == "hello":
+            return {"ok": True, "v": 1, "level": self.level,
+                    "quotes": len(self.memory.data.get("quotes", [])), "facts": len(self.memory.data.get("facts", {}))}
+        if op == "say":
+            level = parse_level(req.get("level"), self.level)
+            if level == "off" or not text.strip():
+                return {"ok": True, "lines": None}
+            return {"ok": True, "lines": _persona_mind(self.mind(who), text, level, who)}
+        if op == "claude":
+            self.log.info("floyd gate: %s from %s asks Claude", who, peer)
+            cfg = self.claude_cfg
+            state = claude_state(cfg)
+            if not state.startswith("yes"):
+                return {"ok": True, "lines": ["Claude is asleep: %s." % state.split(" - ", 1)[-1]]}
+            if "busy" in state:
+                return {"ok": True, "lines": ["Floyd is still waiting for Claude. Claude is slow. Floyd is patient."]}
+            lines, job = _claude_launch(text, cfg)
+            return {"ok": True, "job": job, "lines": lines}
+        if op == "poll":
+            job = str(req.get("job") or "")
+            if not job.isdigit():
+                return {"ok": False, "error": "bad job"}
+            lines = claude_poll(self.claude_cfg, only=job)
+            if lines is not None:
+                return {"ok": True, "done": True, "lines": lines}
+            if not os.path.isdir(os.path.join(_claude_jobs(), job)):
+                return {"ok": True, "done": True, "lines": ["Claude: that question is gone (already collected?)"]}
+            return {"ok": True, "done": False}
+        return {"ok": False, "error": "unknown op"}

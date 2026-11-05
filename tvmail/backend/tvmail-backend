@@ -2338,8 +2338,11 @@ class MailFloyd(object):
                 who = getpass.getuser()
             except Exception:
                 who = "friend"
+            extra = {}
+            if hasattr(tvf, "master_settings"):           # the master Floyd on the server, when [floyd] server is set
+                extra["master"] = tvf.master_settings(lambda k, d: _conf().get("floyd", k, fallback=d))
             said = tvf.persona(t, self.level, who=who, where="tvmail",
-                               path=tvf.persona_memory_path(_conf().get("floyd", "memory", fallback="")))
+                               path=tvf.persona_memory_path(_conf().get("floyd", "memory", fallback="")), **extra)
             if said:
                 return said
         if tvf.at_least(self.level, "chatty"):

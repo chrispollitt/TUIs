@@ -7754,11 +7754,40 @@ def cmd_floyd_daemon(a):
                 chat.connect(x)
             except UserError as e:
                 raise UserError("%s: %s" % (x.id, e))
+    gates = []
+    for x in floyds:                             # the master's door for tvmail / tvcal / tvchat helpers (gate = PORT)
+        o = x.opts
+        port = (o.get("gate") or "").strip()
+        if not port or port.lower() in ("no", "off", "none", "0"):
+            continue
+        if not hasattr(tvf, "FloydGate"):
+            raise UserError("%s: gate = %s needs the newer tvfloyd.py beside this program" % (x.id, port))
+        token = (o.get("gate_token") or "").strip()
+        tfile = os.path.expanduser((o.get("gate_token_file") or "").strip())
+        if not token and tfile:
+            try:
+                with open(tfile, encoding="utf-8") as fh:
+                    token = fh.read().strip()
+            except OSError as e:
+                raise UserError("%s: cannot read gate_token_file %s: %s" % (x.id, tfile, e))
+        if not token:
+            raise UserError("%s: gate = %s needs gate_token or gate_token_file" % (x.id, port))
+        ad = chat.adapter(x)
+        cfg = tvf.claude_settings(lambda k, d, o=o: (o.get(k) or ("no" if k == "claude" else d)))
+        try:
+            gate = tvf.FloydGate(loop, ad.memory, token, cfg, (o.get("gate_listen") or "127.0.0.1").strip(),
+                                 int(port), ad.level, _log)
+            gate.start()
+        except (ValueError, OSError) as e:
+            raise UserError("%s: the gate cannot start: %s" % (x.id, e))
+        gates.append(gate)
     _log.info("floyd-daemon %s: up (%s)", __version__, _conf_path())
     loop.call_later(1, drain)
     try:
         loop.run()
     finally:
+        for g in gates:
+            g.stop()
         chat.close()
         _log.info("floyd-daemon: down")
     return 0

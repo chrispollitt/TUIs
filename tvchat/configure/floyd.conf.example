@@ -185,6 +185,14 @@ claude_dir      = ~
 # seconds to wait for an answer, and lines of it that are passed on (default 180, 10)
 #claude_timeout = 180
 #claude_lines   = 10
+# The master's door (tvcommon/FLOYD-MASTER.md): tvmail, tvcal and tvchat ask THIS Floyd, with this
+# memory and this Claude, when [floyd] server = HOST in their own config; they fall back to their
+# own local Floyd when it is out of reach.  One JSON line per request, token-checked, plain TCP:
+# bind it to the LAN address only.  Off unless gate is set.
+#gate           = 7077
+#gate_listen    = 192.168.10.1
+# the shared secret (a file, mode 640 root:floyd, is better than gate_token = ...)
+#gate_token_file = /etc/tvchat/floyd-gate.token
 # what he remembers (seen, tells, karma, quotes, facts)
 #memory   = ~/.local/share/tvchat/floyd/floyd.json
 

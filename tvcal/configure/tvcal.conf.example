@@ -28,6 +28,12 @@
 
 # Floyd, the assistant (F7).  level: off | minimal | helpful | chatty (the default) | clippy
 [floyd]
+# The master Floyd (tvchat-floyd on the server): when `server` answers, HE answers - one memory, and Claude
+# from the server (so this machine needs no Claude CLI).  When it does not (cpbee down, laptop elsewhere),
+# the local Floyd below answers by himself.  Leave `server` out to stay local.  !status says which.
+#server = cpbee            # HOST or HOST:PORT (default port 7077)
+#token = ...               # the shared secret from the server's floyd-gate.token
+#server_timeout = 2        # seconds before giving up (a miss is not retried for a minute)
 #level = chatty
 # !claude QUESTION in his window asks the Claude CLI (read-only: only the tools named in claude_tools, no
 # MCP servers, no skills); the answer appears in the window when it is ready.  claude = no turns it off.

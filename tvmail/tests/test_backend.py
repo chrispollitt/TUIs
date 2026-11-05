@@ -2194,6 +2194,45 @@ class TestFloyd(Base):
         self.assertEqual(answer, ["Claude: the fake answer"])
         self.assertEqual((self.tmp / "asked").read_text(), "what is 2+2?")
 
+    def test_the_master_answers_and_the_local_floyd_is_the_fallback(self):
+        import selectors
+        import threading
+        sel, stop = selectors.DefaultSelector(), []
+
+        class Loop(object):
+            def add_reader(s, sock, fn):
+                sel.register(sock, selectors.EVENT_READ, fn)
+
+            def remove_reader(s, sock):
+                stop.append(1)
+
+        def pump():
+            while not stop:
+                for key, _ in sel.select(0.05):
+                    key.data()
+        mem = be.tvf.FloydMemory(str(self.tmp / "master.json"))
+        mem.data["facts"]["tea"] = "master tea is hot"
+        gate = be.tvf.FloydGate(Loop(), mem, "tok", be.tvf.claude_settings(lambda k, d: "no" if k == "claude" else d),
+                                "127.0.0.1", 0)
+        gate.start()
+        threading.Thread(target=pump, daemon=True).start()
+        self.addCleanup(gate.stop)
+        port = gate.sock.getsockname()[1]
+        conf = self.tmp / "tvmail.conf"
+        os.environ["TVMAIL_CONF"] = str(conf)
+        self.addCleanup(os.environ.pop, "TVMAIL_CONF", None)
+        self.f.set_level("chatty")
+        be.tvf._DOWN.clear()
+        conf.write_text("[floyd]\nserver = 127.0.0.1:%d\ntoken = tok\nserver_timeout = 0.5\n" % port)
+        self.assertIn("master tea is hot", self.say("!tea"))
+        conf.write_text("[floyd]\nserver = 127.0.0.1:%d\ntoken = wrong\n" % port)
+        self.assertNotIn("master tea", self.say("!tea"))                # refused: the local Floyd answers
+        self.assertIn("refused", self.say("status"))
+        gate.stop()
+        be.tvf._DOWN.clear()
+        conf.write_text("[floyd]\nserver = 127.0.0.1:%d\ntoken = tok\nserver_timeout = 0.5\n" % port)
+        self.assertIn("B-19-7", self.say("!about"))                     # cpbee gone: still himself
+
     def test_channel_things_are_not_offered(self):
         for irc in ("!seen bob", "!tell bob hi", "bob++", "!karma"):
             self.assertNotIn("point", self.say(irc), irc)

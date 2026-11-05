@@ -3,6 +3,7 @@ tvmail's Floyd share.  Stdlib unittest, no network."""
 import importlib.util
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -141,6 +142,138 @@ class TestClippy(unittest.TestCase):
         self.assertTrue(all(t.startswith("Floyd not clippy but ") for t in tips))
         self.assertEqual(tvf.clippy_mail(0, 0, 0, 0, False), [])
         self.assertIn("5 unread", tvf.clippy_mail(5, 0, 0, 0, False)[0])
+
+
+class _Loop(object):
+    """Just enough of tvchat's Loop for the gate: a thread that calls accept() when readable."""
+    def __init__(self):
+        import selectors, threading
+        self.sel, self.stop_flag = selectors.DefaultSelector(), False
+        self.t = threading.Thread(target=self.run, daemon=True)
+
+    def add_reader(self, sock, fn):
+        import selectors
+        self.sel.register(sock, selectors.EVENT_READ, fn)
+        self.t.start()
+
+    def remove_reader(self, sock):
+        self.stop_flag = True
+        try:
+            self.sel.unregister(sock)
+        except (KeyError, ValueError):
+            pass
+
+    def run(self):
+        while not self.stop_flag:
+            try:
+                for key, _ in self.sel.select(0.05):
+                    key.data()
+            except (OSError, ValueError, KeyError):
+                return
+
+
+class TestMaster(unittest.TestCase):
+    TOKEN = "s3cret"  # allowlist secret: test value
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.old = dict(os.environ)
+        os.environ["XDG_STATE_HOME"] = os.path.join(self.tmp, "state")
+        os.environ["XDG_DATA_HOME"] = os.path.join(self.tmp, "data")
+        tvf._DOWN.clear()
+        tvf._SOURCE["last"] = None
+        tvf._MINDS.clear()
+        self.loop = _Loop()
+        self.mem = tvf.FloydMemory(os.path.join(self.tmp, "master.json"))
+        self.cfg = tvf.claude_settings(lambda k, d: "no" if k == "claude" else d)
+        self.gate = tvf.FloydGate(self.loop, self.mem, self.TOKEN, self.cfg, "127.0.0.1", 0)
+        self.gate.start()
+        self.port = self.gate.sock.getsockname()[1]
+        self.m = {"server": "127.0.0.1:%d" % self.port, "token": self.TOKEN, "timeout": 2.0}  # allowlist secret
+
+    def tearDown(self):
+        self.gate.stop()
+        os.environ.clear()
+        os.environ.update(self.old)
+        tvf._MASTER = None
+
+    def test_settings(self):
+        g = lambda d: (lambda k, dflt: d.get(k, dflt))
+        self.assertEqual(tvf.master_settings(g({}))["server"], "")
+        self.assertEqual(tvf.master_settings(g({"server": "cpbee"}))["server"], "cpbee:7077")
+        self.assertEqual(tvf.master_settings(g({"server": "none"}))["server"], "")
+
+    def test_hello_and_say_use_the_masters_memory(self):
+        self.assertTrue(tvf.master_alive(self.m))
+        self.mem.data.setdefault("quotes", []).append("master-only quote")
+        self.mem.save() if hasattr(self.mem, "save") else None
+        lines = tvf.persona("!quote", "chatty", who="chris", where="tvcal", path=None, master=self.m)
+        self.assertTrue(lines)
+        self.assertIn("master-only quote", " ".join(lines))
+
+    def test_wrong_token_falls_back_to_local(self):
+        bad = dict(self.m, token="nope")
+        self.assertEqual(tvf.master_call(bad, {"op": "hello"}).get("ok"), False)
+        self.assertIn("refused", tvf.master_state(bad))
+        lines = tvf.persona("!about", "chatty", path=None, master=bad)
+        self.assertTrue(lines)                                     # the local Floyd answered
+
+    def test_dead_port_falls_back_and_is_remembered(self):
+        import socket
+        s = socket.socket()
+        s.bind(("127.0.0.1", 0))
+        dead = {"server": "127.0.0.1:%d" % s.getsockname()[1], "token": "x", "timeout": 0.5}
+        s.close()
+        self.assertIsNone(tvf.master_call(dead, {"op": "hello"}))
+        self.assertGreater(tvf._DOWN[dead["server"]], 0)
+        self.assertTrue(tvf.persona("!about", "chatty", path=None, master=dead))
+        self.assertIn("not reachable", tvf.master_state(dead))
+
+    def test_switch_notices(self):
+        dead = dict(self.m, server="127.0.0.1:1", timeout=0.3)
+        first = tvf.persona("!about", "chatty", path=None, master=self.m)
+        self.assertFalse(first[0].startswith("* Floyd is"))        # no notice on the first answer
+        self.assertEqual(tvf._SOURCE["last"], "master")
+        tvf.persona("!about", "chatty", path=None, master=dead)       # falls back, says so on the NEXT master answer
+        self.assertEqual(tvf._SOURCE["last"], "local")
+        back = tvf.persona("!about", "chatty", path=None, master=self.m)
+        self.assertTrue(back[0].startswith("* Floyd is back on the master"))
+
+    def test_irc_only_is_refused_on_the_gate_too(self):
+        r = tvf.master_call(self.m, {"op": "say", "text": "!seen bob", "level": "chatty", "who": "x"})
+        self.assertTrue(r["ok"])
+        self.assertIsNone(r["lines"])
+
+    def test_claude_asleep_on_the_master(self):
+        r = tvf.master_call(self.m, {"op": "claude", "text": "hi"})
+        self.assertTrue(r["ok"])
+        self.assertIn("asleep", r["lines"][0])
+
+    def test_claude_job_through_the_master_end_to_end(self):
+        script = os.path.join(self.tmp, "fakeclaude")
+        with open(script, "w") as fh:
+            fh.write("#!/bin/sh\ncat >/dev/null\necho 42 is the answer\n")
+        os.chmod(script, 0o755)
+        self.gate.claude_cfg = tvf.claude_settings(lambda k, d: {"claude_cmd": script}.get(k, d))
+        cfg = tvf.claude_settings(lambda k, d: {"server": self.m["server"], "token": self.TOKEN}.get(k, d))
+        lines = tvf.claude_start("what is it", cfg)
+        self.assertTrue(lines)
+        got = None
+        for _ in range(100):
+            got = tvf.claude_poll(cfg)
+            if got:
+                break
+            time.sleep(0.1)
+        self.assertEqual(got, ["Claude: 42 is the answer"])
+        self.assertIsNone(tvf.claude_poll(cfg))
+
+    def test_bad_requests(self):
+        self.assertEqual(self.gate.handle(b"not json")["ok"], False)
+        self.assertEqual(self.gate.handle(b"[]")["ok"], False)
+        r = self.gate.handle(('{"token":"%s","op":"poll","job":"../x"}' % self.TOKEN).encode())
+        self.assertEqual(r["ok"], False)
+        r = self.gate.handle(('{"token":"%s","op":"zzz"}' % self.TOKEN).encode())
+        self.assertEqual(r["ok"], False)
 
 
 if __name__ == "__main__":

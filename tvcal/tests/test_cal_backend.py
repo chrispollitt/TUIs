@@ -592,6 +592,51 @@ class Floyd(Env):
         for word in ("Floyd in tvcal is at level", "Claude:", "Fortunes:", "Calendar: a local file"):
             self.assertIn(word, out)
 
+    def _master(self):
+        """A master Floyd's gate on a free local port, with its own memory; [floyd] server/token point at it."""
+        import selectors
+        import threading
+        sel = selectors.DefaultSelector()
+        stop = []
+
+        class Loop(object):
+            def add_reader(s, sock, fn):
+                sel.register(sock, selectors.EVENT_READ, fn)
+
+            def remove_reader(s, sock):
+                stop.append(1)
+
+        def pump():
+            while not stop:
+                for key, _ in sel.select(0.05):
+                    key.data()
+        tvf = tb._load_tvfloyd()
+        mem = tvf.FloydMemory(os.path.join(self.tmp, "master.json"))
+        gate = tvf.FloydGate(Loop(), mem, "tok", tvf.claude_settings(lambda k, d: "no" if k == "claude" else d),
+                                "127.0.0.1", 0)
+        gate.start()
+        threading.Thread(target=pump, daemon=True).start()
+        self.addCleanup(gate.stop)
+        return gate, mem
+
+    def test_the_master_answers_and_the_local_floyd_is_the_fallback(self):
+        self.env["XDG_DATA_HOME"] = os.path.join(self.tmp, "xdg")          # the LOCAL memory: empty
+        gate, mem = self._master()
+        mem.data["facts"]["tea"] = "master tea is hot"
+        port = gate.sock.getsockname()[1]
+        conf = self.env["TVCAL_CONF"]
+        open(conf, "w").write("[floyd]\nserver = 127.0.0.1:%d\ntoken = tok\n" % port)
+        self.assertIn("master tea is hot", self.say("!tea"))               # only the master knows it
+        self.assertIn("answers", self.say("!status"))
+        open(conf, "w").write("[floyd]\nserver = 127.0.0.1:%d\ntoken = wrong\n" % port)
+        out = self.say("!status")
+        self.assertIn("refused", out)                                      # wrong token: local Floyd, and it says so
+        self.assertNotIn("master tea", self.say("!tea"))
+        gate.stop()
+        open(conf, "w").write("[floyd]\nserver = 127.0.0.1:%d\ntoken = tok\nserver_timeout = 0.5\n" % port)
+        self.assertIn("not reachable", self.say("!status"))                # cpbee gone: still answers
+        self.assertIn("B-19-7", self.say("!about"))
+
     def _fake_claude(self, body="the fake answer"):
         path = os.path.join(self.tmp, "claude")
         open(path, "w").write('#!/bin/sh\ncat > "%s/asked"\necho "%s"\n' % (self.tmp, body))

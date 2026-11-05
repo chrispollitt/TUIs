@@ -60,5 +60,6 @@ Pinned ideas (Chris, Nov 2, 2026; not started, not designed)
    one list, newest first, each marked with its account. Same idea for tvchat
    (tvchat/TO-DO.txt, "Picking up"); share the design through tvcommon.
 29 Floyd (F7) could talk to the real, central Floyd on cpbee instead of being a local helper: one Floyd
-   with one memory and Claude from the server.  Optional ([floyd] server = ...; local stays the default and
-   the fallback).  Same item as tvcal/TO-DO.txt 15: decide the transport once, in tvcommon/py/tvfloyd.py.
+   with one memory and Claude from the server.  Suite rule (2026-11-04): every app (tvmail, tvchat, tvcal)
+   has a local Floyd as the fall-back AND a link to the master on cpbee when reachable ([floyd] server = ...;
+   master first, local when cpbee is out of reach).  Same item as tvcal/TO-DO.txt 15: decide the transport once, in tvcommon/py/tvfloyd.py.
