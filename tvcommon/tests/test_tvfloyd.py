@@ -712,6 +712,28 @@ class TestWizard(unittest.TestCase):
         self.assertNotIn("has no token for the Delta Chat gateway", self.say("!setup", master=m))
         self.assertIn("has no Delta Chat account with gateway", self.say("!setup delta x nonesuch", master=m))
 
+    def test_an_account_of_the_older_kind_is_moved_to_the_gateway(self):
+        import json
+        self.manifest["accounts"] = [a for a in self.manifest["accounts"] if a["protocol"] != "deltachat"] + [
+            {"id": "delta_chris", "protocol": "deltachat", "display": "Delta Chat (chris)", "autoconnect": True,
+             "opts": {"gateway": "cpbee", "gateway_tls": "yes", "gateway_cafile": "@CA:chat@"}}]
+        self.manifest.pop("delta_owner", None)
+        with open(self.setup_file, "w") as fh:
+            json.dump(self.manifest, fh)
+        with open(self.path("tvchat"), "a") as fh:                     # the old kind: its own core, no gateway
+            fh.write("\n[account:delta_chris]\nprotocol = deltachat\ndisplay = x\naddr = chris@cpbee.cmnet\n"
+                     "rpc_server = /usr/local/bin/deltachat-rpc-server.exe\n")
+        out, m = self.join()
+        rep = self.say("!setup", master=m)
+        self.assertIn("todo tvchat's Delta Chat (chris) account has its own Delta Chat core here", rep)
+        done = self.say("!setup all", master=m)
+        self.assertIn("now uses the Delta Chat gateway cpbee", done)
+        self.assertEqual(tvf.conf_get(self.path("tvchat"), "account:delta_chris", "gateway"), "cpbee")
+        self.assertEqual(tvf.conf_get(self.path("tvchat"), "account:delta_chris", "gateway_tls"), "yes")
+        self.assertTrue(os.path.isfile(tvf.conf_get(self.path("tvchat"), "account:delta_chris", "gateway_cafile")))
+        self.assertIn("Token saved", self.say("!setup delta tok999", master=m))
+        self.assertNotIn("has its own Delta Chat core", self.say("!setup", master=m))
+
     def test_the_owner_machine_does_not_get_a_delta_account_step(self):
         self.say("!setup join %s %s" % (self.server, self.TOKEN))
         m = tvf.master_settings(lambda k, d: {"server": self.server, "token": self.TOKEN, "machine": "cpbee"}.get(k, d))  # allowlist secret

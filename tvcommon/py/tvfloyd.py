@@ -2170,7 +2170,22 @@ def wizard_steps(app, m, manifest=None, cas=None):
             ident, proto = acc["id"], acc.get("protocol", "")
             if proto == "deltachat" and manifest.get("delta_owner") == m["machine"]:
                 continue                                        # the owner machine runs the account as it is
-            if ("account:" + ident) in conf_sections(tvchat_path):
+            want_gw = (acc.get("opts") or {}).get("gateway")
+            if ("account:" + ident) in conf_sections(tvchat_path) and want_gw and \
+                    conf_get(tvchat_path, "account:" + ident, "gateway") != want_gw:
+                def fix(acc=acc, ident=ident):                   # an account of the older kind (its own core): move it to the gateway
+                    for k, v in acc.get("opts", {}).items():
+                        v = str(v)
+                        mca = re.search(r"@CA(?::(\w+))?@", v)
+                        if mca:
+                            key = mca.group(1) or "chat"
+                            v = v.replace(mca.group(0), put_ca("tvchat", key) or ca_path("tvchat", key))
+                        conf_set(tvchat_path, "account:" + ident, k, v)
+                    return ("tvchat: the %s account now uses the Delta Chat gateway %s (its old local settings stay in the file, "
+                            "unused).  Next: !setup delta TOKEN." % (acc.get("display", ident), want_gw))
+                steps.append(WizStep("todo", "tvchat's %s account has its own Delta Chat core here; the master says to use the "
+                                             "gateway %s" % (acc.get("display", ident), want_gw), fix))
+            elif ("account:" + ident) in conf_sections(tvchat_path):
                 steps.append(WizStep("ok", "tvchat has the %s account (%s)" % (acc.get("display", ident), proto)))
             else:
                 def fix(acc=acc, ident=ident):
