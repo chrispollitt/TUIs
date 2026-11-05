@@ -606,6 +606,18 @@ def load_people(accounts, path=None):
 # mu share), then ~/.netrc (machine <host> login <user> password <p>, chmod
 # 600).  In each, only an entry for the SASL login counts (bug #46).
 # --------------------------------------------------------------------------
+def _refused_hint(host, ips):
+    """Words to add to a refused connection when a NAME points at this very machine: the usual cause is the server
+    listening on the LAN address only while the machine's own name resolves to loopback (Debian's 127.0.1.1)."""
+    if host == "localhost" or re.match(r"^(\d+\.){3}\d+$|^[0-9a-fA-F:]+$", host or ""):
+        return ""
+    loop = [ip for ip in ips if str(ip).startswith("127.") or str(ip) == "::1"]
+    if not loop:
+        return ""
+    return (" (%s is %s on this machine, that is, this machine itself; if the server listens only on a LAN address, "
+            "put that address in host = for this account)" % (host, loop[0]))
+
+
 def _env_name(account_id):
     return "TVCHAT_PASS_" + re.sub(r"[^A-Za-z0-9]", "_", account_id).upper()
 
@@ -1211,8 +1223,9 @@ class IrcAdapter(CommandMixin):
         self.server_conv()
         self.phase = "resolving"
         gen = self.gen
-        self.timer = self.loop.call_later(self.TIMEOUT,
-                                          lambda: self._fail("timed out"))
+        self.timer = self.loop.call_later(self.TIMEOUT, lambda: self._fail(
+            "no answer from %s port %d within %d seconds (is the server up, and is host/port right?)"
+            % (self.host, self.port, self.TIMEOUT)))
         self.chat.set_state(self.account, "connecting",
                             "looking up %s" % self.host)
         host, port = self.host, self.port
@@ -1225,6 +1238,7 @@ class IrcAdapter(CommandMixin):
             self._fail("cannot look up %s: %s" % (self.host, err))
             return
         self.addrs = list(res)
+        self.ips = [a[4][0] for a in self.addrs]
         self._try_next(None)
 
     def _try_next(self, why):
@@ -1248,7 +1262,8 @@ class IrcAdapter(CommandMixin):
                 return
             why = os.strerror(rc)
             s.close()
-        self._fail("cannot connect to %s port %d: %s" % (self.host, self.port, why))
+        self._fail("cannot connect to %s port %d: %s%s" % (
+            self.host, self.port, why, _refused_hint(self.host, getattr(self, "ips", [])) if "refused" in str(why).lower() else ""))
 
     def _connected(self):
         err = self.sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
@@ -2383,8 +2398,9 @@ class TalkAdapter(CommandMixin):
         self.server_conv()
         self.phase = "connecting"
         gen = self.gen
-        self.timer = self.loop.call_later(TALK_TIMEOUT,
-                                          lambda: gen == self.gen and self._fail("timed out"))
+        self.timer = self.loop.call_later(TALK_TIMEOUT, lambda: gen == self.gen and self._fail(
+            "no answer from talkd on %s port %d within %d seconds (is the server up, and is host right?)"
+            % (self.host, self.port, TALK_TIMEOUT)))
         self.chat.set_state(self.account, "connecting",
                             "talkd on %s port %d" % (self.host, self.port))
         host, port = self.host, self.port
@@ -2402,17 +2418,20 @@ class TalkAdapter(CommandMixin):
         rc = s.connect_ex(addr)
         if rc not in (0, errno.EINPROGRESS, errno.EWOULDBLOCK):
             s.close()
-            self._fail("cannot connect to %s port %d: %s" % (self.host, self.port, os.strerror(rc)))
+            self._fail("cannot connect to %s port %d: %s%s" % (self.host, self.port, os.strerror(rc),
+                       _refused_hint(self.host, [addr[0]]) if rc == errno.ECONNREFUSED else ""))
             return
         self.sock = s
+        self.talk_ip = addr[0]
         self.loop.watch(s, on_write=self._connected)
 
     def _connected(self):
         err = self.sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
         if err:
             self._fail("cannot connect to talkd on %s port %d: %s (is it set up there? "
-                       "chat-setup/scripts/configure-talkd.sh)" % (self.host, self.port,
-                                                                   os.strerror(err)))
+                       "chat-setup/scripts/configure-talkd.sh)%s" % (
+                           self.host, self.port, os.strerror(err),
+                           _refused_hint(self.host, [getattr(self, "talk_ip", "")]) if err == errno.ECONNREFUSED else ""))
             return
         self.phase = "hello"
         self.say("HELLO %s" % self.user)

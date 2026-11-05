@@ -944,5 +944,23 @@ def mesg_y_leaves_tty(opts):
     return tv
 
 
+@case()
+def chat_account_that_cannot_connect_says_why(opts):
+    # an account whose server refuses the connection: the pane (and a toast) say what happened,
+    # not only "Err" in the server list
+    def setup(t):
+        conf = t.tmp / "tvchat.conf"
+        conf.write_text("[chat]\nautoconnect = dead\n\n[account:dead]\nprotocol = irc\ndisplay = Dead\n"
+                        "host = 127.0.0.1\nport = 1\ntls = false\nnick = tester\n")
+        t.env["TVCHAT_CONF"] = str(conf)
+    tv = Tv(opts, setup=setup)
+    c = Case(tv)
+    started(tv, c)
+    c.check(tv.wait("Err", 15), "the account never showed Err in the server list")
+    c.check(tv.wait("cannot connect to 127.0.0.1 port 1: Connection refused", 8),
+            "nothing on screen says why the connection failed (expected the address, port and 'Connection refused')")
+    return tv
+
+
 if __name__ == "__main__":
     run("tvchat")

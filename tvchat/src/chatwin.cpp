@@ -858,8 +858,14 @@ class TChatMainWindow : public TWindow
         noOlder = false;
         if (conv.empty())
         {
-            msgs.push_back({std::string(), nowHHMM(), std::string(), "n",
-                            chat().accounts().empty() ? "no chat accounts" : "no conversation"});
+            // an account that failed to connect says why here (the list only says "Err")
+            const ChatAccount *a = findAccount(acct);
+            std::string why = chat().accounts().empty() ? "no chat accounts" : "no conversation";
+            if (a && a->state == "error")
+                why = a->display + " is not connected: " + (trimmed(a->detail).empty() ? "no reason was given" : trimmed(a->detail));
+            else if (a && a->state == "connecting" && !trimmed(a->detail).empty())
+                why = a->display + ": " + trimmed(a->detail); // e.g. "cannot connect ... - reconnecting in 4 s"
+            msgs.push_back({std::string(), nowHHMM(), std::string(), "n", why});
             render(-1, false);
             return;
         }
@@ -1136,6 +1142,8 @@ class TChatMainWindow : public TWindow
                 std::string d = f.size() > 3 ? trimmed(f[3]) : std::string();
                 note(f[2] + (d.empty() ? std::string() : ": " + d));
             }
+            else if (conv.empty() && f[1] == acct)
+                loadHistory(); // no conversation yet: the pane shows why the account is not connected
         }
         else if (t == "topic" && f.size() >= 3 && f[1] == conv)
             note("topic: " + f[2]);

@@ -5823,5 +5823,22 @@ class TestTwoSites(Base):
         self.assertEqual(self.chat.adapter(self.chat.by_id["lhc"]).last_error, "")
 
 
+class TestRefusedHint(unittest.TestCase):
+    """A refused connection to a NAME that points at this machine says what is probably wrong."""
+
+    def test_a_name_that_resolves_to_loopback_gets_the_hint(self):
+        h = cb._refused_hint("cpbee", ["127.0.1.1"])
+        self.assertIn("cpbee is 127.0.1.1 on this machine", h)
+        self.assertIn("put that address in host =", h)
+        self.assertIn("::1", cb._refused_hint("cpbee", ["::1"]))
+
+    def test_no_hint_for_literals_localhost_or_other_machines(self):
+        self.assertEqual(cb._refused_hint("127.0.0.1", ["127.0.0.1"]), "")
+        self.assertEqual(cb._refused_hint("192.168.10.1", ["192.168.10.1"]), "")
+        self.assertEqual(cb._refused_hint("localhost", ["127.0.0.1"]), "")
+        self.assertEqual(cb._refused_hint("irc.example.org", ["203.0.113.5"]), "")
+        self.assertEqual(cb._refused_hint("cpbee", []), "")
+
+
 if __name__ == "__main__":
     unittest.main()

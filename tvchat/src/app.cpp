@@ -174,6 +174,14 @@ void TVChatApp::chatEvents()
     for (const ChatEvent &ev : evs)
     {
         accounts = accounts || ev.fields[0] == "state";
+        if (ev.fields[0] == "state" && ev.fields.size() > 3 && ev.fields[2] == "error" && !ev.fields[3].empty())
+        { // a connection that failed: say so and why, instead of only "Err" in the list
+            std::string who = ev.fields[1];
+            for (const ChatAccount &a : cc.accounts())
+                if (a.id == ev.fields[1])
+                    who = a.display;
+            notify(who + ": " + ev.fields[3], noteError);
+        }
         if (ev.fields[0] == "share" && ev.fields.size() > 2) // tvmail asks to say something in chat
             notify("tvmail wants to share \"" + ev.fields[2].substr(0, 60) + "\" in chat - Chat > Share from tvmail...");
         if (ev.fields[0] == "invite" && ev.fields.size() > 2) // an invitation to answer in tvchat
