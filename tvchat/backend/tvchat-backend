@@ -7758,6 +7758,14 @@ def cmd_serve(a):
             req, pending[0] = pending[0].split(b"\n", 1)
             handle(req.decode("utf-8", "replace"))
 
+    try:                                         # the notification relay, when a floyd account names a master
+        if hasattr(tvf, "ensure_relay"):
+            for x in chat.accounts:
+                if x.protocol == "floyd" and (x.opts.get("server") or "").strip():
+                    tvf.ensure_relay(tvf.master_settings(lambda k, d, o=x.opts: o.get(k) or d))
+                    break
+    except Exception:
+        pass
     emit(0, b"ready")                            # handshake banner
     loop.add_reader(fd, on_stdin)
     chat.start()                                 # [chat] autoconnect

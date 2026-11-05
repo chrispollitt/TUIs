@@ -22,6 +22,7 @@ import hmac
 import shutil
 import socket
 import subprocess
+import sys
 import time
 from collections import Counter
 
@@ -1266,6 +1267,11 @@ def persona(text, level, who="friend", where="here", path=None, master=None):
     if level == "off" or not text.strip():
         return None
     m = master if master is not None else _MASTER
+    sm = re.match(r"^!send(?:\s+(\S+)(?:\s+(\S.*))?)?$", text.strip(), re.I | re.S)
+    if sm:                                                  # !send MACHINE|all text: a toast on another machine
+        if not (sm.group(1) and sm.group(2)):
+            return ["Usage: !send MACHINE|all TEXT - a toast on another machine (needs the master Floyd)"]
+        return [send_note(m, sm.group(1).lower(), sm.group(2))]
     if m and m.get("server"):
         r = master_call(m, {"op": "say", "text": text, "level": level, "who": who, "app": where})
         if r is not None and r.get("ok"):
@@ -1486,20 +1492,22 @@ def master_settings(get):
     """get(key, default) reads the app's [floyd] section.  Empty server = local only."""
     server = (get("server", "") or "").strip()
     if not server or server.lower() in ("no", "none", "off", "local"):
-        return {"server": "", "token": "", "timeout": 2.0}
+        return {"server": "", "token": "", "timeout": 2.0, "machine": ""}
     if ":" not in server:
         server += ":%d" % GATE_PORT
     try:
         t = float(str(get("server_timeout", "") or 2).strip())
     except ValueError:
         t = 2.0
-    return {"server": server, "token": (get("token", "") or "").strip(), "timeout": max(0.2, min(t, 30.0))}
+    machine = re.sub(r"[^\w.-]", "", (get("machine", "") or "").strip() or socket.gethostname().split(".")[0]).lower()[:32]
+    return {"server": server, "token": (get("token", "") or "").strip(), "timeout": max(0.2, min(t, 30.0)),
+            "machine": machine or "unknown"}
 
 
-def master_call(m, req):
+def master_call(m, req, cached=True):
     """One request to the master: his reply (a dict) or None when he is not there / not understood."""
     key = m["server"]
-    if _DOWN.get(key, 0) > time.time():
+    if cached and _DOWN.get(key, 0) > time.time():
         return None
     host, _, port = key.rpartition(":")
     try:
@@ -1518,7 +1526,8 @@ def master_call(m, req):
         r = json.loads(buf.split(b"\n")[0].decode("utf-8"))
         return r if isinstance(r, dict) else None
     except (OSError, ValueError):
-        _DOWN[key] = time.time() + DOWN_FOR
+        if cached:
+            _DOWN[key] = time.time() + DOWN_FOR
         return None
 
 
@@ -1589,6 +1598,7 @@ class FloydGate(object):
         self.minds = {}
         self.sock = None
         self.served = 0
+        self.hub = EventHub()
 
     def start(self):
         if not self.token:
@@ -1679,4 +1689,262 @@ class FloydGate(object):
             if not os.path.isdir(os.path.join(_claude_jobs(), job)):
                 return {"ok": True, "done": True, "lines": ["Claude: that question is gone (already collected?)"]}
             return {"ok": True, "done": False}
+        if op == "publish":
+            n = self.hub.publish(str(req.get("kind") or "note"), text, str(req.get("level") or "info"),
+                                 origin=str(req.get("machine") or who), to=str(req.get("to") or "all"),
+                                 key=str(req.get("key") or ""), ttl=req.get("ttl"))
+            return {"ok": bool(n), "seq": n, "error": "" if n else "empty"}
+        if op == "events":
+            since = req.get("since")
+            seq, evs = self.hub.since(since if isinstance(since, int) else None, str(req.get("machine") or who))
+            return {"ok": True, "seq": seq, "events": evs}
         return {"ok": False, "error": "unknown op"}
+
+
+# -- the event hub (part 2 of tvcommon/FLOYD-MASTER.md) ---------------------------
+# The gate keeps a ring of events; each machine's relay asks for what is newer than its last number and
+# writes the answers into the spool the apps already read as toasts.  Phase 1: events come from clients
+# (`!send MACHINE text`) and from the daemon (later phases: the sentinel and the watchers).
+class EventHub(object):
+    RING = 200
+
+    def __init__(self, clock=time.time):
+        self.clock, self.seq, self.ring, self.sticky, self.seen = clock, 0, [], {}, {}
+
+    @staticmethod
+    def clean(text, limit=200):
+        return re.sub(r"[\x00-\x1f\x7f]+", " ", str(text)).strip()[:limit]
+
+    @staticmethod
+    def name(text, default):
+        n = re.sub(r"[^\w.-]", "", str(text or "")).lower()[:32]
+        return n or default
+
+    def publish(self, kind, text, level="info", origin="cpbee", to="all", key="", ttl=None):
+        """Add an event; its number, or 0 when it has no text.  A `key` makes it sticky until a "recover" with the same key."""
+        text = self.clean(text)
+        if not text:
+            return 0
+        try:
+            ttl = max(30, min(int(ttl if ttl is not None else 900), 86400))
+        except (TypeError, ValueError):
+            ttl = 900
+        self.seq += 1
+        ev = {"seq": self.seq, "ts": int(self.clock()), "kind": self.name(kind, "note")[:16],
+              "level": level if level in ("info", "warn", "error") else "info",
+              "text": text, "origin": self.name(origin, "cpbee"), "to": self.name(to, "all"),
+              "key": self.clean(key, 40), "ttl": ttl}
+        self.ring.append(ev)
+        del self.ring[:-self.RING]
+        if ev["key"]:
+            if ev["kind"] == "recover":
+                self.sticky.pop(ev["key"], None)
+            else:
+                self.sticky[ev["key"]] = ev
+        return self.seq
+
+    def _for(self, ev, machine):
+        return ev["origin"] != machine and ev["to"] in ("all", machine) and ev["ts"] + ev["ttl"] > self.clock()
+
+    def since(self, cursor, machine):
+        """(current number, the events MACHINE has not seen).  No cursor (first contact, or the hub
+        restarted and numbers began again) = only what is still true: the sticky events."""
+        self.seen[machine] = self.clock()
+        if cursor is None or cursor > self.seq or cursor < 0:
+            evs = [e for e in self.sticky.values() if self._for(e, machine)]
+        else:
+            evs = [e for e in self.ring if e["seq"] > cursor and self._for(e, machine)]
+        return self.seq, sorted(evs, key=lambda e: e["seq"])
+
+
+# -- the relay: one small process per user per machine ---------------------------
+# Polls the hub every few seconds (TVFLOYD_RELAY_POLL), writes each event as a spool note for tvmail, tvchat
+# and tvcal (the apps show it as a toast), says so when it loses cpbee, and ends when no app has run for a while.
+RELAY_APPS = ("tvmail", "tvchat", "tvcal")
+
+
+def _state_dir():
+    return os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "tvfloyd")
+
+
+def spool_root():
+    return os.environ.get("TV_SPOOL_DIR") or os.path.join(
+        os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "tvcommon", "spool")
+
+
+def spool_write(app, sender, level, text, ttl=900):
+    """One note in APP's inbox, the way spool.cpp writes it (temp name, then rename). False when it was not written."""
+    d = os.path.join(spool_root(), app)
+    try:
+        os.makedirs(d, mode=0o700, exist_ok=True)
+        now = int(time.time())
+        live = 0
+        for n in os.listdir(d):
+            if n.endswith(".note"):
+                if n.split("-")[0].isdigit() and int(n.split("-")[0]) <= now:
+                    os.remove(os.path.join(d, n))               # sweep what nobody came for
+                else:
+                    live += 1
+        if live >= 50:
+            return False
+        name = "%d-%d-%d" % (now + max(1, ttl), os.getpid(), spool_write.n)
+        spool_write.n += 1
+        flat = re.sub(r"[\t\r\n]+", " ", text)
+        tmp, fin = os.path.join(d, ".tmp-" + name), os.path.join(d, name + ".note")
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write("1\t%s\t%s\t%s\n" % (re.sub(r"[\t\r\n]+", " ", sender), level, flat))
+        os.rename(tmp, fin)
+        return True
+    except OSError:
+        return False
+
+
+spool_write.n = 0
+
+
+def _apps_running(prefixes=RELAY_APPS):
+    """Is some tv* app (or its backend) running?  True when /proc cannot tell."""
+    if not os.path.isdir("/proc/self"):
+        return True
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        try:
+            with open("/proc/%s/cmdline" % pid, "rb") as fh:
+                args = fh.read().split(b"\0")[:2]
+        except OSError:
+            continue
+        for a in args:
+            base = os.path.basename(a.decode("utf-8", "replace"))
+            base = re.sub(r"\.(exe|py)$", "", base)
+            if any(base == p or base.startswith(p + "-") for p in prefixes):
+                return True
+    return False
+
+
+def _relay_pid():
+    try:
+        with open(os.path.join(_state_dir(), "relay.pid")) as fh:
+            pid = int(fh.read().strip())
+        os.kill(pid, 0)
+        return pid
+    except (OSError, ValueError):
+        return 0
+
+
+def ensure_relay(m):
+    """Start the relay for master settings M unless one runs.  True when one runs or was started.  Never raises."""
+    try:
+        if not m or not m.get("server") or os.environ.get("TVFLOYD_RELAY", "") == "none":
+            return False
+        if _relay_pid():
+            return True
+        env = dict(os.environ, TVFLOYD_SERVER=m["server"], TVFLOYD_TOKEN=m["token"],
+                   TVFLOYD_MACHINE=m.get("machine") or "", TVFLOYD_TIMEOUT=str(m.get("timeout", 2.0)))
+        subprocess.Popen([sys.executable, os.path.abspath(__file__), "--relay"], env=env, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        return True
+    except Exception:
+        return False
+
+
+def relay_run(env=None, once=False, stop=None):
+    """The relay's loop.  ENV carries TVFLOYD_SERVER / _TOKEN / _MACHINE / _TIMEOUT.  ONCE = one poll; STOP() = true to end (tests)."""
+    import signal
+    env = env if env is not None else os.environ
+    m = {"server": env.get("TVFLOYD_SERVER", ""), "token": env.get("TVFLOYD_TOKEN", ""),
+         "timeout": float(env.get("TVFLOYD_TIMEOUT") or 2.0), "machine": env.get("TVFLOYD_MACHINE") or "unknown"}
+    if not m["server"]:
+        return 2
+    poll = float(env.get("TVFLOYD_RELAY_POLL") or 3.0)
+    lost_after = float(env.get("TVFLOYD_RELAY_LOST") or 60.0)
+    idle_exit = float(env.get("TVFLOYD_RELAY_IDLE") or 600.0)
+    apps = [a for a in RELAY_APPS if shutil.which(a) or shutil.which(a + "-backend")] or list(RELAY_APPS)
+    base = _state_dir()
+    os.makedirs(base, mode=0o700, exist_ok=True)
+    lock = open(os.path.join(base, "relay.lock"), "a")
+    try:
+        import fcntl
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except ImportError:
+        pass
+    except OSError:
+        lock.close()
+        return 0                                         # another relay holds it
+    with open(os.path.join(base, "relay.pid"), "w") as fh:
+        fh.write("%d\n" % os.getpid())
+    seq_file = os.path.join(base, "relay.seq")
+    try:
+        with open(seq_file) as fh:
+            cursor = int(fh.read().strip())
+    except (OSError, ValueError):
+        cursor = None
+    host = m["server"].rpartition(":")[0]
+    state = {"stop": False, "last_ok": None, "lost": False, "idle_since": None}
+    try:
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            signal.signal(sig, lambda *_: state.update(stop=True))
+    except ValueError:                                   # not the main thread (tests)
+        pass
+
+    def toast(sender, level, text, ttl=900):
+        for a in apps:
+            spool_write(a, sender, level, text, ttl)
+    while not state["stop"] and not (stop and stop()):
+        now = time.time()
+        r = master_call(m, {"op": "events", "since": cursor, "machine": m["machine"]}, cached=False)
+        if r is not None and r.get("ok"):
+            state["last_ok"] = now
+            if state["lost"]:
+                state["lost"] = False
+                toast(host, "info", "%s answers again" % host, 300)
+            for ev in r.get("events") or []:
+                toast(ev.get("origin") if ev.get("origin") not in (None, "", "cpbee") else host,
+                      ev.get("level") if ev.get("level") in ("info", "warn", "error") else "info",
+                      str(ev.get("text", ""))[:200], min(int(ev.get("ttl") or 900), 900))
+            if isinstance(r.get("seq"), int):
+                cursor = r["seq"]
+                try:
+                    with open(seq_file, "w") as fh:
+                        fh.write("%d\n" % cursor)
+                except OSError:
+                    pass
+        elif state["last_ok"] is not None and not state["lost"] and now - state["last_ok"] >= lost_after:
+            state["lost"] = True
+            toast(host, "warn", "lost contact with %s" % host, 600)
+        if once:
+            break
+        if idle_exit:
+            if _apps_running():
+                state["idle_since"] = None
+            elif state["idle_since"] is None:
+                state["idle_since"] = now
+            elif now - state["idle_since"] > idle_exit:
+                break
+        time.sleep(poll)
+    try:
+        os.remove(os.path.join(base, "relay.pid"))
+    except OSError:
+        pass
+    lock.close()                                         # releases the lock
+    return 0
+
+
+def send_note(m, target, text, level="info"):
+    """!send: publish TEXT for machine TARGET ("all" = every other).  The reply line."""
+    if not m or not m.get("server"):
+        return "!send needs the master Floyd ([floyd] server)."
+    r = master_call(m, {"op": "publish", "kind": "note", "text": text, "level": level, "to": target,
+                        "machine": m.get("machine") or "unknown", "ttl": 900})
+    if r is None:
+        return "The master is not reachable, so nothing was sent."
+    if not r.get("ok"):
+        return "The master refused it (%s)." % (r.get("error") or "no")
+    return "Sent to %s." % ("every other machine" if target == "all" else target)
+
+
+if __name__ == "__main__":
+    import sys as _sys
+    if "--relay" in _sys.argv[1:]:
+        raise SystemExit(relay_run())
+    print("tvfloyd.py is a library; --relay runs the notification relay (started by the tv* backends).")

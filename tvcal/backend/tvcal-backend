@@ -1632,6 +1632,13 @@ def cmd_serve(a):
         raw_out.write(("%d %d\n" % (status, len(body))).encode("ascii") + body)
         raw_out.flush()
 
+    try:                                         # the notification relay, when [floyd] server is set
+        tvf = _load_tvfloyd()
+        if tvf is not None and hasattr(tvf, "ensure_relay"):
+            c = config()
+            tvf.ensure_relay(tvf.master_settings(lambda k, d: c.get("floyd", k, fallback=d)))
+    except Exception:
+        pass
     emit(0, b"ready")
     for text in sys.stdin:
         text = text.strip()

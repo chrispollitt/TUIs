@@ -276,5 +276,124 @@ class TestMaster(unittest.TestCase):
         self.assertEqual(r["ok"], False)
 
 
+
+class TestEventHub(unittest.TestCase):
+    def test_publish_clean_and_visible_only_to_the_right_machines(self):
+        h = tvf.EventHub()
+        self.assertEqual(h.publish("note", "  \x07 ", "info"), 0)                    # nothing to say
+        n = h.publish("note", "hello\tthere\nfriend", "weird", origin="CmDesktop", to="cmlaptop")
+        self.assertEqual(n, 1)
+        ev = h.ring[0]
+        self.assertEqual((ev["text"], ev["level"], ev["origin"], ev["to"]), ("hello there friend", "info", "cmdesktop", "cmlaptop"))
+        seq, evs = h.since(0, "cmlaptop")
+        self.assertEqual((seq, [e["seq"] for e in evs]), (1, [1]))
+        self.assertEqual(h.since(0, "cmdesktop")[1], [])                              # never back to its origin
+        self.assertEqual(h.since(0, "other")[1], [])                                  # not addressed to it
+        self.assertEqual(h.since(1, "cmlaptop")[1], [])                               # already seen
+        h.publish("note", "to everybody", to="all", origin="a")
+        self.assertEqual([e["text"] for e in h.since(1, "b")[1]], ["to everybody"])
+
+    def test_sticky_events_are_told_to_a_late_machine_until_recovered(self):
+        h = tvf.EventHub()
+        h.publish("outage", "Radicale is down", "error", key="svc:radicale")
+        h.publish("note", "just a note")
+        seq, evs = h.since(None, "late")                                              # first contact: only what is still true
+        self.assertEqual([e["text"] for e in evs], ["Radicale is down"])
+        h.publish("recover", "Radicale is back", key="svc:radicale")
+        self.assertEqual(h.since(None, "late2")[1], [])
+        self.assertEqual(h.since(seq + 5, "late3")[1], [])                            # a cursor from before a hub restart = first contact
+
+    def test_events_expire_and_the_ring_is_bounded(self):
+        t = [1000.0]
+        h = tvf.EventHub(clock=lambda: t[0])
+        h.publish("note", "short", ttl=30)
+        t[0] += 31
+        self.assertEqual(h.since(0, "x")[1], [])
+        for i in range(250):
+            h.publish("note", "n%d" % i)
+        self.assertEqual(len(h.ring), 200)
+
+
+class TestRelay(unittest.TestCase):
+    """The gate's publish / events ops, !send, and the relay writing the spool (toasts)."""
+    TOKEN = TestMaster.TOKEN  # allowlist secret: test value
+    tearDown = TestMaster.tearDown
+
+    def setUp(self):
+        TestMaster.setUp(self)
+        self.spool = os.path.join(self.tmp, "spool")
+        os.environ["TV_SPOOL_DIR"] = self.spool
+        self.env = {"TVFLOYD_SERVER": self.m["server"], "TVFLOYD_TOKEN": self.TOKEN, "TVFLOYD_MACHINE": "cmlaptop",  # allowlist secret: test value
+                    "TVFLOYD_TIMEOUT": "1", "TVFLOYD_RELAY_POLL": "0.05"}
+
+    def notes(self, app):
+        d = os.path.join(self.spool, app)
+        out = []
+        for n in sorted(os.listdir(d)) if os.path.isdir(d) else []:
+            if n.endswith(".note"):
+                out.append(open(os.path.join(d, n), encoding="utf-8").read().rstrip("\n").split("\t"))
+        return out
+
+    def test_send_publishes_and_the_relay_writes_a_toast_in_every_app(self):
+        sender = dict(self.m, machine="cmdesktop")
+        self.assertIn("Sent to cmlaptop", tvf.persona("!send cmlaptop dinner is ready", "chatty", master=sender)[0])
+        tvf.relay_run(self.env, once=True)                                           # first contact: nothing sticky, cursor taken
+        for app in ("tvmail", "tvchat", "tvcal"):
+            self.assertEqual(self.notes(app), [], app)
+        # the note was published BEFORE the first contact, so it is not replayed; publish again with the relay known
+        tvf.persona("!send cmlaptop dinner is ready", "chatty", master=sender)
+        tvf.relay_run(self.env, once=True)
+        for app in ("tvmail", "tvchat", "tvcal"):
+            self.assertEqual([n[1:] for n in self.notes(app)], [["cmdesktop", "info", "dinner is ready"]], app)
+        before = [len(self.notes(a)) for a in ("tvmail", "tvchat", "tvcal")]
+        tvf.relay_run(self.env, once=True)                                           # nothing new: no repeat
+        self.assertEqual([len(self.notes(a)) for a in ("tvmail", "tvchat", "tvcal")], before)
+
+    def test_send_to_all_skips_the_sender_and_other_machines_get_it(self):
+        sender = dict(self.m, machine="cmdesktop")
+        tvf.relay_run(self.env, once=True)
+        tvf.persona("!send all hello everyone", "chatty", master=sender)
+        tvf.relay_run(self.env, once=True)
+        self.assertEqual(len(self.notes("tvcal")), 1)
+        tvf.relay_run(dict(self.env, TVFLOYD_MACHINE="cmdesktop", XDG_STATE_HOME=os.path.join(self.tmp, "desk")), once=True)
+        self.assertEqual(len(self.notes("tvcal")), 1)                                 # the sender's own relay got nothing more
+
+    def test_a_sticky_outage_reaches_a_machine_that_connects_later(self):
+        self.gate.hub.publish("outage", "Ergo is down", "error", key="svc:ergo")
+        tvf.relay_run(self.env, once=True)
+        self.assertEqual([n[1:] for n in self.notes("tvmail")], [["127.0.0.1", "error", "Ergo is down"]])
+
+    def test_send_without_a_master_or_with_a_dead_one(self):
+        self.assertIn("needs the master", tvf.persona("!send cmlaptop hi", "chatty", master={"server": ""})[0])
+        self.assertIn("Usage", tvf.persona("!send", "chatty", master=self.m)[0])
+        dead = dict(self.m, server="127.0.0.1:1", timeout=0.3)
+        self.assertIn("not reachable", tvf.persona("!send cmlaptop hi", "chatty", master=dead)[0])
+
+    def test_the_relay_says_so_when_it_loses_cpbee_and_when_it_is_back(self):
+        import threading
+        stop = []
+        env = dict(self.env, TVFLOYD_RELAY_LOST="0.4", TVFLOYD_RELAY_IDLE="0")
+        t = threading.Thread(target=lambda: tvf.relay_run(env, stop=lambda: bool(stop)), daemon=True)
+        t.start()
+        time.sleep(0.5)                                                               # in contact
+        port = self.gate.sock.getsockname()[1]
+        self.gate.stop()                                                              # cpbee goes away
+        for _ in range(60):
+            time.sleep(0.1)
+            if any("lost contact" in n[3] for n in self.notes("tvcal")):
+                break
+        self.assertTrue(any("lost contact" in n[3] for n in self.notes("tvcal")), self.notes("tvcal"))
+        stop.append(1)
+        t.join(5)
+
+    def test_spool_notes_are_what_spool_cpp_reads(self):
+        self.assertTrue(tvf.spool_write("tvcal", "cpbee", "warn", "a\tb\nc", 60))
+        name = [n for n in os.listdir(os.path.join(self.spool, "tvcal")) if n.endswith(".note")][0]
+        self.assertTrue(name.split("-")[0].isdigit())
+        self.assertGreater(int(name.split("-")[0]), time.time())
+        self.assertEqual(open(os.path.join(self.spool, "tvcal", name)).read(), "1\tcpbee\twarn\ta b c\n")
+        self.assertFalse([n for n in os.listdir(os.path.join(self.spool, "tvcal")) if n.startswith(".tmp")])
+
+
 if __name__ == "__main__":
     unittest.main()

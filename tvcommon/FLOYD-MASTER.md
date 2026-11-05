@@ -47,7 +47,14 @@ Extend `tvchat/deploy/floyd-voice-on-cpbee.sh` (or a sibling script): install ne
 
 ---
 
-# Part 2: the master as the suite's event hub (design 2026-11-04, not built)
+# Part 2: the master as the suite's event hub (design 2026-11-04; phase 1 built, deploy: tvchat/deploy/floyd-hub-on-cpbee.sh)
+
+**Phase 1 as built:** `EventHub` and the gate ops `publish` / `events` (tvfloyd.py), the relay (`python tvfloyd.py --relay`,
+started by the backends through `ensure_relay`), `!send MACHINE|all text`, the lost-contact toast.  One deviation from the text
+below: the relay *short-polls every 3 s* (a toast arrives within about 3 s) instead of long-polling, because a parked
+connection would need loop timers in the single-threaded gate; long-polling can replace it later without a protocol change
+(`events` just gains a `wait`).  The relay ends after 10 minutes with no tv* app running (`/proc` scan).  Setting:
+`[floyd] machine = NAME` (default the host name).  Tests: tvcommon/tests/test_tvfloyd.py (TestEventHub, TestRelay).
 
 Chris asked for: server issues relayed to the clients as toasts (cpbee about to go down, u-l.ca unreachable,
 a cpbee service down), toasts relayed between LAN machines (tvmail on cmdesktop -> tvcal on cmlaptop), and

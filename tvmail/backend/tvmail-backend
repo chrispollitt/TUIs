@@ -2641,6 +2641,11 @@ def cmd_serve(a):
         raw_out.write(("%d %d\n" % (status, len(body))).encode("ascii") + body)
         raw_out.flush()
 
+    try:                                         # the notification relay, when [floyd] server is set
+        if hasattr(tvf, "ensure_relay"):
+            tvf.ensure_relay(tvf.master_settings(lambda k, d: _conf().get("floyd", k, fallback=d)))
+    except Exception:
+        pass
     emit(0, b"ready")                            # handshake banner
     while True:
         line = sys.stdin.readline()
