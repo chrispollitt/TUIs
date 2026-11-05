@@ -3153,6 +3153,182 @@ class TestDeltaSecondDevice(DeltaBase):
         self.assertEqual([e for e in gate.hub.since(None, "cmlaptop")[1] if e["kind"] == "device"], [])
 
 
+
+def _load_dcgw():
+    import importlib.machinery
+    import importlib.util
+    path = str(Path(__file__).resolve().parent.parent / "backend" / "dcgw")
+    loader = importlib.machinery.SourceFileLoader("dcgw", path)
+    spec = importlib.util.spec_from_loader("dcgw", loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
+
+
+class TestDeltaGateway(DeltaBase):
+    """The account lives on a Delta Chat gateway (dcgw): tvchat is a thin client, with no core, key or mail password."""
+    TOKEN = "gw-token-for-tests"  # allowlist secret: test value
+
+    def setUp(self):
+        super().setUp()
+        import json
+        self.dcgw = _load_dcgw()
+        self.gwdata = self.tmp / "gw"
+        self.dir = self.gwdata / "chris"                       # where the fake core behind the gateway keeps its files
+        self.dir.mkdir(parents=True)
+        (self.dir / "world.json").write_text(json.dumps(DC_WORLD))
+        (self.dir / "state.json").write_text(json.dumps({"accounts": [1], "configured": True}))
+        self.gwconf = self.tmp / "dcgw.conf"
+        self.write_gwconf(self.TOKEN)
+        self.start_gateway()
+
+    def write_gwconf(self, token):
+        self.gwconf.write_text("[dcgw]\nlisten = 127.0.0.1:0\ncore = %s\ndata = %s\n\n[user:chris]\naddr = chris@cpbee.cmnet\n"
+                               "token = %s\n" % (FAKE_DC, self.gwdata, token))
+
+    def start_gateway(self):
+        self.gw = self.dcgw.Gateway(str(self.gwconf))
+        self.gw.serve()
+        self.addCleanup(self.gw.stop)
+        self.port = self.gw.servers[0].server_address[1]
+
+    def use_gateway(self, token=None, extra=""):
+        self.conf("""\
+            [account:delta]
+            protocol = deltachat
+            display  = Delta
+            gateway  = 127.0.0.1:%d
+            token    = %s
+            %s
+            """ % (self.port, token or self.TOKEN, extra))
+        self.chat = cb._chat()
+        self.acct = self.chat.by_id["delta"]
+        self.ad = self.chat.adapter(self.acct)
+
+    def test_a_thin_client_lists_chats_and_history_and_holds_no_core_or_key(self):
+        self.use_gateway()
+        self.up()
+        self.assertEqual(sorted(self.acct.convs), ["delta/*", "delta/10", "delta/11"])
+        alice = self.acct.convs["delta/10"]
+        self.assertEqual([m.text for m in alice.history], ["hello", "hi back"])
+        self.assertEqual(self.ad.addr, "chris@cpbee.cmnet")                    # learned from the gateway
+        self.assertFalse((self.data / "tvchat" / "deltachat").exists())        # no database of its own here
+        self.assertEqual(self.acct.state, "connected")
+        self.assertNotIn("mail_pw", " ".join(str(r) for r in self.requests()))
+
+    def test_sending_goes_through_the_gateway(self):
+        self.use_gateway()
+        self.up()
+        st, body = self.verb("send", "delta/10", "from the thin client")
+        self.assertEqual(st, 0, body)
+        sent = self.requests("misc_send_text_message")
+        self.assertEqual([r["params"][1:] for r in sent], [[10, "from the thin client"]])
+
+    def test_an_incoming_message_arrives_through_the_gateways_event_stream(self):
+        self.use_gateway()
+        self.up()
+        self.order(set_msg={"id": 103, "chatId": 10, "fromId": 20, "text": "ping", "state": 10, "sortTimestamp": 1700000200})
+        self.event(kind="IncomingMsg", chatId=10, msgId=103)
+        self.turn(lambda: [m.text for m in self.acct.convs["delta/10"].history][-1:] == ["ping"])
+        self.assertEqual(self.acct.convs["delta/10"].unread, 2)
+
+    def test_a_wrong_token_is_refused_in_words(self):
+        self.use_gateway(token="not-the-token")  # allowlist secret: test value
+        self.chat.connect(self.acct)
+        self.turn(lambda: self.acct.state == "error")
+        self.assertIn("refused", self.acct.detail)
+        self.assertIn("not accepted", self.acct.detail)
+
+    def test_a_gateway_that_is_down_is_named(self):
+        self.use_gateway()
+        self.gw.stop()
+        self.chat.connect(self.acct)
+        self.turn(lambda: self.acct.state == "error")
+        self.assertIn("cannot connect to the Delta Chat gateway 127.0.0.1:%d" % self.port, self.acct.detail)
+
+    def test_an_account_not_set_up_on_the_gateway_says_what_to_do(self):
+        import json
+        (self.dir / "state.json").write_text(json.dumps({"accounts": [1], "configured": False}))
+        self.gw.stop()
+        self.start_gateway()
+        self.use_gateway()
+        self.chat.connect(self.acct)
+        self.turn(lambda: self.acct.state == "error")
+        self.assertIn("dcgw setup", self.acct.detail)
+
+    def test_a_missing_token_is_a_user_error_and_the_config_check_agrees(self):
+        self.conf("[account:delta]\nprotocol = deltachat\ngateway = cpbee\n")
+        chat = cb._chat()
+        self.chat = chat
+        with self.assertRaises(cb.UserError) as e:
+            chat.connect(chat.by_id["delta"])
+        self.assertIn("token =", str(e.exception))
+        errors, warnings, _ = cb.check_config(cb._conf_path())
+        self.assertTrue(any("gateway = needs token" in x for x in errors), errors)
+        self.conf("[account:delta]\nprotocol = deltachat\ngateway = cpbee\ntoken = x\n")
+        errors, warnings, _ = cb.check_config(cb._conf_path())
+        self.assertEqual(errors, [])                                           # no addr, no core needed
+
+    def test_the_link_dropping_is_reported_and_retried(self):
+        self.use_gateway()
+        self.up()
+        self.order(exit=3)                                                     # the core behind the gateway dies
+        self.turn(lambda: self.acct.state != "connected")
+        self.assertIn("gateway", self.acct.detail + self.acct.state)
+
+
+class TestDeltaGatewayTls(TestDeltaGateway):
+    """The same, over TLS: the gateway with a certificate, the client verifying it (a thread pair carries the bytes)."""
+
+    def setUp(self):
+        import shutil as _sh
+        import subprocess as _sp
+        if not _sh.which("openssl"):
+            self.skipTest("no openssl to make a test certificate")
+        self.certdir = Path(tempfile.mkdtemp(prefix="dcgw-tls-"))
+        self.addCleanup(_sh.rmtree, str(self.certdir), True)
+        self.cert, self.key = self.certdir / "cert.pem", self.certdir / "key.pem"
+        r = _sp.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2", "-subj", "/CN=cpbee",
+                     "-addext", "subjectAltName=IP:127.0.0.1,DNS:cpbee", "-keyout", str(self.key), "-out", str(self.cert)],
+                    stdout=_sp.PIPE, stderr=_sp.PIPE)
+        if r.returncode != 0:
+            self.skipTest("openssl could not make a certificate: %s" % r.stderr.decode()[-200:])
+        super().setUp()
+
+    def write_gwconf(self, token):
+        super().write_gwconf(token)
+        text = self.gwconf.read_text().replace("[dcgw]\n", "[dcgw]\ntls_cert = %s\ntls_key = %s\n" % (self.cert, self.key), 1)
+        self.gwconf.write_text(text)
+
+    def use_gateway(self, token=None, extra=""):
+        super().use_gateway(token, "gateway_tls = yes\ngateway_cafile = %s\n%s" % (self.cert, extra))
+
+    def test_the_wire_is_encrypted_and_an_unverified_certificate_is_refused(self):
+        self.use_gateway()
+        self.up()
+        self.assertEqual(sorted(self.acct.convs), ["delta/*", "delta/10", "delta/11"])
+        self.assertEqual(type(self.ad.proc.tls).__name__, "SSLSocket")          # the link IS the TLS socket
+        # a plain client is not served by a TLS gateway ...
+        plain = socket.create_connection(("127.0.0.1", self.port), 3)
+        plain.settimeout(3)
+        plain.sendall(("DCGW 1 %s\n" % self.TOKEN).encode())
+        try:
+            self.assertNotIn(b"OK", plain.recv(100))
+        except (socket.timeout, OSError):
+            pass
+        plain.close()
+        # ... and a client that does not trust the certificate says so
+        self.ad.disconnect()
+        self.conf("[account:delta]\nprotocol = deltachat\ngateway = 127.0.0.1:%d\ntoken = %s\ngateway_tls = yes\n"
+                  % (self.port, self.TOKEN))
+        cb._CHAT = None
+        self.chat = cb._chat()
+        self.acct = self.chat.by_id["delta"]
+        self.chat.connect(self.acct)
+        self.turn(lambda: self.acct.state == "error")
+        self.assertIn("certificate", self.acct.detail.lower())
+
+
 class TestDeltaInvitations(DeltaBase):
     """Joining an address you hold no key for mails an invitation; one found in
     the INBOX is offered, accepted or declined."""
@@ -5937,6 +6113,76 @@ class TestTwoSites(Base):
         self.assertEqual(self.pro.posted, [])
         self.assertIn("401", self.chat.adapter(self.chat.by_id["lhc_pro"]).last_error)
         self.assertEqual(self.chat.adapter(self.chat.by_id["lhc"]).last_error, "")
+
+
+
+class TestFloydVerb(Base):
+    """File > Floyd... (F7) in tvchat: the `floyd` and `floyd-poll` verbs, the same Floyd as in tvcal and tvmail."""
+
+    def setUp(self):
+        super().setUp()
+        self.data = self.tmp / "xdg-data"
+        self.state = self.tmp / "xdg-state"
+        for k, v in (("XDG_DATA_HOME", self.data), ("XDG_STATE_HOME", self.state)):
+            os.environ[k] = str(v)
+            self.addCleanup(os.environ.pop, k, None)
+        os.environ["TVFLOYD_TVCAL"] = "none"                      # an installed tvcal must not take his to-do list
+        self.addCleanup(os.environ.pop, "TVFLOYD_TVCAL", None)
+        os.environ["TVFLOYD_RELAY"] = "none"
+        self.addCleanup(os.environ.pop, "TVFLOYD_RELAY", None)
+        self.conf("[chat]\n")
+        cb.tvf._DOWN.clear()
+        cb.tvf._MASTER = None
+        self.addCleanup(setattr, cb.tvf, "_MASTER", None)
+
+    def say(self, text):
+        st, body = cb.dispatch(cb.build_parser(), ["floyd"] + ([text] if text else []))
+        self.assertEqual(st, 0, body)
+        return body.decode().strip()
+
+    def test_help_tools_and_his_own_voice(self):
+        self.assertIn("!setup", self.say("help"))
+        self.assertIn("84", self.say("!calc 12*7"))
+        self.assertIn("B-19-7", self.say("!about"))
+        self.assertIn("learned", self.say("!learn tea is hot"))
+        self.assertIn("tea is hot", self.say("!tea"))                 # remembered between calls
+        self.assertTrue(os.path.isfile(str(self.data / "tvfloyd" / "memory.json")))
+
+    def test_status_names_the_app_and_the_chat_accounts(self):
+        out = self.say("!status")
+        self.assertIn("Floyd in tvchat is at level", out)
+        self.assertIn("Master Floyd: none set", out)
+        self.assertIn("Chat: 0 accounts, 0 connected.", out)
+
+    def test_irc_only_things_are_not_offered_here(self):
+        for irc in ("!seen bob", "!tell bob hi", "!karma"):
+            self.assertIn("Say help", self.say(irc), irc)
+
+    def test_the_wizard_answers_in_this_window(self):
+        self.assertIn("!setup join HOST TOKEN", self.say("!setup"))
+        self.assertIn("Usage: !setup join", self.say("!setup join"))
+
+    def test_claude_is_asked_in_the_background_and_polled(self):
+        fake = self.tmp / "claude"
+        fake.write_text("#!/bin/sh\ncat >/dev/null\necho the fake answer\n")
+        fake.chmod(0o755)
+        self.conf("[floyd]\nclaude_cmd = %s\n" % fake)
+        self.assertIn("will ask Claude", self.say("!claude what is 2+2?"))
+        got = ""
+        for _ in range(60):
+            st, body = cb.dispatch(cb.build_parser(), ["floyd-poll"])
+            got = body.decode().strip()
+            if got:
+                break
+            time.sleep(0.2)
+        self.assertEqual(got, "Claude: the fake answer")
+
+    def test_a_level_of_off_silences_him_and_the_master_is_used_when_set(self):
+        self.conf("[floyd]\nlevel = off\n")
+        self.assertIn("Floyd is off", self.say("!about"))
+        self.conf("[floyd]\nserver = 127.0.0.1:1\ntoken = x\nserver_timeout = 0.3\n")
+        self.assertIn("not reachable", self.say("!status"))          # the master is named, and he still answers himself
+        self.assertIn("B-19-7", self.say("!about"))
 
 
 class TestRefusedHint(unittest.TestCase):

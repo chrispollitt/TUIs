@@ -1,0 +1,571 @@
+#!/usr/bin/env python3
+"""dcgw - the Delta Chat gateway.  Stdlib only, Python >= 3.6.
+
+ONE machine (cpbee) holds every person's Delta Chat account: the key, the database and the mail login live
+here, in a deltachat-rpc-server (the official core) per person.  tvchat on any other machine is a thin client: it
+connects to this daemon with a personal token and speaks the core's own JSON-RPC to it, as it would to a core of
+its own - but holds no key, no database and no mail password.  Several clients of one person (laptop, desktop,
+cpbee itself) see the same chats and read marks, because there is only one account behind them.
+
+The wire (TCP, optionally TLS):
+
+    client -> DCGW 1 <token>\\n
+    server -> OK 1 <name> <address>\\n      or      ERR <why>\\n   (and the connection is closed)
+    then JSON-RPC 2.0, one object per line, both ways.
+
+What a client may ask is a short allow-list (the calls tvchat makes); nothing that reads a mail password, touches a
+file on this machine, makes or removes an account, or exports a key is on it.  `get_next_event` is answered by the
+gateway from a queue of its own, so every client gets every event (the core has one event queue per process, which
+two clients could not share).
+
+    dcgw serve [--conf FILE]                 run the daemon (systemd: dcgw.service)
+    dcgw add-user NAME --addr ADDRESS        add a person: a token is made and printed once (also: dcgw token NAME)
+    dcgw setup NAME [--password-file FILE]   give the person's account its mail login (asks for the password); the
+                                             service must be stopped while this runs
+    dcgw adopt NAME DIR                      take over an existing account folder (a tvchat deltachat/<account>)
+    dcgw list                                the people, their addresses, and whether the account is configured
+"""
+import argparse
+import configparser
+import hmac
+import json
+import logging
+import os
+import secrets
+import shutil
+import socket
+import socketserver
+import ssl
+import subprocess
+import sys
+import threading
+import time
+from collections import deque
+
+VERSION = "0.1.0"
+DEFAULT_PORT = 7078
+CONF = "/etc/dcgw/dcgw.conf"
+_log = logging.getLogger("dcgw")
+
+# method -> where the account id is: "acct" = first parameter (must be this person's), "none" = no account.
+ALLOWED = {
+    "get_system_info": "none", "get_all_account_ids": "none",
+    "is_configured": "acct", "get_config": "acct", "set_config": "acct", "start_io": "acct",
+    "stop_io": "acct", "stop_io_for_all_accounts": "none", "get_connectivity": "acct",
+    "get_chatlist_entries": "acct", "get_chatlist_items_by_entries": "acct", "get_basic_chat_info": "acct",
+    "get_chat_contacts": "acct", "get_contact": "acct", "get_contacts": "acct", "get_message_ids": "acct",
+    "get_messages": "acct", "get_message": "acct", "lookup_contact_id_by_addr": "acct", "create_contact": "acct",
+    "create_chat_by_contact_id": "acct", "create_group_chat": "acct", "add_contact_to_chat": "acct",
+    "remove_contact_from_chat": "acct", "set_chat_name": "acct", "leave_group": "acct", "delete_chat": "acct",
+    "accept_chat": "acct", "marknoticed_chat": "acct", "markseen_msgs": "acct", "misc_send_text_message": "acct",
+    "get_chat_securejoin_qr_code": "acct", "secure_join": "acct", "get_next_event": "none",
+}
+LOCAL = ("start_io", "stop_io", "stop_io_for_all_accounts")      # the gateway keeps the core's I/O running itself
+READ_KEYS = ("displayname", "addr", "configured_addr", "bcc_self", "selfstatus")     # never mail_pw & co
+WRITE_KEYS = ("displayname", "bcc_self", "selfstatus")
+
+
+def _json(raw):
+    try:
+        v = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return None
+    return v if isinstance(v, dict) else None
+
+
+class Client(object):
+    """One connected tvchat: its socket, its events, and the get_next_event requests waiting for them."""
+    QUEUE = 2000
+
+    def __init__(self, conn, name):
+        self.conn, self.name = conn, name
+        self.wlock = threading.Lock()
+        self.qlock = threading.Lock()
+        self.events = deque(maxlen=self.QUEUE)
+        self.waiting = deque()
+        self.alive = True
+
+    def send(self, obj):
+        data = (json.dumps(obj) + "\n").encode("utf-8")
+        with self.wlock:
+            try:
+                self.conn.sendall(data)
+            except (OSError, ValueError):
+                self.close()
+
+    def push(self, ev):
+        with self.qlock:
+            self.events.append(ev)
+        self.deliver()
+
+    def park(self, rid):
+        with self.qlock:
+            self.waiting.append(rid)
+        self.deliver()
+
+    def deliver(self):
+        while True:
+            with self.qlock:
+                if not (self.events and self.waiting):
+                    return
+                ev, rid = self.events.popleft(), self.waiting.popleft()
+            self.send({"jsonrpc": "2.0", "id": rid, "result": ev})
+
+    def close(self):
+        self.alive = False
+        try:
+            self.conn.shutdown(socket.SHUT_RDWR)       # a reader thread holds the socket: close() alone would not end it
+        except (OSError, ValueError):
+            pass
+        try:
+            self.conn.close()
+        except OSError:
+            pass
+
+
+class Core(object):
+    """One deltachat-rpc-server for one person, with its account folder, shared by that person's clients."""
+
+    def __init__(self, name, folder, server_path):
+        self.name, self.folder, self.server_path = name, folder, server_path
+        self.proc = None
+        self.lock = threading.Lock()
+        self.wlock = threading.Lock()
+        self.clients = set()
+        self.pending = {}                    # core request id -> (client, the client's own id)
+        self.internal = {}                   # core request id -> [Event, result, error]
+        self.ids = 0
+        self.aid = None
+        self.configured = False
+        self.stopping = False
+        self.ready = threading.Event()
+
+    # -- the process ---------------------------------------------------------------------------------
+    def start(self):
+        with self.lock:
+            if self.proc is not None and self.proc.poll() is None:
+                return
+            self.stopping = False
+            os.makedirs(self.folder, mode=0o700, exist_ok=True)
+            env = dict(os.environ, DC_ACCOUNTS_PATH=self.folder)
+            self.proc = subprocess.Popen([self.server_path], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                         stderr=open(self.folder.rstrip("/") + ".log", "ab"), env=env, bufsize=0,
+                                         close_fds=True)
+            self.ready.clear()
+            proc = self.proc
+        threading.Thread(target=self._read, args=(proc,), daemon=True, name="core-%s" % self.name).start()
+        try:
+            self.call("get_system_info", [], 30)
+            ids = self.call("get_all_account_ids", [], 30)
+            self.aid = ids[0] if ids else self.call("add_account", [], 30)
+            self.configured = bool(self.call("is_configured", [self.aid], 30))
+            if self.configured:
+                self.call("start_io", [self.aid], 60)
+        except (RuntimeError, OSError) as e:
+            _log.error("%s: the core did not start: %s", self.name, e)
+            self.stop()
+            raise
+        threading.Thread(target=self._pump, args=(proc,), daemon=True, name="events-%s" % self.name).start()
+        self.ready.set()
+        _log.info("%s: core up (account %s, %s)", self.name, self.aid, "configured" if self.configured else "NOT configured")
+
+    def stop(self):
+        self.stopping = True
+        proc, self.proc = self.proc, None
+        if proc is not None:
+            try:
+                proc.stdin.close()
+                proc.wait(3)
+            except (OSError, subprocess.TimeoutExpired):
+                proc.kill()
+        self._fail_all("the Delta Chat core stopped")
+
+    def alive(self):
+        return self.proc is not None and self.proc.poll() is None
+
+    def _next(self):
+        with self.lock:
+            self.ids += 1
+            return self.ids
+
+    def _write(self, obj):
+        data = (json.dumps(obj) + "\n").encode("utf-8")
+        with self.wlock:
+            self.proc.stdin.write(data)
+
+    def call(self, method, params, timeout=None):
+        """An internal request: the gateway's own (the event pump, the start-up)."""
+        rid = self._next()
+        slot = [threading.Event(), None, None]
+        self.internal[rid] = slot
+        try:
+            self._write({"jsonrpc": "2.0", "method": method, "params": params, "id": rid})
+        except (OSError, AttributeError, ValueError):
+            self.internal.pop(rid, None)
+            raise RuntimeError("the Delta Chat core is gone")
+        if not slot[0].wait(timeout):
+            self.internal.pop(rid, None)
+            raise RuntimeError("%s: no answer from the core" % method)
+        if slot[2] is not None:
+            raise RuntimeError("%s: %s" % (method, slot[2]))
+        return slot[1]
+
+    def _read(self, proc):
+        try:
+            for raw in iter(proc.stdout.readline, b""):
+                msg = _json(raw)
+                if msg is None or "id" not in msg:
+                    continue
+                rid = msg["id"]
+                slot = self.internal.pop(rid, None)
+                if slot is not None:
+                    slot[1] = msg.get("result")
+                    slot[2] = (msg["error"] or {}).get("message", msg["error"]) if msg.get("error") else None
+                    slot[0].set()
+                    continue
+                target = self.pending.pop(rid, None)
+                if target is not None:
+                    client, orig = target
+                    reply = {"jsonrpc": "2.0", "id": orig}
+                    if msg.get("error"):
+                        reply["error"] = msg["error"]
+                    else:
+                        reply["result"] = msg.get("result")
+                    client.send(reply)
+        except (OSError, ValueError):
+            pass
+        if proc is self.proc and not self.stopping:
+            _log.warning("%s: the core exited", self.name)
+            self._died()
+
+    def _died(self):
+        self.ready.clear()
+        self._fail_all("the Delta Chat core exited")
+        for c in list(self.clients):          # the clients reconnect (and so restart the core) with their own backoff
+            c.close()
+
+    def _fail_all(self, why):
+        for rid, slot in list(self.internal.items()):
+            slot[2] = why
+            slot[0].set()
+        self.internal.clear()
+        for rid, (client, orig) in list(self.pending.items()):
+            client.send({"jsonrpc": "2.0", "id": orig, "error": {"code": -32000, "message": why}})
+        self.pending.clear()
+
+    def _pump(self, proc):
+        """Every event of the core goes to every client: the core's queue is read here, once."""
+        while proc is self.proc and not self.stopping:
+            try:
+                ev = self.call("get_next_event", [])
+            except RuntimeError:
+                return
+            for c in list(self.clients):
+                c.push(ev)
+
+    # -- the clients -----------------------------------------------------------------------------------
+    def check(self, msg):
+        """None when the request may go to the core, else the words to send back."""
+        m = msg.get("method")
+        p = msg.get("params")
+        if not isinstance(m, str) or m not in ALLOWED:
+            return "%s is not available through the gateway" % (m if isinstance(m, str) else "that")
+        if p is None:
+            p = []
+        if not isinstance(p, list):
+            return "parameters must be a list"
+        if ALLOWED[m] == "acct" and not (p and p[0] == self.aid):
+            return "that is not your account"
+        if m == "get_config" and (len(p) < 2 or p[1] not in READ_KEYS):
+            return "that setting cannot be read through the gateway"
+        if m == "set_config" and (len(p) < 2 or p[1] not in WRITE_KEYS):
+            return "that setting cannot be changed through the gateway"
+        return None
+
+    def forward(self, client, msg):
+        rid = msg.get("id")
+        m = msg.get("method")
+        if rid is None:
+            return
+        bad = self.check(msg)
+        if bad:
+            client.send({"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": bad}})
+            return
+        if m == "get_next_event":
+            client.park(rid)
+        elif m == "get_all_account_ids":
+            client.send({"jsonrpc": "2.0", "id": rid, "result": [self.aid]})
+        elif m in LOCAL:
+            client.send({"jsonrpc": "2.0", "id": rid, "result": None})
+        else:
+            cid = self._next()
+            self.pending[cid] = (client, rid)
+            try:
+                self._write({"jsonrpc": "2.0", "method": m, "params": msg.get("params") or [], "id": cid})
+            except (OSError, AttributeError, ValueError):
+                self.pending.pop(cid, None)
+                client.send({"jsonrpc": "2.0", "id": rid, "error": {"code": -32000, "message": "the Delta Chat core is gone"}})
+
+
+class Gateway(object):
+    def __init__(self, conf_path=CONF):
+        self.conf_path = conf_path
+        c = configparser.ConfigParser(interpolation=None)
+        c.read(conf_path, encoding="utf-8")
+        g = c["dcgw"] if c.has_section("dcgw") else {}
+        self.listen = [x.strip() for x in (g.get("listen", "127.0.0.1:%d" % DEFAULT_PORT)).split(",") if x.strip()]
+        self.core_path = g.get("core", "") or shutil.which("deltachat-rpc-server") or "deltachat-rpc-server"
+        self.data = os.path.expanduser(g.get("data", "/var/lib/dcgw"))
+        self.tls_cert, self.tls_key = g.get("tls_cert", "").strip(), g.get("tls_key", "").strip()
+        self.users = {}
+        for s in c.sections():
+            if s.startswith("user:"):
+                name = s[5:].strip()
+                self.users[name] = {"token": c.get(s, "token", fallback="").strip(), "addr": c.get(s, "addr", fallback="").strip()}
+        self.cores = {}
+        self.clock = threading.Lock()
+        self.servers = []
+        self.ctx = None
+        if self.tls_cert:
+            self.ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            self.ctx.load_cert_chain(self.tls_cert, self.tls_key or None)
+
+    def core_for(self, name):
+        with self.clock:
+            core = self.cores.get(name)
+            if core is None:
+                core = self.cores[name] = Core(name, os.path.join(self.data, name), self.core_path)
+        if not core.alive():
+            core.start()
+        elif not core.ready.wait(60):
+            raise RuntimeError("the core is not ready")
+        return core
+
+    def who(self, token):
+        found = None
+        for name, u in self.users.items():              # no early exit: the time does not tell which token was close
+            if u["token"] and hmac.compare_digest(u["token"].encode("utf-8"), token.encode("utf-8")):
+                found = name
+        return found
+
+    def handle(self, conn, peer):
+        client = None
+        core = None
+        try:
+            conn.settimeout(10)
+            if self.ctx is not None:
+                conn = self.ctx.wrap_socket(conn, server_side=True)
+            conn.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            rfile = conn.makefile("rb", 65536)
+            line = rfile.readline(512).decode("utf-8", "replace").strip()
+            parts = line.split(None, 2)
+            name = self.who(parts[2]) if len(parts) == 3 and parts[0] == "DCGW" and parts[1] == "1" else None
+            if name is None:
+                time.sleep(1)                          # a wrong token costs a second
+                conn.sendall(b"ERR not accepted\n")
+                _log.warning("refused %s", peer)
+                return
+            try:
+                core = self.core_for(name)
+            except (RuntimeError, OSError) as e:
+                conn.sendall(("ERR the Delta Chat core of %s is not available: %s\n" % (name, e)).encode("utf-8"))
+                return
+            conn.sendall(("OK 1 %s %s\n" % (name, self.users[name]["addr"])).encode("utf-8"))
+            conn.settimeout(None)
+            client = Client(conn, name)
+            core.clients.add(client)
+            _log.info("%s: client %s connected", name, peer)
+            for raw in iter(lambda: rfile.readline(1 << 20), b""):
+                msg = _json(raw)
+                if msg is not None:
+                    core.forward(client, msg)
+                if not client.alive:
+                    break
+        except (OSError, ssl.SSLError) as e:
+            _log.debug("connection from %s ended: %s", peer, e)
+        finally:
+            if client is not None and core is not None:
+                core.clients.discard(client)
+                _log.info("%s: client %s gone", client.name, peer)
+            try:
+                conn.close()
+            except OSError:
+                pass
+
+    def serve(self):
+        gw = self
+
+        class Handler(socketserver.BaseRequestHandler):
+            def handle(self):
+                gw.handle(self.request, self.client_address[0])
+
+        class Server(socketserver.ThreadingMixIn, socketserver.TCPServer):
+            daemon_threads = True
+            allow_reuse_address = True
+        for spec in self.listen:
+            host, _, port = spec.rpartition(":")
+            srv = Server((host or "127.0.0.1", int(port or DEFAULT_PORT)), Handler)
+            self.servers.append(srv)
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            _log.info("dcgw %s: listening on %s%s", VERSION, spec, " (TLS)" if self.ctx else "")
+        for name in self.users:                      # start the cores now: mail is received even with no client
+            try:
+                self.core_for(name)
+            except (RuntimeError, OSError) as e:
+                _log.error("%s: not started: %s", name, e)
+
+    def stop(self):
+        for s in self.servers:
+            s.shutdown()
+            s.server_close()
+        for core in self.cores.values():
+            core.stop()
+
+
+# -- administration ---------------------------------------------------------------------------------------
+def _read_conf(path):
+    c = configparser.ConfigParser(interpolation=None)
+    c.read(path, encoding="utf-8")
+    return c
+
+
+def _write_conf(path, c):
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp = path + ".new"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        c.write(fh)
+    try:                                   # keep the file's owner and mode (root:dcgw 640 lets the service read it)
+        st = os.stat(path)
+        os.chmod(tmp, st.st_mode & 0o777)
+        if hasattr(os, "chown") and os.geteuid() == 0:
+            os.chown(tmp, st.st_uid, st.st_gid)
+    except OSError:
+        os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+
+
+def cmd_add_user(a):
+    c = _read_conf(a.conf)
+    sect = "user:" + a.name
+    if not c.has_section("dcgw"):
+        c.add_section("dcgw")
+    if c.has_section(sect):
+        print("%s exists; token unchanged (dcgw token %s shows it)" % (a.name, a.name))
+        return 0
+    c.add_section(sect)
+    c.set(sect, "addr", a.addr)
+    c.set(sect, "token", secrets.token_hex(16))
+    _write_conf(a.conf, c)
+    print("added %s (%s); token: %s" % (a.name, a.addr, c.get(sect, "token")))
+    return 0
+
+
+def cmd_token(a):
+    c = _read_conf(a.conf)
+    if not c.has_section("user:" + a.name):
+        print("no such person: %s" % a.name, file=sys.stderr)
+        return 1
+    print(c.get("user:" + a.name, "token"))
+    return 0
+
+
+def cmd_list(a):
+    gw = Gateway(a.conf)
+    for name, u in gw.users.items():
+        d = os.path.join(gw.data, name)
+        has = any("dc.db" in files for _r, _d, files in os.walk(d)) if os.path.isdir(d) else False
+        print("%s\t%s\t%s" % (name, u["addr"], "has data" if has else "no data yet"))
+    return 0
+
+
+def cmd_adopt(a):
+    gw = Gateway(a.conf)
+    if a.name not in gw.users:
+        print("no such person: %s (dcgw add-user first)" % a.name, file=sys.stderr)
+        return 1
+    dest = os.path.join(gw.data, a.name)
+    if os.path.isdir(dest) and any("dc.db" in files for _r, _d, files in os.walk(dest)):
+        print("%s already has data in %s; not overwritten" % (a.name, dest), file=sys.stderr)
+        return 1
+    if not any("dc.db" in files for _r, _d, files in os.walk(a.dir)):
+        print("%s holds no Delta Chat account (no dc.db)" % a.dir, file=sys.stderr)
+        return 1
+    shutil.copytree(a.dir, dest, dirs_exist_ok=True) if sys.version_info >= (3, 8) else shutil.copytree(a.dir, dest)
+    os.chmod(dest, 0o700)
+    print("%s's account copied to %s" % (a.name, dest))
+    return 0
+
+
+def cmd_setup(a):
+    import getpass
+    gw = Gateway(a.conf)
+    u = gw.users.get(a.name)
+    if u is None:
+        print("no such person: %s" % a.name, file=sys.stderr)
+        return 1
+    if a.password_file:
+        with open(a.password_file, encoding="utf-8") as fh:
+            pw = fh.read().strip()
+    else:
+        pw = getpass.getpass("mail password for %s: " % u["addr"])
+    if not pw:
+        print("nothing was typed", file=sys.stderr)
+        return 1
+    core = Core(a.name, os.path.join(gw.data, a.name), gw.core_path)
+    try:
+        core.start()
+        params = {"addr": u["addr"], "password": pw}
+        for key, name in (("imap_server", "imapServer"), ("smtp_server", "smtpServer"), ("imap_user", "imapUser"),
+                          ("smtp_user", "smtpUser")):
+            if getattr(a, key):
+                params[name] = getattr(a, key)
+        if a.smtp_port:
+            params["smtpPort"] = a.smtp_port
+        if a.no_verify:
+            params["certificateChecks"] = "acceptInvalidCertificates"
+        core.call("add_or_update_transport", [core.aid, params], 240)
+        core.call("set_config", [core.aid, "bcc_self", "1"], 30)
+        print("%s: the account is set up" % u["addr"])
+    except RuntimeError as e:
+        print("setup failed: %s" % e, file=sys.stderr)
+        return 1
+    finally:
+        core.stop()
+    return 0
+
+
+def cmd_serve(a):
+    logging.basicConfig(stream=sys.stderr, level=logging.INFO, format="%(levelname)s %(message)s")
+    gw = Gateway(a.conf)
+    if not gw.users:
+        print("%s has no [user:NAME]: dcgw add-user first" % a.conf, file=sys.stderr)
+        return 1
+    gw.serve()
+    import signal
+    done = threading.Event()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, lambda *_: done.set())
+    done.wait()
+    gw.stop()
+    return 0
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="dcgw", description="the Delta Chat gateway")
+    ap.add_argument("--version", action="version", version="dcgw " + VERSION)
+    ap.add_argument("--conf", default=os.environ.get("DCGW_CONF", CONF))
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("serve"); p.set_defaults(fn=cmd_serve)
+    p = sub.add_parser("add-user"); p.add_argument("name"); p.add_argument("--addr", required=True); p.set_defaults(fn=cmd_add_user)
+    p = sub.add_parser("token"); p.add_argument("name"); p.set_defaults(fn=cmd_token)
+    p = sub.add_parser("list"); p.set_defaults(fn=cmd_list)
+    p = sub.add_parser("adopt"); p.add_argument("name"); p.add_argument("dir"); p.set_defaults(fn=cmd_adopt)
+    p = sub.add_parser("setup"); p.add_argument("name"); p.add_argument("--password-file")
+    p.add_argument("--imap-server"); p.add_argument("--smtp-server"); p.add_argument("--imap-user"); p.add_argument("--smtp-user")
+    p.add_argument("--smtp-port", type=int); p.add_argument("--no-verify", action="store_true"); p.set_defaults(fn=cmd_setup)
+    a = ap.parse_args(argv)
+    return a.fn(a)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

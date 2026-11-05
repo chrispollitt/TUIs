@@ -688,6 +688,30 @@ class TestWizard(unittest.TestCase):
         self.assertIn("no password for chris on cpbee", rep)
         self.assertNotIn("hunter2", rep)
 
+    def test_a_delta_chat_gateway_account_is_added_and_asks_for_its_token_separately(self):
+        import json
+        self.manifest["accounts"] = [a for a in self.manifest["accounts"] if a["protocol"] != "deltachat"] + [
+            {"id": "delta_chris", "protocol": "deltachat", "display": "Delta Chat (chris)", "autoconnect": True,
+             "opts": {"gateway": "cpbee", "gateway_tls": "yes", "gateway_cafile": "@CA:chat@"}}]
+        self.manifest.pop("delta_owner", None)
+        with open(self.setup_file, "w") as fh:
+            json.dump(self.manifest, fh)
+        out, m = self.join()
+        done = self.say("!setup all", master=m)
+        self.assertIn("added the Delta Chat (chris) account", done)
+        self.assertIn("Next: !setup delta TOKEN", done)
+        self.assertEqual(tvf.conf_get(self.path("tvchat"), "account:delta_chris", "gateway"), "cpbee")
+        self.assertEqual(tvf.conf_get(self.path("tvchat"), "account:delta_chris", "token"), "")
+        rep = self.say("!setup", master=m)
+        self.assertIn("you  tvchat's Delta Chat (chris) account has no token for the Delta Chat gateway", rep)
+        self.assertIn("Usage: !setup delta TOKEN", self.say("!setup delta"))
+        saved = self.say("!setup delta gwtoken123", master=m)
+        self.assertIn("Token saved for delta_chris", saved)
+        self.assertNotIn("gwtoken123", saved)                                       # never repeated
+        self.assertEqual(tvf.conf_get(self.path("tvchat"), "account:delta_chris", "token"), "gwtoken123")
+        self.assertNotIn("has no token for the Delta Chat gateway", self.say("!setup", master=m))
+        self.assertIn("has no Delta Chat account with gateway", self.say("!setup delta x nonesuch", master=m))
+
     def test_the_owner_machine_does_not_get_a_delta_account_step(self):
         self.say("!setup join %s %s" % (self.server, self.TOKEN))
         m = tvf.master_settings(lambda k, d: {"server": self.server, "token": self.TOKEN, "machine": "cpbee"}.get(k, d))  # allowlist secret

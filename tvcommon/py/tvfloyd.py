@@ -2190,10 +2190,16 @@ def wizard_steps(app, m, manifest=None, cas=None):
                     if acc.get("autoconnect", True):
                         conf_autoconnect_add(tvchat_path, ident)
                     more = ""
-                    if acc.get("protocol") == "deltachat":
+                    if acc.get("protocol") == "deltachat" and (acc.get("opts") or {}).get("gateway"):
+                        more = " Next: !setup delta TOKEN (your token on the Delta Chat gateway; see ~/dcgw-*.token on the server)."
+                    elif acc.get("protocol") == "deltachat":
                         more = " Next, in tvchat: Chat > Use account from another device... (cpbee shows Chat > Add second device first)."
                     return "tvchat: added the %s account%s.%s" % (acc.get("display", ident), " and autoconnect" if acc.get("autoconnect", True) else "", more)
                 steps.append(WizStep("todo", "tvchat lacks the %s account (%s)" % (acc.get("display", ident), proto), fix))
+            if (acc.get("opts") or {}).get("gateway") and ("account:" + ident) in conf_sections(tvchat_path) \
+                    and not conf_get(tvchat_path, "account:" + ident, "token"):
+                steps.append(WizStep("you", "tvchat's %s account has no token for the Delta Chat gateway: !setup delta TOKEN "
+                                            "(yours is in ~/dcgw-*.token on the server)" % acc.get("display", ident)))
             who = (acc.get("opts") or {}).get("sasl") or (acc.get("opts") or {}).get("imap_user")
             h = (acc.get("opts") or {}).get("host") or (acc.get("opts") or {}).get("imap_server")
             if who and h and not _has_secret(h, who):
@@ -2252,6 +2258,21 @@ def wizard_command(text, app, m):
         head = ["Joined: %s answers (%s quotes, %s facts); this machine is called %s." % (host, r.get("quotes", "?"),
                                                                                          r.get("facts", "?"), probe["machine"])]
         return head + _wiz_report(app, m, "")
+    dl = re.match(r"^delta\s+(\S+)(?:\s+(\S+))?$", arg, re.I)
+    if arg.lower().startswith("delta") and not dl:
+        return ["Usage: !setup delta TOKEN [ACCOUNT]  (your token on the Delta Chat gateway; asked once)"]
+    if dl:
+        path = wiz_conf_path("tvchat")
+        names = [n.split(":", 1)[1] for n in conf_sections(path)
+                 if n.startswith("account:") and conf_get(path, n, "gateway")]
+        if dl.group(2):
+            names = [n for n in names if n == dl.group(2)]
+        if not names:
+            return ["tvchat.conf has no Delta Chat account with gateway = %s: !setup adds it first." %
+                    (("(named " + dl.group(2) + ")") if dl.group(2) else "...")]
+        for n in names:
+            conf_set(path, "account:" + n, "token", dl.group(1))
+        return ["Token saved for %s in %s (it is not shown again). Restart tvchat to use it." % (", ".join(names), path)]
     if not m or not m.get("server"):
         return ["I do not know the master Floyd yet.  Say: !setup join HOST TOKEN  (e.g. !setup join cpbee ...; the token is "
                 "in ~/floyd-gate.token on the server).  Then !setup checks everything else."]
@@ -2310,6 +2331,7 @@ if __name__ == "__main__":
 # `remind` seconds while it stays down, and one "recover" event when it is back.  A shutdown of the server
 # itself, scheduled or begun, is announced too.  The checks run on a worker thread, never on the loop.
 SERVICE_LABELS = {"ergo": "IRC server (Ergo)", "talkd": "talkd (chat)", "dovecot": "mailbox server (Dovecot)",
+                  "dcgw": "Delta Chat gateway (dcgw)",
                   "postfix": "mail relay (Postfix)", "radicale": "calendar server (Radicale)"}
 SENTINEL_SERVICES = "ergo:6697, talkd:518@127.0.0.1, dovecot:993, postfix:25@127.0.0.1, radicale:5232"
 SENTINEL_HOSTS = "u-l.ca mail relay=u-l.ca:465, u-l.ca mailbox=u-l.ca:993"

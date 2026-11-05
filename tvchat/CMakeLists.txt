@@ -30,7 +30,7 @@ endif()
 include("${TVCOMMON_DIR}/tvcommon.cmake")
 
 add_executable(tvchat
-    src/main.cpp src/app.cpp src/chat.cpp src/chatwin.cpp src/help.cpp
+    src/main.cpp src/app.cpp src/chat.cpp src/chatwin.cpp src/floydwin.cpp src/help.cpp
     ${TVCOMMON_SOURCES})
 tvcommon_setup(tvchat)
 target_compile_definitions(tvchat PRIVATE TVCHAT_VERSION="${PROJECT_VERSION}")

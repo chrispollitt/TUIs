@@ -3059,6 +3059,100 @@ def _json_line(raw):
     return msg if isinstance(msg, dict) else None
 
 
+class _GatewayLink(object):
+    """Stands where the core's subprocess stands when the account lives on a Delta Chat gateway (dcgw on the server):
+    a socket whose lines are the core's own JSON-RPC.  With TLS, a thread pair carries the bytes between the TLS socket
+    and a plain local socket pair, so the adapter keeps reading and writing plain file descriptors."""
+
+    def __init__(self, sock, tls=None, pumps=()):
+        self.sock, self.tls, self.stdin, self.stdout = sock, tls, sock, sock
+        self.extra = pumps
+        self.wfd = None                  # a second descriptor for the same socket (the loop watches reads and writes apart)
+
+    def poll(self):
+        return None if self.sock.fileno() >= 0 else 0
+
+    def wait(self, timeout=None):
+        self.kill()
+        return 0
+
+    def kill(self):
+        if self.wfd is not None:
+            try:
+                os.close(self.wfd)
+            except OSError:
+                pass
+            self.wfd = None
+        for s_ in (self.sock, self.tls) + tuple(self.extra):
+            try:
+                if s_ is not None:
+                    s_.close()
+            except OSError:
+                pass
+
+
+def gateway_open(spec, token, tls=False, cafile="", verify=True, timeout=10):
+    """Connect and log in to a gateway: (link, name, address).  Blocking: run it on a thread.  UserError when refused."""
+    host, _, port = spec.rpartition(":") if ":" in spec else (spec, "", "")
+    try:
+        sock = socket.create_connection((host, int(port or 7078)), timeout)
+    except OSError as e:
+        raise UserError("cannot connect to the Delta Chat gateway %s: %s%s" % (
+            spec, e.strerror or e, _refused_hint(host, [a[4][0] for a in socket.getaddrinfo(host, None)])
+            if "refused" in str(e).lower() else ""))
+    link_sock = sock
+    try:
+        if tls:
+            ctx = ssl.create_default_context(cafile=os.path.expanduser(cafile) if cafile else None)
+            if not verify:
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+            link_sock = ctx.wrap_socket(sock, server_hostname=host)
+        link_sock.settimeout(timeout)
+        link_sock.sendall(("DCGW 1 %s\n" % token).encode("utf-8"))
+        line = b""
+        while not line.endswith(b"\n") and len(line) < 512:
+            ch = link_sock.recv(1)
+            if not ch:
+                break
+            line += ch
+    except (OSError, ssl.SSLError) as e:
+        try:
+            link_sock.close()
+        except OSError:
+            pass
+        raise UserError("the Delta Chat gateway %s: %s" % (spec, getattr(e, "reason", None) or e.strerror or e))
+    parts = line.decode("utf-8", "replace").strip().split(None, 3)
+    if not parts or parts[0] != "OK":
+        link_sock.close()
+        raise UserError("the Delta Chat gateway %s refused: %s" % (
+            spec, " ".join(parts[1:]) if parts[:1] == ["ERR"] and len(parts) > 1 else "no sensible answer"))
+    name, addr = (parts[2] if len(parts) > 2 else ""), (parts[3] if len(parts) > 3 else "")
+    if not tls:
+        link_sock.settimeout(None)
+        return _GatewayLink(link_sock), name, addr
+    a, b = socket.socketpair()               # the adapter's end is b; two threads carry the bytes
+    link_sock.settimeout(None)
+
+    def pump(src, dst):
+        try:
+            while True:
+                data = src.recv(65536)
+                if not data:
+                    break
+                dst.sendall(data)
+        except (OSError, ssl.SSLError):
+            pass
+        for x in (src, dst):
+            try:
+                x.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+    threading.Thread(target=pump, args=(link_sock, a), daemon=True).start()
+    threading.Thread(target=pump, args=(a, link_sock), daemon=True).start()
+    return _GatewayLink(b, link_sock, (a,)), name, addr
+
+
 class DeltaChatAdapter(CommandMixin):
     """Delta Chat through the official core: `deltachat-rpc-server` runs as a
     child of the backend and speaks JSON-RPC 2.0, one object per line, on its
@@ -3091,6 +3185,12 @@ class DeltaChatAdapter(CommandMixin):
         o = account.opts
         self.addr = (o.get("addr") or "").strip()
         self.rpc_server = (o.get("rpc_server") or "deltachat-rpc-server").strip()
+        # gateway = HOST[:PORT], token = ...: the account lives on a Delta Chat gateway (dcgw), not in a core of our own
+        self.gateway = (o.get("gateway") or "").strip()
+        self.gw_token = (o.get("token") or "").strip()
+        self.gw_tls = _bool(o.get("gateway_tls"), False)
+        self.gw_cafile = (o.get("gateway_cafile") or o.get("cafile") or "").strip()
+        self.gw_verify = _bool(o.get("gateway_verify"), True)
         # trust = chris@cpbee.cmnet, ...: an END-TO-END ENCRYPTED message (the core's padlock) from those addresses counts
         # as sent by the services account named like the address's user part, so Floyd's admins = applies; the key the
         # core pinned for the address vouches for it, a From line alone never does
@@ -3158,9 +3258,41 @@ class DeltaChatAdapter(CommandMixin):
             raise UserError("cannot use %s: %s" % (d, e.strerror or e))
         return d
 
+    def _connect_gateway(self):
+        if not self.gw_token:
+            raise UserError("[account:%s] gateway = needs token = (your token on the gateway; the admin has it: "
+                            "dcgw token NAME)" % self.account.id)
+        self.server_conv()
+        self.phase = "starting"
+        gen = self.gen
+        self.timer = self.loop.call_later(
+            self.START_TIMEOUT,
+            lambda: gen == self.gen and self._fail("the Delta Chat gateway %s did not answer" % self.gateway))
+        self.chat.set_state(self.account, "connecting", "connecting to the Delta Chat gateway %s" % self.gateway)
+        spec, tok, tls, caf, ver = self.gateway, self.gw_token, self.gw_tls, self.gw_cafile, self.gw_verify
+        self.loop.run_in_thread(lambda: gateway_open(spec, tok, tls, caf, ver),
+                                lambda res, err: gen == self.gen and self._gateway_opened(res, err))
+
+    def _gateway_opened(self, res, err):
+        if err is not None:
+            self._fail(str(err))
+            return
+        link, name, addr = res
+        if addr and not self.addr:
+            self.addr = addr
+        self.proc = link
+        self.rfd = link.sock.fileno()
+        self.wfd = link.wfd = os.dup(self.rfd)           # the loop's watch is per descriptor: reads and writes need two
+        link.sock.setblocking(False)
+        self.loop.watch(self.rfd, on_read=self._on_read)
+        self.chat.set_state(self.account, "connecting", "logged in to the gateway as %s" % (name or "?"))
+        self._request("get_system_info", [], self._started)
+
     def connect(self):
         if self.phase != "down":
             return
+        if self.gateway:
+            return self._connect_gateway()
         if not self.addr:
             raise UserError("[account:%s] has no addr= (the address Delta Chat uses)"
                             % self.account.id)
@@ -3244,6 +3376,8 @@ class DeltaChatAdapter(CommandMixin):
 
     def _core_log(self):
         """What the core last said on stderr (why it would not start)."""
+        if self.gateway:
+            return ""
         try:
             with open(self._dir() + ".log", "rb") as fh:
                 lines = fh.read().decode("utf-8", "replace").strip().splitlines()
@@ -3258,7 +3392,8 @@ class DeltaChatAdapter(CommandMixin):
                 rc = self.proc.wait(1)
             except subprocess.TimeoutExpired:
                 pass
-        why = "the Delta Chat core exited" + (" (status %s)" % rc if rc is not None else "")
+        why = ("the connection to the Delta Chat gateway %s was lost" % self.gateway) if self.gateway else \
+            "the Delta Chat core exited" + (" (status %s)" % rc if rc is not None else "")
         tail = self._core_log()
         return why + (": " + tail if tail else "")
 
@@ -3432,6 +3567,9 @@ class DeltaChatAdapter(CommandMixin):
             ids = self.call("get_all_account_ids")
             self.acct = ids[0] if ids else self.call("add_account")
             configured = self.call("is_configured", self.acct)
+            if self.gateway and not configured:
+                raise UserError("the gateway has no set-up Delta Chat account for you yet (the admin, on the server: "
+                                "dcgw setup NAME)")
             if self.want_backup and configured:
                 self.want_backup = None
                 raise UserError("this machine already has a Delta Chat account set up; use Chat > Use account from "
@@ -6670,6 +6808,10 @@ def check_config(path):
             if (o.get("url") or "").strip().startswith("http://"):
                 warnings.append("[account:%s] url= is not https: the operator's key goes over the wire in the clear" % i)
         elif a.protocol == "deltachat":
+            if (o.get("gateway") or "").strip():           # the account lives on the gateway: token, not a core
+                if not (o.get("token") or "").strip():
+                    errors.append("[account:%s] gateway = needs token = (the admin: dcgw token NAME)" % i)
+                continue
             addr = (o.get("addr") or "").strip()
             if not DeltaChatAdapter.ADDRESS.match(addr):
                 errors.append("[account:%s] addr= must be the mailbox's email address" % i)
@@ -7313,6 +7455,86 @@ def cmd_device_use(a):
     """device-use ACCOUNT CODE [--replace]: take the account another device offers.  Prints confirm (this machine
     has one already: ask the user, then repeat with --replace) or started."""
     sys.stdout.write(_delta(_chat(), a.account).device_use(a.code, a.replace) + "\n")
+    return 0
+
+
+FLOYD_HELP = ("Floyd helps with: !calc 12*7, !convert 5 km to mi, !time in Tokyo, !todo [add TEXT | done N | rm N], !note TEXT, "
+              "!claude QUESTION (the answer comes when it is ready), !status, !setup (checks this machine against the master "
+              "Floyd; !setup join HOST TOKEN the first time), !send MACHINE TEXT. And himself: !quote, !addquote TEXT, !8ball Q, "
+              "!fortune, !joke, !about, !learn X is Y, look / take / go north (at chatty).")
+
+
+def _floyd_conf():
+    c = configparser.ConfigParser(interpolation=None)
+    try:
+        c.read(_conf_path(), encoding="utf-8")
+    except configparser.Error:
+        pass
+    return c
+
+
+def cmd_floyd(a):
+    """floyd TEXT: what Floyd says to that, in his own window (F7): one line each.  The same Floyd as in tvcal and tvmail:
+    the master on the server when [floyd] server is set and reachable, else his local self."""
+    if not hasattr(tvf, "persona"):
+        raise UserError("Floyd's words (tvfloyd.py) are not installed beside tvchat-backend")
+    c = _floyd_conf()
+    text = " ".join(a.words).strip()
+    level = tvf.parse_level(os.environ.get("TVCHAT_FLOYD_LEVEL") or c.get("floyd", "level", fallback=""), None) or tvf.DEFAULT_LEVEL
+    if level == "off":
+        sys.stdout.write("Floyd is off. Set [floyd] level in tvchat.conf to wake him.\n")
+        return 0
+    verb, _, rest = text.lstrip("!").partition(" ")
+    verb = verb.lower()
+    if verb in ("help", "?", ""):
+        sys.stdout.write(FLOYD_HELP + "\n")
+        return 0
+    mem_path = tvf.persona_memory_path(c.get("floyd", "memory", fallback=""))
+    cfg = tvf.claude_settings(lambda k, d: c.get("floyd", k, fallback=d))
+    if verb == "status":
+        accts = _chat().accounts
+        up = sum(1 for x in accts if x.state == "connected")
+        sys.stdout.write("\n".join(tvf.status_lines("tvchat", level, cfg, mem_path)
+                                   + ["Chat: %d account%s, %d connected." % (len(accts), "" if len(accts) == 1 else "s", up)]) + "\n")
+        return 0
+    m = tvf.CLAUDE_RX.match(text)
+    if m:
+        sys.stdout.write("\n".join(tvf.claude_start(m.group(1).strip(), cfg)) + "\n")
+        return 0
+    notes = tvf.make_notes(os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"),
+                                        "tvchat", "floyd-notes.json"), calendar=True)
+    out = None
+    try:
+        arg = rest if verb not in ("todo", "note", "notes", "event", "appointment") else text.lstrip("!").partition(" ")[2]
+        out = tvf.run_tool(verb, arg, notes, time.time())
+        if out is None and tvf.at_least(level, "helpful"):
+            out = tvf.natural(text, notes, time.time())
+    except tvf.CalcError as e:
+        out = "Floyd can't. %s" % e
+    if out is None:                                   # his own voice, the master, the wizard (!setup), !send
+        import getpass
+        try:
+            who = getpass.getuser()
+        except Exception:
+            who = "friend"
+        said = tvf.persona(text, level, who=who, where="tvchat", path=mem_path)
+        if said:
+            out = "\n".join(said)
+    if out is None:
+        out = ("Floyd doesn't understand, but Floyd likes the way you say it. " if tvf.at_least(level, "chatty")
+               else "Floyd doesn't know that one. ") + "Say help."
+    sys.stdout.write(out + "\n")
+    return 0
+
+
+def cmd_floyd_poll(a):
+    """floyd-poll: Claude's answer to the last !claude question once it is ready (nothing before)."""
+    if not hasattr(tvf, "claude_poll"):
+        return 0
+    c = _floyd_conf()
+    lines = tvf.claude_poll(tvf.claude_settings(lambda k, d: c.get("floyd", k, fallback=d)))
+    if lines:
+        sys.stdout.write("\n".join(lines) + "\n")
     return 0
 
 
@@ -8142,6 +8364,8 @@ def build_parser():
     p = sub.add_parser("convs"); p.add_argument("account", nargs="?"); p.set_defaults(fn=cmd_convs)
     p = sub.add_parser("join"); p.add_argument("account"); p.add_argument("target"); p.set_defaults(fn=cmd_join)
     p = sub.add_parser("invite"); p.add_argument("account"); p.add_argument("channel", nargs="?", default=""); p.set_defaults(fn=cmd_invite)
+    p = sub.add_parser("floyd"); p.add_argument("words", nargs="*"); p.set_defaults(fn=cmd_floyd)
+    p = sub.add_parser("floyd-poll"); p.set_defaults(fn=cmd_floyd_poll)
     p = sub.add_parser("device-add"); p.add_argument("account"); p.set_defaults(fn=cmd_device_add)
     p = sub.add_parser("device-cancel"); p.add_argument("account"); p.set_defaults(fn=cmd_device_cancel)
     p = sub.add_parser("device-use"); p.add_argument("account"); p.add_argument("code", nargs="?", default="")

@@ -1,0 +1,37 @@
+# systemd unit for the Delta Chat gateway (dcgw): every person's Delta Chat account lives on this machine, in a
+# deltachat-rpc-server of its own; tvchat elsewhere is a thin client with a token.
+#
+# tvchat/deploy/dcgw-on-cpbee.sh does all of this (the dcgw user, the core, the certificate, /etc/dcgw/dcgw.conf, this
+# unit, the firewall port, starting it).  By hand:
+#
+#   sudo install -m 755 dcgw /usr/local/bin/dcgw
+#   sudo install -m 644 dcgw.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now dcgw
+#   journalctl -u dcgw -f
+#
+# Administration (as root, with the service stopped when it touches an account):
+#   dcgw add-user NAME --addr NAME@host      a person and a token (printed once; `dcgw token NAME` shows it again)
+#   dcgw adopt NAME DIR                      take over an existing tvchat deltachat/<account> folder
+#   dcgw setup NAME                          give the account its mail login (asks for the password)
+#   dcgw list
+[Unit]
+Description=Delta Chat gateway (dcgw)
+After=network-online.target dovecot.service
+Wants=network-online.target
+
+[Service]
+User=dcgw
+Group=dcgw
+ExecStart=/usr/local/bin/dcgw serve --conf /etc/dcgw/dcgw.conf
+Restart=always
+RestartSec=10
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+ReadWritePaths=/var/lib/dcgw
+
+[Install]
+WantedBy=multi-user.target

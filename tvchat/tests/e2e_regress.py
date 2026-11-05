@@ -640,6 +640,73 @@ def delta_second_device_use_on_a_connected_account(opts):
 
 
 @case()
+def chat_floyd_window_f7(opts):
+    # File > Floyd, the assistant... (F7): the same chat window as in tvcal and tvmail, on tvchat's backend
+    tv = Tv(opts)
+    c = Case(tv)
+    started(tv, c)
+    tv.send("\x1b[18~")                                   # F7
+    c.check(tv.wait("ask him anything", 5), "F7 did not open Floyd's window")
+    c.check(tv.wait(lambda: tv.has("Floyd helps with"), 10), "Floyd's greeting did not appear")
+    c.check(tv.has("[type here]"), "the empty input line does not say where to type")
+    tv.send("!calc 12*7", "Enter")
+    c.check(tv.wait(lambda: tv.has("you:   !calc 12*7"), 10), "what was typed is not in the transcript")
+    c.check(tv.wait(lambda: tv.has("84"), 10), "Floyd did not answer the sum")
+    tv.send("!setup", "Enter")
+    c.check(tv.wait(lambda: tv.has("!setup join HOST TOKEN"), 10), "the setup wizard did not answer in Floyd's window")
+    return tv
+
+
+@case()
+def delta_through_the_gateway(opts):
+    # the account lives on a Delta Chat gateway (dcgw, here with the fake core): tvchat is a thin client with only a token
+    import json
+    import socket
+    import subprocess
+    core = HERE / "fake_deltachat_rpc.py"
+    gwprog = HERE.parent / "backend" / "dcgw"
+    state = {}
+
+    def setup(t):
+        data = t.tmp / "gwdata" / "chris"
+        data.mkdir(parents=True)
+        (data / "world.json").write_text(json.dumps({"contacts": {"20": {"address": "alice@example.org", "displayName": "Alice"}},
+                                                     "chats": {"10": {"id": 10, "name": "Alice", "chatType": "Single",
+                                                                      "contacts": [20]}}, "messages": {}}))
+        (data / "state.json").write_text(json.dumps({"accounts": [1], "configured": True}))
+        with socket.socket() as probe:                    # a free port
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        (t.tmp / "dcgw.conf").write_text("[dcgw]\nlisten = 127.0.0.1:%d\ncore = %s\ndata = %s\n\n[user:chris]\n"
+                                         "addr = chris@cpbee.cmnet\ntoken = e2e-token\n" % (port, core, t.tmp / "gwdata"))
+        gw = subprocess.Popen([sys.executable, str(gwprog), "--conf", str(t.tmp / "dcgw.conf"), "serve"],
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        t.cleanups.append(gw.terminate)
+        for _ in range(100):                              # wait until it listens
+            try:
+                socket.create_connection(("127.0.0.1", port), 0.2).close()
+                break
+            except OSError:
+                time.sleep(0.1)
+        conf = t.tmp / "tvchat.conf"
+        conf.write_text("[chat]\nautoconnect = delta\n\n[account:delta]\nprotocol = deltachat\ndisplay = Delta\n"
+                        "gateway = 127.0.0.1:%d\ntoken = e2e-token\n" % port)
+        t.env["TVCHAT_CONF"] = str(conf)
+        t.core = data
+    tv = Tv(opts, setup=setup)
+    c = Case(tv)
+    started(tv, c)
+    c.check(tv.wait(lambda: re.search(r"Delta\b.*\bYes\b", tv.text()), 20),
+            "the Delta Chat account did not connect through the gateway")
+    c.check(not (tv.tmp / "xdg" / "tvchat" / "deltachat").exists(), "a local Delta Chat database was made on the thin client")
+    tv.send("Enter", settle=1.0)                          # the server's conversations
+    c.check(tv.wait("Alice", 8), "the chat list from the gateway did not show Alice")
+    reqs = (tv.core / "requests.jsonl").read_text()
+    c.check("get_chatlist_entries" in reqs, "the chat list was not asked of the core behind the gateway")
+    return tv
+
+
+@case()
 def delta_group_rename_and_leave(opts):
     # Chat > New group..., Rename group... and Leave (which asks first) against
     # tests/fake_deltachat_rpc.py

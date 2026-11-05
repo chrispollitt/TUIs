@@ -1,0 +1,27 @@
+# /etc/dcgw/dcgw.conf - the Delta Chat gateway (tvchat/backend/dcgw).  Mode 640, root:dcgw: it holds the tokens.
+[dcgw]
+# where to listen: HOST:PORT, comma-separated.  Put the LAN address here, never 0.0.0.0 on a router.
+listen = 192.168.10.1:7078
+# the official core, one process per person (pip install deltachat-rpc-server into a venv the dcgw user can read)
+core = /opt/dcgw/venv/bin/deltachat-rpc-server
+# one folder per person under here (the key, the database, the mail login), owned by the dcgw user
+data = /var/lib/dcgw
+# TLS: both set = the gateway speaks TLS only.  The clients verify it with gateway_cafile = the certificate.
+tls_cert = /etc/dcgw/cert.pem
+tls_key = /etc/dcgw/key.pem
+
+# One section per person.  A token opens exactly that person's account and nobody else's.
+# dcgw add-user NAME --addr ADDRESS  makes the section and prints the token once.
+[user:chris]
+addr = chris@cpbee.cmnet
+token = (made by dcgw add-user)
+
+# in the client's tvchat.conf (laptop, desktop, cpbee itself):
+#   [account:delta_chris]
+#   protocol       = deltachat
+#   display        = Delta Chat (chris)
+#   gateway        = cpbee
+#   token          = (the same token)
+#   gateway_tls    = yes
+#   gateway_cafile = ~/.config/tvchat/dcgw-ca.pem
+# Floyd's `!setup` adds the account and `!setup delta TOKEN` saves the token.

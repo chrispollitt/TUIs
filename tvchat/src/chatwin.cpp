@@ -2604,8 +2604,20 @@ void chatMenuGrey()
                                     p->command == cmChatGroupRename) && deltaGroupShown().empty()));
 }
 
+bool chatAsk(const std::string &req, std::string &body, std::string &err)
+{
+    return ask(req, body, err);
+}
+
 bool chatCommand(ushort command)
 {
+    if (command == cmFloyd) // works without any chat account too: on a new machine `!setup join` is how the rest gets configured
+    {
+        TRect r = TProgram::deskTop->getExtent();
+        r.grow(-6, -3);
+        TProgram::deskTop->insert(newFloydWindow(r));
+        return true;
+    }
     if (!(command >= cmChatInvite && command <= cmChatDeviceUse) &&
         (command < cmChatConnect || command >= cmChatAccount + kChatMaxAccounts))
         return false;

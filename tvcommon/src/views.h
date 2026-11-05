@@ -813,8 +813,9 @@ public:
     void remember(const std::string &line)
     {
         at = recall.size();
-        // "!setup join HOST TOKEN" carries the master Floyd's token: never kept in the history file
-        bool joins = line.size() > 11 && strncasecmp(line.c_str(), "!setup join", 11) == 0;
+        // "!setup join HOST TOKEN" and "!setup delta TOKEN" carry a token: never kept in the history file
+        bool joins = (line.size() > 11 && strncasecmp(line.c_str(), "!setup join", 11) == 0) ||
+                     (line.size() > 12 && strncasecmp(line.c_str(), "!setup delta", 12) == 0);
         if (line.find_first_not_of(' ') == std::string::npos || line[0] == ' ' || joins || (secret && secret(line)) ||
             (!recall.empty() && recall.back() == line))
             return;

@@ -159,7 +159,7 @@ other app").  That spool stays the only thing the C++ apps read, so **no C++ cha
 Chris asked for the back-and-forth and the configuration to be hidden and automated as far as possible, and for Floyd to
 have "setup wizard" powers.
 
-## `!setup` (tvfloyd.py `wizard_command`, in the Floyd window of tvcal and tvmail, and of a local floyd account in tvchat)
+## `!setup` (tvfloyd.py `wizard_command`, in the Floyd window (F7) of tvcal, tvmail and, since 2026-11-04, tvchat: File > Floyd, the assistant..., the verbs `floyd` / `floyd-poll` of tvchat-backend; it opens even on a machine with no tvchat.conf)
 - **Once per machine:** `!setup join HOST TOKEN` checks the token against the master, writes `[floyd] server / token /
   machine` into that app's conf, and shows the report.  The line is never kept in the input history (`TRecallLine`).
 - **After that:** `!setup` compares this machine with the master's *manifest* (`/etc/tvchat/floyd-setup.json`, served by the
@@ -185,3 +185,8 @@ have "setup wizard" powers.
   The event ends with the offer (a `recover` with the same key).  The code is a one-time secret that rides the same plain LAN
   TCP as the gate's token.  Without a master it is shown in the dialog to type by hand.
 - The core stops its mail traffic while an offer stands; Done in the dialog ends the offer and restarts it.
+
+## Update 2026-11-04: Delta Chat moved to a gateway (supersedes the second-device path above)
+Chris chose one Delta Chat account per person on cpbee behind `dcgw` (tvchat/DELTA-GATEWAY.md): the wizard's Delta entry is now a
+gateway account (`gateway`, `gateway_tls`, `gateway_cafile = @CA:dcgw@`), the token is saved with `!setup delta TOKEN`, the
+manifest has no `delta_owner`, and the sentinel watches `dcgw`.  The second-device menu items stay as a fallback.

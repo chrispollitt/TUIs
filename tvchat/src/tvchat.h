@@ -39,6 +39,7 @@ const ushort cmChatToCal = 2150;       // Chat > Add selection to calendar...: t
 const ushort cmChatToTodo = 2151;      // Chat > Add selection as to-do...
 const ushort cmChatDeviceAdd = 2152;   // Chat > Add second device...: offer a Delta Chat account to another machine
 const ushort cmChatDeviceUse = 2153;   // Chat > Use account from another device...: take the account that machine offers
+const ushort cmFloyd = 2154;           // File > Floyd, the assistant... (F7)
 const ushort cmChatAcctPicked = 2140; // broadcast: the chat window's server pane moved
 const ushort cmChatConvPicked = 2141; // broadcast: its conversation pane moved
 
@@ -50,7 +51,9 @@ bool chatOn();                         // tvchat-backend is up
 TSubMenu &chatSubMenu();               // for initMenuBar: the items, before chat starts
 void chatMenuRebuild();                // the account list and its states, afresh
 void chatMenuGrey();                   // set the items' disabled flags
-bool chatCommand(ushort command);      // a cmChat* command; false if not one
+bool chatCommand(ushort command);      // a cmChat* command (and cmFloyd); false if not one
+bool chatAsk(const std::string &req, std::string &body, std::string &err); // one request to tvchat-backend (floydwin.cpp)
+TWindow *newFloydWindow(const TRect &bounds); // floydwin.cpp: Floyd's chat window (F7)
 void openChatWindow();                 // the 3-pane window, made the first time
 std::string chatWatchedConv();           // the conversation shown while the chat window is in front, else ""
 

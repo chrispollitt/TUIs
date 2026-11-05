@@ -64,6 +64,7 @@ TMenuBar *TVChatApp::initMenuBar(TRect r)
     r.b.y = r.a.y + 1;
     return new TVChatMenuBar(r,
                         *new TSubMenu("~F~ile", kbAltF) +
+                            *new TMenuItem("~F~loyd, the assistant...", cmFloyd, kbF7, hcNoContext, "F7") +
                             tvConfigItem() +
                             tvReloadItem() +
                             tvExitItem() +
