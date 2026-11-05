@@ -1310,6 +1310,15 @@ def _persona_mind(mind, text, level, who):
 IRC_ONLY = ("seen", "tell", "karma", "leave")
 
 
+def fortune_phrase(prog, master=False):
+    """Where his fortunes come from, for !status: the master's when it answers."""
+    if master and prog is None:                         # an older master that does not say
+        return "the master's"
+    who = "the master's " if master else ""
+    return ("%ssystem's fortune program (%s)" % (who, prog) if prog
+            else "%sown, built in - no fortune program is installed" % ("the master's " if master else "his "))
+
+
 def status_lines(app, level, cfg, path=None):
     """!status: how he is, in a few lines."""
     mind = _MINDS.get(path)
@@ -1326,8 +1335,7 @@ def status_lines(app, level, cfg, path=None):
         "Master Floyd: %s." % master_state(m, hello),
         "Claude: %s." % (claude_state(cfg) if not up else
                          "yes, on the master (%s) - ask with !claude QUESTION" % m["server"]),
-        "Fortunes: %s." % ("the system's fortune program (%s)" % fort if fort
-                           else "his own, built in - no fortune program is installed"),
+        "Fortunes: %s." % fortune_phrase(hello.get("fortune") if up else fort, up),
         "He remembers %s quotes and %s facts%s. !about says more, help lists his commands." % (
             quotes, facts, " (the master's: that is the memory in use)" if up else "")]
 
@@ -1667,7 +1675,9 @@ class FloydGate(object):
         who = re.sub(r"[^\w.@-]", "", str(req.get("who") or "friend"))[:32] or "friend"
         text = str(req.get("text") or "")[:4000]
         if op == "hello":
-            return {"ok": True, "v": 1, "level": self.level,
+            if getattr(self, "_fm", None) is None:
+                self._fm = FloydMind(nick="floyd", memory=self.memory)
+            return {"ok": True, "v": 1, "level": self.level, "fortune": self._fm.fortune_prog() or "",
                     "quotes": len(self.memory.data.get("quotes", [])), "facts": len(self.memory.data.get("facts", {}))}
         if op == "say":
             level = parse_level(req.get("level"), self.level)
@@ -1953,3 +1963,230 @@ if __name__ == "__main__":
     if "--relay" in _sys.argv[1:]:
         raise SystemExit(relay_run())
     print("tvfloyd.py is a library; --relay runs the notification relay (started by the tv* backends).")
+
+
+# -- the sentinel (part 2, phase 2 of tvcommon/FLOYD-MASTER.md) --------------------
+# Runs in the master's daemon: every `interval` seconds it checks the server's services, the outside hosts
+# its mail depends on, the mail queue and the disk, and says what changed to the event hub (and so, through
+# the relays, to every machine's toasts).  A check must fail `need` times in a row before it counts as down
+# (one blip is not an outage); there is one "outage" event (sticky, error) when it goes down, a reminder every
+# `remind` seconds while it stays down, and one "recover" event when it is back.  A shutdown of the server
+# itself, scheduled or begun, is announced too.  The checks run on a worker thread, never on the loop.
+SERVICE_LABELS = {"ergo": "IRC server (Ergo)", "talkd": "talkd (chat)", "dovecot": "mailbox server (Dovecot)",
+                  "postfix": "mail relay (Postfix)", "radicale": "calendar server (Radicale)"}
+SENTINEL_SERVICES = "ergo:6697, talkd:518@127.0.0.1, dovecot:993, postfix:25@127.0.0.1, radicale:5232"
+SENTINEL_HOSTS = "u-l.ca mail relay=u-l.ca:465, u-l.ca mailbox=u-l.ca:993"
+
+
+def _tcp_ok(host, port, timeout=4.0):
+    try:
+        socket.create_connection((host, int(port)), timeout=timeout).close()
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def check_service(unit, port=None, host="127.0.0.1"):
+    """(ok, detail) for a systemd unit, and for its port when one is given ("active but not answering")."""
+    unit = unit if "." in unit else unit + ".service"
+    try:
+        st = subprocess.run(["systemctl", "is-active", unit], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                            timeout=10).stdout.decode().strip() or "unknown"
+    except (OSError, subprocess.SubprocessError):
+        return True, "cannot ask systemd"                  # an unknown is not an outage
+    if st != "active":
+        return False, "unit is %s" % st
+    if port and not _tcp_ok(host, port):
+        return False, "running but not answering on port %s" % port
+    return True, ""
+
+
+def check_host(host, port):
+    return (True, "") if _tcp_ok(host, port, 5.0) else (False, "no answer on %s:%s" % (host, port))
+
+
+def mail_queue_length():
+    """Messages waiting in Postfix's queue, or None when it cannot be told (postqueue missing / not allowed)."""
+    exe = shutil.which("postqueue") or shutil.which("postqueue", path="/usr/sbin:/sbin")
+    if not exe:
+        return None
+    try:
+        out = subprocess.run([exe, "-p"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=15).stdout.decode()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if "queue is empty" in out:
+        return 0
+    m = re.search(r"in (\d+) Request", out)
+    return int(m.group(1)) if m else None
+
+
+def check_queue(limit):
+    n = mail_queue_length()
+    if n is None or n < limit:
+        return True, ""
+    return False, "%d message%s waiting in the mail queue (mail to the outside is stuck)" % (n, "" if n == 1 else "s")
+
+
+def check_disk(path, percent):
+    try:
+        u = shutil.disk_usage(path)
+    except OSError:
+        return True, ""
+    used = 100.0 * (u.total - u.free) / max(1, u.total)
+    return (True, "") if used < percent else (False, "%s is %.0f%% full" % (path, used))
+
+
+def shutdown_state():
+    """None, ("scheduled", mode, epoch) for a `shutdown +10`, or ("now", mode) once the system is going down."""
+    try:
+        info = dict(l.strip().split("=", 1) for l in open("/run/systemd/shutdown/scheduled") if "=" in l)
+        return ("scheduled", info.get("MODE", "poweroff"), int(info.get("USEC", "0")) // 1000000)
+    except (OSError, ValueError):
+        pass
+    try:
+        out = subprocess.run(["systemctl", "list-jobs", "--no-pager", "--no-legend"], stdout=subprocess.PIPE,
+                             stderr=subprocess.DEVNULL, timeout=5).stdout.decode()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for l in out.splitlines():
+        for target, mode in (("reboot.target", "reboot"), ("poweroff.target", "poweroff"), ("halt.target", "halt"),
+                             ("kexec.target", "reboot")):
+            if target in l and " start" in l:
+                return ("now", mode)
+    return None
+
+
+def system_stopping():
+    try:
+        out = subprocess.run(["systemctl", "is-system-running"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                             timeout=5).stdout.decode().strip()
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return out == "stopping"
+
+
+def sentinel_checks(get, host="127.0.0.1"):
+    """The checks the account's options ask for: [(key, label, need, fn)].  get(key, default) reads them:
+    sentinel_services = unit[:port[@host]], ...   sentinel_hosts = label=host:port, ...   sentinel_queue = N
+    (0 = off)   sentinel_disk = PERCENT (0 = off)."""
+    out = []
+    for spec in (get("sentinel_services", "") or SENTINEL_SERVICES).split(","):
+        spec = spec.strip()
+        if not spec or spec.lower() in ("none", "off", "no"):
+            continue
+        unit, _, rest = spec.partition(":")
+        port, _, h = rest.partition("@")
+        base = unit.split(".")[0]
+        out.append(("svc:" + base, SERVICE_LABELS.get(base, base), 2,
+                    lambda u=unit, p=port, hh=h or host: check_service(u, p or None, hh)))
+    for spec in (get("sentinel_hosts", "") or SENTINEL_HOSTS).split(","):
+        label, _, target = spec.strip().rpartition("=") if "=" in spec else ("", "", spec.strip())
+        h, _, p = target.rpartition(":")
+        if not (h and p.isdigit()):
+            continue
+        out.append(("host:%s:%s" % (h, p), label.strip() or "%s port %s" % (h, p), 2,
+                    lambda hh=h, pp=p: check_host(hh, pp)))
+
+    def num(key, default):
+        try:
+            return float(str(get(key, "") or default).strip())
+        except ValueError:
+            return float(default)
+    q = int(num("sentinel_queue", 1))
+    if q > 0:
+        out.append(("queue", "outgoing mail", 4, lambda: check_queue(q)))
+    d = num("sentinel_disk", 90)
+    if d > 0:
+        out.append(("disk", "disk space", 2, lambda: check_disk("/", d)))
+    return out
+
+
+class Sentinel(object):
+    def __init__(self, loop, hub, checks, interval=30.0, remind=1800.0, log=None, clock=time.time, name="cpbee"):
+        self.loop, self.hub, self.checks = loop, hub, checks
+        self.interval, self.remind, self.clock, self.name = interval, remind, clock, name
+        self.log = log or _log
+        self.state = {}                          # key -> {"fails", "down_since", "last_said"}
+        self.sd = None                           # the last shutdown_state() announced
+
+    def start(self, first=10.0):
+        self.loop.call_later(first, self._tick)
+        self.loop.call_later(first, self._sd_tick)
+
+    # -- the periodic runs: a thread does the asking, the loop does the telling ---------
+    def _tick(self):
+        self.loop.run_in_thread(self.run_checks, self._done)
+
+    def _done(self, results, err):
+        if err is None and results is not None:
+            self.evaluate(results)
+        elif err is not None:
+            self.log.warning("sentinel: checks failed: %r", err)
+        self.loop.call_later(self.interval, self._tick)
+
+    def _sd_tick(self):
+        self.loop.run_in_thread(shutdown_state, self._sd_done)
+
+    def _sd_done(self, st, err):
+        if err is None:
+            self.shutdown(st)
+        self.loop.call_later(5.0, self._sd_tick)
+
+    def run_checks(self):
+        """Ask every check (at once, on threads): {key: (ok, detail)}."""
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=min(8, max(1, len(self.checks)))) as pool:
+            futs = [(k, pool.submit(fn)) for k, _label, _need, fn in self.checks]
+            res = {}
+            for k, f in futs:
+                try:
+                    res[k] = f.result(timeout=60)
+                except Exception as e:           # a broken check is not an outage
+                    res[k] = (True, "check failed: %s" % e)
+            return res
+
+    # -- what changed ------------------------------------------------------------------
+    def evaluate(self, results):
+        now = self.clock()
+        for key, label, need, _fn in self.checks:
+            if key not in results:
+                continue
+            ok, detail = results[key]
+            st = self.state.setdefault(key, {"fails": 0, "down_since": None, "last_said": 0})
+            if ok:
+                if st["down_since"] is not None:
+                    self.hub.publish("recover", "%s is back (was down %s)" % (label, _dur(now - st["down_since"])),
+                                     "info", origin=self.name, key=key)
+                    self.log.info("sentinel: %s is back", key)
+                st.update(fails=0, down_since=None, last_said=0)
+                continue
+            st["fails"] += 1
+            if st["down_since"] is None and st["fails"] >= need:
+                st.update(down_since=now, last_said=now)
+                self.hub.publish("outage", "%s is down: %s" % (label, detail), "error", origin=self.name, key=key)
+                self.log.warning("sentinel: %s is down: %s", key, detail)
+            elif st["down_since"] is not None and now - st["last_said"] >= self.remind:
+                st["last_said"] = now
+                self.hub.publish("outage", "%s is still down after %s: %s" % (label, _dur(now - st["down_since"]), detail),
+                                 "error", origin=self.name, key=key)
+
+    def shutdown(self, st):
+        """Announce a scheduled or begun shutdown of the server, and a cancelled one."""
+        if st == self.sd:
+            return
+        old, self.sd = self.sd, st
+        words = {"reboot": "reboot", "poweroff": "power off", "halt": "halt"}
+        if st is None:
+            if old and old[0] == "scheduled":
+                self.hub.publish("recover", "%s: the scheduled shutdown was cancelled" % self.name, "info",
+                                 origin=self.name, key="shutdown")
+            return
+        mode = words.get(st[1], st[1])
+        if st[0] == "scheduled":
+            left = st[2] - self.clock()
+            when = time.strftime("%H:%M", time.localtime(st[2]))
+            self.hub.publish("shutdown", "%s will %s at %s (in %s)" % (self.name, mode, when, _dur(max(0, left))),
+                             "warn", origin=self.name, key="shutdown")
+        else:
+            self.hub.publish("shutdown", "%s is going down now (%s)" % (self.name, mode), "error",
+                             origin=self.name, key="shutdown")

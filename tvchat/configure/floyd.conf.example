@@ -193,6 +193,20 @@ claude_dir      = ~
 #gate_listen    = 192.168.10.1
 # the shared secret (a file, mode 640 root:floyd, is better than gate_token = ...)
 #gate_token_file = /etc/tvchat/floyd-gate.token
+# The sentinel (needs the gate): every 30 s he checks the server and tells every machine's toasts when something
+# changes: a service down (and back), the outside hosts mail depends on, a stuck mail queue, a full disk, and a
+# shutdown of the server (scheduled or begun).  A check must fail twice in a row (the queue: four times) first.
+#sentinel          = yes
+#sentinel_interval = 30
+# a reminder while something stays down, in seconds
+#sentinel_remind   = 1800
+# systemd units: unit[:port[@host]]; with a port, "running but not answering" counts as down too (host defaults to gate_listen)
+#sentinel_services = ergo:6697, talkd:518@127.0.0.1, dovecot:993, postfix:25@127.0.0.1, radicale:5232
+# outside hosts: label=host:port
+#sentinel_hosts    = u-l.ca mail relay=u-l.ca:465, u-l.ca mailbox=u-l.ca:993
+# messages waiting in Postfix's queue before it counts (0 = off), and the disk's percent full (0 = off)
+#sentinel_queue    = 1
+#sentinel_disk     = 90
 # what he remembers (seen, tells, karma, quotes, facts)
 #memory   = ~/.local/share/tvchat/floyd/floyd.json
 

@@ -4887,8 +4887,9 @@ class FloydAdapter(CommandMixin):
             (0.8, "Floyd %s has been up %s%s. Level here: %s (%s)." % (
                 __version__, up, " on " + ", ".join(nets) if nets else "", lvl, tvf.LEVEL_BLURB[lvl]))] + mline + [
             (1.6, "Claude: %s." % self._claude_state(conv, msg.sender)),
-            (2.4, "Fortunes: %s." % ("the system's fortune program (%s)" % fort if fort
-                                     else "his own, built in - no fortune program is installed")),
+            (2.4, "Fortunes: %s." % (tvf.fortune_phrase(hello.get("fortune"), True) if up and hasattr(tvf, "fortune_phrase") else
+                                     ("the system's fortune program (%s)" % fort if fort
+                                      else "his own, built in - no fortune program is installed"))),
             (3.2, "He remembers %s quotes, %s facts%s, %d tells waiting, %d people seen; listening in %d conversations." % (
                 hello.get("quotes", 0) if up else len(d["quotes"]), hello.get("facts", 0) if up else len(d["facts"]),
                 " (the master's)" if up else "", len(d["tells"]), len(d["seen"]),
@@ -7824,8 +7825,17 @@ def cmd_floyd_daemon(a):
                 _log.info("%s: server: %s", fields[2].split("/", 1)[0], fields[7][:200])
         loop.call_later(2, drain)
 
+    hubs = []                                    # the gates' event hubs: told when the whole server is stopping
+
+    def on_term(*_):
+        if hubs and hasattr(tvf, "system_stopping") and tvf.system_stopping():
+            for h in hubs:                       # the relays poll every few seconds: stay up long enough to be heard
+                h.publish("shutdown", "cpbee is shutting down now", "error", origin="cpbee", key="shutdown")
+            loop.call_later(4.0, loop.stop)
+        else:
+            loop.stop()
     for sig in (signal.SIGTERM, signal.SIGINT):
-        signal.signal(sig, lambda *_: loop.stop())
+        signal.signal(sig, on_term)
     chat.start()
     for x in chat.accounts:                      # he is always on, with or without [chat] autoconnect
         if x.protocol in ("irc", "talk", "deltachat", "mail", "lhc", "floyd") and x.state == "disconnected":
@@ -7860,6 +7870,14 @@ def cmd_floyd_daemon(a):
         except (ValueError, OSError) as e:
             raise UserError("%s: the gate cannot start: %s" % (x.id, e))
         gates.append(gate)
+        hubs.append(gate.hub)
+        if _bool(o.get("sentinel"), False):       # watches the server and tells the hub (tvfloyd.py, Sentinel)
+            if not hasattr(tvf, "Sentinel"):
+                raise UserError("%s: sentinel = yes needs the newer tvfloyd.py beside this program" % x.id)
+            host = (o.get("gate_listen") or "127.0.0.1").strip()
+            tvf.Sentinel(loop, gate.hub, tvf.sentinel_checks(lambda k, d, o=o: o.get(k) or d, host=host),
+                         interval=ad._number(o.get("sentinel_interval"), 30),
+                         remind=ad._number(o.get("sentinel_remind"), 1800), log=_log).start()
     _log.info("floyd-daemon %s: up (%s)", __version__, _conf_path())
     loop.call_later(1, drain)
     try:

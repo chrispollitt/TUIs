@@ -395,5 +395,147 @@ class TestRelay(unittest.TestCase):
         self.assertFalse([n for n in os.listdir(os.path.join(self.spool, "tvcal")) if n.startswith(".tmp")])
 
 
+
+class TestSentinel(unittest.TestCase):
+    class Loop(object):
+        """call_later is recorded; run_in_thread runs the function at once."""
+        def __init__(self):
+            self.later = []
+
+        def call_later(self, delay, fn):
+            self.later.append((delay, fn))
+
+        def run_in_thread(self, fn, cb):
+            try:
+                res, err = fn(), None
+            except Exception as e:
+                res, err = None, e
+            cb(res, err)
+
+    def setUp(self):
+        self.t = [1000.0]
+        self.hub = tvf.EventHub(clock=lambda: self.t[0])
+        self.up = {"a": (True, ""), "b": (True, "")}
+        self.loop = self.Loop()
+        checks = [("svc:a", "Alpha", 2, lambda: self.up["a"]), ("host:b", "Beta mail", 3, lambda: self.up["b"])]
+        self.s = tvf.Sentinel(self.loop, self.hub, checks, interval=30, remind=600, clock=lambda: self.t[0])
+
+    def texts(self, machine="m"):
+        return [(e["kind"], e["level"], e["text"]) for e in self.hub.since(0, machine)[1]]
+
+    def round(self, **states):
+        self.up.update(states)
+        self.s._tick()
+        self.t[0] += 30
+
+    def test_one_blip_is_not_an_outage_and_a_real_one_is_told_once_then_recovered(self):
+        self.round(a=(False, "unit is failed"))
+        self.assertEqual(self.texts(), [])                                    # one failure: nothing said
+        self.round(a=(True, ""))
+        self.round(a=(False, "unit is failed"))
+        self.round(a=(False, "unit is failed"))                                # second in a row: down
+        self.assertEqual(self.texts(), [("outage", "error", "Alpha is down: unit is failed")])
+        self.round()                                                           # still down: not repeated
+        self.assertEqual(len(self.texts()), 1)
+        self.assertEqual(self.hub.since(None, "late")[1][0]["key"], "svc:a")   # a machine that connects now is told
+        self.round(a=(True, ""))
+        k = self.texts()
+        self.assertEqual(k[-1][0:2], ("recover", "info"))
+        self.assertIn("Alpha is back (was down", k[-1][2])
+        self.assertEqual(self.hub.since(None, "late2")[1], [])                 # no longer sticky
+
+    def test_need_counts_per_check_and_a_reminder_comes_while_it_stays_down(self):
+        for _ in range(2):
+            self.round(b=(False, "no answer"))
+        self.assertEqual(self.texts(), [])                                     # Beta mail needs 3
+        self.round(b=(False, "no answer"))
+        self.assertEqual([x[2] for x in self.texts()], ["Beta mail is down: no answer"])
+        self.t[0] += 700
+        self.round(b=(False, "no answer"))
+        self.assertIn("still down after", self.texts()[-1][2])
+        self.assertEqual(len(self.texts()), 2)
+
+    def test_a_broken_check_is_not_an_outage(self):
+        def boom():
+            raise RuntimeError("x")
+        self.s.checks = [("svc:z", "Zed", 1, boom)]
+        self.s._tick()
+        self.assertEqual(self.texts(), [])
+
+    def test_the_timers_rearm_themselves(self):
+        self.s.start(first=1)
+        self.assertEqual(len(self.loop.later), 2)
+        self.loop.later.pop(0)[1]()                                            # the check tick ran
+        self.assertEqual([d for d, _ in self.loop.later][-1], 30)
+
+    def test_shutdown_scheduled_cancelled_and_begun(self):
+        self.s.shutdown(("scheduled", "reboot", int(self.t[0]) + 600))
+        k = self.texts()
+        self.assertEqual(k[0][:2], ("shutdown", "warn"))
+        self.assertIn("will reboot at", k[0][2])
+        self.assertIn("(in 10m", k[0][2])
+        self.s.shutdown(("scheduled", "reboot", int(self.t[0]) + 600))        # the same state again: not repeated
+        self.assertEqual(len(self.texts()), 1)
+        self.s.shutdown(None)
+        self.assertIn("cancelled", self.texts()[-1][2])
+        self.assertEqual(self.hub.since(None, "x")[1], [])                    # sticky key cleared
+        self.s.shutdown(("now", "poweroff"))
+        self.assertEqual(self.texts()[-1][:2], ("shutdown", "error"))
+        self.assertIn("going down now (power off)", self.texts()[-1][2])
+
+    def test_the_checks_come_from_the_options(self):
+        got = tvf.sentinel_checks(lambda k, d: {"sentinel_services": "ergo:6697, talkd:518@127.0.0.1",
+                                                "sentinel_hosts": "My relay=example.org:465",
+                                                "sentinel_queue": "0", "sentinel_disk": "85"}.get(k, d), host="10.0.0.1")
+        self.assertEqual([(k, lab) for k, lab, _n, _f in got],
+                         [("svc:ergo", "IRC server (Ergo)"), ("svc:talkd", "talkd (chat)"),
+                          ("host:example.org:465", "My relay"), ("disk", "disk space")])
+        dflt = tvf.sentinel_checks(lambda k, d: d)
+        keys = [k for k, _l, _n, _f in dflt]
+        for want in ("svc:ergo", "svc:dovecot", "svc:postfix", "svc:radicale", "svc:talkd", "host:u-l.ca:465",
+                     "host:u-l.ca:993", "queue", "disk"):
+            self.assertIn(want, keys)
+        none = tvf.sentinel_checks(lambda k, d: {"sentinel_services": "none", "sentinel_hosts": "x", "sentinel_queue": "0",
+                                                  "sentinel_disk": "0"}.get(k, d))
+        self.assertEqual(none, [])
+
+    def test_the_checks_themselves(self):
+        import socket
+        srv = socket.socket()
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        port = srv.getsockname()[1]
+        self.assertEqual(tvf.check_host("127.0.0.1", port), (True, ""))
+        srv.close()
+        ok, why = tvf.check_host("127.0.0.1", port)
+        self.assertFalse(ok)
+        self.assertIn("no answer", why)
+        self.assertEqual(tvf.check_disk("/", 101), (True, ""))
+        self.assertFalse(tvf.check_disk("/", 0.0001)[0])
+        old = tvf.mail_queue_length
+        try:
+            tvf.mail_queue_length = lambda: 3
+            ok, why = tvf.check_queue(1)
+            self.assertFalse(ok)
+            self.assertIn("3 messages waiting", why)
+            self.assertEqual(tvf.check_queue(5), (True, ""))
+            tvf.mail_queue_length = lambda: None                              # cannot be told: not an outage
+            self.assertEqual(tvf.check_queue(1), (True, ""))
+        finally:
+            tvf.mail_queue_length = old
+
+    def test_the_events_reach_a_relay_as_toasts(self):
+        # the whole way: the sentinel tells the hub, the gate serves it, the relay writes the spool note
+        os.environ["TV_SPOOL_DIR"] = os.path.join(tempfile.mkdtemp(), "spool")
+        self.addCleanup(os.environ.pop, "TV_SPOOL_DIR", None)
+        self.hub.publish("outage", "Ergo is down: unit is failed", "error", origin="cpbee", key="svc:ergo")
+        seq, evs = self.hub.since(None, "cmlaptop")
+        for ev in evs:
+            tvf.spool_write("tvcal", "cpbee", ev["level"], ev["text"])
+        d = os.path.join(os.environ["TV_SPOOL_DIR"], "tvcal")
+        notes = [open(os.path.join(d, n)).read() for n in os.listdir(d) if n.endswith(".note")]
+        self.assertEqual(notes, ["1\tcpbee\terror\tErgo is down: unit is failed\n"])
+
+
 if __name__ == "__main__":
     unittest.main()

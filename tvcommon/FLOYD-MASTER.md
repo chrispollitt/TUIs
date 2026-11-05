@@ -49,6 +49,13 @@ Extend `tvchat/deploy/floyd-voice-on-cpbee.sh` (or a sibling script): install ne
 
 # Part 2: the master as the suite's event hub (design 2026-11-04; phase 1 built, deploy: tvchat/deploy/floyd-hub-on-cpbee.sh)
 
+**Phase 2 as built:** `Sentinel` and the checks in tvfloyd.py, wired into `floyd-daemon` (`sentinel = yes` and the
+`sentinel_*` keys, tvchat/configure/floyd.conf.example); deploy: tvchat/deploy/floyd-sentinel-on-cpbee.sh.  Defaults watch
+ergo, talkd, dovecot, postfix, radicale (unit and port), u-l.ca:465 (cpbee's outgoing mail relay) and :993, the Postfix
+queue and the disk, and announce a scheduled or begun shutdown (also from the daemon's SIGTERM when the system is
+stopping).  Answers to the open questions were not needed: u-l.ca is cpbee's smarthost (`relayhost = [u-l.ca]:465`), so
+those two ports are what matter; change them with `sentinel_hosts`.
+
 **Phase 1 as built:** `EventHub` and the gate ops `publish` / `events` (tvfloyd.py), the relay (`python tvfloyd.py --relay`,
 started by the backends through `ensure_relay`), `!send MACHINE|all text`, the lost-contact toast.  One deviation from the text
 below: the relay *short-polls every 3 s* (a toast arrives within about 3 s) instead of long-polling, because a parked

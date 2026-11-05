@@ -629,6 +629,7 @@ class Floyd(Env):
         self.assertIn("master tea is hot", self.say("!tea"))               # only the master knows it
         st = self.say("!status")
         self.assertIn("answers", st)
+        self.assertIn("Fortunes: the master's ", st)                        # his fortunes come from the master too
         self.assertIn("answers (0 quotes, 1 facts)", st)                    # the master's numbers ...
         self.assertIn("He remembers 0 quotes and 1 facts (the master's", st)   # ... in both places, not the local file's
         open(conf, "w").write("[floyd]\nserver = 127.0.0.1:%d\ntoken = wrong\n" % port)
