@@ -41,10 +41,12 @@ if [[ ${RUN_ON_REMOTE:-0} != 1 && $(hostname -s) != "$HOST" ]]; then
     [[ -f $repo/$f ]] || die "$repo/$f is not here"
   done
   grep -q "^class FloydGate" "$repo/tvcommon/py/tvfloyd.py" || die "the repo's tvfloyd.py has no FloydGate (pull/commit first?)"
+  lanport=/home/chris/gh_cp/POSIX/net-utils/lan-port
+  [[ -f $lanport ]] || die "$lanport is not here (POSIX/net-utils)"
   ssh -o BatchMode=yes "$HOST" true || die "cannot ssh to $HOST"
   ssh "$HOST" 'rm -rf /tmp/floyd-gate && mkdir -m 700 /tmp/floyd-gate'
   scp -q "$here/$name" "$repo/tvchat/backend/tvchat-backend" "$repo/tvcal/backend/tvcal-backend" \
-        "$repo/tvmail/backend/tvmail-backend" "$repo/tvcommon/py/tvfloyd.py" "$HOST:/tmp/floyd-gate/"
+        "$repo/tvmail/backend/tvmail-backend" "$repo/tvcommon/py/tvfloyd.py" "$lanport" "$HOST:/tmp/floyd-gate/"
   rc=0
   ssh -t -o ServerAliveInterval=10 "$HOST" \
     "RUN_ON_REMOTE=1 bash /tmp/floyd-gate/$name; rc=\$?; rm -rf /tmp/floyd-gate; exit \$rc" || rc=$?
@@ -145,19 +147,8 @@ PYEOF
   say "  added (backup: $CONF.bak.$stamp)"
 fi
 
-say "  opening $PORT to the LAN in the firewall (cpbee's way: /etc/router-setup/lan0-tcp-ports + setup-router.sh fw) ..."
-PORTS=/etc/router-setup/lan0-tcp-ports
-sudo touch "$PORTS"
-if ! sudo grep -Eq "^[[:space:]]*$PORT([[:space:]]|\$)" "$PORTS"; then
-  printf '%s  # Floyd gate (tvchat-floyd; tvcal/tvmail ask the master Floyd)\n' "$PORT" | sudo tee -a "$PORTS" >/dev/null
-fi
-SR=$HOME/cmpi-router/bin/setup-router.sh
-if [[ -x $SR ]]; then
-  sudo "$SR" fw || die "setup-router.sh fw failed"
-else
-  say "  (no $SR; opening the port in the live firewall only - run setup-router.sh fw later to keep it)"
-  sudo nft add rule inet filter input iifname lan0 tcp dport "$PORT" accept
-fi
+say "  opening $PORT to the LAN with lan-port (the firewall tool: lists it, reloads once, confirms it is open) ..."
+bash "$D/lan-port" add "$PORT" "Floyd gate (tvchat-floyd; tvcal/tvmail ask the master Floyd)" || die "lan-port add $PORT failed"
 
 say "step 4/4: restarting tvchat-floyd ..."
 sudo systemctl restart tvchat-floyd
