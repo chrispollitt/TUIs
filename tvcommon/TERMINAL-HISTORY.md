@@ -1,5 +1,14 @@
 # The Great Terminal Divergence & Convergence: A History of Screen Addressing from Unix to Windows
 
+> **TL;DR**
+>
+> * **Two models.** Unix (and CP/M before it) sends everything, text and control, as one in-band byte stream of ANSI/VT escape sequences, with `terminfo`/`curses` hiding terminal differences (§1). DOS and Windows went the other way: first direct video RAM and BIOS calls, then the out-of-band Win32 Console API (`conhost`), and in 64-bit Windows even `ANSI.SYS` is gone (§2).
+> * **They converged on the Unix one.** Windows 10 added VT processing (2016), then `ConPTY` (2018) and Windows Terminal (2019): escape sequences are now the common language, and `ConPTY` translates old Win32 console calls into them (§4–§6).
+> * **The asterisk.** A full-screen TUI that negotiates live (`tvmail`, `tvchat`) over `ssh` from Windows Terminal still suffers: replies and key records arrive late or cut in two (16-33 ms against ncurses' 10 ms Escape timeout), and Cygwin's own console layer swallows OSC colour queries (§7.1-§7.4). Measure it with `termprobe`.
+> * **Fixes.** `tvmail` raises `ESCDELAY` to 100 ms and builds tvision with a 50 ms read timeout; `wincygterm` runs Cygwin programs on a real pty inside Windows Terminal (§7.5).
+> * **And the reverse.** A pty starves native Windows console programs that want the real console (mouse events, `WriteConsoleOutput`): Microsoft Edit's mouse is dead under `wincygterm`. `wcdirect PROG` hands the console over for one program (§7.6).
+> * **DOS-era programs.** Those that write video RAM or call BIOS `INT 10h` cannot run on 64-bit Windows at all; those that print `ANSI.SYS`-style sequences work wherever the terminal understands them, and `termprobe --dos` checks that.
+
 For decades, the developer experience on Unix/Linux and MS-DOS/Windows was separated by a fundamental architectural divide: **how programs communicate with the terminal screen**. Unix built an ecosystem around character streams, teletypes, and ANSI/VT control sequences. Windows, by contrast, built its command-line interface around object handles, memory buffers, and programmatic Win32 API calls.
 
 This document traces the history of how screen addressing and terminal control diverged between these OS paradigms, the legacy abstractions created on both sides, and the modern engineering efforts (from WinPty to Windows Terminal and ConPTY) that brought them back together — and the specific corner where, as of 2026, they still haven't: `tvmail` and `tvchat` (this repo) running over SSH into a Windows Terminal client (§7).
@@ -268,9 +277,9 @@ The cleanest cure for the Cygwin-console half of the problem turned out to be gi
 
 ### 7.4 The corrected claim
 
-> `ConPTY` closes the gap for **local, single-hop console apps** — the WSL/PowerShell/VS Code terminal case §4–§6 describe. For a **remote TUI that negotiates live**, the path through Windows Terminal, `ssh` and a Cygwin pty is not lossless, but it is not hopeless either: replies and key records get through whole, only sometimes **late and in pieces** (16-33 ms apart in the measurements above, roughly one record in ten), and a program that waits long enough for the rest — tvision with `ESCDELAY` and its read timeout raised — works. Separately, **Cygwin's own console layer swallows OSC queries**, so a Cygwin program in a Cygwin console tab cannot learn the terminal's colours; going through a pty (`ssh` to the machine, mintty, or `wincygterm`, §7.4) avoids that. An actual terminal emulator talking to an actual pty — `mintty`, a real `xterm`, WSL's own console — is still the only path with no such caveats.
+> `ConPTY` closes the gap for **local, single-hop console apps** — the WSL/PowerShell/VS Code terminal case §4–§6 describe. For a **remote TUI that negotiates live**, the path through Windows Terminal, `ssh` and a Cygwin pty is not lossless, but it is not hopeless either: replies and key records get through whole, only sometimes **late and in pieces** (16-33 ms apart in the measurements above, roughly one record in ten), and a program that waits long enough for the rest — tvision with `ESCDELAY` and its read timeout raised — works. Separately, **Cygwin's own console layer swallows OSC queries**, so a Cygwin program in a Cygwin console tab cannot learn the terminal's colours; going through a pty (`ssh` to the machine, mintty, or `wincygterm`, §7.5) avoids that. An actual terminal emulator talking to an actual pty — `mintty`, a real `xterm`, WSL's own console — is still the only path with no such caveats.
 
-### 7.4 A client-side fix: `wincygterm`
+### 7.5 A client-side fix: `wincygterm`
 
 The measurements above point at Cygwin's console layer (`/dev/cons*`), not at `ConPTY`, so the cleanest client-side fix is to take that layer out of the path. [`wincygterm`](https://github.com/chrispollitt/CWPutils/tree/main/toolbox) (CWPutils/toolbox, written after the `termprobe` runs) does that: a small front-end on *native* Windows Python owns the Windows Terminal console in raw VT mode, and a helper on Cygwin's Python starts the command on a real Cygwin pty (`/dev/pty*`) and relays bytes between the two. That is the opposite of `winpty`, which puts a Windows console program inside a Unix pty. A Windows Terminal profile that runs `wincygterm -- ssh <host>` therefore gets the same pty-backed behaviour that mintty gives, with Windows Terminal as the window. Its man page records a live `tvmail` session and a colour query (`termprobe`) as tested; as above, only that path has been re-tested, so treat other combinations as unverified. It is not needed in mintty, which already starts programs on a pty.
 
@@ -278,7 +287,7 @@ It replaces the earlier workaround of running `ssh` from inside WSL (`wsl.exe -d
 
 Open questions, for anyone with the patience: which layer fragments the key records and why at timer-tick multiples, and why the Cygwin console drops OSC strings that Windows Terminal would answer (`termprobe` is a ready-made reproducer for both).
 
-### 7.5 The other direction: a Windows program that wants the console itself (`wcdirect`)
+### 7.6 The other direction: a Windows program that wants the console itself (`wcdirect`)
 
 A pty fixes the Cygwin side and costs something on the Windows side. §2.2's Win32 Console API is not a byte stream, and a native console program that uses it as designed — asks for mouse events with `ENABLE_MOUSE_INPUT`, reads `INPUT_RECORD`s, draws with `WriteConsoleOutput` — needs to be attached to a real console. Found in November 2026 with Microsoft Edit (`edit.exe`, the new `ms-edit`), a plain native console executable. Its mouse worked in:
 
