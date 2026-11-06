@@ -277,3 +277,26 @@ The measurements above point at Cygwin's console layer (`/dev/cons*`), not at `C
 It replaces the earlier workaround of running `ssh` from inside WSL (`wsl.exe -d Ubuntu ssh <host>`), which works for the same reason (WSL's `ssh` talks to a pty) but needs a WSL distribution. The `ESCDELAY` and read-timeout change in `tvmail` stays useful either way: it protects other paths that fragment key records, such as Windows' own `ssh.exe`.
 
 Open questions, for anyone with the patience: which layer fragments the key records and why at timer-tick multiples, and why the Cygwin console drops OSC strings that Windows Terminal would answer (`termprobe` is a ready-made reproducer for both).
+
+### 7.5 The other direction: a Windows program that wants the console itself (`wcdirect`)
+
+A pty fixes the Cygwin side and costs something on the Windows side. §2.2's Win32 Console API is not a byte stream, and a native console program that uses it as designed — asks for mouse events with `ENABLE_MOUSE_INPUT`, reads `INPUT_RECORD`s, draws with `WriteConsoleOutput` — needs to be attached to a real console. Found in November 2026 with Microsoft Edit (`edit.exe`, the new `ms-edit`), a plain native console executable. Its mouse worked in:
+
+| Where `edit` / a test program ran | Mouse |
+| :--- | :--- |
+| `conhost` | works |
+| Windows Terminal, from a `cmd` shell | works |
+| Windows Terminal, from Cygwin `bash` without `wincygterm` (bash on `/dev/cons*`) | works |
+| Windows Terminal, from Cygwin `bash` **under `wincygterm`** (bash on `/dev/pty*`) | **dead** |
+
+The pattern fits the layer, not the program: with bash on the console layer, a native program started from it is attached to the real console and gets Windows Terminal's mouse events; on a pty, Cygwin starts it on a hidden pseudo console (`pcon`) and only text flows between that and the pty, so nothing delivers mouse events to it. That is an inference from where the failure appears; `pcon` itself was not examined. §2.1 says why DOS-era programs cannot be helped at all: direct video RAM (`B800:0000`) and BIOS `INT 10h` do not exist on 64-bit Windows, with or without a pty. The ANSI.SYS-style escape sequences those programs would print are plain bytes and pass through `wincygterm` like any other; `termprobe --dos` (November 2026) measures what the terminal does with them: cursor movement by asking `ESC[6n`, the 16-colour attribute byte read back with DECRQSS, and the width of the 256 CP437 glyphs. <!-- allowlist secret -->
+
+**The fix is a hand-over, not a faster pipe.** `wcdirect PROG [ARG...]` (a symlink to `wincygterm`, installed by `make install` in CWPutils/toolbox; `wincygterm --direct` does the same) runs on the Cygwin pty and asks the front-end to run `PROG` on the real console instead:
+
+1. The shim prints a private OSC string, `ESC ] 7077 ; direct ; TOKEN ; base64(JSON{argv, cwd}) BEL`, on the pty. The front-end, which sees all output, cuts it out of the stream (including when it arrives in pieces).
+2. It answers `ESC ] 7077 ; ack BEL` at once, puts the console back into the modes it found at start, and runs `PROG` attached to it — the same situation as the working `cmd` case above. Its own input and output loops stand aside meanwhile.
+3. When `PROG` ends it returns to raw VT mode, resets mouse, paste and keyboard modes the program may have left on, and sends `ESC ] 7077 ; exit ; STATUS BEL`. The shim exits with that status, so the shell sees an ordinary command.
+
+Because anything that can write to the terminal could otherwise ask for programs to be run, the request carries `TOKEN`: a random per-session secret that only processes started by that `wincygterm` have (`$WINCYGTERM_TOKEN`). A request without it — from a file you `cat`, from a host you `ssh` to — is dropped silently. It is not a boundary against your own processes, and `--no-direct` turns the feature off.
+
+Tested November 2026 (Windows Terminal, Cygwin 3.x): the request filter, split at every byte boundary; the shim against a stand-in front-end on a real Cygwin pty; and live, with a small Win32-API mouse program (`conmouse`, buttons and a doodle pad driven by `MOUSE_EVENT` records), which has a working mouse under `wcdirect` and none directly under `wincygterm`. Edit itself was the program that prompted it and is expected to behave the same, but is not recorded here as separately tested. Limits: use it for native Windows console programs only — a Cygwin program started this way is back on `/dev/cons*` and loses what `wincygterm` is for — and the program starts in the current directory with arguments passed as they are (a path in Cygwin form means nothing to it).
