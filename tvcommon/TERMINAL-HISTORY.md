@@ -66,7 +66,7 @@ While Unix leaned into in-band stream parsing, MS-DOS and early Windows rejected
       +-------------------------------------------------->+
 ```
 
-### 2.0 Before DOS: CP/M's In-Band Legacy (and Why MS-DOS Left It Behind)
+### 2.1 Before DOS: CP/M's In-Band Legacy (and Why MS-DOS Left It Behind)
 
 Before treating DOS as the origin of the API/handle paradigm, it's worth noting DOS's own ancestor didn't work that way. **MS-DOS began life as 86-DOS**, nicknamed **QDOS** ("Quick and Dirty Operating System"), written by Tim Paterson at Seattle Computer Products and acquired by Microsoft in 1980. It was deliberately modeled on **CP/M** (Gary Kildall, Digital Research, 1974) — closely enough that CP/M's `BDOS` function-call numbers map almost one-to-one onto early DOS's `INT 21h` calls, and CP/M's `.COM` binary format carried straight through into DOS.
 
@@ -76,7 +76,7 @@ The catch: CP/M never standardized *which* control codes meant what. An ADM-3A u
 
 **The irony that sets up the rest of this document:** when the IBM PC standardized the clone market around one video architecture, DOS software didn't inherit CP/M's in-band model — it *abandoned* it, because direct memory/BIOS access was now cheap, fast, and (for the first time) safe to assume across nearly all target machines. The API/handle model in §2.2–2.3 below isn't a Windows-native idea so much as what you get when hardware fragmentation is solved by market consolidation instead of by a software abstraction layer. Decades later, virtualization and remote sessions reintroduced exactly the fragmentation problem CP/M and Unix solved with in-band streams — which is a large part of why Windows eventually had to grow one too (§4). And as §7 shows, that regrowth is still incomplete at the edges — which is exactly how this repo's SSH corruption bug happened.
 
-### 2.1 MS-DOS: BIOS Calls and Video RAM
+### 2.2 MS-DOS: BIOS Calls and Video RAM
 In the MS-DOS world, application developers bypass standard streams (`stdout`) when building rich text applications:
 * **BIOS Int 10h:** Called directly to set cursor position or write character attributes.
 * **Direct Video RAM Write:** To achieve fast redraws, DOS programs wrote directly to memory locations `0xB8000` (Color Text Buffer) or `0xB000` (Monochrome Buffer). Screen cells were structured as 2-byte tuples: `[1 Byte ASCII Character | 1 Byte Attribute (4-bit foreground, 4-bit background)]`.
@@ -85,7 +85,7 @@ Microsoft provided an optional driver, `ANSI.SYS`, which parsed escape sequences
 
 **And then even that was taken away.** `ANSI.SYS`'s escape-code interpretation only ever ran inside the MS-DOS/Win16 environment. On NT-based Windows (NT4 through 7/8.1) it survived solely inside the 16-bit **`NTVDM`** subsystem via `CONFIG.NT` — still invisible to native 32-bit console apps, which had no escape-code interpretation of any kind. When 64-bit Windows dropped `NTVDM` entirely (there's no virtual‑8086 mode in long mode to host it — gone from XP x64 in 2005 onward, and with it on every 64‑bit SKU since), that last foothold disappeared too. From then until Windows 10 added `ENABLE_VIRTUAL_TERMINAL_PROCESSING` in 2016 (§4.1), there was **no in-band ANSI interpretation anywhere in native Windows** — not even the old DOS-box version. Developers who wanted colored console output in the meantime reached for third-party hacks like Jason Hood's **`ANSICON`** (2005), which hooked `WriteConsole`/`WriteFile` to reimplement `ANSI.SYS`-style translation for 32-bit apps — filling, unofficially, a gap Microsoft itself didn't close for over a decade.
 
-### 2.2 Windows NT and `ConHost`
+### 2.3 Windows NT and `ConHost`
 When Microsoft introduced Windows NT (1993), direct hardware/memory access was banned in user mode for safety and security. To support command-line programs, Microsoft created the **Win32 Console Subsystem**.
 
 Rather than implementing a stream-based terminal emulator, Windows introduced a rich **Win32 Console API**:
@@ -98,7 +98,7 @@ Under the hood, Windows managed a server process:
 * **`csrss.exe`** (Client/Server Runtime Subsystem) in early Windows NT versions.
 * **`conhost.exe`** (Console Window Host), introduced in Windows 7 to isolate console hosting out of `csrss.exe` for security, stability, and visual styling (DWM/Aero support).
 
-### 2.3 The Architectural Split
+### 2.4 The Architectural Split
 This generated a fundamental split between paradigms:
 
 | Feature | Unix / POSIX Paradigm | Windows Console Paradigm |
