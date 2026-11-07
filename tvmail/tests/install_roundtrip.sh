@@ -20,7 +20,9 @@ P="$tmp/prefix"
 cmake --install "$build" --prefix "$P" >/dev/null || fail "cmake --install"
 [ -e "$P/bin/tvmail-backend" ] || fail "nothing installed"
 [ ! -e "$P/bin/tvchat-backend" ] || fail "tvmail installed tvchat's backend"
-n=$(find "$P" -type f | wc -l)
+# (BSD and macOS wc pad the count with spaces, hence the tr)
+nfiles() { find "$1" -type f | wc -l | tr -d ' '; }
+n=$(nfiles "$P")
 
 # a legacy pop-pull that a mail-pull wrapper still uses must be kept
 mkdir -p "$tmp/home/bin"
@@ -28,7 +30,7 @@ echo '#!/bin/sh' > "$P/bin/pop-pull"
 printf '#!/bin/sh\nexec "%s" "$@"\n' "$P/bin/pop-pull" > "$tmp/home/bin/mail-pull"
 
 HOME="$tmp/home" "$here/uninstall.sh" -n --prefix "$P" >/dev/null || fail "uninstall -n"
-[ "$(find "$P" -type f | wc -l)" = $((n + 1)) ] || fail "--dry-run removed something"
+[ "$(nfiles "$P")" = $((n + 1)) ] || fail "--dry-run removed something"
 
 HOME="$tmp/home" "$here/uninstall.sh" -y --prefix "$P" > "$tmp/out" 2>&1 || { cat "$tmp/out"; fail "uninstall -y"; }
 left=$(find "$P" -type f ! -path "$P/bin/pop-pull")

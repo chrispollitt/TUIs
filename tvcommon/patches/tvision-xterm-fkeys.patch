@@ -1,0 +1,32 @@
+diff --git a/source/platform/ncursinp.cpp b/source/platform/ncursinp.cpp
+index 82c7235..1365d2c 100644
+--- a/source/platform/ncursinp.cpp
++++ b/source/platform/ncursinp.cpp
+@@ -284,6 +284,27 @@ NcursesInput::NcursesInput( ConsoleCtl &aCon, NcursesDisplay &,
+     nonl();
+     // Allow capturing function keys.
+     keypad(stdscr, true);
++    /* Some terminal databases (FreeBSD's base system one, for example) have no
++     * entries for the xterm sequences of Shift/Ctrl/Alt + F1-F12, which
++     * fromCursesKeyCode above expects as kf13...kf60. Define those that are
++     * missing, as the xterm terminfo entries do. */
++    {
++        // modifier parameter (2 Shift, 5 Ctrl, 6 Ctrl+Shift, 3 Alt) and first key code
++        static const struct { int mod, base; } mods[] =
++            { {2, 12}, {5, 24}, {6, 36}, {3, 48} };
++        static const int tilde[] = {15, 17, 18, 19, 20, 21, 23, 24}; // F5-F12
++        for (const auto &m : mods)
++            for (int f = 1; f <= 12; ++f)
++            {
++                char seq[16];
++                if (f <= 4)
++                    snprintf(seq, sizeof(seq), "\033[1;%d%c", m.mod, 'O' + f);
++                else
++                    snprintf(seq, sizeof(seq), "\033[%d;%d~", tilde[f - 5], m.mod);
++                if (key_defined(seq) == 0)
++                    define_key(seq, KEY_F0 + m.base + f);
++            }
++    }
+     // Make getch practically non-blocking. Some terminals may feed input slowly.
+     // Note that we only risk blocking when reading multibyte characters
+     // or parsing escape sequences.

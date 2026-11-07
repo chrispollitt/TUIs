@@ -79,6 +79,12 @@ class FakeTalkd(threading.Thread):
     def hang_up(self):
         with self.lock:
             if self.data is not None:
+                # shutdown first: close() alone does not send the FIN (or wake the thread
+                # reading the socket) on every system - FreeBSD, for one
+                try:
+                    self.data.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
                 self.data.close()
                 self.data = None
 

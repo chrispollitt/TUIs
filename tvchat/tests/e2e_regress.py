@@ -46,6 +46,12 @@ class Tv(tvscreen.Tv):
         # there would win over the one under test, so put ours there
         shutil.copy2(os.path.join(self.opts.backend_dir, "tvchat-backend"),
                      self.bindir / "tvchat-backend")
+        # the backend finds Floyd's words (tvcommon's tvfloyd.py) beside itself, so put
+        # that there too, or the test would only pass where tvchat is installed
+        for d in (HERE.parent / "tvcommon" / "py", HERE.parent.parent / "tvcommon" / "py"):
+            if (d / "tvfloyd.py").is_file():
+                shutil.copy2(d / "tvfloyd.py", self.bindir / "tvfloyd.py")
+                break
         self.env["TVMAIL_MU_TICKETS"] = str(self.tmp / "no-tickets")
         if self.srv:
             conf = self.tmp / "tvchat.conf"

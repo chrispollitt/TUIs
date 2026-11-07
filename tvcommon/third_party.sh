@@ -95,6 +95,16 @@ patch_tvision() {
       "$dbuf" > "$dbuf.new" && mv "$dbuf.new" "$dbuf"
   fi
 
+  # Some terminal databases (FreeBSD's base one) have no entries for the xterm
+  # sequences of Shift/Ctrl/Alt + F1-F12, so tvision never sees those keys (Alt-F3
+  # closes a window).  patches/tvision-xterm-fkeys.patch defines the missing ones at
+  # startup; it does nothing where the database already has them.  (All platforms.)
+  fk="$here/patches/tvision-xterm-fkeys.patch"
+  if [ -f "$fk" ] && ! git -C "$tv" apply --check -R "$fk" >/dev/null 2>&1; then
+    echo ">> tvision: define xterm Shift/Ctrl/Alt+F1-F12 when the terminal database lacks them"
+    git -C "$tv" apply "$fk" || { echo "third_party.sh: couldn't apply $fk" >&2; return 1; }
+  fi
+
   case "$(uname -s 2>/dev/null || echo unknown)" in
     CYGWIN*)
       py="${PYTHON:-}"
