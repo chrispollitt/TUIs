@@ -65,6 +65,8 @@ int main(int argc, char **argv)
         return ok ? 0 : 1;
     }
 
+    if (!helperVersionGuard("tvmail-backend", TVMAIL_VERSION))
+        return 1;
     gRemote = backendRun("mode").rfind("remote", 0) == 0;
     gHost = splitLines(backendRun("host")).front();
 

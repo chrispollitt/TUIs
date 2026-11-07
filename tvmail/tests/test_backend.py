@@ -786,6 +786,14 @@ class FakeIMAP:
                         if "\\Seen" in flags:
                             return False
                         i += 1
+                    elif t == "NOT":
+                        # NOT OR HEADER Chat-Version "" (HEADER Content-Type multipart/encrypted HEADER To hidden-recipients)
+                        chat = (m.get("Chat-Version") is not None or (
+                            "multipart/encrypted" in (m.get("Content-Type", "") or "")
+                            and "hidden-recipients" in (m.get("To", "") or "")))
+                        if chat:
+                            return False
+                        i += 6
                     elif t == "BEFORE":
                         import time as _t
                         cut = _t.strptime(terms[i + 1], "%d-%b-%Y")
@@ -963,10 +971,43 @@ class TestRemoteIMAP(Base):
         selected = []
         orig = self.imap.select
         self.imap.select = lambda *a, **kw: (selected.append(a), orig(*a, **kw))[1]
-        out = self._run(be.cmd_counts, self.ns(mboxes=["spool", "trash"])).decode()
-        # INBOX has 3 messages, 2 unseen; Trash doesn't exist yet -> 0 0
-        self.assertEqual(out.splitlines(), ["spool\t3\t2", "trash\t0\t0"])
+        self.imap.add("Archive", _msg("a@x", "Kept", "b"))
+        out = self._run(be.cmd_counts, self.ns(mboxes=["saved", "trash"])).decode()
+        # Archive has 1 message, 1 unseen; Trash doesn't exist yet -> 0 0
+        self.assertEqual(out.splitlines(), ["saved\t1\t1", "trash\t0\t0"])
         self.assertEqual(selected, [])    # STATUS leaves the open folder alone
+
+    def _chat_mail(self):
+        enc = (b"From: michelle@x\r\nTo: \"hidden-recipients\": ;\r\nSubject: [...]\r\n"
+               b"Content-Type: multipart/encrypted; protocol=\"application/pgp-encrypted\"\r\n\r\nx\r\n")
+        plain = (b"From: michelle@x\r\nTo: chris@x\r\nSubject: hi\r\nChat-Version: 1.0\r\n\r\nx\r\n")
+        self.imap.add("INBOX", enc)
+        self.imap.add("INBOX", plain)
+
+    def test_delta_chat_mail_is_hidden_from_the_inbox_list_counts_and_indexes(self):
+        self._chat_mail()                          # uids 4 and 5, after the 3 ordinary ones
+        rows = [r for r in self._run(be.cmd_list, self.ns()).decode().splitlines() if r]
+        self.assertEqual(len(rows), 3, rows)
+        out = self._run(be.cmd_counts, self.ns(mboxes=["spool"])).decode()
+        self.assertEqual(out.splitlines(), ["spool\t3\t2"])
+        # an index is a position among the SHOWN messages, so delete #2 takes "Third", not chat mail
+        self._run(be.cmd_delete, self.ns(idx=[2], trash=None))
+        left = [m[0] for m in self.imap.folders["INBOX"]]
+        self.assertEqual(left, [1, 2, 4, 5])
+
+    def test_the_view_menu_choice_shows_it_for_every_command(self):
+        self._chat_mail()
+        self.assertEqual(self._run(be.cmd_chat, self.ns(what="show")).decode(), "shown\n")
+        rows = [r for r in self._run(be.cmd_list, self.ns()).decode().splitlines() if r]
+        self.assertEqual(len(rows), 5)
+        self.assertEqual(self._run(be.cmd_chat, self.ns(what="toggle")).decode(), "hidden\n")
+        rows = [r for r in self._run(be.cmd_list, self.ns()).decode().splitlines() if r]
+        self.assertEqual(len(rows), 3)
+
+    def test_other_folders_are_not_filtered(self):
+        self.imap.add("Archive", b"From: a@x\r\nChat-Version: 1.0\r\nSubject: kept\r\n\r\nx\r\n")
+        rows = [r for r in self._run(be.cmd_list, self.ns(mbox="mbox")).decode().splitlines() if r]
+        self.assertEqual(len(rows), 1)
 
     def test_show_over_imap(self):
         out = self._run(be.cmd_show, self.ns(idx=1)).decode()

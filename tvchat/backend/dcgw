@@ -24,6 +24,11 @@ two clients could not share).
                                              service must be stopped while this runs
     dcgw adopt NAME DIR                      take over an existing account folder (a tvchat deltachat/<account>)
     dcgw list                                the people, their addresses, and whether the account is configured
+
+Delta Chat mail shares the person's mailbox with their ordinary mail, so it would sit in their INBOX beside it.  Once
+the core has fetched a chat message (it is then \\Seen), the gateway files it in the folder `chat_folder` (default
+"ChatMail"; `sweep = no` in [dcgw] turns this off) - see sweep_chat_mail().  Moving it away is safe for the core, which
+keeps its own copy in its database and remembers the folder position by UID.
 """
 import argparse
 import configparser
@@ -307,6 +312,83 @@ class Core(object):
                 client.send({"jsonrpc": "2.0", "id": rid, "error": {"code": -32000, "message": "the Delta Chat core is gone"}})
 
 
+# -- keeping chat mail out of the ordinary inbox ------------------------------------------------------------
+# Encrypted Delta Chat mail has no Chat-Version header outside the encryption: what shows is To "hidden-recipients": ;
+# and a multipart/encrypted body.  Unencrypted chat mail has Chat-Version.  Either is chat mail.
+CHAT_CRIT = ["OR", "HEADER", "Chat-Version", '""',
+             "(HEADER Content-Type multipart/encrypted HEADER To hidden-recipients)"]
+SWEEP_MIN_AGE = 300           # seconds in the inbox before a message may be moved: the core fetches within moments, and
+                              # a message it has not fetched yet must stay put
+
+
+def _imap_open_for(tp):
+    """An IMAP connection from a core transport (list_transports): the same login the core uses."""
+    import imaplib
+    host = tp.get("imapServer") or (tp.get("addr") or "").rpartition("@")[2]
+    port = tp.get("imapPort")
+    sec = (tp.get("imapSecurity") or "").lower()          # "", automatic, ssl, starttls, plain
+    ctx = ssl.create_default_context()
+    if tp.get("certificateChecks") == "acceptInvalidCertificates":
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    use_ssl = sec in ("ssl",) or (sec in ("", "automatic") and int(port or 993) == 993)
+    port = int(port or (993 if use_ssl else 143))
+    m = imaplib.IMAP4_SSL(host, port, ssl_context=ctx, timeout=60) if use_ssl else imaplib.IMAP4(host, port, timeout=60)
+    if not use_ssl and sec != "plain":
+        m.starttls(ssl_context=ctx)
+    m.login(tp.get("imapUser") or tp.get("addr"), tp.get("password") or "")
+    return m
+
+
+def sweep_chat_mail(tp, folder="ChatMail", min_age=SWEEP_MIN_AGE, connect=None, now=None):
+    """Move chat mail the core has already read out of INBOX into `folder`.  Returns how many moved.
+    Only \\Seen messages at least `min_age` seconds old, and only when UID EXPUNGE is there (a plain EXPUNGE would also
+    remove messages other clients have marked \\Deleted).  Copy first, delete only what the copy answered for."""
+    import imaplib
+    import re
+    m = (connect or _imap_open_for)(tp)
+    try:
+        # the list imaplib keeps (m.capabilities) is the pre-login one and CAPABILITY does not refresh it: Dovecot adds
+        # UIDPLUS after login, so ask again and read the answer itself
+        typ, data = m.capability()
+        if typ != "OK" or "UIDPLUS" not in b" ".join(x for x in data if isinstance(x, bytes)).decode("latin-1").upper().split():
+            return 0
+        typ, _ = m.select("INBOX")
+        if typ != "OK":
+            return 0
+        typ, data = m.uid("SEARCH", None, "SEEN", *CHAT_CRIT)
+        uids = (data[0] or b"").split() if typ == "OK" else []
+        if not uids:
+            return 0
+        now = time.time() if now is None else now
+        old = []
+        typ, data = m.uid("FETCH", b",".join(uids).decode(), "(INTERNALDATE)")
+        for item in data or []:
+            raw = item if isinstance(item, bytes) else item[0]
+            mu = re.search(rb"UID (\d+)", raw)
+            t = imaplib.Internaldate2tuple(raw)
+            if mu and t and now - time.mktime(t) >= min_age:      # Internaldate2tuple: local time
+                old.append(mu.group(1).decode())
+        if not old:
+            return 0
+        m.create(folder)                                  # NO if it exists: fine
+        m.subscribe(folder)
+        moved = []
+        for u in old:
+            typ, _ = m.uid("COPY", u, folder)
+            if typ == "OK":
+                moved.append(u)
+        if moved:
+            m.uid("STORE", ",".join(moved), "+FLAGS.SILENT", r"(\Deleted)")
+            m.uid("EXPUNGE", ",".join(moved))
+        return len(moved)
+    finally:
+        try:
+            m.logout()
+        except Exception:
+            pass
+
+
 class Gateway(object):
     def __init__(self, conf_path=CONF):
         self.conf_path = conf_path
@@ -317,6 +399,9 @@ class Gateway(object):
         self.core_path = g.get("core", "") or shutil.which("deltachat-rpc-server") or "deltachat-rpc-server"
         self.data = os.path.expanduser(g.get("data", "/var/lib/dcgw"))
         self.tls_cert, self.tls_key = g.get("tls_cert", "").strip(), g.get("tls_key", "").strip()
+        self.sweep = str(g.get("sweep", "yes")).strip().lower() not in ("no", "false", "0", "off")
+        self.chat_folder = str(g.get("chat_folder", "ChatMail")).strip() or "ChatMail"
+        self.sweep_every = int(g.get("sweep_every", 120))
         self.users = {}
         for s in c.sections():
             if s.startswith("user:"):
@@ -325,6 +410,7 @@ class Gateway(object):
         self.cores = {}
         self.clock = threading.Lock()
         self.servers = []
+        self.quit = threading.Event()
         self.ctx = None
         if self.tls_cert:
             self.ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -408,13 +494,30 @@ class Gateway(object):
             self.servers.append(srv)
             threading.Thread(target=srv.serve_forever, daemon=True).start()
             _log.info("dcgw %s: listening on %s%s", VERSION, spec, " (TLS)" if self.ctx else "")
+        if self.sweep:
+            threading.Thread(target=self._sweep_loop, daemon=True, name="sweep").start()
         for name in self.users:                      # start the cores now: mail is received even with no client
             try:
                 self.core_for(name)
             except (RuntimeError, OSError) as e:
                 _log.error("%s: not started: %s", name, e)
 
+    def _sweep_loop(self):
+        while not self.quit.wait(self.sweep_every):
+            for name in list(self.users):
+                core = self.cores.get(name)
+                if core is None or not core.alive() or not core.configured:
+                    continue
+                try:
+                    tps = core.call("list_transports", [core.aid], 30)
+                    n = sweep_chat_mail(tps[0], self.chat_folder) if tps else 0
+                    if n:
+                        _log.info("%s: %d chat message(s) filed in %s", name, n, self.chat_folder)
+                except Exception as e:          # a bad pass must never take the gateway down; the next one retries
+                    _log.warning("%s: chat-mail sweep: %s", name, e)
+
     def stop(self):
+        self.quit.set()
         for s in self.servers:
             s.shutdown()
             s.server_close()

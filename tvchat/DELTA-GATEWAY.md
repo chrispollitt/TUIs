@@ -50,6 +50,16 @@ certificate.
 `gateway_cafile = ~/.config/tvchat/dcgw-ca.pem`; no `addr`, no `rpc_server`, no password.  Floyd's wizard adds the account from
 the master's manifest (`!setup`) and saves the token (`!setup delta TOKEN`, never kept in the input history).
 
+## Chat mail and the ordinary inbox
+A person's Delta Chat mail arrives in the same mailbox as their ordinary mail.  Encrypted chat mail has no `Chat-Version` header
+outside the encryption (what shows is `Subject: [...]`, `To: "hidden-recipients": ;` and a `multipart/encrypted` body), so both
+shapes count as chat mail.  Two halves keep it out of the way:
+- **dcgw** files chat mail the core has already read (`\Seen`, at least 5 minutes in INBOX) into the folder `chat_folder`
+  (default `ChatMail`) every `sweep_every` seconds (default 120); `sweep = no` in `[dcgw]` turns it off.  The core keeps its own
+  copy, so nothing is lost; deleting is `UID EXPUNGE` only after the `COPY` answered.  Needs the server's UIDPLUS.
+- **tvmail** (IMAP mode) hides the same messages in the inbox - list, counts and indexes - until View > Show Delta Chat mail;
+  `[inbox] hide_chat = no` in tvmail.conf makes "shown" the default.  Local-mbox mode is unchanged.
+
 ## Limits
 - cpbee must be up: with it down, Delta Chat is down on every machine.
 - Invitations that arrive *by mail* (the "Accept invite" scan) read the mailbox with the user's mail password, which a thin

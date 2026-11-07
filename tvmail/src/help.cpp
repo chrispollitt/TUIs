@@ -57,6 +57,8 @@ static const char *kHelpText =
     "FINDING AND ORDERING   (message list)\n"
     "  Just type: the list narrows to messages whose From or Subject contains the\n"
     "  text (any case).  Backspace trims it, Esc clears it (or View > Clear filter).\n"
+    "  Delta Chat shares this mailbox; its messages are hidden from the inbox.\n"
+    "  View > Show Delta Chat mail lists them (and View again hides them).\n"
     "  View > Sort by date / from / subject / Unread first; choosing the same sort\n"
     "  again, or View > Reverse order, flips it.  Date is mailbox order, oldest\n"
     "  first - Reverse gives newest first.  The Messages heading shows both.\n"

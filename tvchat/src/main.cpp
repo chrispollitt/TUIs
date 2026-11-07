@@ -55,6 +55,8 @@ int main(int argc, char **argv)
         return ok ? 0 : 1;
     }
 
+    if (!helperVersionGuard("tvchat-backend", TVCHAT_VERSION))
+        return 1;
     mesgFromConf(ChatClient::confPath());
     beepFromConf(ChatClient::confPath());
     spoolFromConf(ChatClient::confPath(), "tvchat", "tvmail");

@@ -55,6 +55,8 @@ int main(int argc, char **argv)
         return ok ? 0 : 1;
     }
 
+    if (!helperVersionGuard("tvcal-backend", TVCAL_VERSION))
+        return 1;
     mesgFromConf(calConfPath());
     beepFromConf(calConfPath());
     // reminders go to both: whichever of them you are looking at shows them

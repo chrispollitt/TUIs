@@ -68,6 +68,7 @@ TMenuBar *TVMailApp::initMenuBar(TRect r)
                             *new TMenuItem("~R~everse order", cmSortReverse, kbNoKey, hcNoContext) +
                             newLine() +
                             *new TMenuItem("~W~rap long lines", cmToggleWrap, kbNoKey, hcNoContext) +
+                            *new TMenuItem("Show ~D~elta Chat mail", cmShowChat, kbNoKey, hcNoContext) +
                             *new TMenuItem("~C~lear filter", cmClearFilter, kbNoKey, hcNoContext, "Esc") +
                             tvWindowMenu() +
                             tvHelpMenu());
@@ -1161,6 +1162,14 @@ void TVMailApp::handleEvent(TEvent &e)
         gWrap = !gWrap;
         mailSetWrap(gWrap);
         break;
+    case cmShowChat: // Delta Chat shares the mailbox: hidden from the inbox unless asked for
+    {
+        std::string st = backendRun("chat toggle");
+        notify(st.rfind("shown", 0) == 0 ? "Delta Chat mail is shown in the inbox"
+                                         : "Delta Chat mail is hidden from the inbox");
+        mailReload();
+        break;
+    }
     case cmClearFilter:
         gFilter.clear();
         mailViewChanged(true);

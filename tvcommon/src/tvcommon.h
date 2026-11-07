@@ -156,6 +156,7 @@ long procId();
 std::string writeTemp(const std::string &content, const char *suffix);
 std::string shCapture(const std::string &body);
 int shInteractive(const std::string &body);
+bool helperVersionGuard(const char *helper, const char *want); // stale-helper check at startup; false = quit
 
 // ------------------------------------------------------------- the tty ---
 // tty.cpp: "mesg n" while the app runs - talk rings and wall from ordinary

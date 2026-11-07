@@ -197,3 +197,37 @@ int shInteractive(const std::string &body)
     remove(sp.c_str());
     return rc;
 }
+
+// ---------------------------------------------------- helper-version guard ----
+// The app finds its helper through kPreamble's PATH, where ~/.local/bin beats
+// /usr/local/bin - so an old copy left there silently shadows a fresh install
+// (old helper: missing commands, fixed bugs back).  Run once at startup: ask
+// the helper that WOULD be run for its version; on a mismatch say which file
+// it is and which others exist, and let the user choose.  Returns false = quit.
+bool helperVersionGuard(const char *helper, const char *want)
+{
+    std::string h = helper;
+    std::string out = shCapture(
+        "p=$(command -v " + h + ") || { echo MISSING; exit 0; }\n"
+        "echo \"$p\"\n\"$p\" --version 2>&1 | head -1\n"
+        "IFS=:; for d in $PATH; do [ -x \"$d/" + h + "\" ] && [ \"$d/" + h +
+        "\" != \"$p\" ] && echo \"other: $d/" + h + "\"; done; exit 0\n");
+    std::vector<std::string> ln = splitLines(out);
+    if (ln.empty() || ln[0] == "MISSING")
+        return true; // the app's own "backend not found" handling reports it
+    std::string have = ln.size() > 1 ? ln[1] : "";
+    size_t n = std::strlen(want);
+    if (have.size() >= n && have.compare(have.size() - n, std::string::npos, want) == 0)
+        return true;
+    std::fprintf(stderr, "\nWARNING: %s reports \"%s\" but this app is %s.\n  using: %s\n",
+                 helper, have.c_str(), want, ln[0].c_str());
+    for (size_t i = 2; i < ln.size(); ++i)
+        if (std::find(ln.begin() + 2, ln.begin() + i, ln[i]) == ln.begin() + i) // PATH can repeat a dir
+            std::fprintf(stderr, "  %s\n", ln[i].c_str());
+    std::fprintf(stderr, "An old copy ahead of the installed one on PATH is the usual cause: remove it.\n"
+                         "Enter = run anyway, q = quit: ");
+    if (!isatty(0))
+        return true;
+    int c = std::getchar();
+    return !(c == 'q' || c == 'Q');
+}

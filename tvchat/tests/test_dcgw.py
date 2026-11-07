@@ -273,6 +273,87 @@ class TestAdmin(unittest.TestCase):
         self.assertIn("has data", self.run_cli("list")[1])
 
 
+class FakeImap(object):
+    """Just enough IMAP for sweep_chat_mail: INBOX holds uid -> (flags, internaldate epoch); `chatty` says which
+    of them match the chat search; COPY/STORE/UID EXPUNGE act on it."""
+    def __init__(self, inbox, chatty, caps=("UIDPLUS",)):
+        self.inbox, self.chatty, self.after_login = inbox, chatty, caps
+        self.capabilities = ("IMAP4REV1",)      # before login: no UIDPLUS
+        self.folders, self.deleted, self.log = {}, set(), []
+
+    def capability(self):                 # after login, as Dovecot: the answer has what m.capabilities (pre-login) lacks;
+        return "OK", [" ".join(("IMAP4rev1",) + tuple(self.after_login)).encode()]   # and, like imaplib, it does not update it
+
+    def select(self, name):
+        return "OK", [b"1"]
+
+    def uid(self, cmd, *a):
+        self.log.append((cmd,) + a)
+        if cmd == "SEARCH":
+            want_seen = "SEEN" in a
+            u = [str(k) for k, (fl, _) in sorted(self.inbox.items())
+                 if k in self.chatty and (not want_seen or "\\Seen" in fl)]
+            return "OK", [" ".join(u).encode()]
+        if cmd == "FETCH":
+            import time
+            out = []
+            for k in a[0].split(","):
+                t = time.strftime("%d-%b-%Y %H:%M:%S +0000", time.gmtime(self.inbox[int(k)][1]))
+                out.append(('%s (UID %s INTERNALDATE "%s")' % (k, k, t)).encode())
+            return "OK", out
+        if cmd == "COPY":
+            self.folders.setdefault(a[1], []).append(int(a[0]))
+            return "OK", [b""]
+        if cmd == "STORE":
+            self.deleted |= set(int(x) for x in a[0].split(","))
+            return "OK", [b""]
+        if cmd == "EXPUNGE":
+            for x in a[0].split(","):
+                if int(x) in self.deleted:
+                    self.inbox.pop(int(x), None)
+            return "OK", [b""]
+        raise AssertionError(cmd)
+
+    def create(self, name):
+        return "OK", [b""]
+
+    def subscribe(self, name):
+        return "OK", [b""]
+
+    def logout(self):
+        pass
+
+
+class TestSweep(unittest.TestCase):
+    NOW = 1_800_000_000
+
+    def run_sweep(self, inbox, chatty, **kw):
+        f = FakeImap(inbox, chatty, **kw)
+        n = dcgw.sweep_chat_mail({}, "ChatMail", min_age=300, connect=lambda tp: f, now=self.NOW)
+        return n, f
+
+    def test_old_seen_chat_mail_moves_and_nothing_else_does(self):
+        inbox = {1: ("\\Seen", self.NOW - 3600),    # chat, read, old: moves
+                 2: ("", self.NOW - 3600),            # chat but unread: the core has not had it - stays
+                 3: ("\\Seen", self.NOW - 10),      # chat, read, brand new: stays a while
+                 4: ("\\Seen", self.NOW - 3600)}    # ordinary mail (not chatty): stays
+        n, f = self.run_sweep(inbox, {1, 2, 3})
+        self.assertEqual(n, 1)
+        self.assertEqual(f.folders, {"ChatMail": [1]})
+        self.assertEqual(sorted(f.inbox), [2, 3, 4])
+
+    def test_the_search_is_for_seen_chat_mail_in_both_shapes(self):
+        n, f = self.run_sweep({1: ("\\Seen", 0)}, {1})
+        search = [x for x in f.log if x[0] == "SEARCH"][0]
+        self.assertIn("SEEN", search)
+        self.assertIn("Chat-Version", search)
+        self.assertTrue(any("multipart/encrypted" in str(x) and "hidden-recipients" in str(x) for x in search))
+
+    def test_without_uidplus_nothing_is_touched(self):
+        n, f = self.run_sweep({1: ("\\Seen", 0)}, {1}, caps=())
+        self.assertEqual((n, f.log), (0, []))
+
+
 class TestCommandLine(unittest.TestCase):
     def test_conf_is_accepted_before_and_after_the_subcommand(self):
         """The systemd unit says `dcgw serve --conf FILE`; an admin may say `dcgw --conf FILE list`."""

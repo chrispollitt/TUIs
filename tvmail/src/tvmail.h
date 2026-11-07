@@ -49,6 +49,7 @@ const ushort cmSortFrom = 2036;     //             by sender
 const ushort cmSortSubj = 2037;     //             by subject
 const ushort cmSortUnread = 2038;   //             unread first
 const ushort cmSortReverse = 2039;  // flip the current order
+const ushort cmShowChat = 2090;     // View > Delta Chat mail (shown in / hidden from the inbox)
 const ushort cmClearFilter = 2040;  // drop the type-to-filter text
 const ushort cmFilterChanged = 2041; // broadcast: list view rebuilt (title refresh)
 const ushort cmChatWith = 2050;     // Message > Chat with sender (asks tvchat, if installed)

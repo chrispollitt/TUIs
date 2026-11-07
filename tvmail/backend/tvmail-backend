@@ -765,10 +765,56 @@ def _imap_select(M, folder, readonly):
     M._tvmail_selected = (folder, readonly)
 
 
+# Delta Chat shares this mailbox (tvchat's gateway on the master logs in as
+# the same user), so its messages land in INBOX.  They are not mail: hide them
+# there.  Encrypted ones carry no Chat-Version header outside the encryption -
+# what shows is Subject "[...]", To "hidden-recipients": ; and a
+# multipart/encrypted body - so match either.  Hidden messages get no index at
+# all (every command numbers messages through _imap_uids), so list / show /
+# delete / mark / purge stay consistent.  The View menu toggles it (`chat`);
+# the choice is a file, so the one-shot backends agree with the serve one.
+_CHAT_CRIT = ["NOT", "OR", "HEADER", "Chat-Version", '""',
+              "(HEADER Content-Type multipart/encrypted HEADER To hidden-recipients)"]
+
+
+def _chat_show_file():
+    return os.path.join(_data_home(), "tvmail", "show-chat-mail")
+
+
+def _chat_hidden():
+    """True when Delta Chat mail is hidden from the inbox (the default)."""
+    if os.path.exists(_chat_show_file()):
+        return False
+    return _conf().getboolean("inbox", "hide_chat", fallback=True)
+
+
+def _chat_crit(folder):
+    """Extra SEARCH keys that drop Delta Chat mail - the inbox only."""
+    if _chat_hidden() and folder == _imap_folder("inbox"):
+        return list(_CHAT_CRIT)
+    return []
+
+
+def cmd_chat(a):
+    """chat [show|hide|toggle]: whether Delta Chat mail shows in the inbox.
+    Prints the new state: 'hidden' or 'shown'."""
+    f = _chat_show_file()
+    want = a.what
+    if want == "toggle":
+        want = "hide" if os.path.exists(f) else "show"
+    if want == "show":
+        os.makedirs(os.path.dirname(f), exist_ok=True)
+        open(f, "w").close()
+    elif want == "hide" and os.path.exists(f):
+        os.remove(f)
+    sys.stdout.write("hidden\n" if _chat_hidden() else "shown\n")
+    return 0
+
+
 def _imap_uids(folder, readonly=True):
     M = _imap()
     _imap_select(M, folder, readonly)
-    typ, data = M.uid("SEARCH", None, "ALL")
+    typ, data = M.uid("SEARCH", None, *(_chat_crit(folder) or ["ALL"]))
     if typ != "OK":
         sys.exit("tvmail-backend: IMAP SEARCH failed")
     return sorted(int(x) for x in (data[0] or b"").split())
@@ -1015,6 +1061,13 @@ def _imap_status(folder):
     """(total, unseen) for an IMAP folder via STATUS - no SELECT, so it does
     not disturb the folder the UI has open.  (0, 0) for a missing folder."""
     import re
+    extra = _chat_crit(folder)
+    if extra:      # inbox with Delta Chat mail hidden: count what the list shows
+        M = _imap()
+        _imap_select(M, folder, True)
+        _, t = M.uid("SEARCH", None, *extra)
+        _, u = M.uid("SEARCH", None, *(extra + ["UNSEEN"]))
+        return (len((t[0] or b"").split()), len((u[0] or b"").split()))
     typ, data = _imap().status(_q_mbox(folder), "(MESSAGES UNSEEN)")
     if typ != "OK" or not data or not data[0]:
         return 0, 0
@@ -1352,7 +1405,7 @@ def _imap_purge(a):
     folder = _imap_folder(a.mbox)
     M = _imap()
     _imap_select(M, folder, a.dry_run)
-    typ, data = M.uid("SEARCH", None, *crit)
+    typ, data = M.uid("SEARCH", None, *(_chat_crit(folder) + crit))
     if typ != "OK":
         sys.exit("tvmail-backend: IMAP SEARCH failed")
     uids = (data[0] or b"").split()
@@ -2580,7 +2633,7 @@ class _CapStream:
 _SERVE_BLOCKED = frozenset(("serve", "send", "save-draft", "pull"))
 _COMMANDS = frozenset(("floyd", "list", "counts", "vacation", "show", "raw", "parts", "save", "delete",
                        "mark", "purge", "empty-trash", "compose-template", "send",
-                       "save-draft", "aliases", "pull", "ping", "mode",
+                       "save-draft", "aliases", "pull", "ping", "mode", "chat",
                        "host", "serve"))
 
 
@@ -2729,6 +2782,8 @@ def build_parser():
     p.add_argument("--force", action="store_true"); p.set_defaults(fn=cmd_vacation)
     p = sub.add_parser("ping"); p.set_defaults(fn=cmd_ping)
     p = sub.add_parser("mode"); p.set_defaults(fn=cmd_mode)
+    p = sub.add_parser("chat"); p.set_defaults(fn=cmd_chat)
+    p.add_argument("what", nargs="?", default="status", choices=["status", "show", "hide", "toggle"])
     p = sub.add_parser("host"); p.set_defaults(fn=cmd_host)
     p = sub.add_parser("floyd"); p.add_argument("text", nargs="*")
     p.add_argument("--tips", action="store_true"); p.add_argument("--status", action="store_true")
