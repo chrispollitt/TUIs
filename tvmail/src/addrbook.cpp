@@ -71,7 +71,7 @@ class TAddrBookWindow : public TViewerWindow
 public:
     TAddrBookWindow(const TRect &b)
         : TWindowInit(&TAddrBookWindow::initFrame),
-          TViewerWindow(b, "Address book (~/.mailrc)")
+          TViewerWindow(b, "Address book")
     {
         palette = wpCyanWindow;
         options |= ofTileable;

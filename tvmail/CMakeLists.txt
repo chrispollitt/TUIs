@@ -90,7 +90,7 @@ include(GNUInstallDirs)
 install(TARGETS tvmail RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(PROGRAMS backend/tvmail-backend DESTINATION ${CMAKE_INSTALL_BINDIR})
 # Floyd's levels and tools, shared with tvchat (the backend looks in ../share/tvmail)
-install(FILES ${TVCOMMON_DIR}/py/tvfloyd.py DESTINATION ${CMAKE_INSTALL_DATADIR}/tvmail)
+install(FILES ${TVCOMMON_DIR}/py/tvfloyd.py ${TVCOMMON_DIR}/py/tvcontacts.py DESTINATION ${CMAKE_INSTALL_DATADIR}/tvmail)
 install(FILES man/tvmail.1 man/tvmail-backend.1
         DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
 install(FILES README.md INSTALL.md HISTORY.md WHY.md LICENSE AUTHORS WARRANTY

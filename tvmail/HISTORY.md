@@ -5,6 +5,10 @@ Releases are tagged `tvmail-vX.Y.Z`; `git log` has the rest.
 
 ## Unreleased
 
+- **Address book on the server:** the Address book window and the To: expansion also use your contacts and groups kept in
+  Radicale (CardDAV), through tvcommon's `tvcontacts.py` ([contacts] in tvmail.conf, or the one beside tvcal's calendar).
+  A group name in To: expands to its members; the server being down just leaves the copy or the mailrc entries.
+
 - **Message > Share in chat:** asks tvchat to say the sender and subject (not the body) of the message
   in its LAN channel (`[chat] share_to` in tvchat.conf). tvchat shows it and says it only when you
   agree there, where you can change the text first.

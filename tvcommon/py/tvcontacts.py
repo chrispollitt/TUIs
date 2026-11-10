@@ -359,6 +359,21 @@ class Book(object):
             self._save_cache()
         return True
 
+    def refresh(self, max_age=60):
+        """sync(), unless the copy was brought up to date less than max_age seconds ago.  True = the copy is current."""
+        try:
+            if time.time() - os.path.getmtime(self._index_path()) < max_age:
+                return True
+        except OSError:
+            pass
+        ok = self.sync()
+        if ok:
+            try:
+                os.utime(self._index_path(), None)
+            except OSError:
+                pass
+        return ok
+
     # -- asking
     def contacts(self):
         return sorted((c for c in self.cards.values() if not c.is_group), key=lambda c: c.name.lower())

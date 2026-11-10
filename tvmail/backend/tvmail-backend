@@ -239,7 +239,94 @@ def _dead_msg():
         return email.message_from_binary_file(f)
 
 
+def _load_contacts():
+    """tvcommon's tvcontacts.py (the shared address book on Radicale), found beside this program like tvfloyd.py;
+    None where it is not installed."""
+    import importlib.util
+    here = os.path.dirname(os.path.realpath(__file__))
+    for d in (here, os.path.join(here, "..", "..", "tvcommon", "py"), os.path.join(here, "..", "share", "tvmail"),
+              "/usr/local/share/tvmail", "/usr/share/tvmail"):
+        path = os.path.join(d, "tvcontacts.py")
+        if os.path.isfile(path):
+            try:
+                spec = importlib.util.spec_from_file_location("tvcontacts", path)
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                return mod
+            except Exception:
+                _log.debug("cannot load %s", path, exc_info=True)
+    return None
+
+
+def _contact_book():
+    """The address book on the server, or None when there is none: [contacts] url, user, ca, insecure in tvmail.conf; with
+    no url, the one beside tvcal's calendar ([server] url of tvcal.conf, calendar/ replaced by contacts/).
+    [contacts] enabled = no (or $TVMAIL_NO_CONTACTS) switches it off."""
+    if os.environ.get("TVMAIL_NO_CONTACTS"):
+        return None
+    c = _conf()
+    if c.get("contacts", "enabled", fallback="yes").strip().lower() in ("no", "false", "0", "off"):
+        return None
+    tvc = _load_contacts()
+    if tvc is None:
+        return None
+    url = c.get("contacts", "url", fallback="").strip()
+    user = c.get("contacts", "user", fallback="").strip()
+    ca = c.get("contacts", "ca", fallback="").strip()
+    insecure = c.get("contacts", "insecure", fallback="no").strip().lower() in ("yes", "true", "1")
+    if not url:
+        cal = configparser.ConfigParser()
+        try:
+            cal.read(os.path.expanduser("~/.config/tvcal/tvcal.conf"))
+        except configparser.Error:
+            return None
+        cu = cal.get("server", "url", fallback="").strip().rstrip("/")
+        if not cu or cal.get("server", "mode", fallback="").strip().lower() == "local":
+            return None
+        url = cu.rpartition("/")[0] + "/contacts/"
+        user = user or cal.get("server", "user", fallback="").strip()
+        ca = ca or cal.get("server", "ca", fallback="").strip()
+        insecure = insecure or cal.get("server", "insecure", fallback="no").strip().lower() in ("yes", "true", "1")
+    try:
+        return tvc.Book(url, user, ca=ca, insecure=insecure)
+    except Exception:
+        _log.debug("address book not usable", exc_info=True)
+        return None
+
+
+def _contact_aliases():
+    """{name: [addr, ...]} from the address book on the server: a contact by name and nickname (its first address),
+    a group by name and nickname (its members' addresses).  Quietly {} when there is no book or no reachable copy."""
+    book = _contact_book()
+    if book is None:
+        return {}
+    try:
+        book.refresh(60)
+    except Exception as e:                      # a server that is down or unhappy must not stop mail from being written
+        _log.debug("address book: %s", e)
+    out = {}
+    for card in book.contacts():
+        if card.emails:
+            for key in [card.name] + card.nicknames:
+                out.setdefault(key, card.emails[:1])
+    for g in book.groups():
+        addrs = book.expand(g.name)
+        if addrs:
+            for key in [g.name] + g.nicknames:
+                out.setdefault(key, addrs)
+    return out
+
+
 def _aliases():
+    """{name: [addr, ...]} from mailrc alias/group lines, expanded recursively - and the address book on the server
+    (a mailrc entry wins over a contact of the same name)."""
+    out = _mailrc_aliases()
+    for k, v in _contact_aliases().items():
+        out.setdefault(k, v)
+    return out
+
+
+def _mailrc_aliases():
     """{name: [addr, ...]} from mailrc alias/group lines, expanded recursively."""
     import shlex
     raw = {}

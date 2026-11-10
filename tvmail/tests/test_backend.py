@@ -17,6 +17,8 @@ import tempfile
 import textwrap
 import time
 import unittest
+
+os.environ.setdefault("TVMAIL_NO_CONTACTS", "1")     # tests never reach for the address book on a server
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -129,6 +131,37 @@ class TestHelpers(Base):
         self.assertEqual(be._expand_recipients(["team", "zed@x"]),
                          ["ann@x", "bo@x", "cy@x", "zed@x"])
         self.assertIn("loopa", al)          # a cycle must terminate, not hang
+
+    def test_aliases_include_the_address_book_on_the_server_but_mailrc_wins(self):
+        import types
+        card = lambda name, emails, nick=(): types.SimpleNamespace(name=name, emails=list(emails), nicknames=list(nick))
+        book = types.SimpleNamespace(
+            refresh=lambda age=60: True,
+            contacts=lambda: [card("Alice Archer", ["alice@example.org"], ["Ally"]), card("Bob", ["bob@example.org"])],
+            groups=lambda: [card("Family", [], ["fam"])],
+            expand=lambda name: ["alice@example.org", "bob@example.org"] if name == "Family" else [])
+        old = be._contact_book
+        be._contact_book = lambda: book
+        self.addCleanup(setattr, be, "_contact_book", old)
+        (self.home / ".mailrc").write_text("alias Bob bob@mine.example\n")
+        al = be._aliases()
+        self.assertEqual(al["Alice Archer"], ["alice@example.org"])
+        self.assertEqual(al["Ally"], ["alice@example.org"])
+        self.assertEqual(al["Bob"], ["bob@mine.example"])                  # mailrc wins
+        self.assertEqual(be._expand_recipients(["fam", "zed@x"]), ["alice@example.org", "bob@example.org", "zed@x"])
+        self.assertEqual(be._expand_recipients(["Alice Archer"]), ["alice@example.org"])
+
+    def test_a_dead_address_book_does_not_stop_aliases(self):
+        import types
+
+        def boom(age=60):
+            raise OSError("down")
+        book = types.SimpleNamespace(refresh=boom, contacts=lambda: [], groups=lambda: [], expand=lambda n: [])
+        old = be._contact_book
+        be._contact_book = lambda: book
+        self.addCleanup(setattr, be, "_contact_book", old)
+        (self.home / ".mailrc").write_text("alias x x@y.z\n")
+        self.assertEqual(be._aliases(), {"x": ["x@y.z"]})
 
     def test_best_body_prefers_plain_then_strips_html(self):
         alt = email.message_from_string(
