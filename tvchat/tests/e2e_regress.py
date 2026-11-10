@@ -1064,8 +1064,12 @@ def resize_keeps_backend(opts):
         shim = b / "tvchat-backend"
         shim.write_text(
             '#!/bin/sh\n'
-            '[ "$1" = serve ] && sleep 1\n'
-            'tee -a "$HOME/chat-requests" | "$HOME/bin/tvchat-backend.real" "$@"\n')
+            '# only `serve` is held back and logged; tvchat also runs it as `--version` (a stale-helper\n'
+            '# check), which must not wait on a tee that nobody feeds\n'
+            'case "$1" in\n'
+            '  serve) sleep 1; tee -a "$HOME/chat-requests" | "$HOME/bin/tvchat-backend.real" "$@" ;;\n'
+            '  *) exec "$HOME/bin/tvchat-backend.real" "$@" ;;\n'
+            'esac\n')
         shim.chmod(0o755)
         conf = t.tmp / "tvchat.conf"
         conf.write_text("[account:idle]\nprotocol = irc\nhost = 127.0.0.1\n")
