@@ -53,7 +53,7 @@ static const char *kHelpText =
     "  Unlike IRC, Delta Chat's history is kept by the core, and PgUp reads it.\n"
     "  An invitation that comes by mail is found by the gateway (or, for an account\n"
     "  with a core of its own, by tvchat) and asks you by itself; Chat > Pending...\n"
-    "  asks again.  Chat > This chat... has the group things (members, rename) and\n"
+    "  asks again.  Chat > This chat... has the group things (members, rename); someone added without a key is put in by themselves once they accept.\n"
     "  Leave, which deletes a chat from this device (it asks first).  With tvmail\n"
     "  installed, Chat > Invite... can also mail the link to someone's ordinary address.\n"
     "  Delta Chat on several machines: the account lives on ONE (cpbee), behind the\n"

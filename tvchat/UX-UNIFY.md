@@ -56,4 +56,4 @@ Pending invites...            only present when an invitation is waiting
 - **Answers to the open questions** (taken as proposed; say if you want them otherwise): no separate "Accept invite" entry (the
   question + Pending...); second-device items live under Devices > and are hidden for gateway accounts.
 - tvmail got the same treatment: Message menu 20 entries -> 8 + Send to / Compose / Details submenus.
-- Not done: a person you add to a group who has no key yet is still invited by mail and must be added again after they accept.
+- A person you add to a group who has no key yet is invited by mail and put into the group by themselves once they accept (remembered in ~/.local/state/tvchat/pending-members.json, checked on the 30 s poll, dropped after 30 days).

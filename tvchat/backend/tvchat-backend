@@ -4125,6 +4125,10 @@ class DeltaChatAdapter(CommandMixin):
         gen = self.gen
         if self.phase != "up":
             return
+        try:
+            self._pay_members()
+        except (RpcError, UserError) as e:
+            _log.debug("%s: members owed: %s", self.account.id, e)
         if self.gateway:
             # the gateway holds the mail login and looks in the mailbox itself; ask it what it found (instant:
             # it keeps the list), so this needs no mail password here
@@ -4448,6 +4452,80 @@ class DeltaChatAdapter(CommandMixin):
                 return c["id"]
         return None
 
+    # A person with no key yet is invited by mail and owed a place in the group: remembered here (a file, so a
+    # restart does not forget) and paid as soon as their key arrives, found on the invitation poll.
+    PENDING_DAYS = 30
+
+    @staticmethod
+    def _pending_path():
+        base = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+        return os.path.join(base, "tvchat", "pending-members.json")
+
+    def _pending_load(self):
+        try:
+            with open(self._pending_path(), encoding="utf-8") as f:
+                d = json.load(f)
+        except (OSError, ValueError):
+            return {}
+        return d if isinstance(d, dict) else {}
+
+    def _pending_save(self, d):
+        path = self._pending_path()
+        try:
+            os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+            with open(path + ".tmp", "w", encoding="utf-8") as f:
+                json.dump(d, f)
+            os.replace(path + ".tmp", path)
+        except OSError as e:
+            _log.debug("%s: could not keep the members owed: %s", self.account.id, e)
+
+    def _owe_member(self, chat_id, addr):
+        d = self._pending_load()
+        d.setdefault(self.account.id, {}).setdefault(addr.lower(), {})[str(chat_id)] = time.time()
+        self._pending_save(d)
+
+    def _pay_members(self):
+        """Put into their groups the people who were invited by mail and have accepted (they now have a key)."""
+        d = self._pending_load()
+        mine = d.get(self.account.id) or {}
+        changed = False
+        for addr, chats in list(mine.items()):
+            for cid, since in list(chats.items()):
+                if time.time() - since > 86400 * self.PENDING_DAYS:
+                    del chats[cid]
+                    changed = True
+            if not chats:
+                del mine[addr]
+                changed = True
+                continue
+            try:
+                key = self._key_contact(addr)
+            except RpcError:
+                continue
+            if key is None:
+                continue
+            for cid in list(chats):
+                try:
+                    self.call("add_contact_to_chat", self.acct, int(cid), key)
+                except RpcError as e:               # the group is gone, or we are out of it: stop trying
+                    _log.debug("%s: could not add %s to chat %s: %s", self.account.id, addr, cid, e)
+                else:
+                    conv = self.account.convs.get("%s/%s" % (self.account.id, cid))
+                    if conv is not None:
+                        try:
+                            self._members(conv)
+                        except RpcError:
+                            pass
+                        self.system(conv, "added %s: they accepted the invitation" % addr)
+                del chats[cid]
+                changed = True
+            if not chats:
+                del mine[addr]
+        if changed:
+            if not mine:
+                d.pop(self.account.id, None)
+            self._pending_save(d)
+
     def _members_for(self, chat_id, addrs):
         """Add each address to the group; those with no key yet are invited by
         mail instead.  Returns (added, invited)."""
@@ -4486,13 +4564,14 @@ class DeltaChatAdapter(CommandMixin):
         self.system(conv, "group created: it reaches the members with the first message you send"
                           + ("" if not added else " (%s)" % ", ".join(added)))
         for addr in invited:
+            self._owe_member(chat_id, addr)       # owed a place even if the mail fails (they may use a link by hand)
             try:
                 self._invite_by_mail(addr)
             except UserError as e:           # the group stays; say what could not be done
                 self.system(conv, "%s has no key yet and could not be invited: %s" % (addr, e))
                 continue
-            self.system(conv, "%s has no key yet: invited by mail - add them (Chat > Invite...) "
-                              "once they have accepted" % addr)
+            self.system(conv, "%s has no key yet: invited by mail - they are added to this group by "
+                              "themselves once they accept" % addr)
         return conv
 
     def _group(self, conv):
@@ -4513,11 +4592,13 @@ class DeltaChatAdapter(CommandMixin):
         except RpcError as e:
             raise UserError(str(e))
         if invited:
+            self._owe_member(chat_id, addr)
             try:
                 self._invite_by_mail(addr)
             except UserError as e:
                 raise UserError("%s has no key yet and could not be invited: %s" % (addr, e))
-            raise UserError("%s has no key yet: invited by mail - add them once they have accepted" % addr)
+            raise UserError("%s has no key yet: invited by mail - they are added to this group by themselves "
+                            "once they accept" % addr)
         self.system(conv, "added %s" % addr)
 
     def group_remove(self, conv, addr):

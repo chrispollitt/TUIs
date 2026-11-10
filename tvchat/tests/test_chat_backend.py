@@ -2381,6 +2381,9 @@ class DeltaBase(Base):
         self.data = self.tmp / "data"
         os.environ["XDG_DATA_HOME"] = str(self.data)
         self.addCleanup(os.environ.pop, "XDG_DATA_HOME", None)
+        self.state = self.tmp / "state"
+        os.environ["XDG_STATE_HOME"] = str(self.state)
+        self.addCleanup(os.environ.pop, "XDG_STATE_HOME", None)
         self.dir = self.data / "tvchat" / "deltachat" / "delta"
 
     def tearDown(self):
@@ -2606,6 +2609,26 @@ class TestDeltaChat(DeltaBase):
         conv = self.acct.convs[body.decode().strip()]
         self.assertEqual([r["params"][2] for r in self.requests("add_contact_to_chat")], [20])
         self.assertTrue(any("stranger@example.org has no key yet" in m.text for m in conv.history))
+
+    def test_a_member_invited_by_mail_is_added_to_the_group_when_they_accept(self):
+        self.setup_dc()
+        self.up()
+        st, body = self.verb("new-group", "delta", "Mixed", "alice@example.org", "stranger@example.org")
+        self.assertEqual(st, 0)
+        conv = self.acct.convs[body.decode().strip()]
+        adds = lambda: [r["params"][2] for r in self.requests("add_contact_to_chat")]
+        self.assertEqual(adds(), [20])
+        self.assertTrue((self.tmp / "state" / "tvchat" / "pending-members.json").exists())   # remembered
+        self.ad._pay_members()                               # not accepted yet: nothing to do
+        self.assertEqual(adds(), [20])
+        self.order(set={"contacts": {"22": {"address": "stranger@example.org", "displayName": "Stranger"}}})
+        self.turn(lambda: (self.ad._pay_members(), len(adds()) == 2)[1])          # their key arrived: they are added
+        self.assertEqual(adds(), [20, 22])
+        self.assertTrue(any("added stranger@example.org: they accepted" in m.text for m in conv.history))
+        self.ad._pay_members()                               # and only once
+        self.assertEqual(adds(), [20, 22])
+        import json
+        self.assertEqual(json.loads((self.tmp / "state" / "tvchat" / "pending-members.json").read_text()), {})
 
     def test_group_members_come_and_go_and_the_group_is_renamed(self):
         self.setup_dc()
