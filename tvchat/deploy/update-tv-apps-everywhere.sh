@@ -53,9 +53,9 @@ for h in $CLIENTS; do
 done
 
 say "== cpbee (all three, then dcgw and tvchat-floyd; sudo asks)"
-  ssh -t cpbee 'cd ~/gh_cp/TUIs && sudo install -m 755 tvchat/backend/dcgw /usr/local/bin/dcgw && sudo systemctl restart dcgw tvchat-floyd && sleep 6 && systemctl is-active dcgw tvchat-floyd' || failed=1
 if ssh -o BatchMode=yes -o ConnectTimeout=8 cpbee true 2>/dev/null; then
   ssh -t cpbee "APPS='tvmail tvchat tvcal' bash -lc '$update_script'" || failed=1
+  ssh -t cpbee 'cd ~/gh_cp/TUIs && sudo install -m 755 tvchat/backend/dcgw /usr/local/bin/dcgw && sudo systemctl restart dcgw tvchat-floyd && sleep 6 && systemctl is-active dcgw tvchat-floyd' || failed=1
 else
   say "  cannot reach cpbee over ssh: skipped"
   failed=1
