@@ -177,8 +177,8 @@ have "setup wizard" powers.
   runs the account as it is (cpbee).
 
 ## Second Delta Chat device
-- tvchat: Chat > Add second device... (on the machine that has the account) offers it with the core's `provide_backup`;
-  Chat > Use account from another device... (on the new machine) takes it with `get_backup`; the new machine's old Delta data
+- tvchat: Chat > Devices > Add second device... (on the machine that has the account) offers it with the core's `provide_backup`;
+  Chat > Devices > Use account from another device... (on the new machine) takes it with `get_backup`; the new machine's old Delta data
   is moved to `deltachat/<account>.replaced-<time>`, never deleted, after a confirmation.  `bcc_self` is switched on on both.
 - **No copy and paste:** the offer is published to the master hub as a sticky `device` event whose code travels in the event's
   hidden `data` (never in the toast text, never written to the spool); the other machine's blank-code "Use" finds it there.

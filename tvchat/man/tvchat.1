@@ -40,10 +40,12 @@ scroll the log from the input line; PgUp at the top fetches older messages
 (asking the server, when it keeps history).
 .TP
 .B Alt\-C
-the Chat menu: Connect..., Disconnect..., Join... (a channel, a nick, an address
-or an invite link), Invite..., Accept invite..., Leave, the Delta Chat group
-items, Add second device... and Use account from another device... (the same
-Delta Chat account on two machines), and one item per account.
+the Chat menu: Connect / Disconnect (the account picked in the Servers pane), Chat with...
+(a channel, a nick, an address or an invite link; New group... is a button there),
+Invite... (in a Delta Chat group it adds a person), This chat... (members, rename, leave),
+Send selection to > Mail, Calendar, To-do, Pending... (only when an invitation or a
+tvmail share waits), Devices > (second-device items, for an account with a core of its
+own), and one item per account.
 .B F5
 reload
 .RB ( "File \(-> Reload" ):
@@ -70,9 +72,9 @@ quit (asking first about text typed and not sent).
 An account with
 .B protocol = talk
 talks talk(1) through the LAN master's talkd.
-Chat > Join... calls a user (or user@host); a call for you shows in the
-status line and the conversation list, and Enter (or Chat > Answer) in it
-answers; Chat > Leave hangs up or declines.
+Chat > Chat with... calls a user (or user@host); a call for you shows in the
+status line and the conversation list, and Enter (or Chat > Answer call) in it
+answers; Chat > This chat... > Leave hangs up or declines.
 .TP
 .B classic
 talk's own screen in the chat pane: you on top, them below, every key sent
@@ -89,15 +91,15 @@ in its
 .SH "DELTA CHAT"
 Encrypted chat over a mailbox of its own (\fBprotocol = deltachat\fR; needs the
 official \fBdeltachat-rpc-server\fR core, see INSTALL.md and PRIMER.md).  Two
-people swap keys once: Chat > Join... with an email address mails them an
-invitation, and their tvchat asks \(lqAccept?\(rq (Chat > Accept invite...
+people swap keys once: Chat > Chat with... with an email address mails them an
+invitation, and their tvchat asks \(lqAccept?\(rq (Chat > Pending...
 asks again); Chat > Invite... shows an invite link to pass on by other means,
-and Join also takes such a link.  A message from someone new waits as a
+and Chat with... also takes such a link.  A message from someone new waits as a
 request; the first reply accepts it.
 .PP
-Chat > New group... makes an encrypted group (people you hold no key for are
-invited by mail); Add member..., Remove member... and Rename group... work on
-the group shown.  Chat > Leave asks first, then deletes the chat and its
+Chat > Chat with... > New group... makes an encrypted group (people you hold no key for are
+invited by mail); This chat... has Add a member, Remove a member and Rename for
+the group shown.  Chat > This chat... > Leave asks first, then deletes the chat and its
 messages from this device (a group is left first, and the others are told).
 .PP
 Chat > Invite... can also mail the link through tvmail (when it is installed) to
@@ -110,7 +112,7 @@ tvmail... shows the text (sender and subject, never the body), which you can cha
 Send says it as you in the channel \fB[chat] share_to\fR names (an IRC account, a colon and the
 channel).  Discard forgets it; Later keeps it for half an hour.
 .SH "MAIL"
-With tvmail installed, Chat > Mail selection... sends the lines selected in the log (Shift-Up /
+With tvmail installed, Chat > Send selection to > Mail... sends the lines selected in the log (Shift-Up /
 Shift-Down, or a mouse drag) as one email through tvmail's account.  It asks for the address,
 filled in when the person's \fBemail:\fR handle is in the \fB[people]\fR table (or they are a Delta
 Chat contact).
@@ -124,7 +126,7 @@ account, a box offers to send it there as a message; with a channel shown, the c
 and a list of the users in it asks which one to send it to; \fBCopy link\fR puts the link on the
 clipboard.  On the same IRC network, with a channel,
 it is an ordinary INVITE.  The other tvchat finds the link in what it is told and
-Chat > Accept invite... asks (a link to a server none of their accounts uses is only
+Chat > Pending... asks (a link to a server none of their accounts uses is only
 mentioned); Yes joins the channel.
 People go by different names on different servers: a
 .B [people]

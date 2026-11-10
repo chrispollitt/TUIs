@@ -25,7 +25,7 @@ autoconnect = libera
 # invite them to, and says "carol (cpollitt)" for an invitation from them.
 #[people]
 #carol = libera:cpollitt, oftc:carol_, delta:carol@example.org, email:carol@example.com
-# (email: is not an account: it is where Chat > Mail selection... sends for them)
+# (email: is not an account: it is where Chat > Send selection to > Mail... sends for them)
 
 # The terminal while tvchat runs (read by tvchat itself).
 [ui]

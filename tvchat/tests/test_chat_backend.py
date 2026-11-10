@@ -2682,6 +2682,17 @@ class TestDeltaChat(DeltaBase):
         self.assertEqual(say("delta/11", "/name Crew")[0], 0)
         self.assertEqual(self.acct.convs["delta/11"].title, "Crew")
         self.assertEqual(say("delta/10", "/name Nope")[0], 1)                # not a group
+        # the words the Chat menu has: /rename (= /name), /remove, /pending, /accept, /chat
+        self.assertEqual(say("delta/11", "/rename Gang")[0], 0)
+        self.assertEqual(self.acct.convs["delta/11"].title, "Gang")
+        self.assertEqual(say("delta/11", "/remove bob@example.org"), (0, b"\n"))
+        self.assertNotIn("bob@example.org", self.acct.convs["delta/11"].members)
+        self.assertEqual(say("delta/10", "/remove bob@example.org")[0], 1)         # not a group
+        say("delta/10", "/pending")
+        self.assertIn("no invitations are waiting", notes("delta/10"))
+        st, body = say("delta/10", "/accept")
+        self.assertEqual((st, b"nobody" in body), (1, True))
+        self.assertEqual(say("delta/10", "/chat bob@example.org")[0], 0)           # Chat with...
         # /clear empties the ring and has the UI re-read the log
         self.assertEqual(say("delta/10", "/clear")[0], 0)
         self.assertEqual(len(self.acct.convs["delta/10"].history), 0)
@@ -3223,6 +3234,18 @@ class TestDeltaGateway(DeltaBase):
         self.assertEqual(st, 0, body)
         sent = self.requests("misc_send_text_message")
         self.assertEqual([r["params"][1:] for r in sent], [[10, "from the thin client"]])
+
+    def test_an_invitation_that_came_by_mail_is_found_by_the_gateway_and_answered_through_it(self):
+        self.use_gateway()
+        self.up()
+        link = "https://i.delta.chat/#ABC123&v=3&a=carol%40example.org&n=Carol"
+        core = self.gw.core_for("chris")
+        core.invites = [["5", "carol@example.org", link]]          # what the gateway's own mailbox scan found
+        self.ad._watch_invites()
+        self.assertEqual(self.ad.pending_invites(), ["carol@example.org"])
+        self.ad.decline_invite("carol@example.org")
+        self.assertEqual(self.ad.pending_invites(), [])
+        self.assertIn("5", core.dropped)                           # the gateway deletes the mail and does not offer it again
 
     def test_an_incoming_message_arrives_through_the_gateways_event_stream(self):
         self.use_gateway()

@@ -128,4 +128,4 @@ else
 fi
 say ""
 say "Done.  Start tvchat: the Delta Chat account is on the list; it has no chats until you and the other person swap keys"
-say "(Chat > Invite... on one side, Chat > Join... on the other)."
+say "(Chat > Invite... on one side, Chat > Chat with... on the other)."

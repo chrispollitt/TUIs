@@ -102,7 +102,7 @@ protocol = talk
 host     = cpbee
 ```
 
-Chat > Join... a user (or `user@host`) calls them; Enter answers a call.
+Chat > Chat with... a user (or `user@host`) calls them; Enter answers a call.
 
 ### Delta Chat
 
@@ -120,12 +120,12 @@ override its guesses.
 **Starting a conversation.** The core refuses to write to an address it has no
 key for, so the two people swap keys once:
 
-1. One person chooses **Chat > Join...** and types the other's address. tvchat
+1. One person chooses **Chat > Chat with...** and types the other's address. tvchat
    mails them an invitation, and says so in the server messages.
 2. The other person's tvchat notices it (within half a minute) and asks
    "delta@... invites you to chat - Accept?". **Yes** completes the key
    exchange; the chat opens on both sides, marked end-to-end encrypted.
-3. From then on either side just types. **Chat > Accept invite...** answers an
+3. From then on either side just types. **Chat > Pending...** answers an
    invitation you put off; **Chat > Invite...** shows a link to hand over by
    other means (any Delta Chat app can use it).
 

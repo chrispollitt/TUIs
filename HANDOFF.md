@@ -36,7 +36,7 @@ mailboxes `delta@` and `delta2@cpbee.cmnet` (Unix users; passwords in
 POSIX repos, `./build.sh && ./install.sh` in `tvchat/`, then
 `chat-setup/scripts/configure-tvchat-delta.sh --addr delta@cpbee.cmnet --host cpbee --self-signed --autoconnect` (installs the core, writes
 `tvchat.conf`, asks for the password, connects once). Then Chat > Invite... on
-one side and Chat > Join... on the other (the keys are swapped once).
+one side and Chat > Chat with... on the other (the keys are swapped once).
 
 Every manual step Chris has to take there is a bug in a script: fix the script,
 not the notes. Things the live runs could not show: `pip install --user` putting
@@ -60,7 +60,7 @@ that tries the logins (TO-DO tvchat 13 / tvmail 24); history is in memory only.
 
 Done Oct 25 (all on main): joining an address mails the invitation and the other
 tvchat asks to accept; the optional tvmail link (Message > Chat with sender / Open
-chat invite, via `~/.local/state/tvchat/requests`); Chat > Leave for Delta Chat
+chat invite, via `~/.local/state/tvchat/requests`); Chat > This chat... > Leave for Delta Chat
 (confirmed first); groups (New group, Add / Remove member, Rename). tvchat/PRIMER.md
 is the how-to for the three protocols. Left of Delta Chat (tvchat/TO-DO.txt item 1):
 attachments, a member picker for groups, tvchat sending an invite through tvmail

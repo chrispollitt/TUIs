@@ -10,6 +10,7 @@ struct ChatAccount
 {
     std::string id, protocol, state, display, detail;
     std::string view; // talk accounts: how talk conversations start - classic or irc
+    bool gateway = false; // a Delta Chat account held on a gateway: the second-device items do not apply
 };
 
 struct ChatConv

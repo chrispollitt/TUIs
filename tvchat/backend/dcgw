@@ -35,7 +35,10 @@ import configparser
 import hmac
 import json
 import logging
+import email
+import email.utils
 import os
+import re
 import secrets
 import shutil
 import socket
@@ -64,6 +67,7 @@ ALLOWED = {
     "remove_contact_from_chat": "acct", "set_chat_name": "acct", "leave_group": "acct", "delete_chat": "acct",
     "accept_chat": "acct", "marknoticed_chat": "acct", "markseen_msgs": "acct", "misc_send_text_message": "acct",
     "get_chat_securejoin_qr_code": "acct", "secure_join": "acct", "get_next_event": "none",
+    "dcgw_invites": "acct", "dcgw_drop_invites": "acct",           # the gateway's own: invitations that came by mail
 }
 LOCAL = ("start_io", "stop_io", "stop_io_for_all_accounts")      # the gateway keeps the core's I/O running itself
 READ_KEYS = ("displayname", "addr", "configured_addr", "bcc_self", "selfstatus")     # never mail_pw & co
@@ -142,6 +146,8 @@ class Core(object):
         self.ids = 0
         self.aid = None
         self.configured = False
+        self.invites = []                    # [uid, sender, link] of the invitation mails waiting in the INBOX
+        self.dropped = set()                 # uids answered (accepted or declined): not offered again
         self.stopping = False
         self.ready = threading.Event()
 
@@ -302,6 +308,16 @@ class Core(object):
             client.send({"jsonrpc": "2.0", "id": rid, "result": [self.aid]})
         elif m in LOCAL:
             client.send({"jsonrpc": "2.0", "id": rid, "result": None})
+        elif m == "dcgw_invites":
+            client.send({"jsonrpc": "2.0", "id": rid, "result": [list(i) for i in self.invites]})
+        elif m == "dcgw_drop_invites":
+            p = msg.get("params") or []
+            uids = [str(u) for u in (p[1] if len(p) > 1 and isinstance(p[1], list) else [])][:50]
+            self.dropped.update(uids)
+            self.invites = [i for i in self.invites if i[0] not in uids]
+            if uids:
+                threading.Thread(target=self._drop_mail, args=(uids,), daemon=True, name="drop-%s" % self.name).start()
+            client.send({"jsonrpc": "2.0", "id": rid, "result": True})
         else:
             cid = self._next()
             self.pending[cid] = (client, rid)
@@ -310,6 +326,80 @@ class Core(object):
             except (OSError, AttributeError, ValueError):
                 self.pending.pop(cid, None)
                 client.send({"jsonrpc": "2.0", "id": rid, "error": {"code": -32000, "message": "the Delta Chat core is gone"}})
+
+
+    def refresh_invites(self, connect=None):
+        """Look in the person's INBOX for invitation mails; the answer waits here for the clients to ask."""
+        tps = self.call("list_transports", [self.aid], 30)
+        if not tps:
+            return
+        found = scan_invite_mail(tps[0], connect)
+        self.invites = [i for i in found if i[0] not in self.dropped]
+
+    def _drop_mail(self, uids, connect=None):
+        try:
+            tps = self.call("list_transports", [self.aid], 30)
+            if tps:
+                drop_invite_mail(tps[0], uids, connect)
+        except Exception as e:                  # the mail stays; it is not offered again (uid is in self.dropped)
+            _log.warning("%s: removing the invitation mail: %s", self.name, e)
+
+
+# -- invitations that come by mail --------------------------------------------------------------------------
+# tvchat mails an invitation (a Delta Chat invite link) to someone it has no key for.  The mail carries the header
+# X-Tvchat-Invite.  The gateway holds the mail login, so IT looks for them (every `invite_every` seconds) and hands the
+# list to its clients, which ask the person "X invites you to chat - accept?".  Nothing is accepted here.
+INVITE_LINK = re.compile(r"(https://i\.delta\.chat/#[^\s<>\"]+|OPENPGP4FPR:[^\s<>\"]+)", re.I)
+INVITE_HEADER = "X-Tvchat-Invite"
+
+
+def _text_of(msg):
+    if msg.is_multipart():
+        return "\n".join(_text_of(part) for part in msg.get_payload())
+    payload = msg.get_payload(decode=True)
+    return payload.decode(msg.get_content_charset() or "utf-8", "replace") if payload else ""
+
+
+def scan_invite_mail(tp, connect=None):
+    """[[uid, sender, link]] for the invitation mails in INBOX (at most 20; link is '' when the mail has none)."""
+    m = (connect or _imap_open_for)(tp)
+    out = []
+    try:
+        m.select("INBOX")
+        typ, data = m.uid("SEARCH", None, "UNDELETED", "HEADER", INVITE_HEADER, "1")
+        for uid in ((data[0] or b"").split() if typ == "OK" else [])[:20]:
+            typ, d = m.uid("FETCH", uid, "(BODY.PEEK[])")
+            if typ != "OK" or not d or not isinstance(d[0], tuple):
+                continue
+            msg = email.message_from_bytes(d[0][1])
+            sender = email.utils.parseaddr(msg.get("From", ""))[1]
+            found = INVITE_LINK.search(_text_of(msg))
+            out.append([uid.decode(), sender, found.group(1) if found else ""])
+    finally:
+        try:
+            m.logout()
+        except Exception:
+            pass
+    return out
+
+
+def drop_invite_mail(tp, uids, connect=None):
+    """Delete those invitation mails from INBOX (only ones that carry the invitation header)."""
+    m = (connect or _imap_open_for)(tp)
+    try:
+        m.select("INBOX")
+        for uid in uids:
+            if not re.match(r"^\d+$", uid):
+                continue
+            typ, data = m.uid("SEARCH", None, "UID", uid, "HEADER", INVITE_HEADER, "1")
+            if typ == "OK" and (data[0] or b"").split():
+                m.uid("STORE", uid, "+FLAGS", "(\\Deleted)")
+        m.expunge()
+    finally:
+        try:
+            m.logout()
+        except Exception:
+            pass
 
 
 # -- keeping chat mail out of the ordinary inbox ------------------------------------------------------------
@@ -402,6 +492,8 @@ class Gateway(object):
         self.sweep = str(g.get("sweep", "yes")).strip().lower() not in ("no", "false", "0", "off")
         self.chat_folder = str(g.get("chat_folder", "ChatMail")).strip() or "ChatMail"
         self.sweep_every = int(g.get("sweep_every", 120))
+        self.invites = str(g.get("invites", "yes")).strip().lower() not in ("no", "false", "0", "off")
+        self.invite_every = int(g.get("invite_every", 30))
         self.users = {}
         for s in c.sections():
             if s.startswith("user:"):
@@ -496,6 +588,8 @@ class Gateway(object):
             _log.info("dcgw %s: listening on %s%s", VERSION, spec, " (TLS)" if self.ctx else "")
         if self.sweep:
             threading.Thread(target=self._sweep_loop, daemon=True, name="sweep").start()
+        if self.invites:
+            threading.Thread(target=self._invite_loop, daemon=True, name="invites").start()
         for name in self.users:                      # start the cores now: mail is received even with no client
             try:
                 self.core_for(name)
@@ -515,6 +609,19 @@ class Gateway(object):
                         _log.info("%s: %d chat message(s) filed in %s", name, n, self.chat_folder)
                 except Exception as e:          # a bad pass must never take the gateway down; the next one retries
                     _log.warning("%s: chat-mail sweep: %s", name, e)
+
+    def _invite_loop(self):
+        wait = 5
+        while not self.quit.wait(wait):
+            wait = self.invite_every
+            for name in list(self.users):
+                core = self.cores.get(name)
+                if core is None or not core.alive() or not core.configured:
+                    continue
+                try:
+                    core.refresh_invites()
+                except Exception as e:          # a bad pass must never take the gateway down; the next one retries
+                    _log.debug("%s: looking for invitations: %s", name, e)
 
     def stop(self):
         self.quit.set()

@@ -1586,6 +1586,45 @@ void connectDialog()
         connectAccount(chat().accounts()[i]);
 }
 
+// Connect / Disconnect: the account picked in the Servers pane, whichever it needs - no dialog;
+// when no account is picked (another window in front), a list of all of them to choose from.
+void connectToggle()
+{
+    const auto &as = chat().accounts();
+    if (as.empty())
+    {
+        notify("No chat account is configured (File > Edit configuration...).", noteInfo);
+        return;
+    }
+    int pick = -1;
+    if (chatInFront())
+        for (size_t i = 0; i < as.size(); ++i)
+            if (as[i].id == gChatWin->accountId())
+                pick = (int)i;
+    if (pick < 0)
+    {
+        std::vector<int> all;
+        for (size_t i = 0; i < as.size(); ++i)
+            all.push_back((int)i);
+        pick = pickAccount("Connect / Disconnect", all);
+        if (pick < 0)
+            return;
+    }
+    ChatAccount a = as[pick]; // connecting polls, which may reshape as
+    if (!isLive(a))
+    {
+        connectAccount(a);
+        flashStatus("Connecting " + a.display + "...");
+        return;
+    }
+    std::string body, err;
+    if (!ask("disconnect " + shq(a.id), body, err))
+        notify(err, noteError);
+    else
+        flashStatus("Disconnected " + a.display);
+    pollNow();
+}
+
 void disconnectDialog()
 {
     std::vector<int> cand = accountsWhere(true);
@@ -1603,23 +1642,26 @@ void disconnectDialog()
     pollNow();
 }
 
-// Join...: a channel, or a nick / address for a direct conversation, on
-// one of the connected accounts; opens its window.
+void newGroupDialog();
+
+// Chat with...: one box for everything you can start a chat with - a #channel, a nick, an email
+// address (a Delta Chat chat; with no key yet, the invitation goes by mail) or an invite link - on
+// one of the connected accounts; opens its window.  New group... is the one other way in.
 void joinDialog()
 {
     std::vector<int> cand = accountsWhere(true);
     if (cand.empty())
     {
-        notify("Connect a chat account first (Chat > Connect...).", noteInfo);
+        notify("Connect a chat account first (Chat > Connect / Disconnect).", noteInfo);
         return;
     }
     const auto &as = chat().accounts();
     int n = cand.size() > 1 ? (int)cand.size() : 0;
-    TDialog *d = new TDialog(TRect(0, 0, 50, 9 + n + (n ? 1 : 0)), "Join");
+    TDialog *d = new TDialog(TRect(0, 0, 50, 9 + n + (n ? 1 : 0)), "Chat with");
     d->options |= ofCentered;
     TInputLine *il = new TInputLine(TRect(3, 3, 47, 4), 400);
     d->insert(il);
-    d->insert(new TLabel(TRect(2, 2, 47, 3), "~C~hannel, nick, address or invite link", il));
+    d->insert(new TLabel(TRect(2, 2, 47, 3), "~W~ho: #channel, nick, email or invite link", il));
     TRadioButtons *rb = nullptr;
     if (n)
     {
@@ -1639,8 +1681,9 @@ void joinDialog()
                 }
     }
     int by = 5 + n + (n ? 1 : 0);
-    d->insert(new TButton(TRect(12, by, 24, by + 2), "~J~oin", cmOK, bfDefault));
-    d->insert(new TButton(TRect(26, by, 38, by + 2), "Cancel", cmCancel, bfNormal));
+    d->insert(new TButton(TRect(4, by, 14, by + 2), "O~K~", cmOK, bfDefault));
+    d->insert(new TButton(TRect(16, by, 32, by + 2), "New ~g~roup...", cmYes, bfNormal));
+    d->insert(new TButton(TRect(34, by, 46, by + 2), "Cancel", cmCancel, bfNormal));
     d->selectNext(False);
     il->select();
     ushort r = TProgram::deskTop->execView(d);
@@ -1649,6 +1692,11 @@ void joinDialog()
     if (rb)
         rb->getData(&sel);
     TObject::destroy(d);
+    if (r == cmYes)
+    {
+        newGroupDialog();
+        return;
+    }
     if (r == cmCancel || target.empty() || sel >= cand.size())
         return;
     std::string body, err;
@@ -1938,9 +1986,9 @@ void inviteDialog()
     int y = 2;
     if (irc)
         d->insert(new TStaticText(TRect(3, y, 67, y + 2), ("Invite someone to " + menuSafe(as[i].display) +
-                                                           "; they can open the\nlink with Chat > Accept invite...").c_str()));
+                                                           "; they can open the\nlink with Chat > Chat with...").c_str()));
     else
-        d->insert(new TStaticText(TRect(3, y, 67, y + 2), "Give this link to the person you want to write to;\nthey use Chat > Join..."));
+        d->insert(new TStaticText(TRect(3, y, 67, y + 2), "Give this link to the person you want to write to;\nthey use Chat > Chat with..."));
     y += 3;
     TInputLine *chan = nullptr, *mail = nullptr;
     if (irc)
@@ -2058,7 +2106,7 @@ void inviteDialog()
 // IRC account of ours.  Yes joins - the chat opens here - No drops it (a
 // Delta Chat one also removes the mail), Cancel leaves the rest for later.
 // Also posted when a new one arrives.
-void acceptInviteDialog()
+void acceptInviteDialog(bool quiet = false)
 {
     std::string body, err;
     if (!ask("invites", body, err))
@@ -2078,7 +2126,8 @@ void acceptInviteDialog()
     }
     if (lines.empty())
     {
-        notify("No chat invitations are waiting.", noteInfo);
+        if (!quiet)
+            notify("No chat invitations are waiting.", noteInfo);
         return;
     }
     for (const std::string &l : lines)
@@ -2112,6 +2161,7 @@ void acceptInviteDialog()
             notify(err, noteError);
     }
     pollNow();
+    chatMenuRebuild(); // Pending... may be gone now
 }
 
 // Mail selection...: the lines selected in the log (Shift-arrows or a drag), as
@@ -2215,7 +2265,7 @@ void mailSelectionDialog()
 // Nothing is said until you agree here: the text can be changed first, and it goes out
 // as you, in the channel [chat] share_to names.  Send says it, Discard forgets it,
 // Later leaves the rest for another time.
-void sharesDialog()
+void sharesDialog(bool quiet = false)
 {
     std::string body, err;
     if (!ask("shares", body, err))
@@ -2239,7 +2289,8 @@ void sharesDialog()
     }
     if (waiting.empty())
     {
-        notify("Nothing from tvmail is waiting to be shared.", noteInfo);
+        if (!quiet)
+            notify("Nothing from tvmail is waiting to be shared.", noteInfo);
         return;
     }
     for (const auto &w : waiting)
@@ -2283,6 +2334,7 @@ void sharesDialog()
             notify("Said in " + trimmed(body) + ".", noteInfo);
     }
     pollNow();
+    chatMenuRebuild();
 }
 
 // ---- Delta Chat groups -------------------------------------------------------
@@ -2489,6 +2541,122 @@ void leaveShown()
     pollNow();
 }
 
+// Invite...: in a Delta Chat group, add a person to it; anywhere else, invite someone to the
+// account (a link, a message in the chat shown, or a mail).
+void inviteSmart()
+{
+    if (!deltaGroupShown().empty())
+        groupAddDialog();
+    else
+        inviteDialog();
+}
+
+// This chat...: what can be done with the conversation shown - add or remove people, rename
+// (a Delta Chat group), leave - in one list, so the menu does not need an entry for each.
+void thisChatDialog()
+{
+    if (!chatInFront() || gChatWin->showingServer())
+    {
+        flashStatus("This chat: show a conversation first");
+        return;
+    }
+    const std::string cv = gChatWin->convId();
+    const ChatConv *c = convOf(cv);
+    std::string title = c ? c->title : cv;
+    bool delta = false;
+    for (const ChatAccount &a : chat().accounts())
+        if (a.id == accountIdOf(cv) && a.protocol == "deltachat")
+            delta = true;
+    bool group = !deltaGroupShown().empty();
+    TSItem *items = nullptr;
+    std::vector<std::pair<std::string, ushort>> rows;
+    if (group)
+    {
+        rows.push_back({"~A~dd a member...", cmChatGroupAdd});
+        rows.push_back({"~R~emove a member...", cmChatGroupRemove});
+        rows.push_back({"Re~n~ame the group...", cmChatGroupRename});
+    }
+    rows.push_back({delta ? (group ? "~L~eave and delete the group" : "~L~eave and delete this chat")
+                          : (c && c->kind == "channel" ? "~L~eave the channel" : "~L~eave (close this chat)"),
+                    cmChatLeave});
+    for (auto it = rows.rbegin(); it != rows.rend(); ++it)
+        items = new TSItem(it->first, items);
+    int n = (int)rows.size();
+    TDialog *d = new TDialog(TRect(0, 0, 54, 8 + n), "This chat");
+    d->options |= ofCentered;
+    d->insert(new TStaticText(TRect(3, 2, 51, 3), menuSafe(fitCols(title, 46)).c_str()));
+    TRadioButtons *rb = new TRadioButtons(TRect(3, 4, 51, 4 + n), items);
+    d->insert(rb);
+    d->insert(new TButton(TRect(12, 5 + n, 24, 7 + n), "O~K~", cmOK, bfDefault));
+    d->insert(new TButton(TRect(28, 5 + n, 40, 7 + n), "Cancel", cmCancel, bfNormal));
+    d->selectNext(False);
+    ushort r = TProgram::deskTop->execView(d);
+    ushort sel = 0;
+    if (r != cmCancel)
+        rb->getData(&sel);
+    TObject::destroy(d);
+    if (r == cmCancel || sel >= rows.size())
+        return;
+    switch (rows[sel].second)
+    {
+    case cmChatGroupAdd:
+        groupAddDialog();
+        break;
+    case cmChatGroupRemove:
+        groupRemoveDialog();
+        break;
+    case cmChatGroupRename:
+        groupRenameDialog();
+        break;
+    default:
+        leaveShown();
+    }
+}
+
+// How many invitations and tvmail shares wait for an answer: the Chat menu shows Pending... only then.
+int gPendingInv = 0, gPendingShare = 0;
+
+int countLines(const std::string &b)
+{
+    int n = 0;
+    for (size_t at = 0; at < b.size();)
+    {
+        size_t nl = b.find('\n', at);
+        if (nl == std::string::npos)
+            nl = b.size();
+        if (nl > at)
+            ++n;
+        at = nl + 1;
+    }
+    return n;
+}
+
+void refreshPending()
+{
+    gPendingInv = gPendingShare = 0;
+    if (!ChatClient::instance().started())
+        return;
+    std::string body, err;
+    if (ask("invites", body, err))
+        gPendingInv = countLines(body);
+    body.clear();
+    if (ask("shares", body, err))
+        gPendingShare = countLines(body);
+}
+
+// Pending...: each invitation and each message tvmail wants to share, one question apiece.
+void pendingDialog()
+{
+    refreshPending();
+    if (gPendingInv + gPendingShare == 0)
+    {
+        notify("Nothing is waiting for an answer.", noteInfo);
+        return;
+    }
+    acceptInviteDialog(true);
+    sharesDialog(true);
+}
+
 // Chat > <account>: the chat window on that account - connecting it first
 // if it is not.
 void accountItem(int i)
@@ -2520,25 +2688,31 @@ TMenu *buildChatMenu()
         *tail = it;
         tail = &it->next;
     };
-    add(new TMenuItem("~C~onnect...", cmChatConnect, kbNoKey, hcNoContext));
-    add(new TMenuItem("~D~isconnect...", cmChatDisconnect, kbNoKey, hcNoContext));
-    add(new TMenuItem("~J~oin...", cmChatJoin, kbNoKey, hcNoContext));
+    refreshPending();
+    bool talk = false, ownCore = false;
+    for (const ChatAccount &a : chat().accounts())
+    {
+        talk = talk || a.protocol == "talk";
+        ownCore = ownCore || (a.protocol == "deltachat" && !a.gateway);
+    }
+    add(new TMenuItem("~C~onnect / Disconnect", cmChatConnect, kbNoKey, hcNoContext));
+    add(new TMenuItem("Chat ~w~ith...", cmChatJoin, kbNoKey, hcNoContext));
     add(new TMenuItem("~I~nvite...", cmChatInvite, kbNoKey, hcNoContext));
-    add(new TMenuItem("Accept in~v~ite...", cmChatAcceptInvite, kbNoKey, hcNoContext));
-    add(new TMenuItem("~A~nswer", cmChatAnswer, kbNoKey, hcNoContext));
-    add(new TMenuItem("~L~eave", cmChatLeave, kbNoKey, hcNoContext));
-    add(new TMenuItem("~M~ail selection...", cmChatMailSelection, kbNoKey, hcNoContext));
-    add(new TMenuItem("S~h~are from tvmail...", cmChatShares, kbNoKey, hcNoContext));
-    add(new TMenuItem("Add selection to ~c~alendar...", cmChatToCal, kbNoKey, hcNoContext));
-    add(new TMenuItem("Add selection as ~t~o-do...", cmChatToTodo, kbNoKey, hcNoContext));
-    add(&newLine());
-    add(new TMenuItem("New ~g~roup...", cmChatNewGroup, kbNoKey, hcNoContext));
-    add(new TMenuItem("Add m~e~mber...", cmChatGroupAdd, kbNoKey, hcNoContext));
-    add(new TMenuItem("~R~emove member...", cmChatGroupRemove, kbNoKey, hcNoContext));
-    add(new TMenuItem("Re~n~ame group...", cmChatGroupRename, kbNoKey, hcNoContext));
-    add(&newLine());
-    add(new TMenuItem("Add ~s~econd device...", cmChatDeviceAdd, kbNoKey, hcNoContext));
-    add(new TMenuItem("~U~se account from another device...", cmChatDeviceUse, kbNoKey, hcNoContext));
+    add(new TMenuItem("~T~his chat...", cmChatThis, kbNoKey, hcNoContext));
+    add(new TMenuItem("~S~end selection to", kbNoKey,
+                      new TMenu(*new TMenuItem("~M~ail...", cmChatMailSelection, kbNoKey, hcNoContext) +
+                                *new TMenuItem("C~a~lendar...", cmChatToCal, kbNoKey, hcNoContext) +
+                                *new TMenuItem("~T~o-do...", cmChatToTodo, kbNoKey, hcNoContext))));
+    if (gPendingInv + gPendingShare > 0)
+        add(new TMenuItem(("~P~ending (" + std::to_string(gPendingInv + gPendingShare) + ")...").c_str(), cmChatPending,
+                          kbNoKey, hcNoContext));
+    if (ownCore) // an account with a core of its own can be shared with a second machine; a gateway account is one already
+        add(new TMenuItem("~D~evices", kbNoKey,
+                          new TMenu(*new TMenuItem("Add ~s~econd device...", cmChatDeviceAdd, kbNoKey, hcNoContext) +
+                                    *new TMenuItem("~U~se account from another device...", cmChatDeviceUse, kbNoKey,
+                                                   hcNoContext))));
+    if (talk)
+        add(new TMenuItem("A~n~swer call", cmChatAnswer, kbNoKey, hcNoContext));
     add(&newLine());
     const auto &as = chat().accounts();
     if (!chatOn() || as.empty())
@@ -2594,14 +2768,20 @@ void chatMenuGrey()
     bool on = chatOn();
     bool inChat = chatInFront() && !gChatWin->showingServer();
     bool call = chatInFront() && gChatWin->showingCall();
-    for (TMenuItem *p = gChatItem->subMenu->items; p; p = p->next)
-        if (p->name && p->command)
-            p->disabled = Boolean(!on || p->command == cmChatOff ||
-                                  ((p->command == cmChatLeave || p->command == cmChatMailSelection || p->command == cmChatToCal ||
-                                   p->command == cmChatToTodo) && !inChat) ||
-                                  (p->command == cmChatAnswer && !call) ||
-                                  ((p->command == cmChatGroupAdd || p->command == cmChatGroupRemove ||
-                                    p->command == cmChatGroupRename) && deltaGroupShown().empty()));
+    std::function<void(TMenu *)> walk = [&](TMenu *m)
+    {
+        for (TMenuItem *p = m ? m->items : nullptr; p; p = p->next)
+        {
+            if (p->name && !p->command && p->subMenu)
+                walk(p->subMenu);
+            else if (p->name && p->command)
+                p->disabled = Boolean(!on || p->command == cmChatOff ||
+                                      ((p->command == cmChatMailSelection || p->command == cmChatToCal ||
+                                        p->command == cmChatToTodo || p->command == cmChatThis) && !inChat) ||
+                                      (p->command == cmChatAnswer && !call));
+        }
+    };
+    walk(gChatItem->subMenu);
 }
 
 bool chatAsk(const std::string &req, std::string &body, std::string &err)
@@ -2618,7 +2798,7 @@ bool chatCommand(ushort command)
         TProgram::deskTop->insert(newFloydWindow(r));
         return true;
     }
-    if (!(command >= cmChatInvite && command <= cmChatDeviceUse) &&
+    if (!(command >= cmChatInvite && command <= cmChatPending) &&
         (command < cmChatConnect || command >= cmChatAccount + kChatMaxAccounts))
         return false;
     if (command == cmChatOff)
@@ -2631,7 +2811,7 @@ bool chatCommand(ushort command)
     switch (command)
     {
     case cmChatConnect:
-        connectDialog();
+        connectToggle();
         break;
     case cmChatDisconnect:
         disconnectDialog();
@@ -2640,7 +2820,13 @@ bool chatCommand(ushort command)
         joinDialog();
         break;
     case cmChatInvite:
-        inviteDialog();
+        inviteSmart();
+        break;
+    case cmChatThis:
+        thisChatDialog();
+        break;
+    case cmChatPending:
+        pendingDialog();
         break;
     case cmChatAcceptInvite:
         acceptInviteDialog();

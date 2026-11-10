@@ -33,7 +33,7 @@ Typed **/commands** are the same words for IRC, talk and Delta Chat - `/help` li
 
 **talk(1)** too (`protocol = talk`): through the one talkd on the LAN master
 (chrispollitt/POSIX `chat-setup`), so a plain `talk you@cpbee` from any shell
-rings you in tvchat. Chat > Join... calls, Enter answers, Chat > Leave hangs
+rings you in tvchat. Chat > Chat with... calls, Enter answers, Chat > This chat... > Leave hangs
 up. A talk conversation has two views, View > Talk view (Ctrl-T): *classic*,
 talk's own split screen in the chat pane with every keystroke sent (the
 default), or *IRC*, the log with whole lines and "... is typing".
@@ -41,9 +41,11 @@ default), or *IRC*, the log with whole lines and "... is typing".
 **Delta Chat** too (`protocol = deltachat`): encrypted chat over a mailbox of
 its own, through the official `deltachat-rpc-server` core (INSTALL.md says
 how to get it, and how to set the account up with one command). Two people
-swap keys once: one runs Chat > Invite... and gives the link to the other,
-who pastes it into Chat > Join...; after that, Join with an address opens a
-chat. Unlike IRC, the history is kept by the core, so PgUp reads all of it.
+swap keys once: **Chat > Chat with...** an address you hold no key for mails
+them an invitation, their tvchat asks "Accept?", and the chat opens on both
+sides (or give them the link from Chat > Invite...; they paste it into Chat
+with...). The Chat menu is the same for IRC, Delta Chat and talk, and the same
+words work typed (`/chat`, `/invite`, `/accept` ...). Unlike IRC, the history is kept by the core, so PgUp reads all of it.
 
 **Floyd** (`protocol = floyd`): a robot to keep you company, after Infocom's
 *Planetfall*. No server, no network: he is an account with one conversation. He

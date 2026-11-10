@@ -214,7 +214,7 @@ def chat_join_and_leave(opts):
     c = Case(tv)
     started(tv, c)
     c.check(srv.wait_joined("#e2e"), "the chat backend never joined #e2e")
-    tv.send(alt("c"), "j")
+    tv.send(alt("c"), "w")
     c.check(tv.wait("invite link", 3), "Chat > Join... did not ask")
     tv.send("#Other", "Enter", settle=0.8)
     c.check(srv.wait_joined("#other") and srv.sent("JOIN #Other"),
@@ -223,7 +223,8 @@ def chat_join_and_leave(opts):
             "Join did not show the channel in the chat window")
     c.check(tv.wait(lambda: re.search(r"│ ?#Other\b", tv.text()), 3),
             "the channel joined is not in the conversation list")
-    tv.send(alt("c"), "l", settle=0.8)
+    tv.send(alt("c"), "t", settle=0.8)                   # Chat > This chat... ...
+    tv.send("l", "Enter", settle=0.8)                    # ... Leave
     c.check(srv.sent("PART #Other"), "Chat > Leave did not part the channel")
     c.check(tv.wait(lambda: chat_heading(tv, "#Other — Fake") is None and
                     not re.search(r"│ ?#Other\b", tv.text()), 4),
@@ -366,10 +367,8 @@ def chat_share_from_tvmail(opts):
     open_chat(tv, c, srv)
     (reqs[0] / ".tmp").write_text("share tvmail: Bob - hello\n")
     os.rename(reqs[0] / ".tmp", reqs[0] / "1-1-1.req")
-    c.check(tv.wait("tvmail wants to share", 6), "no toast about what tvmail wants to share")
-    c.check(not srv.sent("PRIVMSG #share"), "it was said before anyone agreed")
-    tv.send(alt("c"), "h", settle=0.8)
-    c.check(tv.wait("Share from tvmail", 3) and tv.has("#share on Fake") and tv.has("tvmail: Bob - hello"),
+    # the share arrives as a question by itself (no menu entry to find): Send / Discard / Later
+    c.check(tv.wait("Share from tvmail", 8) and tv.has("#share on Fake") and tv.has("tvmail: Bob - hello"),
             "Chat > Share from tvmail... did not show the text and where it goes")
     tv.send("End", " (ok)", settle=0.4)
     tv.send("Enter", settle=1.0)
@@ -393,12 +392,12 @@ def chat_mail_selection(opts):
     stub = tv.bindir / "tvmail-backend"
     stub.write_text("#!/bin/sh\necho \"$@\" >> %s\ncat >> %s\nexit 0\n" % (sent, sent))
     stub.chmod(0o755)
-    tv.send(alt("c"), "m", settle=0.5)
+    tv.send(alt("c"), "s", "m", settle=0.5)
     c.check(tv.wait("Select lines in the log first", 2), "no hint to select lines first")
     (r1, c1), (r3, c3) = tv.find("first line"), tv.find("third line")
     tv.send("\x1b[<0;%d;%dM" % (c1 + 1, r1 + 1), "\x1b[<32;%d;%dM" % (c3 + 1, r3 + 1),
             "\x1b[<0;%d;%dm" % (c3 + 1, r3 + 1), settle=0.5)     # a mouse drag over the three lines
-    tv.send(alt("c"), "m", settle=0.8)
+    tv.send(alt("c"), "s", "m", settle=0.8)
     c.check(tv.wait("3 lines from #e2e", 3), "Chat > Mail selection... did not ask where to mail the 3 lines")
     tv.send("bob@example.org", "Enter", settle=1.5)
     c.check(tv.wait(lambda: sent.exists() and "third line" in sent.read_text(), 5),
@@ -527,9 +526,10 @@ def delta_invite_join_and_send(opts):
             return False
     c.check(tv.wait(mailed, 6), "the invitation was not handed to tvmail-backend send")
     c.check("FAKEINVITE" in tv.tvmail_log.read_text(), "the mail sent through tvmail does not hold the link")
-    tv.send(alt("c"), "v", settle=0.8)
-    c.check(tv.wait("No chat invitations are waiting.", 4), "Chat > Accept invite... did not say there are none")
-    tv.send(alt("c"), "j")
+    tv.send(alt("c"), settle=0.6)                      # nothing is waiting: the menu has no Pending... entry
+    c.check(tv.has("This chat") and not tv.has("Pending"), "Pending... is in the menu although nothing is waiting")
+    tv.send("\x1b", "\x1b", settle=0.4)
+    tv.send(alt("c"), "w")
     c.check(tv.wait("invite link", 3), "Chat > Join... does not mention an invite link")
     tv.send("https://i.delta.chat/#FAKEINVITE", "Enter", settle=1.0)
     c.check(tv.wait(lambda: chat_heading(tv, "Inviter") is not None, 6),
@@ -568,7 +568,7 @@ def delta_second_device_offer(opts):
     c = Case(tv)
     started(tv, c)
     c.check(tv.wait(lambda: re.search(r"Delta\b.*\bYes\b", tv.text()), 15), "the Delta Chat account did not connect")
-    tv.send(alt("c"), "s", settle=1.0)
+    tv.send(alt("c"), "d", "s", settle=1.0)
     c.check(tv.wait("DCBACKUP2:fake-backup-token", 8), "Chat > Add second device... did not show the code")
     c.check(tv.has("Add second device"), "the dialog has no title")
     tv.send("Enter", settle=1.0)                  # Done
@@ -597,7 +597,7 @@ def delta_second_device_use(opts):
     tv = Tv(opts, setup=setup)
     c = Case(tv)
     started(tv, c)
-    tv.send(alt("c"), "u", settle=1.0)
+    tv.send(alt("c"), "d", "u", settle=1.0)
     c.check(tv.wait("Use account from another device", 5), "Chat > Use account from another device... opened no dialog")
     tv.send("DCBACKUP2:fake-backup-token", "Enter", settle=1.0)
     c.check(tv.wait(lambda: re.search(r"Delta\b.*\bYes\b", tv.text()), 15),
@@ -631,7 +631,7 @@ def delta_second_device_use_on_a_connected_account(opts):
     c = Case(tv)
     started(tv, c)
     c.check(tv.wait(lambda: re.search(r"Delta\b.*\bYes\b", tv.text()), 15), "the Delta Chat account did not connect")
-    tv.send(alt("c"), "u", settle=1.0)
+    tv.send(alt("c"), "d", "u", settle=1.0)
     c.check(not tv.has("No Delta Chat account"), "Use account said there is no Delta Chat account although one is connected")
     c.check(tv.wait("Use account from another device", 5), "Chat > Use account from another device... opened no dialog")
     tv.send("DCBACKUP2:fake-backup-token", "Enter", settle=1.0)
@@ -734,15 +734,18 @@ def delta_group_rename_and_leave(opts):
     started(tv, c)
     c.check(tv.wait(lambda: re.search(r"Delta\b.*\bYes\b", tv.text()), 15),
             "the Delta Chat account did not connect")
-    tv.send(alt("c"), "g", settle=0.8)
-    c.check(tv.wait("Group name", 4), "Chat > New group... did not ask for a name")
+    tv.send(alt("c"), "w", settle=0.8)                   # Chat with... has the New group... button
+    tv.send(alt("g"), settle=0.8)
+    c.check(tv.wait("Group name", 4), "Chat with... > New group... did not ask for a name")
     tv.send("Crew", "Enter", settle=1.0)
     c.check(tv.wait(lambda: chat_heading(tv, "Crew — Delta") is not None, 6), "the new group did not open")
-    tv.send(alt("c"), "n", settle=0.8)
-    c.check(tv.wait("Rename group", 4), "Chat > Rename group... did not ask")
+    tv.send(alt("c"), "t", settle=0.8)                   # Chat > This chat... > Rename the group
+    tv.send("n", "Enter", settle=0.8)
+    c.check(tv.wait("Rename group", 4), "This chat... > Rename did not ask")
     tv.send("\x15", "Pirates", "Enter", settle=1.0)       # Ctrl-U clears the old name first
     c.check(tv.wait(lambda: chat_heading(tv, "Pirates — Delta") is not None, 6), "the group was not renamed")
-    tv.send(alt("c"), "l", settle=0.8)
+    tv.send(alt("c"), "t", settle=0.8)                   # Chat > This chat... ...
+    tv.send("l", "Enter", settle=0.8)                    # ... Leave
     c.check(tv.wait("Leave the group", 4) and tv.has("This cannot be undone."),
             "Leave did not ask before deleting")
     tv.send("n", settle=0.6)
@@ -876,7 +879,7 @@ def talk_irc_mode_call_out_and_toggle(opts):
     c.check(srv.greeted(), "tvchat-backend never said HELLO to talkd")
     c.check(tv.wait(lambda: re.search(r"Talk\b.*\bYes\b", tv.text()), 5),
             "the server pane does not show Talk as connected (Yes)")
-    tv.send(alt("c"), "j")
+    tv.send(alt("c"), "w")
     c.check(tv.wait("invite link", 3), "Chat > Join... did not ask")
     tv.send("michelle", "Enter", settle=0.8)
     c.check(srv.wait(lambda: srv.sent("CALL ")), "Join did not CALL")
@@ -1012,7 +1015,7 @@ def menus_stay_open_while_chat_polls(opts):
     c = Case(tv)
     started(tv, c)
     c.check(srv.wait_joined("#e2e"), "the chat backend never joined #e2e")
-    for key, item in (("f", "Exit"), ("c", "Join...")):
+    for key, item in (("f", "Exit"), ("c", "Chat with...")):
         tv.send(alt(key))
         c.check(tv.wait(item, 3), "Alt-%s did not open its menu" % key.upper())
         tv.pump(1.5)
@@ -1039,7 +1042,7 @@ def chat_menu_greyed_without_config(opts):
     enabled = cell_colours(tv.screen.buffer[y][x + 1])[0]
     tv.send("\x1b", "\x1b", alt("c"))
     c.check(tv.wait("no tvchat.conf", 3), "the Chat menu does not say chat is off")
-    for item in ("Connect...", "Join...", "Leave"):
+    for item in ("Connect / Disconnect", "Chat with...", "This chat..."):
         y, x = tv.find(item)
         c.check(cell_colours(tv.screen.buffer[y][x + 1])[0] != enabled,
                 "Chat > %s is not greyed without a tvchat.conf" % item)

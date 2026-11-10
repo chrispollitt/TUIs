@@ -62,8 +62,8 @@ shapes count as chat mail.  Two halves keep it out of the way:
 
 ## Limits
 - cpbee must be up: with it down, Delta Chat is down on every machine.
-- Invitations that arrive *by mail* (the "Accept invite" scan) read the mailbox with the user's mail password, which a thin
-  client does not have: that scan is off for gateway accounts (a candidate to move into dcgw).
+- Invitations that arrive *by mail* are found by the gateway itself (it holds the mail login; `invites = no` in [dcgw] turns the scan off,
+  `invite_every` sets how often): a client asks it (`dcgw_invites`) and shows the Accept question.
 - Attachments are not carried (tvchat shows `[attachment: NAME]`), as before.
 - The Floyd daemon's own Delta Chat account (floyd@cpbee.cmnet) is separate and unchanged.
 

@@ -105,7 +105,11 @@ bool ChatClient::sync()
         {
             std::vector<std::string> f = chatFields(ln);
             if (f.size() >= 4)
-                accts.push_back({f[0], f[1], f[2], f[3], "", f.size() > 4 ? f[4] : ""});
+            {
+                ChatAccount a{f[0], f[1], f[2], f[3], "", f.size() > 4 ? f[4] : ""};
+                a.gateway = f.size() > 5 && f[5] == "gateway";
+                accts.push_back(a);
+            }
         }
     else
         debugLog("chat: accounts: %s", body.c_str());

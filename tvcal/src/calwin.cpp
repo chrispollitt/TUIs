@@ -1247,7 +1247,7 @@ void shareInChat()
     if (!peerRequest("tvchat", "share " + body, err))
         notify(err, noteError);
     else
-        notify("Asked tvchat to share this in chat. You say yes there (Chat > Share from tvmail...), "
+        notify("Asked tvchat to share this in chat. You say yes there (Chat > Pending...), "
                "within 10 minutes; only the title, day, time and place go.");
 }
 

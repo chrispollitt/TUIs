@@ -354,6 +354,78 @@ class TestSweep(unittest.TestCase):
         self.assertEqual((n, f.log), (0, []))
 
 
+class FakeInviteImap(object):
+    """INBOX holds uid -> (raw message bytes); only messages with the invitation header answer the SEARCH."""
+    def __init__(self, inbox):
+        self.inbox, self.deleted, self.log = inbox, set(), []
+
+    def select(self, name):
+        return "OK", [b"1"]
+
+    def uid(self, cmd, *a):
+        self.log.append((cmd,) + a)
+        if cmd == "SEARCH":
+            a = a[1:] if a and a[0] is None else a            # the charset slot
+            u = [k for k, raw in sorted(self.inbox.items()) if dcgw.INVITE_HEADER.encode() in raw and
+                 (a[0] != "UID" and "UNDELETED" in a or a[0] == "UID" and str(k) == a[1])]
+            return "OK", [" ".join(str(k) for k in u).encode()]
+        if cmd == "FETCH":
+            return "OK", [(b"1 (UID 1 BODY[] {1}", self.inbox[int(a[0])]), b")"]
+        if cmd == "STORE":
+            self.deleted.add(int(a[0]))
+            return "OK", [b""]
+        raise AssertionError(cmd)
+
+    def expunge(self):
+        for k in self.deleted:
+            self.inbox.pop(k, None)
+        return "OK", [b""]
+
+    def logout(self):
+        pass
+
+
+def invite_mail(sender, link, header=True):
+    return ("From: %s\nTo: me@cpbee.cmnet\nSubject: Chat invitation from %s\n%sContent-Type: text/plain\n\n"
+            "Open this link:\n\n%s\n" % (sender, sender, ("%s: 1\n" % dcgw.INVITE_HEADER) if header else "", link)).encode()
+
+
+class TestInviteMail(unittest.TestCase):
+    LINK = "https://i.delta.chat/#ABC123&v=3&a=carol%40example.org&n=Carol"
+
+    def test_only_mail_with_the_invitation_header_is_listed(self):
+        f = FakeInviteImap({5: invite_mail("Carol <carol@example.org>", self.LINK),
+                            6: invite_mail("dave@example.org", self.LINK, header=False)})
+        self.assertEqual(dcgw.scan_invite_mail({}, lambda tp: f), [["5", "carol@example.org", self.LINK]])
+
+    def test_a_mail_without_a_link_is_listed_with_an_empty_link(self):
+        f = FakeInviteImap({7: invite_mail("eve@example.org", "no link here")})
+        self.assertEqual(dcgw.scan_invite_mail({}, lambda tp: f), [["7", "eve@example.org", ""]])
+
+    def test_dropping_removes_only_invitation_mail_and_only_numeric_uids(self):
+        f = FakeInviteImap({5: invite_mail("carol@example.org", self.LINK), 6: invite_mail("x@y.z", "q", header=False)})
+        dcgw.drop_invite_mail({}, ["5", "6", "5;rm", "../x"], lambda tp: f)
+        self.assertEqual(sorted(f.inbox), [6])          # 6 has no header: not ours to delete
+
+
+class TestInvitesThroughTheGateway(GatewayCase):
+    LINK = TestInviteMail.LINK
+
+    def test_clients_ask_the_gateway_for_the_invitations_and_answer_them(self):
+        core = self.gw.core_for("chris")
+        core.invites = [["5", "carol@example.org", self.LINK]]
+        a, b = self.conn("tok-chris"), self.conn("tok-michelle")
+        self.assertEqual(a.rpc("dcgw_invites", 1)["result"], [["5", "carol@example.org", self.LINK]])
+        self.assertEqual(b.rpc("dcgw_invites", 1)["result"], [])             # michelle has her own list
+        self.assertEqual(a.rpc("dcgw_invites", 2)["error"]["message"], "that is not your account")
+        self.assertEqual(a.rpc("dcgw_drop_invites", 1, ["5"])["result"], True)
+        self.assertEqual(a.rpc("dcgw_invites", 1)["result"], [])
+        self.assertIn("5", core.dropped)
+        # once answered it is not offered again, even if the mail is still there on the next look
+        core.invites = [i for i in [["5", "carol@example.org", self.LINK]] if i[0] not in core.dropped]
+        self.assertEqual(core.invites, [])
+
+
 class TestCommandLine(unittest.TestCase):
     def test_conf_is_accepted_before_and_after_the_subcommand(self):
         """The systemd unit says `dcgw serve --conf FILE`; an admin may say `dcgw --conf FILE list`."""

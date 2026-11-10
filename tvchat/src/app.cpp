@@ -171,10 +171,10 @@ void TVChatApp::chatEvents()
     bool accounts = reset; // the Chat menu lists the accounts and their states
     if (reset)
         message(deskTop, evBroadcast, cmChatReset, nullptr);
-    bool invited = false;
+    bool invited = false, shared = false;
     for (const ChatEvent &ev : evs)
     {
-        accounts = accounts || ev.fields[0] == "state";
+        accounts = accounts || ev.fields[0] == "state" || ev.fields[0] == "invite" || ev.fields[0] == "share";
         if (ev.fields[0] == "state" && ev.fields.size() > 3 && ev.fields[2] == "error" && !ev.fields[3].empty())
         { // a connection that failed: say so and why, instead of only "Err" in the list
             std::string who = ev.fields[1];
@@ -183,10 +183,10 @@ void TVChatApp::chatEvents()
                     who = a.display;
             notify(who + ": " + ev.fields[3], noteError);
         }
-        if (ev.fields[0] == "share" && ev.fields.size() > 2) // tvmail asks to say something in chat
-            notify("tvmail wants to share \"" + ev.fields[2].substr(0, 60) + "\" in chat - Chat > Share from tvmail...");
+        if (ev.fields[0] == "share" && ev.fields.size() > 2) // tvmail asks to say something in chat: asked below
+            shared = true;
         if (ev.fields[0] == "invite" && ev.fields.size() > 2) // an invitation to answer in tvchat
-            spoolSend(noteInfo, ev.fields[2] + " invites you - tvchat: Chat > Accept invite...", 3600, true);
+            spoolSend(noteInfo, ev.fields[2] + " invites you - tvchat: Chat > Pending...", 3600, true);
         invited = invited || ev.fields[0] == "invite";
         if (ev.fields[0] == "notice" && ev.fields.size() > 1) // e.g. tvmail asked for a chat
             notify(ev.fields[1]);
@@ -197,7 +197,9 @@ void TVChatApp::chatEvents()
     if (accounts)
         chatMenuRebuild();
     if (invited)
-        message(this, evCommand, cmChatAcceptInvite, nullptr); // asks; the Chat menu has it too
+        message(this, evCommand, cmChatAcceptInvite, nullptr); // asks; Chat > Pending... asks again
+    if (shared)
+        message(this, evCommand, cmChatShares, nullptr);       // Send / Discard / Later; Chat > Pending... too
     if (cc.unreadTotal() != unread && statusLine && !gFlashTimer)
         statusLine->drawView(); // "N new"
 }

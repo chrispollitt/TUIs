@@ -207,8 +207,11 @@ class Account:
 
     def wire(self):
         # the view only where there is one: IRC's lines stay as they were
-        return line(self.id, self.protocol, self.state, self.display,
-                    *([self.view] if self.view else []))
+        # a Delta Chat account on a gateway adds "gateway" (the UI then leaves out the second-device
+        # items, which do not apply: the account is one, on the gateway)
+        gw = self.protocol == "deltachat" and bool((self.opts.get("gateway") or "").strip())
+        extra = ([self.view] if self.view or gw else []) + (["gateway"] if gw else [])
+        return line(self.id, self.protocol, self.state, self.display, *extra)
 
 
 class Contact:
@@ -893,8 +896,8 @@ _PREFIX_ROLE = {"~": "owner", "&": "admin", "@": "op", "%": "halfop", "+": "voic
 # that starts with // is sent as a line starting with a single /.
 #   name: (aliases, {protocol or "*": (usage, what it does)})
 # --------------------------------------------------------------------------
-COMMAND_ORDER = ("help", "status", "whoami", "me", "shrug", "join", "query", "msg", "leave", "invite", "names",
-                 "whois", "nick", "name", "topic", "away", "ping", "floyd", "play", "look", "inventory", "take", "drop", "clear", "quit",
+COMMAND_ORDER = ("help", "status", "whoami", "me", "shrug", "chat", "join", "query", "msg", "leave", "invite", "names",
+                 "remove", "pending", "accept", "decline", "whois", "nick", "name", "topic", "away", "ping", "floyd", "play", "look", "inventory", "take", "drop", "clear", "quit",
                  "quote")
 COMMAND_TABLE = {
     "help": (("?",), {"*": ("/help [COMMAND]", "list the commands, or explain one")}),
@@ -902,6 +905,9 @@ COMMAND_TABLE = {
     "whoami": ((), {"*": ("/whoami", "who the network knows you as here")}),
     "me": ((), {"*": ("/me ACTION", "say it in the third person")}),
     "shrug": ((), {"*": ("/shrug [TEXT]", "send TEXT with a shrug after it")}),
+    "chat": ((), dict((p, ("/chat #CHANNEL | NICK | ADDRESS | LINK", "start a chat, whichever of those it is "
+                                                                       "(the same as Chat > Chat with...)"))
+                      for p in ("irc", "talk", "deltachat"))),
     "join": (("j",), {
         "irc": ("/join #CHANNEL [KEY]", "join a channel"),
         "deltachat": ("/join ADDRESS | LINK", "chat with an address, or join a link"),
@@ -929,7 +935,11 @@ COMMAND_TABLE = {
     "nick": ((), {
         "irc": ("/nick NEWNICK", "change your nick"),
         "deltachat": ("/nick NAME", "change the name people see")}),
-    "name": ((), {"deltachat": ("/name NEW NAME", "rename this group")}),
+    "name": (("rename",), {"deltachat": ("/name NEW NAME", "rename this group")}),
+    "remove": ((), {"deltachat": ("/remove ADDRESS", "take someone out of this group")}),
+    "pending": ((), {"deltachat": ("/pending", "the invitations waiting for an answer")}),
+    "accept": ((), {"deltachat": ("/accept [NAME]", "accept the invitation (from NAME, when several wait)")}),
+    "decline": ((), {"deltachat": ("/decline [NAME]", "decline it, and delete the mail")}),
     "topic": ((), {"irc": ("/topic [NEW TOPIC]", "show or set the topic")}),
     "away": ((), {"irc": ("/away [REASON]", "mark yourself away (none: back)")}),
     "ping": ((), {"irc": ("/ping [NICK]", "round-trip time to the server or NICK")}),
@@ -1073,6 +1083,14 @@ class CommandMixin(object):
 
     def whoami_lines(self, conv):
         return self.status_lines()[1:2] or ["not connected"]
+
+    def c_chat(self, conv, rest):
+        """/chat WHO: what Chat > Chat with... does - a channel is joined, a nick, an address or a link opens a chat."""
+        _need(rest, "/chat #CHANNEL | NICK | ADDRESS | LINK")
+        first = rest.split()[0]
+        if self.account.protocol == "irc" and not self.is_channel(first):
+            return self.c_query(conv, rest)
+        return self.c_join(conv, rest)
 
     def c_shrug(self, conv, rest):
         self._in_a_chat(conv, "/shrug")
@@ -2090,7 +2108,7 @@ class IrcAdapter(CommandMixin):
         if inv is not None and inv["channel"] == channel:
             return
         self.invites[key] = {"from": sender, "channel": channel}
-        self.system(self.server_conv(), "%s invites you to %s - Chat > Accept invite..."
+        self.system(self.server_conv(), "%s invites you to %s - Chat > Pending..."
                     % (sender, channel or self.account.display))
         self.chat.events.push("invite", self.account.id, sender)
         if self.chat.daemon or _bool(self.account.opts.get("join_invites"), False):
@@ -2741,16 +2759,16 @@ class TalkAdapter(CommandMixin):
 
     def _session(self, conv):
         if conv.kind == "server":
-            raise UserError("the server window takes no messages - call someone (Chat > Join...)")
+            raise UserError("the server window takes no messages - call someone (Chat > Chat with...)")
         call = self.call_of(conv)
         if call is None:
-            raise UserError("not talking to %s now - Chat > Join... to call" % conv.title)
+            raise UserError("not talking to %s now - Chat > Chat with... to call" % conv.title)
         if call.data is None:
             raise UserError("%s has not answered yet" % conv.title if call.outgoing
                             else "%s is calling - answer first" % conv.title)
         return call
 
-    SERVER_TEXT_REFUSAL = "the server window takes no messages - call someone (Chat > Join... or /join USER)"
+    SERVER_TEXT_REFUSAL = "the server window takes no messages - call someone (Chat > Chat with... or /join USER)"
 
     def speak(self, conv, text):
         """IRC mode: a whole line.  It goes out with its newline, and is in the
@@ -2967,7 +2985,7 @@ def send_invite_mail(p, to, link):
     msg[INVITE_HEADER] = "1"
     msg.set_content(
         "%s invites you to chat, end-to-end encrypted, with Delta Chat.\n\n"
-        "In tvchat this shows up as a question (or choose Chat > Accept invite...).\n"
+        "In tvchat this shows up as a question (or choose Chat > Pending...).\n"
         "In another Delta Chat app, open this link:\n\n%s\n" % (p["addr"], link))
     ctx = _tls_context(p["verify"])
     host, port = p["smtp_host"], p["smtp_port"]
@@ -3010,7 +3028,7 @@ def mail_through_tvmail(tvmail, to, sender, link):
     """Send the invitation as an ordinary mail through tvmail's own account (a
     thread); the reason in the exception if tvmail refuses."""
     body = ("%s invites you to chat, end-to-end encrypted, with Delta Chat.\n\n"
-            "In tvchat: Chat > Join... and paste this link (or, in tvmail, Message > Open\n"
+            "In tvchat: Chat > Chat with... and paste this link (or, in tvmail, Message > Open\n"
             "chat invite).  In another Delta Chat app, open it:\n\n%s\n" % (sender, link))
     mail_text_through_tvmail(tvmail, to, "Chat invitation from %s" % sender, body)
 
@@ -3636,7 +3654,7 @@ class DeltaChatAdapter(CommandMixin):
         if not m:
             return False
         r = tvf.master_call(m, {"op": "publish", "kind": "device", "key": self._offer_key(), "data": qr, "ttl": 600,
-                                "text": "%s offers %s to a second device: Chat > Use account from another device..."
+                                "text": "%s offers %s to a second device: Chat > Devices > Use account from another device..."
                                         % (m["machine"], self.addr or self.account.id),
                                 "machine": m["machine"], "to": "all"})
         return bool(r and r.get("ok"))
@@ -3661,7 +3679,7 @@ class DeltaChatAdapter(CommandMixin):
         return best
 
     def device_offer(self):
-        """Chat > Add second device: offer this account to another machine.  Returns the code to type there.
+        """Chat > Devices > Add second device: offer this account to another machine.  Returns the code to type there.
         The core stops its mail traffic while the offer stands (until the other device has it, or it is cancelled)."""
         self._need_up()
         if self.offer:
@@ -3714,14 +3732,14 @@ class DeltaChatAdapter(CommandMixin):
         return False
 
     def device_use(self, qr, replace=False):
-        """Chat > Use account from another device: fetch the account the code names.  'confirm' when this machine
+        """Chat > Devices > Use account from another device: fetch the account the code names.  'confirm' when this machine
         already has a Delta Chat account (it is kept aside, not deleted, if the user confirms), 'started' otherwise."""
         qr = (qr or "").strip()
         if not qr:                       # no code typed: ask the master Floyd whether some machine offers this account
             qr = self._find_offer()
             if not qr:
                 raise UserError("no machine is offering %s right now (looked through the master Floyd): on the machine that "
-                                "has it, use Chat > Add second device...; or paste its code here%s"
+                                "has it, use Chat > Devices > Add second device...; or paste its code here%s"
                                 % (self.addr or self.account.id, "" if self._master() else
                                    " ([floyd] server = and token = in tvchat.conf would find it by itself)"))
         if not self.BACKUP_QR.match(qr):
@@ -4072,7 +4090,7 @@ class DeltaChatAdapter(CommandMixin):
                 return
             if err is not None:
                 self.system(conv, "could not mail the invitation to %s: %s - give them this link "
-                                  "instead (they use Chat > Join...): %s" % (addr, err, link))
+                                  "instead (they use Chat > Chat with...): %s" % (addr, err, link))
             else:
                 self.system(conv, "invitation mailed to %s - the chat opens here when they accept" % addr)
         self.loop.run_in_thread(lambda: send_invite_mail(p, addr, link), done)
@@ -4107,6 +4125,16 @@ class DeltaChatAdapter(CommandMixin):
         gen = self.gen
         if self.phase != "up":
             return
+        if self.gateway:
+            # the gateway holds the mail login and looks in the mailbox itself; ask it what it found (instant:
+            # it keeps the list), so this needs no mail password here
+            try:
+                res = [tuple(x) for x in (self.call("dcgw_invites", self.acct) or [])]
+                err = None
+            except (RpcError, UserError) as e:
+                res, err = [], e
+            self._scanned(res, err)
+            return
         try:
             p = self._mail_params()
         except UserError as e:
@@ -4134,7 +4162,7 @@ class DeltaChatAdapter(CommandMixin):
             inv = self.invites.get(key)
             if inv is None or inv["link"] != link:
                 self.invites[key] = inv = {"from": sender, "link": link, "uids": []}
-                self.system(self.server_conv(), "%s invites you to chat - Chat > Accept invite..." % sender)
+                self.system(self.server_conv(), "%s invites you to chat - Chat > Pending..." % sender)
                 self.chat.events.push("invite", self.account.id, sender)
             if uid not in inv["uids"]:
                 inv["uids"].append(uid)
@@ -4165,7 +4193,7 @@ class DeltaChatAdapter(CommandMixin):
         inv = self.invites.get(sender.lower())
         if inv is None or inv["link"] != link:
             self.invites[sender.lower()] = {"from": sender, "link": link, "uids": []}
-            self.system(self.server_conv(), "%s invites you to chat - Chat > Accept invite..." % sender)
+            self.system(self.server_conv(), "%s invites you to chat - Chat > Pending..." % sender)
             self.chat.events.push("invite", self.account.id, sender)
             self._accept_waiting()
 
@@ -4190,6 +4218,13 @@ class DeltaChatAdapter(CommandMixin):
     def _drop_invite(self, inv):
         self.invites.pop(inv["from"].lower(), None)
         self.done_uids.update(inv["uids"])
+        if self.gateway:                        # the gateway deletes the mail (and does not offer it again)
+            if inv["uids"]:
+                try:
+                    self.call("dcgw_drop_invites", self.acct, list(inv["uids"]))
+                except (RpcError, UserError) as e:
+                    _log.debug("%s: the gateway did not drop the invitation mail: %s", self.account.id, e)
+            return
         try:
             p = self._mail_params()
         except UserError:
@@ -4217,7 +4252,7 @@ class DeltaChatAdapter(CommandMixin):
         self.requests.discard(cid)
         self.chat.remove_conv(conv)
 
-    SERVER_TEXT_REFUSAL = "the server window takes no messages - start a chat (Chat > Join... or /join ADDRESS)"
+    SERVER_TEXT_REFUSAL = "the server window takes no messages - start a chat (Chat > Chat with... or /join ADDRESS)"
 
     def need_up(self):
         self._need_up()
@@ -4299,6 +4334,43 @@ class DeltaChatAdapter(CommandMixin):
         if conv.kind == "group":
             return (self.group_add, (conv, rest))
         return (self._join_cmd, (rest,))
+
+    def c_remove(self, conv, rest):
+        _need(rest and " " not in rest, "/remove ADDRESS")
+        if conv.kind != "group":
+            raise UserError("/remove takes someone out of a group; this is not one")
+        return (self.group_remove, (conv, rest))
+
+    def c_pending(self, conv, rest):
+        who = self.pending_invites()
+        return (self._notes, (conv, ["%d invitation(s) waiting: %s - /accept NAME or /decline NAME" % (len(who), ", ".join(who))]
+                              if who else ["no invitations are waiting"]))
+
+    def _invite_named(self, rest):
+        who = self.pending_invites()
+        name = rest.strip()
+        if not name:
+            if len(who) != 1:
+                raise UserError("/accept or /decline NAME - waiting: %s" % (", ".join(who) or "nobody"))
+            return who[0]
+        for w in who:
+            if w.lower() == name.lower():
+                return w
+        raise UserError("no invitation from %s (/pending lists them)" % name)
+
+    def c_accept(self, conv, rest):
+        return (self._accept_cmd, (conv, self._invite_named(rest)))
+
+    def _accept_cmd(self, conv, who):
+        joined = self.accept_invite(who)
+        self.system(conv, "accepted the invitation from %s - their chat is open: %s" % (who, joined.title))
+
+    def c_decline(self, conv, rest):
+        return (self._decline_cmd, (conv, self._invite_named(rest)))
+
+    def _decline_cmd(self, conv, who):
+        self.decline_invite(who)
+        self.system(conv, "declined the invitation from %s" % who)
 
     def c_name(self, conv, rest):
         _need(rest, "/name NEW NAME")
@@ -4419,7 +4491,7 @@ class DeltaChatAdapter(CommandMixin):
             except UserError as e:           # the group stays; say what could not be done
                 self.system(conv, "%s has no key yet and could not be invited: %s" % (addr, e))
                 continue
-            self.system(conv, "%s has no key yet: invited by mail - add them (Chat > Add member) "
+            self.system(conv, "%s has no key yet: invited by mail - add them (Chat > Invite...) "
                               "once they have accepted" % addr)
         return conv
 
@@ -6939,7 +7011,7 @@ class Chat:
     def find_invites(self, conv, msg):
         """A message that carries an invitation - an irc:// link for the IRC
         account on that server, or a Delta Chat link - becomes one to answer
-        (Chat > Accept invite...), from whoever sent it.  Only what people say
+        (Chat > Pending...), from whoever sent it.  Only what people say
         to us or a group: not ours, not a channel's chatter (a link there is
         for everyone), not a server window's notices, not mail or Floyd."""
         if "s" in msg.flags or "n" in msg.flags or conv.kind not in ("direct", "group") \
@@ -7259,11 +7331,11 @@ class Chat:
             return "dropped an empty request to share"
         self.shares = [s for s in getattr(self, "shares", []) if time.time() - s["when"] < self.SHARE_KEEP]
         if len(self.shares) >= self.SHARE_MAX:
-            return "too many shares are waiting - Chat > Share from tvmail..."
+            return "too many shares are waiting - Chat > Pending..."
         self._share_ids = getattr(self, "_share_ids", 0) + 1
         self.shares.append({"id": str(self._share_ids), "text": text, "when": time.time()})
         self.events.push("share", str(self._share_ids), text)
-        return "tvmail wants to share a message in %s on %s - Chat > Share from tvmail..." % (chan, acct.display)
+        return "tvmail wants to share a message in %s on %s - Chat > Pending..." % (chan, acct.display)
 
     def pending_shares(self):
         """[(id, text, where)] still waiting, oldest first."""

@@ -2208,7 +2208,7 @@ def wizard_steps(app, m, manifest=None, cas=None):
                     if acc.get("protocol") == "deltachat" and (acc.get("opts") or {}).get("gateway"):
                         more = " Next: !setup delta TOKEN (your token on the Delta Chat gateway; see ~/dcgw-*.token on the server)."
                     elif acc.get("protocol") == "deltachat":
-                        more = " Next, in tvchat: Chat > Use account from another device... (cpbee shows Chat > Add second device first)."
+                        more = " Next, in tvchat: Chat > Devices > Use account from another device... (cpbee shows Chat > Devices > Add second device first)."
                     return "tvchat: added the %s account%s.%s" % (acc.get("display", ident), " and autoconnect" if acc.get("autoconnect", True) else "", more)
                 steps.append(WizStep("todo", "tvchat lacks the %s account (%s)" % (acc.get("display", ident), proto), fix))
             if (acc.get("opts") or {}).get("gateway") and ("account:" + ident) in conf_sections(tvchat_path) \
