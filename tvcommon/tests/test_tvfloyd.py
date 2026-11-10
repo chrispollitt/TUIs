@@ -645,7 +645,7 @@ class TestWizard(unittest.TestCase):
         self.assertIn("Done: tvmail now has server =", done)
         self.assertIn("Done: tvcal: calendar https://cpbee:5232/chris/calendar/", done)
         self.assertIn("Done: tvchat: added the Delta Chat (chris) account", done)
-        self.assertIn("Chat > Use account from another device", done)
+        self.assertIn("Chat > Devices > Use account from another device", done)
         self.assertNotIn(self.TOKEN, done)
         # the files
         self.assertEqual(tvf.conf_get(self.path("tvmail"), "floyd", "token"), self.TOKEN)

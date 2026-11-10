@@ -460,6 +460,31 @@ class Book(object):
                     out.append((g.name + " (group)", ", ".join(addrs)))
         return out[:limit]
 
+    def resolve(self, text):
+        """Turn what was typed - addresses, names, nicknames, group names, separated by commas - into addresses.  An
+        address stays as it is; a name that is not in the book is a ContactsError naming it."""
+        out, missing = [], []
+        for tok in [t.strip() for t in re.split(r"[,;]", text or "") if t.strip()]:
+            if "@" in tok:
+                found = [tok]
+            else:
+                key = tok.lower()
+                found = []
+                for c in self.contacts():
+                    if c.emails and key in [c.name.lower()] + [n.lower() for n in c.nicknames]:
+                        found = c.emails[:1]
+                        break
+                if not found:
+                    found = self.expand(tok)
+            if not found:
+                missing.append(tok)
+            for a in found:
+                if a not in out:
+                    out.append(a)
+        if missing:
+            raise ContactsError("not in the address book: %s" % ", ".join(missing))
+        return out
+
     def expand(self, group_name, _seen=None):
         """A group's addresses (nested groups too, each once); [] if there is no such group."""
         seen = _seen if _seen is not None else set()
@@ -637,6 +662,8 @@ def main(argv=None):
     p = sub.add_parser("add-address", help="add an address (a sender) unless the book already has it")
     p.add_argument("--email", required=True)
     p.add_argument("--name", default="")
+    p = sub.add_parser("resolve", help="names, nicknames and group names (and addresses) to addresses")
+    p.add_argument("text")
     p = sub.add_parser("complete"); p.add_argument("text")
     p = sub.add_parser("import-mailrc"); p.add_argument("--dry-run", action="store_true")
     a = ap.parse_args(argv)
@@ -683,6 +710,8 @@ def main(argv=None):
             name = _clean(a.name).strip(" \"'") or addr.split("@")[0]
             book.save(Card.new(name, [addr]))
             print("added %s <%s> to the address book" % (name, addr))
+        elif a.cmd == "resolve":
+            print(", ".join(book.resolve(a.text)))
         elif a.cmd == "complete":
             for name, addr in book.complete(a.text):
                 print("%s\t%s" % (_clean(name), _clean(addr)))

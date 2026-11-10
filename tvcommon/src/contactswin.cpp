@@ -359,6 +359,37 @@ TWindow *newContactsWindow(const TRect &bounds)
     return new TContactsWindow(bounds);
 }
 
+// Names, nicknames and group names in a list of recipients become addresses (addresses stay): text is the person's input,
+// out what to use.  Without an address book out = text.  False: out is the reason (a name that is not in the book).
+bool contactsResolve(const std::string &text, std::string &out)
+{
+    out = text;
+    bool names = false;
+    size_t at = 0;
+    while (at <= text.size())
+    {
+        size_t e = text.find_first_of(",;", at);
+        std::string tok = trim(text.substr(at, e == std::string::npos ? std::string::npos : e - at));
+        if (!tok.empty() && tok.find('@') == std::string::npos)
+            names = true;
+        if (e == std::string::npos)
+            break;
+        at = e + 1;
+    }
+    if (!names)
+        return true; // all addresses already
+    Result r = runCli("resolve " + shq(text));
+    if (r.ok)
+    {
+        out = r.out;
+        return true;
+    }
+    if (r.out.find("no address book is configured") != std::string::npos || r.out.find("not installed") != std::string::npos)
+        return true; // no book: leave it as typed
+    out = r.out;
+    return false;
+}
+
 // Add an address (a sender, say) to the address book unless it is there already: the words to say, and whether it worked.
 bool contactsAddAddress(const std::string &name, const std::string &email, std::string &say)
 {

@@ -2347,7 +2347,7 @@ if __name__ == "__main__":
 # itself, scheduled or begun, is announced too.  The checks run on a worker thread, never on the loop.
 SERVICE_LABELS = {"ergo": "IRC server (Ergo)", "talkd": "talkd (chat)", "dovecot": "mailbox server (Dovecot)",
                   "dcgw": "Delta Chat gateway (dcgw)",
-                  "postfix": "mail relay (Postfix)", "radicale": "calendar server (Radicale)"}
+                  "postfix": "mail relay (Postfix)", "radicale": "calendar and address book server (Radicale)"}
 SENTINEL_SERVICES = "ergo:6697, talkd:518@127.0.0.1, dovecot:993, postfix:25@127.0.0.1, radicale:5232"
 SENTINEL_HOSTS = "u-l.ca mail relay=u-l.ca:465, u-l.ca mailbox=u-l.ca:993"
 

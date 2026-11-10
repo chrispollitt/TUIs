@@ -102,6 +102,55 @@ __version__ = "1.3.0"
 _log = logging.getLogger("tvchat-backend")
 
 
+def _load_contacts():
+    """tvcommon's tvcontacts.py (the shared address book on Radicale), from beside this file, the source tree or the
+    install; None where it is nowhere."""
+    import importlib.util
+    here = os.path.dirname(os.path.realpath(__file__))
+    for d in (here, os.path.join(here, "..", "..", "tvcommon", "py"), os.path.join(here, "..", "share", "tvchat"),
+              "/usr/local/share/tvchat", "/usr/share/tvchat"):
+        path = os.path.join(d, "tvcontacts.py")
+        if os.path.isfile(path):
+            try:
+                spec = importlib.util.spec_from_file_location("tvcontacts", path)
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                return mod
+            except Exception:
+                _log.debug("cannot load %s", path, exc_info=True)
+    return None
+
+
+def book_lookup(name):
+    """What the address book on the server says a typed name is: ("contact", address), ("group", name, [addresses]) or None
+    (no book, no such name, or the server and the copy both silent).  $TVCHAT_NO_CONTACTS switches it off."""
+    if os.environ.get("TVCHAT_NO_CONTACTS"):
+        return None
+    tvc = _load_contacts()
+    if tvc is None:
+        return None
+    try:
+        book = tvc.default_book()
+        if book is None:
+            return None
+        try:
+            book.refresh(60)
+        except Exception as e:
+            _log.debug("address book: %s", e)
+        key = name.strip().lower()
+        for c in book.contacts():
+            if c.emails and key in [c.name.lower()] + [n.lower() for n in c.nicknames]:
+                return ("contact", c.emails[0])
+        for g in book.groups():
+            if key in [g.name.lower()] + [n.lower() for n in g.nicknames]:
+                addrs = book.expand(g.name)
+                if addrs:
+                    return ("group", g.name, addrs)
+    except Exception:
+        _log.debug("address book lookup failed", exc_info=True)
+    return None
+
+
 def _load_tvfloyd():
     """tvcommon's tvfloyd.py - Floyd's levels and useful tools, shared with tvmail -
     from beside this file, the source tree or the install; a do-nothing stand-in
@@ -910,7 +959,7 @@ COMMAND_TABLE = {
                       for p in ("irc", "talk", "deltachat"))),
     "join": (("j",), {
         "irc": ("/join #CHANNEL [KEY]", "join a channel"),
-        "deltachat": ("/join ADDRESS | LINK", "chat with an address, or join a link"),
+        "deltachat": ("/join ADDRESS | NAME | LINK", "chat with an address or a name from your address book (a group name makes the group), or join a link"),
         "talk": ("/join USER[@HOST]", "call someone")}),
     "query": (("q",), {
         "irc": ("/query NICK [TEXT]", "open a conversation, say TEXT"),
@@ -4018,6 +4067,15 @@ class DeltaChatAdapter(CommandMixin):
         shows in the chat)."""
         self._need_up()
         addr = target.strip()
+        if not self.INVITE.match(addr) and "@" not in addr:
+            found = book_lookup(addr)                 # a name from your address book
+            if found and found[0] == "contact":
+                addr = found[1]
+            elif found:
+                for c in self.account.convs.values():          # the group is made once
+                    if c.kind == "group" and c.title.lower() == found[1].lower():
+                        return c
+                return self.new_group(found[1], found[2])
         if self.INVITE.match(addr):
             try:
                 chat_id = self.call("secure_join", self.acct, addr)
@@ -4029,8 +4087,8 @@ class DeltaChatAdapter(CommandMixin):
                 raise UserError(str(e))
             return conv
         if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", addr):
-            raise UserError("a Delta Chat chat is started with an email address (%r is not one)"
-                            % target)
+            raise UserError("a Delta Chat chat is started with an email address, an invite link or a name from your "
+                            "address book (%r is none of those)" % target)
         try:
             cid = self.call("lookup_contact_id_by_addr", self.acct, addr)
             if cid is None:

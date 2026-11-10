@@ -21,6 +21,8 @@ import threading
 import time
 import types
 import unittest
+
+os.environ.setdefault("TVCHAT_NO_CONTACTS", "1")     # tests never reach for the address book on a server
 import unittest.mock
 import base64
 import io
@@ -2630,6 +2632,31 @@ class TestDeltaChat(DeltaBase):
         import json
         self.assertEqual(json.loads((self.tmp / "state" / "tvchat" / "pending-members.json").read_text()), {})
 
+    def test_a_name_from_the_address_book_starts_a_chat_or_makes_the_group(self):
+        self.setup_dc()
+        self.up()
+        calls = []
+
+        def fake_lookup(name):
+            calls.append(name)
+            return {"bob": ("contact", "bob@example.org"),
+                    "pals": ("group", "Pals", ["alice@example.org", "bob@example.org"])}.get(name.lower())
+        old = cb.book_lookup
+        cb.book_lookup = fake_lookup
+        self.addCleanup(setattr, cb, "book_lookup", old)
+        st, body = self.verb("join", "delta", "Bob")                       # a name: the address from the book
+        self.assertEqual(st, 0, body)
+        self.assertEqual(body.decode().strip(), "delta/12")
+        st, body = self.verb("join", "delta", "Pals")                      # a group name: the Delta group is made
+        self.assertEqual(st, 0, body)
+        conv = self.acct.convs[body.decode().strip()]
+        self.assertEqual((conv.kind, conv.title), ("group", "Pals"))
+        st, again = self.verb("join", "delta", "pals")                     # ... once
+        self.assertEqual(again.decode().strip(), conv.id)
+        st, body = self.verb("join", "delta", "Nobody")                    # not in the book: the old answer, now with the hint
+        self.assertEqual(st, 1)
+        self.assertIn("name from your address book", body.decode())
+
     def test_group_members_come_and_go_and_the_group_is_renamed(self):
         self.setup_dc()
         self.up()
@@ -2660,7 +2687,7 @@ class TestDeltaChat(DeltaBase):
         self.assertEqual(say("delta/10", "/help")[0], 0)
         listed = "\n".join(notes("delta/10"))
         self.assertIn("Delta Chat commands", listed)
-        self.assertIn("/join ADDRESS | LINK", listed)
+        self.assertIn("/join ADDRESS | NAME | LINK", listed)
         self.assertIn("/leave", listed)
         self.assertIn("/help [COMMAND]", listed)
         self.assertNotIn("/topic", listed)

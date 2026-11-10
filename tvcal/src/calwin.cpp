@@ -1218,11 +1218,17 @@ void mailInvite()
         return;
     }
     char buf[200] = "";
-    if (inputBox("Mail invitation", "~T~o (an address)", buf, sizeof(buf) - 1) != cmOK || trimmed(buf).empty())
+    if (inputBox("Mail invitation", "~T~o (an address, a name or a group from your address book)", buf, sizeof(buf) - 1) != cmOK || trimmed(buf).empty())
         return;
+    std::string to;
+    if (!contactsResolve(trimmed(buf), to)) // names from the address book become addresses
+    {
+        notify(to, noteWarn);
+        return;
+    }
     flashStatus("Sending through tvmail...");
     // one-shot, not the serve co-process: sending takes longer than its read timeout
-    std::string out = shCapture("tvcal-backend mail-event " + shq(uid) + " " + shq(trimmed(buf)) + " 2>&1");
+    std::string out = shCapture("tvcal-backend mail-event " + shq(uid) + " " + shq(to) + " 2>&1");
     while (!out.empty() && isspace((unsigned char)out.back()))
         out.pop_back();
     notify(out.empty() ? "tvmail did not answer." : out, out.compare(0, 4, "sent") == 0 ? noteInfo : noteError);

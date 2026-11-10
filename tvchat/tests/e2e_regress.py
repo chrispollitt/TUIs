@@ -215,7 +215,7 @@ def chat_join_and_leave(opts):
     started(tv, c)
     c.check(srv.wait_joined("#e2e"), "the chat backend never joined #e2e")
     tv.send(alt("c"), "w")
-    c.check(tv.wait("invite link", 3), "Chat > Join... did not ask")
+    c.check(tv.wait("name or link", 3), "Chat > Join... did not ask")
     tv.send("#Other", "Enter", settle=0.8)
     c.check(srv.wait_joined("#other") and srv.sent("JOIN #Other"),
             "Join did not join the channel")
@@ -530,7 +530,7 @@ def delta_invite_join_and_send(opts):
     c.check(tv.has("This chat") and not tv.has("Pending"), "Pending... is in the menu although nothing is waiting")
     tv.send("\x1b", "\x1b", settle=0.4)
     tv.send(alt("c"), "w")
-    c.check(tv.wait("invite link", 3), "Chat > Join... does not mention an invite link")
+    c.check(tv.wait("name or link", 3), "Chat > Join... does not mention an invite link")
     tv.send("https://i.delta.chat/#FAKEINVITE", "Enter", settle=1.0)
     c.check(tv.wait(lambda: chat_heading(tv, "Inviter") is not None, 6),
             "joining the invite did not open the chat")
@@ -880,7 +880,7 @@ def talk_irc_mode_call_out_and_toggle(opts):
     c.check(tv.wait(lambda: re.search(r"Talk\b.*\bYes\b", tv.text()), 5),
             "the server pane does not show Talk as connected (Yes)")
     tv.send(alt("c"), "w")
-    c.check(tv.wait("invite link", 3), "Chat > Join... did not ask")
+    c.check(tv.wait("name or link", 3), "Chat > Join... did not ask")
     tv.send("michelle", "Enter", settle=0.8)
     c.check(srv.wait(lambda: srv.sent("CALL ")), "Join did not CALL")
     cid = srv.sent("CALL ")[0].split()[1]

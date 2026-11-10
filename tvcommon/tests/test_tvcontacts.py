@@ -283,6 +283,16 @@ class TestBook(Base):
         again = tc.import_mailrc(b, [str(rc)])
         self.assertTrue(all(l.startswith("kept") for l in again), again)   # once only
 
+    def test_resolve_names_nicknames_groups_and_addresses(self):
+        b = self.book()
+        b.sync()
+        self.assertEqual(b.resolve("Ally, bob@elsewhere.example; Family"),
+                         ["alice@example.org", "bob@elsewhere.example", "bob@example.org"])
+        self.assertEqual(b.resolve("carol@x.y"), ["carol@x.y"])
+        with self.assertRaises(tc.ContactsError) as e:
+            b.resolve("Ally, Zed Zoe")
+        self.assertIn("not in the address book: Zed Zoe", str(e.exception))
+
     def test_a_wrong_password_and_a_missing_book_are_said_in_words(self):
         with self.assertRaises(tc.ContactsError) as e:
             self.book(password="wrong").sync()
@@ -359,6 +369,12 @@ class TestCommandLine(Base):
         self.assertEqual((rc, "not in the address book: Zed Zoe" in err), (1, True))
         rc, out, _ = self.run_cli("complete", "pal")
         self.assertEqual(out.strip(), "Pals (group)\talice@example.org, bob@example.org")
+
+    def test_resolve_on_the_command_line(self):
+        rc, out, _ = self.run_cli("resolve", "Alice Archer, Bob Baker")
+        self.assertEqual((rc, out.strip()), (0, "alice@example.org, bob@example.org"))
+        rc, _, err = self.run_cli("resolve", "Nobody")
+        self.assertEqual((rc, "not in the address book: Nobody" in err), (1, True))
 
     def test_no_book_configured_says_so(self):
         import contextlib

@@ -1661,7 +1661,7 @@ void joinDialog()
     d->options |= ofCentered;
     TInputLine *il = new TInputLine(TRect(3, 3, 47, 4), 400);
     d->insert(il);
-    d->insert(new TLabel(TRect(2, 2, 47, 3), "~W~ho: #channel, nick, email or invite link", il));
+    d->insert(new TLabel(TRect(2, 2, 47, 3), "~W~ho: #channel, nick, email, name or link", il));
     TRadioButtons *rb = nullptr;
     if (n)
     {

@@ -189,6 +189,7 @@ extern TTimerId gFlashTimer;
 void flashStatus(const std::string &msg);
 // contactswin.cpp: the Contacts window (add, edit, delete contacts and groups in the address book on the server)
 TWindow *newContactsWindow(const TRect &bounds);
+bool contactsResolve(const std::string &text, std::string &out); // names -> addresses; false: out is the reason
 bool contactsAddAddress(const std::string &name, const std::string &email, std::string &say); // false: say is the reason
 
 // ---------------------------------------------------- toasts + history ---
