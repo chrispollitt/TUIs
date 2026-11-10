@@ -32,26 +32,25 @@ TMenuBar *TVMailApp::initMenuBar(TRect r)
                             *new TMenuItem("Repl~y~ All", cmReplyAllMsg, kbNoKey, hcNoContext) +
                             *new TMenuItem("~F~orward", cmForwardMsg, kbNoKey, hcNoContext) +
                             *new TMenuItem("~N~ew message", cmCompose, kbCtrlN, hcNoContext, "Ctrl-N") +
-                            *new TMenuItem("~E~dit draft", cmEditDraft, kbNoKey, hcNoContext, "Enter") +
-                            *new TMenuItem("~S~end", cmSendMsg, kbF2, hcNoContext, "F2") +
-                            newLine() +
-                            *new TMenuItem("Insert si~g~nature", cmInsSig, kbNoKey, hcNoContext) +
-                            *new TMenuItem("Insert dead.~l~etter", cmInsDead, kbNoKey, hcNoContext) +
-                            newLine() +
-                            *new TMenuItem("~A~ddress book", cmAddrBook, kbF4, hcNoContext, "F4") +
-                            *new TMenuItem("~P~arts...", cmViewParts, kbNoKey, hcNoContext) +
-                            *new TMenuItem("~V~iew source", cmViewSrc, kbNoKey, hcNoContext) +
-                            newLine() +
-                            *new TMenuItem("Mar~k~ read", cmMarkRead, kbNoKey, hcNoContext) +
-                            *new TMenuItem("Mark ~u~nread", cmMarkUnread, kbNoKey, hcNoContext) +
-                            *new TMenuItem("M~o~ve to...", cmMoveMsg, kbNoKey, hcNoContext) +
                             *new TMenuItem("~D~elete", cmDeleteMsg, kbCtrlD, hcNoContext, "Ctrl-D") +
+                            *new TMenuItem("M~o~ve to...", cmMoveMsg, kbNoKey, hcNoContext) +
+                            *new TMenuItem("Mar~k~ read/unread", cmMarkToggle, kbNoKey, hcNoContext) +
                             newLine() +
                             *new TMenuItem("Cha~t~ with sender", cmChatWith, kbNoKey, hcNoContext) +
-                            *new TMenuItem("Open chat ~i~nvite", cmChatInvite, kbNoKey, hcNoContext) +
-                            *new TMenuItem("S~h~are in chat", cmShareChat, kbNoKey, hcNoContext) +
-                            *new TMenuItem("Add to ca~l~endar", cmToCal, kbNoKey, hcNoContext) +
-                            *new TMenuItem("Add as ~t~o-do", cmToTodo, kbNoKey, hcNoContext) +
+                            *new TMenuItem("S~e~nd to", kbNoKey,
+                                           new TMenu(*new TMenuItem("~C~hat (sender and subject)", cmShareChat, kbNoKey, hcNoContext) +
+                                                     *new TMenuItem("C~a~lendar", cmToCal, kbNoKey, hcNoContext) +
+                                                     *new TMenuItem("~T~o-do", cmToTodo, kbNoKey, hcNoContext))) +
+                            newLine() +
+                            *new TMenuItem("~C~ompose", kbNoKey,
+                                           new TMenu(*new TMenuItem("~E~dit draft", cmEditDraft, kbNoKey, hcNoContext, "Enter") +
+                                                     *new TMenuItem("~S~end", cmSendMsg, kbF2, hcNoContext, "F2") +
+                                                     *new TMenuItem("Insert si~g~nature", cmInsSig, kbNoKey, hcNoContext) +
+                                                     *new TMenuItem("Insert dead.~l~etter", cmInsDead, kbNoKey, hcNoContext) +
+                                                     *new TMenuItem("~A~ddress book", cmAddrBook, kbF4, hcNoContext, "F4"))) +
+                            *new TMenuItem("Deta~i~ls", kbNoKey,
+                                           new TMenu(*new TMenuItem("~P~arts...", cmViewParts, kbNoKey, hcNoContext) +
+                                                     *new TMenuItem("~V~iew source", cmViewSrc, kbNoKey, hcNoContext))) +
                             *new TSubMenu("~E~dit", kbAltE) +
                             *new TMenuItem("~U~ndo", cmUndo, kbNoKey, hcNoContext) +
                             newLine() +
@@ -1110,6 +1109,18 @@ void TVMailApp::handleEvent(TEvent &e)
     case cmDeleteMsg:
         deleteMsg(currentRow());
         break;
+    case cmMarkToggle: // one menu entry: an unread message becomes read, a read one unread
+    {
+        int r = currentRow();
+        if (r >= 0)
+        {
+            if (gRows[r].flag == 'N')
+                markRead(r);
+            else
+                markUnread(r);
+        }
+        break;
+    }
     case cmMarkUnread:
         markUnread(currentRow());
         break;
@@ -1122,9 +1133,16 @@ void TVMailApp::handleEvent(TEvent &e)
     case cmEditConfig:
         editConfig();
         break;
-    case cmChatWith:
-        chatWithSender(currentRow());
+    case cmChatWith: // do what I mean: a message holding a Delta Chat invite link opens that; any other, a chat with the sender
+    {
+        int r = currentRow();
+        if (r >= 0 && tvchatInstalled() &&
+            !inviteLinkIn(shCapture(backendCommand("raw " + std::to_string(gRows[r].idx) + " " + gMbox))).empty())
+            openChatInvite(r);
+        else
+            chatWithSender(r);
         break;
+    }
     case cmChatInvite:
         openChatInvite(currentRow());
         break;

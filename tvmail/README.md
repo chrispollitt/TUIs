@@ -218,10 +218,13 @@ save-a-copy-on-send.
 Editing keys (compose body, signature): `Shift-Del` cut, `Ctrl-Ins` copy,
 `Shift-Ins` paste; **Edit** menu has Find / Replace / Find again.
 
-The **Message** menu has a few more actions with no dedicated key - Reply
-All, Forward, `Parts...`, Mark read / Mark unread, `Move to...` - reach them
-with `F10` or `Alt-M`. **File ▸ Purge...** does the same for a whole folder at
-once.
+The **Message** menu (`F10` or `Alt-M`) keeps the everyday actions at the top -
+Reply, Reply All, Forward, New message, Delete, `Move to...`, Mark read/unread
+(one entry that flips) - and tucks the rest away: **Chat with sender** (it
+opens an invite link instead, when the message holds one), **Send to ▸** Chat /
+Calendar / To-do, **Compose ▸** Edit draft, Send, Insert signature, Insert
+dead.letter, Address book, and **Details ▸** Parts..., View source.
+**File ▸ Purge...** does the same for a whole folder at once.
 
 ### Messages from other users
 
@@ -238,7 +241,7 @@ messages, set `mesg = y` under `[ui]` in `~/.config/tvmail/tvmail.conf`.
 - **Unread stays unread until you look.** Arrowing down the message list only
   *previews* a message (its body appears below, the `N` flag stays). It's marked
   read when the body pane takes focus — `Enter` or `Tab` — or by **Message ▸
-  Mark read**. **Mark unread** puts the `N` back and it stays put.
+  Mark read/unread**, which flips it; marking it unread puts the `N` back and it stays put.
 - **Folder counts.** The folder pane is a table, `Folder | Total | New`: how
   many messages each folder holds, and how many of them are unread (dead.letter is 1, or 0 when there is no file). They refresh on `F5`, after a pull, and as you read.
 - **Type to filter.** In the message list just start typing: the list narrows
@@ -258,7 +261,7 @@ messages, set `mesg = y` under `[ui]` in `~/.config/tvmail/tvmail.conf`.
 ## Composing
 
 - **New message** starts with your `~/.signature` (after the quoted text on
-  replies, or the forwarded original on **Forward**). **Message ▸ Insert
+  replies, or the forwarded original on **Forward**). **Message ▸ Compose ▸ Insert
   signature / Insert dead.letter** add them by hand — the classic `~a` / `~d`
   tilde escapes.
 - **Reply All** fills `Cc:` with the original message's To/Cc, minus whoever
@@ -279,7 +282,7 @@ messages, set `mesg = y` under `[ui]` in `~/.config/tvmail/tvmail.conf`.
 
 ## Attachments
 
-**Message ▸ Parts...** lists a message's MIME parts (type, size, filename).
+**Message ▸ Details ▸ Parts...** lists a message's MIME parts (type, size, filename).
 `Enter` on one prompts for a path and saves it there.
 
 ## Bulk actions
@@ -313,7 +316,7 @@ is already empty.
 
 ## Address book
 
-**Message ▸ Address book** (`F4`) opens a window listing the `alias` and
+**Message ▸ Compose ▸ Address book** (`F4`) opens a window listing the `alias` and
 `group` entries from `/etc/mailrc` and `~/.mailrc` (recursively expanded).
 `Enter` drops the addresses into your compose window's `To:` field. You can
 also just type an alias name in `To:` — `tvmail-backend send` expands it.

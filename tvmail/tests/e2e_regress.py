@@ -180,8 +180,8 @@ def esc_closes_windows(opts):
     started(tv, c)
     for name, keys, title in (
             ("Help", ["F1"], "THE THREE PANES"),
-            ("View source", [alt("m"), "v"], "Source of msg"),
-            ("Parts", [alt("m"), "p"], "Parts of msg"),
+            ("View source", [alt("m"), "i", "v"], "Source of msg"),
+            ("Parts", [alt("m"), "i", "p"], "Parts of msg"),
             ("Address book", ["F4"], "Address book")):
         tv.send(*keys)
         c.check(tv.wait(title, 5), "#7 %s did not open" % name)
@@ -236,7 +236,7 @@ def share_in_chat_leaves_a_request(opts):
     tv = chat_link_tv(opts)
     c = Case(tv)
     started(tv, c)
-    tv.send(alt("m"), "h", settle=0.8)
+    tv.send(alt("m"), "e", "c", settle=0.8)
     c.check(tv.wait("Asked tvchat to share", 5), "Message > Share in chat did not say it asked tvchat")
     c.check(requests_of(tv) == ["share tvmail: Bob - SUBJ2 plain"],
             "the request file is wrong: %r" % requests_of(tv))
@@ -250,16 +250,16 @@ def toast_appears_goes_away_and_is_kept(opts):
     tv = chat_link_tv(opts)
     c = Case(tv)
     started(tv, c)
-    tv.send(alt("m"), "i", settle=0.8)
-    c.check(tv.wait("holds no Delta Chat", 5), "no toast for a message without a link")
-    p = tv.find("holds no Delta Chat")
+    tv.send(alt("m"), "t", settle=0.8)   # Chat with sender asks tvchat: a toast
+    c.check(tv.wait("Asked tvchat to chat with", 5), "no toast after Chat with sender")
+    p = tv.find("Asked tvchat to chat with")
     c.check(p and p[1] > 40 and p[0] > 18, "the toast is not at the bottom right: %r" % (p,))
     # nothing modal: a key goes to the window behind it (Tab moves to the message pane)
     tv.send("Tab", settle=0.5)
     c.check(tv.has("[ Messages ]") or tv.has("Messages"), "the toast took the key")
-    c.check(tv.wait(lambda: not tv.has("holds no Delta Chat"), 9), "the toast did not go away by itself")
+    c.check(tv.wait(lambda: not tv.has("Asked tvchat to chat with"), 9), "the toast did not go away by itself")
     tv.send(alt("w"), "h", settle=1.0)
-    c.check(tv.wait("Notification history", 4) and tv.has("holds no Delta Chat invite link"),
+    c.check(tv.wait("Notification history", 4) and tv.has("Asked tvchat to chat with"),
             "the history does not hold the toast")
     return tv
 
@@ -292,16 +292,17 @@ def chat_invite_in_a_message_goes_to_tvchat(opts):
     started(tv, c)
     tv.send("Tab", "Up", settle=0.8)               # the invitation (the older one)
     c.check(tv.wait("Chat invitation", 4), "could not select the invitation")
-    tv.send(alt("m"), "i", settle=0.8)
+    tv.send(alt("m"), "t", settle=0.8)   # Chat with sender: an invite link in the message wins
     c.check(tv.wait("Handed the invitation to tvchat.", 6),
-            "Message > Open chat invite did not hand the link over")
+            "Message > Chat with sender did not hand the invite link over")
     c.check(requests_of(tv) == ["invite https://i.delta.chat/#ABC123&v=3&a=carol%40example.org&n="],
             "the request file is wrong: %r" % requests_of(tv))
-    # a message without a link says so and leaves nothing
+    # a message without a link: the same entry opens a chat with the sender instead
     tv.send("Down", settle=0.6)
-    tv.send(alt("m"), "i", settle=0.8)
-    c.check(tv.wait("holds no Delta Chat", 5), "a message without a link was not refused")
-    c.check(len(requests_of(tv)) == 1, "a request was written for a message without a link")
+    tv.send(alt("m"), "t", settle=0.8)
+    c.check(tv.wait("Asked tvchat to chat with", 5), "a message without a link did not fall back to Chat with sender")
+    c.check(len(requests_of(tv)) == 2 and "chat bob@example.com" in requests_of(tv),
+            "the second request is wrong: %r" % requests_of(tv))
     return tv
 
 
@@ -495,7 +496,7 @@ def find_copy_paste(opts):
     tv.send("d")
     c.check(tv.wait(lambda: not compose_open(tv), 3), "Discard did not close it")
     # View source and Help copy too (the whole text, when nothing is selected)
-    tv.send(alt("m"), "v")
+    tv.send(alt("m"), "i", "v")
     c.check(tv.wait("Source of msg", 4), "View source did not open")
     tv.send("CtrlIns", settle=0.6)
     c.check(tv.has("Copied the whole text"), "#29 no copy in View source")
@@ -535,6 +536,7 @@ def send_menu_label(opts):
     c = Case(tv)
     started(tv, c)
     tv.send(alt("m"))
+    tv.send("c")
     c.check(tv.wait("Address book", 3), "the Message menu did not open")
     c.check(re.search(r"│ Send\s+F2 │", tv.text()) and not tv.has("Send draft"),
             "#31 the F2 menu item is not labelled Send")
@@ -601,7 +603,7 @@ def readable_colours(opts):
             ("main window, Messages focused", ["Tab"], "[ Messages ]", True),
             ("main window, body focused", ["Tab"], "[ Message ]", True),
             ("Window list", [alt("0")], "Window list", True),
-            ("Message menu", ["\x1b", alt("m")], "Address book", True),
+            ("Message menu", ["\x1b", alt("m")], "Chat with sender", True),
             ("delete message box", ["\x1b", "ShiftTab", "CtrlD"],
              "to the trash?", True),
             ("compose window", ["n", "CtrlN"], " Compose ", False),
