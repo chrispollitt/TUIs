@@ -115,9 +115,9 @@ def incoming_request_is_added_on_a_yes(opts):
     c.check("Reply to Bob" not in open(tv.tmp / "cal.ics").read() if (tv.tmp / "cal.ics").exists() else True,
             "it was added without a yes")
     tv.send("\x1b" + "c")                                # Alt-C: the Calendar menu
-    c.check(tv.wait("Incoming from", 3), "the Calendar menu has no Incoming item")
-    tv.send("i")
-    c.check(tv.wait("From tvmail", 5), "Incoming... did not open the request")
+    c.check(tv.wait("Pending (from", 3), "the Calendar menu has no Pending item")
+    tv.send("p")
+    c.check(tv.wait("From tvmail", 5), "Pending... did not open the request")
     c.check(tv.has("Reply to Bob"), "the dialog is not filled in")
     tv.send("Enter")                                     # Add
     c.check(tv.wait(lambda: tv.has("[ ] Reply to Bob"), 8), "the to-do was not added")

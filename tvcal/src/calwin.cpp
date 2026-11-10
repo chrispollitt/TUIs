@@ -987,7 +987,7 @@ public:
         refreshTodos();
     }
 
-    // The item the Share menu works on: the to-do when that pane has the focus, else the event shown.
+    // The item Send to works on: the to-do when that pane has the focus, else the event shown.
     bool shareTarget(std::string &uid, std::string &date, std::string &what) const
     {
         if (current == todo && todo->current())
@@ -1069,7 +1069,7 @@ void incomingRefresh()
         TProgram::statusLine->drawView(); // the "N incoming" at its end
 }
 
-// Calendar > Incoming...: what tvmail or tvchat asked to add, one at a time, each with its
+// Calendar > Pending...: what tvmail or tvchat asked to add, one at a time, each with its
 // dialog filled in; Add keeps it, Discard drops it, Skip leaves it for later.
 void incoming()
 {
@@ -1213,7 +1213,7 @@ void mailInvite()
     if (!calAsk("has-tvmail", body, err) || body != "yes\n")
     {
         notify("tvmail is not installed here: tvcal hands the invitation to tvmail to send. "
-               "Share > Export .ics file... writes it to a file instead.",
+               "File > Export .ics file... writes it to a file instead.",
                noteWarn);
         return;
     }

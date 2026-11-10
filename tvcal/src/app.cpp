@@ -6,7 +6,7 @@
 namespace
 {
 // The status line, with a quiet "N incoming" at its right end while tvmail or tvchat have
-// asked for something to be added (Calendar > Incoming...).
+// asked for something to be added (Calendar > Pending...).
 class TVCalStatusLine : public TStatusLine
 {
 public:
@@ -44,6 +44,8 @@ TMenuBar *TVCalApp::initMenuBar(TRect r)
                *new TMenuItem("~F~loyd, the assistant...", cmFloyd, kbF7, hcNoContext, "F7") +
                tvConfigItem() +
                tvReloadItem() +
+               *new TMenuItem("~I~mport .ics file...", cmCalImport, kbNoKey, hcNoContext) +
+               *new TMenuItem("Ex~p~ort .ics file...", cmCalExport, kbNoKey, hcNoContext) +
                tvExitItem() +
                *new TSubMenu("~C~alendar", kbAltC) +
                *new TMenuItem("~N~ew event...", cmCalNewEvent, kbCtrlN, hcNoContext, "Ctrl-N") +
@@ -54,7 +56,10 @@ TMenuBar *TVCalApp::initMenuBar(TRect r)
                *new TMenuItem("Go to ~d~ate...", cmCalGoto, kbCtrlG, hcNoContext, "Ctrl-G") +
                *new TMenuItem("~F~ind...", cmCalFind, kbCtrlF, hcNoContext, "Ctrl-F") +
                newLine() +
-               *new TMenuItem("~I~ncoming from tvmail / tvchat...", cmCalIncoming, kbNoKey, hcNoContext) +
+               *new TMenuItem("~S~end to", kbNoKey,
+                              new TMenu(*new TMenuItem("~M~ail (an invitation)...", cmCalMail, kbNoKey, hcNoContext) +
+                                        *new TMenuItem("~C~hat (share)", cmCalShareChat, kbNoKey, hcNoContext))) +
+               *new TMenuItem("~P~ending (from tvmail / tvchat)...", cmCalIncoming, kbNoKey, hcNoContext) +
                *new TSubMenu("~T~o-do", kbAltT) +
                *new TMenuItem("~N~ew to-do...", cmCalNewTodo, kbCtrlT, hcNoContext, "Ctrl-T") +
                *new TMenuItem("~E~dit to-do...", cmCalEditTodo, kbNoKey, hcNoContext, "Enter") +
@@ -62,12 +67,6 @@ TMenuBar *TVCalApp::initMenuBar(TRect r)
                *new TMenuItem("~D~elete to-do", cmCalDelTodo, kbNoKey, hcNoContext, "Del") +
                newLine() +
                *new TMenuItem("~S~how completed", cmCalShowDone, kbNoKey, hcNoContext) +
-               *new TSubMenu("~S~hare", kbAltS) +
-               *new TMenuItem("~M~ail invitation...", cmCalMail, kbNoKey, hcNoContext) +
-               *new TMenuItem("Share in ~c~hat", cmCalShareChat, kbNoKey, hcNoContext) +
-               newLine() +
-               *new TMenuItem("~I~mport .ics file...", cmCalImport, kbNoKey, hcNoContext) +
-               *new TMenuItem("E~x~port .ics file...", cmCalExport, kbNoKey, hcNoContext) +
                *new TSubMenu("~E~dit", kbAltE) +
                *new TMenuItem("~C~opy", cmCopy, kbCtrlIns, hcNoContext, "Ctrl-Ins") +
                *new TMenuItem("~P~aste", cmPaste, kbShiftIns, hcNoContext, "Shift-Ins") +
