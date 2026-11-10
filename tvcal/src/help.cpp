@@ -43,6 +43,8 @@ static const char *kHelpText =
     "  A group lists its members by name, nickname or address; a group name in tvmail's To: expands to them.\n"
     "  With the server unreachable the list is the last copy and changes are refused.\n"
     "  Set it up with [contacts] url in the .conf (by default: beside tvcal's calendar).\n"
+    "  A shared (family) book, if set up (tvcontacts shared URL), is shown with yours, tagged [family];\n"
+    "  a new entry asks which book it goes in, and an old one is changed where it is.\n"
     "\n"
     "FLOYD\n"
     "  F7 (File > Floyd, the assistant...) asks him.  He is the same Floyd as in tvmail and tvchat,\n"

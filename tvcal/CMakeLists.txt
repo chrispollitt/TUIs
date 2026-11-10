@@ -57,6 +57,7 @@ install(TARGETS tvcal RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(PROGRAMS backend/tvcal-backend DESTINATION ${CMAKE_INSTALL_BINDIR})
 # Floyd's words, shared with tvmail and tvchat (the backend looks in ../share/tvcal)
 install(FILES ${TVCOMMON_DIR}/py/tvfloyd.py ${TVCOMMON_DIR}/py/tvcontacts.py DESTINATION ${CMAKE_INSTALL_DATADIR}/tvcal)
+install(PROGRAMS ${TVCOMMON_DIR}/py/tvcontacts.py DESTINATION ${CMAKE_INSTALL_BINDIR} RENAME tvcontacts)
 install(FILES README.md INSTALL.md HISTORY.md LICENSE AUTHORS WARRANTY
               configure/tvcal.conf.example configure/configure-radicale.sh
         DESTINATION ${CMAKE_INSTALL_DOCDIR})

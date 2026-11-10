@@ -595,6 +595,51 @@ def contacts_window_adds_edits_and_deletes(opts):
     return tv
 
 
+@case()
+def contacts_window_shows_and_saves_in_the_family_book(opts):
+    # a shared book beside the person's own: its entries are tagged [family], a new entry asks where to be saved, and
+    # an old one is changed in its own book
+    import http.server
+    import importlib.util
+    import threading
+    spec = importlib.util.spec_from_file_location(
+        "tvcontacts_tests2", str(HERE.parent.parent / "tvcommon" / "tests" / "test_tvcontacts.py"))
+    fake = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fake)
+    mine = http.server.ThreadingHTTPServer(("127.0.0.1", 0), fake.Fake)
+    mine.cards = {"alice.vcf": (fake.ALICE, "1")}
+    mine.log = []
+    fam = http.server.ThreadingHTTPServer(("127.0.0.1", 0), fake.Fake)
+    fam.cards = {"gran.vcf": (fake.TestLibrary.GRAN, "1")}
+    fam.log = []
+    for srv in (mine, fam):
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+    in_ = lambda srv, needle: [k for k, v in srv.cards.items() if needle in v[0]]
+
+    def setup(t):
+        t.env["TVCONTACTS_URL"] = "http://127.0.0.1:%d/c/" % mine.server_address[1]
+        t.env["TVCONTACTS_SHARED"] = "http://127.0.0.1:%d/c/" % fam.server_address[1]
+        t.env["TVCONTACTS_USER"] = "chris"
+        t.env["TVCONTACTS_PASS"] = "secret"                      # allowlist secret: test value
+        t.env["TVCONTACTS_PY"] = str(HERE.parent.parent / "tvcommon" / "py" / "tvcontacts.py")
+        t.cleanups += [mine.shutdown, fam.shutdown]
+    tv = Tv(opts, setup=setup)
+    c = Case(tv)
+    started(tv, c)
+    tv.send(alt("f"), "n", settle=1.5)
+    c.check(tv.wait("Alice Archer", 8) and tv.has("[family] Grandma Gray"), "the shared book's entries are not tagged [family]")
+    tv.send("n", settle=0.8)
+    c.check(tv.wait("New contact", 3) and tv.has("Save in") and tv.has("(shared)"), "a new entry does not ask which book")
+    tv.send("Cousin Cy", "Tab", "", "Tab", "cy@example.org", "Tab", "f", "Enter", settle=2.5)
+    c.check(tv.wait("[family] Cousin Cy", 6), "the new entry is not shown in the family book")
+    c.check(len(in_(fam, "cy@example.org")) == 1 and not in_(mine, "cy@example.org"), "it was not saved in the family book")
+    # the one for the person alone goes in her own book (the default)
+    tv.send("n", settle=0.8)
+    tv.send("Dee Dunn", "Tab", "", "Tab", "dee@example.org", "Enter", settle=2.5)
+    c.check(len(in_(mine, "dee@example.org")) == 1 and not in_(fam, "dee@example.org"), "the default did not go to her own book")
+    return tv
+
+
 @case(31)
 def send_menu_label(opts):
     tv = Tv(opts)

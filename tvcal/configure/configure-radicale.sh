@@ -16,6 +16,11 @@
 #            Checked afterwards (the sharer gets in, cannot see the owner's other collections); if the check
 #            fails the old configuration is put back.  Needs the server half to have run once.
 #
+#   share-book  (root, on the same host) lets a second user work on ONE more collection of the owner's - the family address
+#            book (/OWNER/family/) - with the login that user already has: nothing is made or changed in the password file.
+#            Read and write on that collection only; the rights file is rebuilt and, if Radicale does not come back, the old
+#            one is put back.  The owner makes the collection itself (tvcontacts init).
+#
 #   client   (as yourself, on each machine that runs tvcal - no root)
 #            writes [server] into ~/.config/tvcal/tvcal.conf ($TVCAL_CONF), puts the
 #            password in ~/.mu-tickets (mode 600), fetches the CA if the server's certificate is
@@ -28,6 +33,7 @@
 # Usage:
 #   sudo ./configure-radicale.sh server --user chris [options]
 #   sudo ./configure-radicale.sh share --user chris --with floyd
+#   sudo ./configure-radicale.sh share-book --user chris --with michelle --collection family
 #   ./configure-radicale.sh client --user chris [options]
 #
 # Server options:
@@ -49,7 +55,7 @@
 set -euo pipefail
 
 mode="${1:-}"; [ $# -gt 0 ] && shift
-USER_NAME=""; WITH=""; PORT=5232; BIND=0.0.0.0; CERT=""; KEY=""; NAME=""; HOST=cpbee; CA=""; CHECK=1
+USER_NAME=""; WITH=""; COLLECTION=""; PORT=5232; BIND=0.0.0.0; CERT=""; KEY=""; NAME=""; HOST=cpbee; CA=""; CHECK=1
 
 log()  { printf '  %s\n' "$*"; }
 warn() { printf 'WARNING: %s\n' "$*" >&2; }
@@ -60,6 +66,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --user)     USER_NAME="${2:?}"; shift 2 ;;
     --with)     WITH="${2:?}"; shift 2 ;;
+    --collection) COLLECTION="${2:?}"; shift 2 ;;
     --port)     PORT="${2:?}"; shift 2 ;;
     --bind)     BIND="${2:?}"; shift 2 ;;
     --cert)     CERT="${2:?}"; shift 2 ;;
@@ -113,10 +120,10 @@ permissions: rw
 RIGHTS
     n=0
     if [ -f /etc/radicale/shares ]; then
-      while read -r owner with _; do
+      while read -r owner with coll _; do
         case "$owner" in ""|\#*) continue ;; esac
         n=$((n + 1))
-        printf '\n[share-%s]\nuser: %s\ncollection: %s/calendar\npermissions: rw\n' "$n" "$with" "$owner"
+        printf '\n[share-%s]\nuser: %s\ncollection: %s/%s\npermissions: rw\n' "$n" "$with" "$owner" "${coll:-calendar}"
       done < /etc/radicale/shares
     fi
   } > /etc/radicale/rights
@@ -259,6 +266,42 @@ share() {
   rm -f /etc/radicale/*.share-bak."$stamp"
 }
 
+# -------------------------------------------------------------- share-book ---
+share_book() {
+  [ "$(id -u)" = 0 ] || die "the share-book mode needs root (sudo)"
+  [ -n "$WITH" ] || die "--with USER is required (who may work on the shared collection)"
+  [ -n "$COLLECTION" ] || die "--collection NAME is required (family)"
+  case "$WITH" in *[!A-Za-z0-9._-]*|"") die "--with: letters, digits . _ - only" ;; esac
+  case "$COLLECTION" in *[!A-Za-z0-9._-]*|"") die "--collection: letters, digits . _ - only" ;; esac
+  [ "$COLLECTION" != calendar ] || die "calendar is shared with the share mode"
+  [ "$WITH" != "$USER_NAME" ] || die "--with is the owner already"
+  [ -f /etc/radicale/config ] || die "run the server half first"
+  grep -q "^$WITH:" /etc/radicale/users 2>/dev/null || die "$WITH has no Radicale login yet (run the server half for $WITH first); nothing was changed"
+  stamp=$(date +%Y%m%d%H%M%S)
+  for f in rights shares; do [ -f "/etc/radicale/$f" ] && cp -p "/etc/radicale/$f" "/etc/radicale/$f.share-bak.$stamp"; done
+  restore() {
+    for f in rights shares; do
+      if [ -f "/etc/radicale/$f.share-bak.$stamp" ]; then cp -p "/etc/radicale/$f.share-bak.$stamp" "/etc/radicale/$f"; else rm -f "/etc/radicale/$f"; fi
+    done
+    systemctl restart radicale || true
+  }
+  line="$USER_NAME $WITH $COLLECTION"
+  grep -qxF "$line" /etc/radicale/shares 2>/dev/null || echo "$line" >> /etc/radicale/shares
+  chmod 0644 /etc/radicale/shares
+  write_rights
+  systemctl restart radicale || { restore; die "radicale did not restart; the old rights are back"; }
+  code=000
+  for _ in $(seq 1 20); do
+    code=$(curl -sk -o /dev/null -w '%{http_code}' "https://localhost:$PORT/" || true)
+    [ "$code" != 000 ] && break
+    sleep 1
+  done
+  [ "$code" != 000 ] || { restore; die "Radicale does not answer after the change; the old rights are back"; }
+  log "$WITH may read and write /$USER_NAME/$COLLECTION/ (and nothing else of $USER_NAME's); Radicale is up (HTTP $code)"
+  log "$USER_NAME makes the collection once: tvcontacts shared https://HOST:$PORT/$USER_NAME/$COLLECTION/ ; tvcontacts init"
+  rm -f /etc/radicale/*.share-bak."$stamp"
+}
+
 # ------------------------------------------------------------------ client ---
 client() {
   conf="${TVCAL_CONF:-$HOME/.config/tvcal/tvcal.conf}"
@@ -307,7 +350,8 @@ print("https://%s:%s@%s:%s" % (u.quote(os.environ["CAL_USER"], safe=""), u.quote
 case "$mode" in
   server) server ;;
   share)  [ -n "$USER_NAME" ] || die "--user OWNER is required"; share ;;
+  share-book) [ -n "$USER_NAME" ] || die "--user OWNER is required"; share_book ;;
   client) client ;;
   -h|--help|"") usage ;;
-  *) die "say 'server', 'share' or 'client' (try --help)" ;;
+  *) die "say 'server', 'share', 'share-book' or 'client' (try --help)" ;;
 esac

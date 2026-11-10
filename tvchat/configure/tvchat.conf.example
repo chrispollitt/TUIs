@@ -144,5 +144,9 @@ rpc_server = deltachat-rpc-server
 #user = chris
 #ca = ~/.config/tvmail/cpbee-ca.pem
 #insecure = no
+# A shared book (the family's), read together with your own; new entries ask which book, old ones stay where they are.
+# Write it with:  tvcontacts shared https://cpbee:5232/chris/family/   (the server side: configure-radicale.sh share-book)
+#shared = https://cpbee:5232/chris/family/
+#shared_label = family
 # enabled = no switches the address book off for every app
 #enabled = yes

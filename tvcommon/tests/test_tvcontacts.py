@@ -392,5 +392,139 @@ class TestCommandLine(Base):
         self.assertIn("no address book is configured", err.getvalue())
 
 
+class TestLibrary(Base):
+    """The person's own book and the shared family book, asked as one."""
+
+    GRAN = ("BEGIN:VCARD\r\nVERSION:3.0\r\nUID:u-gran\r\nFN:Grandma Gray\r\nEMAIL:gran@example.org\r\nEND:VCARD\r\n")
+    CLASH = ("BEGIN:VCARD\r\nVERSION:3.0\r\nUID:u-alice2\r\nFN:Alice Archer\r\nEMAIL:alice@family.example\r\nEND:VCARD\r\n")
+
+    def setUp(self):
+        super().setUp()
+        self.srv2 = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Fake)
+        self.srv2.cards = {"gran.vcf": (self.GRAN, "1"), "alice2.vcf": (self.CLASH, "1")}
+        self.srv2.log = []
+        threading.Thread(target=self.srv2.serve_forever, daemon=True).start()
+        self.addCleanup(self.srv2.server_close)
+        self.addCleanup(self.srv2.shutdown)
+        self.url2 = "http://127.0.0.1:%d/c/" % self.srv2.server_address[1]
+
+    def lib(self):
+        mine = tc.Book(self.url, "chris", cache=str(self.tmp / "c1"), password="secret", label="mine")        # allowlist secret: test value
+        fam = tc.Book(self.url2, "chris", cache=str(self.tmp / "c2"), password="secret", label="family")     # allowlist secret: test value
+        return tc.Library([mine, fam])
+
+    def test_both_books_are_asked_and_the_first_wins_a_clash(self):
+        lib = self.lib()
+        self.assertTrue(lib.refresh(0))
+        self.assertEqual(lib.labels(), ["mine", "family"])
+        names = sorted((c.name, c.book) for c in lib.contacts())
+        self.assertEqual(names, [("Alice Archer", "family"), ("Alice Archer", "mine"), ("Bob Baker", "mine"), ("Grandma Gray", "family")])
+        self.assertEqual(lib.resolve("Alice Archer, Grandma Gray"), ["alice@example.org", "gran@example.org"])   # mine first
+        self.assertEqual(lib.complete("gran"), [("Grandma Gray", "gran@example.org")])
+        self.assertEqual(len(lib.cards), 6)
+
+    def test_a_new_card_goes_where_it_is_told_and_an_old_one_stays_in_its_book(self):
+        lib = self.lib()
+        lib.refresh(0)
+        a = tc.Card.new("Uncle Ugo", ["ugo@example.org"])
+        lib.save(a)                                                        # default: mine
+        self.assertEqual(a.book, "mine")
+        self.assertTrue(any("Ugo" in v[0] for v in self.srv.cards.values()))
+        b = tc.Card.new("Cousin Cy", ["cy@example.org"])
+        lib.save(b, "family")
+        self.assertEqual(b.book, "family")
+        self.assertTrue(any("Cy" in v[0] for v in self.srv2.cards.values()))
+        self.assertFalse(any("Cy" in v[0] for v in self.srv.cards.values()))
+        gran = next(c for c in lib.contacts() if c.name == "Grandma Gray")
+        gran.set_values("NICKNAME", ["Gran"])
+        lib.save(gran, "mine")                                             # the label is for NEW cards only
+        self.assertIn("NICKNAME:Gran", self.srv2.cards["gran.vcf"][0])
+        self.assertFalse(any("Gran" in v[0] for v in self.srv.cards.values()))
+        lib.delete(gran)
+        self.assertNotIn("gran.vcf", self.srv2.cards)
+        with self.assertRaises(tc.ContactsError):
+            lib.save(tc.Card.new("X", ["x@y.z"]), "nosuch")
+
+    def test_the_shared_book_being_down_leaves_my_own(self):
+        lib = self.lib()
+        lib.refresh(0)
+        self.srv2.shutdown()
+        self.srv2.server_close()
+        lib2 = self.lib()                                                  # a new start: the copies
+        self.assertFalse(lib2.refresh(0))
+        self.assertTrue(lib2.offline)
+        self.assertEqual(len(lib2.contacts()), 4)
+        lib.books[1].timeout = 2
+        with self.assertRaises(tc.ContactsError):
+            lib2.save(tc.Card.new("Z", ["z@example.org"]), "family")
+
+    def test_default_book_reads_the_shared_book_from_the_config_and_set_shared_writes_it(self):
+        home = self.tmp / "home"
+        (home / ".config" / "tvcal").mkdir(parents=True)
+        conf = home / ".config" / "tvcal" / "tvcal.conf"
+        conf.write_text("[server]\nurl = https://cpbee:5232/chris/calendar/\nuser = chris\n\n[floyd]\nserver = cpbee\n")
+        old = {k: os.environ.get(k) for k in ("HOME", "TVCONTACTS_URL", "TVCONTACTS_SHARED")}
+        os.environ["HOME"] = str(home)
+        os.environ.pop("TVCONTACTS_URL", None)
+        os.environ.pop("TVCONTACTS_SHARED", None)
+        try:
+            lib = tc.default_book()
+            self.assertEqual(lib.labels(), ["mine"])
+            self.assertEqual(lib.books[0].url, "https://cpbee:5232/chris/contacts/")
+            tc.set_shared("https://cpbee:5232/chris/family/")
+            text = conf.read_text()
+            self.assertIn("[contacts]\nshared = https://cpbee:5232/chris/family/", text)
+            self.assertIn("[floyd]\nserver = cpbee", text)                    # other sections untouched
+            self.assertEqual(len(list((conf.parent / "BAK").iterdir())), 1)
+            lib = tc.default_book()
+            self.assertEqual(lib.labels(), ["mine", "family"])
+            self.assertEqual((lib.books[1].url, lib.books[1].user), ("https://cpbee:5232/chris/family/", "chris"))
+            tc.set_shared("https://cpbee:5232/chris/kin/")                      # replaced, not doubled
+            self.assertEqual(conf.read_text().count("shared ="), 1)
+            self.assertIn("/chris/kin/", conf.read_text())
+        finally:
+            for k, v in old.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+
+class TestLibraryCommandLine(Base):
+    def run_cli(self, *args):
+        os.environ["TVCONTACTS_SHARED"] = self.url2
+        self.addCleanup(os.environ.pop, "TVCONTACTS_SHARED", None)
+        return TestCommandLine.run_cli(self, *args)
+
+    def setUp(self):
+        super().setUp()
+        self.srv2 = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Fake)
+        self.srv2.cards = {"gran.vcf": (TestLibrary.GRAN, "1")}
+        self.srv2.log = []
+        threading.Thread(target=self.srv2.serve_forever, daemon=True).start()
+        self.addCleanup(self.srv2.server_close)
+        self.addCleanup(self.srv2.shutdown)
+        self.url2 = "http://127.0.0.1:%d/c/" % self.srv2.server_address[1]
+
+    # the command line with a shared book present (rows have a 7th field: the book)
+    def test_books_list_and_a_new_entry_in_the_family_book(self):
+        rc, out, _ = self.run_cli("books")
+        self.assertEqual(out.split(), ["mine", "family"])
+        rc, out, _ = self.run_cli("list")
+        rows = [l.split("\t") for l in out.splitlines()]
+        self.assertIn(("Grandma Gray", "family"), [(r[2], r[6]) for r in rows])
+        self.assertIn(("Alice Archer", "mine"), [(r[2], r[6]) for r in rows])
+        rc, uid, _ = self.run_cli("save", "--name", "Cousin Cy", "--emails", "cy@example.org", "--book", "family")
+        self.assertEqual(rc, 0)
+        self.assertTrue(any("Cousin Cy" in v[0] for v in self.srv2.cards.values()))
+        self.assertFalse(any("Cousin Cy" in v[0] for v in self.srv.cards.values()))
+        rc, _, _ = self.run_cli("save", "--uid", uid.strip(), "--name", "Cousin Cy", "--emails", "cy@new.example")   # stays in family
+        self.assertTrue(any("cy@new.example" in v[0] for v in self.srv2.cards.values()))
+        rc, out, _ = self.run_cli("delete", uid.strip())
+        self.assertEqual((rc, out.strip()), (0, "deleted Cousin Cy"))
+        rc, _, err = self.run_cli("save", "--name", "N", "--emails", "n@x.y", "--book", "nosuch")
+        self.assertEqual((rc, "no address book called nosuch" in err), (1, True))
+
+
 if __name__ == "__main__":
     unittest.main()

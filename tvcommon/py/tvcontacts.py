@@ -85,6 +85,7 @@ class Card(object):
         self.props = []
         self.href = ""
         self.etag = ""
+        self.book = ""                      # the label of the book it lives in (mine, family ...)
 
     # -- reading
     @classmethod
@@ -229,215 +230,18 @@ def state_dir():
     return os.path.join(base, "tvcommon", "contacts")
 
 
-class Book(object):
-    """One address book: a CardDAV collection and its local copy (a directory of .vcf files and an index of ETags)."""
-
-    def __init__(self, url, user, ca="", insecure=False, cache=None, password=None, timeout=8):
-        self.url = url if url.endswith("/") else url + "/"
-        self.user, self.ca, self.insecure, self.timeout = user, ca, insecure, timeout
-        self._password = password  # allowlist secret: the caller passes it in
-        key = hashlib.sha1((self.url + "\0" + user).encode("utf-8")).hexdigest()[:12]
-        self.cache = cache or os.path.join(state_dir(), key)
-        self.offline = False
-        self.cards = {}                   # href -> Card
-        self._load_cache()
-
-    # -- the wire
-    def request(self, method, url, body=None, headers=None):
-        pw = self._password if self._password is not None else find_password(self.url, self.user)
-        req = urllib.request.Request(url, data=body, method=method, headers=headers or {})
-        req.add_header("Authorization", "Basic " + base64.b64encode(("%s:%s" % (self.user, pw)).encode("utf-8")).decode("ascii"))
-        ctx = None
-        if url.startswith("https"):
-            ctx = ssl.create_default_context(cafile=os.path.expanduser(self.ca) if self.ca else None)
-            if self.insecure:
-                ctx.check_hostname = False
-                ctx.verify_mode = ssl.CERT_NONE
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout, context=ctx) as r:
-                return r.status, r.read(), dict(r.headers)
-        except urllib.error.HTTPError as e:
-            if e.code in (401, 403):
-                raise ContactsError("the address book server refused the login for %s (password: $TVCONTACTS_PASS, "
-                                    "~/.mu-tickets or ~/.netrc)" % (self.user or "(no user)"))
-            if e.code in (404, 412):
-                return e.code, b"", {}
-            raise ContactsError("the address book server said %d %s" % (e.code, e.reason))
-        except (urllib.error.URLError, OSError) as e:
-            raise ConnectionError(str(getattr(e, "reason", e)))
-
-    def _abs(self, href):
-        u = urllib.parse.urlparse(self.url)
-        return "%s://%s%s" % (u.scheme, u.netloc, href) if href.startswith("/") else href
-
-    # -- the copy
-    def _index_path(self):
-        return os.path.join(self.cache, "index.json")
-
-    def _load_cache(self):
-        try:
-            with open(self._index_path(), encoding="utf-8") as fh:
-                idx = json.load(fh)
-        except (OSError, ValueError):
-            return
-        for href, meta in idx.items():
-            try:
-                with open(os.path.join(self.cache, meta["file"]), encoding="utf-8") as fh:
-                    card = Card.parse(fh.read())
-            except (OSError, ContactsError, KeyError):
-                continue
-            card.href, card.etag = href, meta.get("etag", "")
-            self.cards[href] = card
-
-    def _save_cache(self):
-        os.makedirs(self.cache, mode=0o700, exist_ok=True)
-        idx = {}
-        for href, card in self.cards.items():
-            fname = hashlib.sha1(href.encode("utf-8")).hexdigest() + ".vcf"
-            self._write(os.path.join(self.cache, fname), card.text())
-            idx[href] = {"file": fname, "etag": card.etag}
-        for f in os.listdir(self.cache):
-            if f.endswith(".vcf") and f not in {m["file"] for m in idx.values()}:
-                try:
-                    os.remove(os.path.join(self.cache, f))
-                except OSError:
-                    pass
-        self._write(self._index_path(), json.dumps(idx))
-
-    @staticmethod
-    def _write(path, text):
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8", newline="") as fh:
-            fh.write(text)
-        os.replace(tmp, path)
-
-    # -- sync
-    def sync(self):
-        """Bring the copy up to date: one PROPFIND for the ETags, a GET for each card that is new or changed.
-        Returns True when the server answered; False (and offline = True) when the copy was all there is."""
-        body = (b'<?xml version="1.0"?><propfind xmlns="DAV:"><prop><getetag/></prop></propfind>')
-        try:
-            st, data, _ = self.request("PROPFIND", self.url, body, {"Depth": "1", "Content-Type": "application/xml"})
-        except ConnectionError:
-            self.offline = True
-            return False
-        self.offline = False
-        if st == 404:
-            raise ContactsError("the address book %s does not exist on the server (configure-radicale.sh makes it)" % self.url)
-        try:
-            root = ET.fromstring(data)
-        except ET.ParseError:
-            raise ContactsError("the address book server sent something that is not a listing")
-        remote = {}
-        base = urllib.parse.urlparse(self.url).path
-        for resp in root.iter(DAV + "response"):
-            href = urllib.parse.unquote(resp.findtext(DAV + "href") or "")
-            etag = ""
-            for pst in resp.iter(DAV + "propstat"):
-                e = pst.findtext(DAV + "prop/" + DAV + "getetag")
-                if e:
-                    etag = e
-            if href and href.rstrip("/") != base.rstrip("/") and href.lower().endswith(".vcf"):
-                remote[href] = etag
-        changed = False
-        for href in [h for h in self.cards if h not in remote]:
-            del self.cards[href]
-            changed = True
-        for href, etag in remote.items():
-            have = self.cards.get(href)
-            if have is not None and have.etag == etag and etag:
-                continue
-            try:
-                st, raw, hdr = self.request("GET", self._abs(urllib.parse.quote(href)), headers={"Accept": "text/vcard"})
-                card = Card.parse(raw.decode("utf-8", "replace"))
-            except (ContactsError, ConnectionError):
-                continue                                 # one bad card must not hide the others
-            card.href, card.etag = href, etag or hdr.get("ETag", "")
-            self.cards[href] = card
-            changed = True
-        if changed or not os.path.exists(self._index_path()):
-            self._save_cache()
-        return True
-
-    def refresh(self, max_age=60):
-        """sync(), unless the copy was brought up to date less than max_age seconds ago.  True = the copy is current."""
-        try:
-            if time.time() - os.path.getmtime(self._index_path()) < max_age:
-                return True
-        except OSError:
-            pass
-        ok = self.sync()
-        if ok:
-            try:
-                os.utime(self._index_path(), None)
-            except OSError:
-                pass
-        return ok
-
-    # -- writing (refused while the server cannot be reached: nothing is queued)
-    def _write_call(self, method, url, body=None, headers=None):
-        try:
-            return self.request(method, url, body, headers)
-        except ConnectionError as e:
-            self.offline = True
-            raise ContactsError("the address book server cannot be reached (%s): contacts are read-only until it is back" % e)
-
-    def make(self):
-        """Create the collection (an address book) when it is not there yet."""
-        body = (b'<?xml version="1.0"?><mkcol xmlns="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav"><set><prop>'
-                b'<resourcetype><collection/><C:addressbook/></resourcetype><displayname>Contacts</displayname>'
-                b'</prop></set></mkcol>')
-        st, _, _ = self._write_call("MKCOL", self.url, body, {"Content-Type": "application/xml"})
-        if st not in (200, 201, 204):
-            raise ContactsError("could not create the address book (the server said %d)" % st)
-
-    def _href_for(self, card):
-        return urllib.parse.urlparse(self.url).path + urllib.parse.quote(card.uid or str(uuid.uuid4()), safe="") + ".vcf"
-
-    def save(self, card):
-        """Write a card: a new one (If-None-Match) or a changed one (If-Match its ETag).  A card somebody else changed
-        meanwhile is refused with a ContactsError saying so; sync() and try again."""
-        if not card.uid:
-            card.props.append(["UID", "", str(uuid.uuid4())])
-        new = not card.href
-        href = card.href or self._href_for(card)
-        hdr = {"Content-Type": "text/vcard; charset=utf-8"}
-        if new:
-            hdr["If-None-Match"] = "*"
-        elif card.etag:
-            hdr["If-Match"] = card.etag
-        st, _, rh = self._write_call("PUT", self._abs(urllib.parse.quote(href)), card.text().encode("utf-8"), hdr)
-        if st == 412:
-            raise ContactsError("%s was changed by someone else meanwhile: reload (sync) and try again" % card.name)
-        if st not in (200, 201, 204):
-            raise ContactsError("the address book server did not take %s (it said %d)" % (card.name, st))
-        card.href = href
-        card.etag = rh.get("ETag") or rh.get("Etag") or ""
-        self.cards[href] = card
-        self._save_cache()
-        return card
-
-    def delete(self, card):
-        if not card.href:
-            return
-        hdr = {"If-Match": card.etag} if card.etag else {}
-        st, _, _ = self._write_call("DELETE", self._abs(urllib.parse.quote(card.href)), None, hdr)
-        if st == 412:
-            raise ContactsError("%s was changed by someone else meanwhile: reload (sync) and try again" % card.name)
-        if st not in (200, 204, 404):
-            raise ContactsError("the address book server did not delete %s (it said %d)" % (card.name, st))
-        self.cards.pop(card.href, None)
-        self._save_cache()
+class _Asking(object):
+    """What one book or several can be asked: needs _all(), the cards in order of preference (the first match wins)."""
 
     # -- asking
     def contacts(self):
-        return sorted((c for c in self.cards.values() if not c.is_group), key=lambda c: c.name.lower())
+        return sorted((c for c in self._all() if not c.is_group), key=lambda c: c.name.lower())
 
     def groups(self):
-        return sorted((c for c in self.cards.values() if c.is_group), key=lambda c: c.name.lower())
+        return sorted((c for c in self._all() if c.is_group), key=lambda c: c.name.lower())
 
     def by_uid(self, uid):
-        for c in self.cards.values():
+        for c in self._all():
             if c.uid == uid:
                 return c
         return None
@@ -506,6 +310,277 @@ class Book(object):
         return out
 
 
+
+class Book(_Asking):
+    """One address book: a CardDAV collection and its local copy (a directory of .vcf files and an index of ETags)."""
+
+    def __init__(self, url, user, ca="", insecure=False, cache=None, password=None, timeout=8, label="mine"):
+        self.label = label
+        self.url = url if url.endswith("/") else url + "/"
+        self.user, self.ca, self.insecure, self.timeout = user, ca, insecure, timeout
+        self._password = password  # allowlist secret: the caller passes it in
+        key = hashlib.sha1((self.url + "\0" + user).encode("utf-8")).hexdigest()[:12]
+        self.cache = cache or os.path.join(state_dir(), key)
+        self.offline = False
+        self.cards = {}                   # href -> Card
+        self._load_cache()
+
+    def _all(self):
+        return list(self.cards.values())
+
+    # -- the wire
+    def request(self, method, url, body=None, headers=None):
+        pw = self._password if self._password is not None else find_password(self.url, self.user)
+        req = urllib.request.Request(url, data=body, method=method, headers=headers or {})
+        req.add_header("Authorization", "Basic " + base64.b64encode(("%s:%s" % (self.user, pw)).encode("utf-8")).decode("ascii"))
+        ctx = None
+        if url.startswith("https"):
+            ctx = ssl.create_default_context(cafile=os.path.expanduser(self.ca) if self.ca else None)
+            if self.insecure:
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout, context=ctx) as r:
+                return r.status, r.read(), dict(r.headers)
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 403):
+                raise ContactsError("the address book server refused the login for %s (password: $TVCONTACTS_PASS, "
+                                    "~/.mu-tickets or ~/.netrc)" % (self.user or "(no user)"))
+            if e.code in (404, 412):
+                return e.code, b"", {}
+            raise ContactsError("the address book server said %d %s" % (e.code, e.reason))
+        except (urllib.error.URLError, OSError) as e:
+            raise ConnectionError(str(getattr(e, "reason", e)))
+
+    def _abs(self, href):
+        u = urllib.parse.urlparse(self.url)
+        return "%s://%s%s" % (u.scheme, u.netloc, href) if href.startswith("/") else href
+
+    # -- the copy
+    def _index_path(self):
+        return os.path.join(self.cache, "index.json")
+
+    def _load_cache(self):
+        try:
+            with open(self._index_path(), encoding="utf-8") as fh:
+                idx = json.load(fh)
+        except (OSError, ValueError):
+            return
+        for href, meta in idx.items():
+            try:
+                with open(os.path.join(self.cache, meta["file"]), encoding="utf-8") as fh:
+                    card = Card.parse(fh.read())
+            except (OSError, ContactsError, KeyError):
+                continue
+            card.href, card.etag, card.book = href, meta.get("etag", ""), self.label
+            self.cards[href] = card
+
+    def _save_cache(self):
+        os.makedirs(self.cache, mode=0o700, exist_ok=True)
+        idx = {}
+        for href, card in self.cards.items():
+            fname = hashlib.sha1(href.encode("utf-8")).hexdigest() + ".vcf"
+            self._write(os.path.join(self.cache, fname), card.text())
+            idx[href] = {"file": fname, "etag": card.etag}
+        for f in os.listdir(self.cache):
+            if f.endswith(".vcf") and f not in {m["file"] for m in idx.values()}:
+                try:
+                    os.remove(os.path.join(self.cache, f))
+                except OSError:
+                    pass
+        self._write(self._index_path(), json.dumps(idx))
+
+    @staticmethod
+    def _write(path, text):
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8", newline="") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+
+    # -- sync
+    def sync(self):
+        """Bring the copy up to date: one PROPFIND for the ETags, a GET for each card that is new or changed.
+        Returns True when the server answered; False (and offline = True) when the copy was all there is."""
+        body = (b'<?xml version="1.0"?><propfind xmlns="DAV:"><prop><getetag/></prop></propfind>')
+        try:
+            st, data, _ = self.request("PROPFIND", self.url, body, {"Depth": "1", "Content-Type": "application/xml"})
+        except ConnectionError:
+            self.offline = True
+            return False
+        self.offline = False
+        if st == 404:
+            raise ContactsError("the address book %s does not exist on the server (configure-radicale.sh makes it)" % self.url)
+        try:
+            root = ET.fromstring(data)
+        except ET.ParseError:
+            raise ContactsError("the address book server sent something that is not a listing")
+        remote = {}
+        base = urllib.parse.urlparse(self.url).path
+        for resp in root.iter(DAV + "response"):
+            href = urllib.parse.unquote(resp.findtext(DAV + "href") or "")
+            etag = ""
+            for pst in resp.iter(DAV + "propstat"):
+                e = pst.findtext(DAV + "prop/" + DAV + "getetag")
+                if e:
+                    etag = e
+            if href and href.rstrip("/") != base.rstrip("/") and href.lower().endswith(".vcf"):
+                remote[href] = etag
+        changed = False
+        for href in [h for h in self.cards if h not in remote]:
+            del self.cards[href]
+            changed = True
+        for href, etag in remote.items():
+            have = self.cards.get(href)
+            if have is not None and have.etag == etag and etag:
+                continue
+            try:
+                st, raw, hdr = self.request("GET", self._abs(urllib.parse.quote(href)), headers={"Accept": "text/vcard"})
+                card = Card.parse(raw.decode("utf-8", "replace"))
+            except (ContactsError, ConnectionError):
+                continue                                 # one bad card must not hide the others
+            card.href, card.etag, card.book = href, etag or hdr.get("ETag", ""), self.label
+            self.cards[href] = card
+            changed = True
+        if changed or not os.path.exists(self._index_path()):
+            self._save_cache()
+        return True
+
+    def refresh(self, max_age=60):
+        """sync(), unless the copy was brought up to date less than max_age seconds ago.  True = the copy is current."""
+        try:
+            if time.time() - os.path.getmtime(self._index_path()) < max_age:
+                return True
+        except OSError:
+            pass
+        ok = self.sync()
+        if ok:
+            try:
+                os.utime(self._index_path(), None)
+            except OSError:
+                pass
+        return ok
+
+    # -- writing (refused while the server cannot be reached: nothing is queued)
+    def _write_call(self, method, url, body=None, headers=None):
+        try:
+            return self.request(method, url, body, headers)
+        except ConnectionError as e:
+            self.offline = True
+            raise ContactsError("the address book server cannot be reached (%s): contacts are read-only until it is back" % e)
+
+    def make(self):
+        """Create the collection (an address book) when it is not there yet."""
+        body = (b'<?xml version="1.0"?><mkcol xmlns="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav"><set><prop>'
+                b'<resourcetype><collection/><C:addressbook/></resourcetype><displayname>Contacts</displayname>'
+                b'</prop></set></mkcol>')
+        st, _, _ = self._write_call("MKCOL", self.url, body, {"Content-Type": "application/xml"})
+        if st not in (200, 201, 204):
+            raise ContactsError("could not create the address book (the server said %d)" % st)
+
+    def _href_for(self, card):
+        return urllib.parse.urlparse(self.url).path + urllib.parse.quote(card.uid or str(uuid.uuid4()), safe="") + ".vcf"
+
+    def save(self, card, label=None):
+        """Write a card: a new one (If-None-Match) or a changed one (If-Match its ETag).  A card somebody else changed
+        meanwhile is refused with a ContactsError saying so; sync() and try again."""
+        if not card.uid:
+            card.props.append(["UID", "", str(uuid.uuid4())])
+        new = not card.href
+        href = card.href or self._href_for(card)
+        hdr = {"Content-Type": "text/vcard; charset=utf-8"}
+        if new:
+            hdr["If-None-Match"] = "*"
+        elif card.etag:
+            hdr["If-Match"] = card.etag
+        st, _, rh = self._write_call("PUT", self._abs(urllib.parse.quote(href)), card.text().encode("utf-8"), hdr)
+        if st == 412:
+            raise ContactsError("%s was changed by someone else meanwhile: reload (sync) and try again" % card.name)
+        if st not in (200, 201, 204):
+            raise ContactsError("the address book server did not take %s (it said %d)" % (card.name, st))
+        card.href = href
+        card.book = self.label
+        card.etag = rh.get("ETag") or rh.get("Etag") or ""
+        self.cards[href] = card
+        self._save_cache()
+        return card
+
+    def delete(self, card):
+        if not card.href:
+            return
+        hdr = {"If-Match": card.etag} if card.etag else {}
+        st, _, _ = self._write_call("DELETE", self._abs(urllib.parse.quote(card.href)), None, hdr)
+        if st == 412:
+            raise ContactsError("%s was changed by someone else meanwhile: reload (sync) and try again" % card.name)
+        if st not in (200, 204, 404):
+            raise ContactsError("the address book server did not delete %s (it said %d)" % (card.name, st))
+        self.cards.pop(card.href, None)
+        self._save_cache()
+
+
+class Library(_Asking):
+    """Several books asked as one: the person's own first (it wins a clash of names), then the shared one(s).  A card is
+    changed or deleted in the book it came from; a new one goes where the caller says (default: the first)."""
+
+    def __init__(self, books):
+        self.books = list(books)                  # [Book, ...]; each has a .label
+        self.problems = {}                        # label -> why a shared book could not be read (the first must work)
+
+    @property
+    def offline(self):
+        return any(b.offline for b in self.books)
+
+    @property
+    def cards(self):
+        return dict(("%s|%s" % (b.label, h), c) for b in self.books for h, c in b.cards.items())
+
+    def _all(self):
+        return [c for b in self.books for c in b.cards.values()]
+
+    def labels(self):
+        return [b.label for b in self.books]
+
+    def book_of(self, label):
+        for b in self.books:
+            if b.label == label:
+                return b
+        raise ContactsError("there is no address book called %s (%s)" % (label, ", ".join(self.labels())))
+
+    def _each(self, fn):
+        ok = True
+        for i, b in enumerate(self.books):
+            try:
+                ok = bool(fn(b)) and ok
+                self.problems.pop(b.label, None)
+            except ContactsError as e:
+                if i == 0:
+                    raise
+                self.problems[b.label] = str(e)
+        return ok
+
+    def sync(self):
+        return self._each(lambda b: b.sync())
+
+    def refresh(self, max_age=60):
+        return self._each(lambda b: b.refresh(max_age))
+
+    def make(self):
+        for b in self.books:
+            try:
+                if not b.sync():
+                    raise ContactsError("the address book server cannot be reached")
+            except ContactsError as e:
+                if "does not exist" not in str(e):
+                    raise
+                b.make()
+                b.sync()
+
+    def save(self, card, label=None):
+        return self.book_of(card.book or label or self.books[0].label).save(card)
+
+    def delete(self, card):
+        self.book_of(card.book or self.books[0].label).delete(card)
+
+
 # ------------------------------------------------------------ configuration ---
 def _conf(app):
     import configparser
@@ -518,29 +593,82 @@ def _conf(app):
 
 
 def default_book(apps=("tvmail", "tvchat", "tvcal")):
-    """The Book the person's configuration names, or None.  The first of tvmail.conf, tvchat.conf, tvcal.conf with a
-    [contacts] url (user, ca, insecure beside it) wins; failing that, the one beside tvcal's calendar:
-    [server] url of tvcal.conf with its last part (calendar) replaced by contacts.  [contacts] enabled = no switches it off.
-    $TVCONTACTS_URL / $TVCONTACTS_USER name one directly."""
-    if os.environ.get("TVCONTACTS_URL"):
-        return Book(os.environ["TVCONTACTS_URL"], os.environ.get("TVCONTACTS_USER", ""),
-                    ca=os.environ.get("TVCONTACTS_CA", ""), insecure=bool(os.environ.get("TVCONTACTS_INSECURE")))
+    """The Library the person's configuration names, or None.  The personal book: the first of tvmail.conf, tvchat.conf,
+    tvcal.conf with a [contacts] url (user, ca, insecure beside it) wins; failing that, the one beside tvcal's calendar:
+    [server] url of tvcal.conf with its last part (calendar) replaced by contacts.  A shared book (the family's): the first
+    of them with [contacts] shared = URL (shared_label = NAME, default family), read with the same login and certificate.
+    [contacts] enabled = no switches it all off.  $TVCONTACTS_URL / _USER / _CA name the personal book directly, and
+    $TVCONTACTS_SHARED the shared one."""
     yes = ("yes", "true", "1", "y", "on")
-    for app in apps:
-        c = _conf(app)
-        if c.get("contacts", "enabled", fallback="yes").strip().lower() in ("no", "false", "0", "off"):
-            return None
-        url = c.get("contacts", "url", fallback="").strip()
-        if url:
-            return Book(url, c.get("contacts", "user", fallback="").strip(), ca=c.get("contacts", "ca", fallback="").strip(),
-                        insecure=c.get("contacts", "insecure", fallback="no").strip().lower() in yes)
-    cal = _conf("tvcal")
-    cu = cal.get("server", "url", fallback="").strip().rstrip("/")
-    if cu and cal.get("server", "mode", fallback="").strip().lower() != "local":
-        return Book(cu.rpartition("/")[0] + "/contacts/", cal.get("server", "user", fallback="").strip(),
-                    ca=cal.get("server", "ca", fallback="").strip(),
-                    insecure=cal.get("server", "insecure", fallback="no").strip().lower() in yes)
-    return None
+    personal = None
+    shared_url, shared_label = os.environ.get("TVCONTACTS_SHARED", ""), os.environ.get("TVCONTACTS_SHARED_LABEL", "family")
+    if os.environ.get("TVCONTACTS_URL"):
+        personal = dict(url=os.environ["TVCONTACTS_URL"], user=os.environ.get("TVCONTACTS_USER", ""),
+                        ca=os.environ.get("TVCONTACTS_CA", ""), insecure=bool(os.environ.get("TVCONTACTS_INSECURE")))
+    else:
+        for app in apps:
+            c = _conf(app)
+            if c.get("contacts", "enabled", fallback="yes").strip().lower() in ("no", "false", "0", "off"):
+                return None
+            if personal is None and c.get("contacts", "url", fallback="").strip():
+                personal = dict(url=c.get("contacts", "url").strip(), user=c.get("contacts", "user", fallback="").strip(),
+                                ca=c.get("contacts", "ca", fallback="").strip(),
+                                insecure=c.get("contacts", "insecure", fallback="no").strip().lower() in yes)
+            if not shared_url and c.get("contacts", "shared", fallback="").strip():
+                shared_url = c.get("contacts", "shared").strip()
+                shared_label = c.get("contacts", "shared_label", fallback="family").strip() or "family"
+        if personal is None:
+            cal = _conf("tvcal")
+            cu = cal.get("server", "url", fallback="").strip().rstrip("/")
+            if cu and cal.get("server", "mode", fallback="").strip().lower() != "local":
+                personal = dict(url=cu.rpartition("/")[0] + "/contacts/", user=cal.get("server", "user", fallback="").strip(),
+                                ca=cal.get("server", "ca", fallback="").strip(),
+                                insecure=cal.get("server", "insecure", fallback="no").strip().lower() in yes)
+    if personal is None:
+        return None
+    books = [Book(personal["url"], personal["user"], ca=personal["ca"], insecure=personal["insecure"], label="mine")]
+    if shared_url:
+        books.append(Book(shared_url, personal["user"], ca=personal["ca"], insecure=personal["insecure"], label=shared_label))
+    return Library(books)
+
+
+def set_shared(url, app="tvcal"):
+    """Write [contacts] shared = URL into ~/.config/APP/APP.conf (the old file is kept in BAK/, other lines untouched)."""
+    path = os.path.expanduser("~/.config/%s/%s.conf" % (app, app))
+    try:
+        with open(path, encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        raise ContactsError("%s does not exist: set up %s first" % (path, app))
+    bak = os.path.join(os.path.dirname(path), "BAK")
+    os.makedirs(bak, exist_ok=True)
+    import shutil
+    shutil.copy2(path, os.path.join(bak, "%s.conf.%s" % (app, time.strftime("%Y%m%d-%H%M%S"))))
+    out, in_sec, done = [], False, False
+    for ln in lines:
+        head = ln.strip()
+        if head.startswith("[") and head.endswith("]"):
+            if in_sec and not done:
+                out.append("shared = %s" % url)
+                done = True
+            in_sec = head.lower() == "[contacts]"
+        elif in_sec and re.match(r"^\s*shared\s*=", ln):
+            if not done:
+                out.append("shared = %s" % url)
+                done = True
+            continue
+        out.append(ln)
+    if in_sec and not done:
+        out.append("shared = %s" % url)
+        done = True
+    if not done:
+        out += ["", "[contacts]", "shared = %s" % url]
+    old = os.umask(0o077)
+    try:
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(out) + "\n")
+    finally:
+        os.umask(old)
 
 
 # ------------------------------------------------------------- command line ---
@@ -556,7 +684,8 @@ def _row(card, book):
             m = book.by_uid(uid)
             names.append(m.name if m is not None else uid)
     return "\t".join([kind, card.uid, _clean(card.name), _clean(",".join(card.nicknames)),
-                      _clean(",".join(names if card.is_group else card.emails)), _clean(card.get("NOTE")[:60])])
+                      _clean(",".join(names if card.is_group else card.emails)), _clean(card.get("NOTE")[:60]),
+                      _clean(card.book)])
 
 
 def _split(text):
@@ -648,8 +777,11 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="tvcontacts", description="the TUI suite's address book (Radicale, CardDAV)")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("sync", help="bring the local copy up to date")
-    sub.add_parser("list", help="TSV: kind(c/g) uid name nicknames emails-or-members note")
-    sub.add_parser("init", help="create the address book on the server if it is not there")
+    sub.add_parser("list", help="TSV: kind(c/g) uid name nicknames emails-or-members note book")
+    sub.add_parser("init", help="create the address book(s) on the server if they are not there")
+    sub.add_parser("books", help="the books there are (mine first)")
+    p = sub.add_parser("shared", help="use this shared address book (writes [contacts] shared = URL into tvcal.conf)")
+    p.add_argument("url")
     p = sub.add_parser("show"); p.add_argument("uid")
     p = sub.add_parser("delete"); p.add_argument("uid")
     p = sub.add_parser("save", help="add or change a contact (or a group with --group); prints its uid")
@@ -659,6 +791,7 @@ def main(argv=None):
     p.add_argument("--emails", default="")
     p.add_argument("--group", action="store_true")
     p.add_argument("--members", default="", help="a group's members: names, nicknames or addresses, comma separated")
+    p.add_argument("--book", default="", help="which book a NEW entry goes into (default: the first, yours)")
     p = sub.add_parser("add-address", help="add an address (a sender) unless the book already has it")
     p.add_argument("--email", required=True)
     p.add_argument("--name", default="")
@@ -667,22 +800,26 @@ def main(argv=None):
     p = sub.add_parser("complete"); p.add_argument("text")
     p = sub.add_parser("import-mailrc"); p.add_argument("--dry-run", action="store_true")
     a = ap.parse_args(argv)
+    if a.cmd == "shared":
+        try:
+            set_shared(a.url)
+        except ContactsError as e:
+            sys.stderr.write("%s\n" % e)
+            return 1
+        print("tvcal.conf now has [contacts] shared = %s (the old file is in BAK/)" % a.url)
+        return 0
     book = default_book()
     if book is None:
         sys.stderr.write("no address book is configured: [contacts] url in tvmail.conf, or tvcal's [server] url\n")
         return 2
     try:
         if a.cmd == "init":
-            try:
-                if not book.sync():
-                    raise ContactsError("the address book server cannot be reached")
-                print("the address book is there")
-            except ContactsError as e:
-                if "does not exist" not in str(e):
-                    raise
-                book.make()
-                book.sync()
-                print("the address book was made")
+            book.make()
+            print("the address book%s %s there" % ("s" if len(book.books) > 1 else "", "are" if len(book.books) > 1 else "is"))
+            return 0
+        if a.cmd == "books":
+            for label in book.labels():
+                print(label)
             return 0
         ok = book.refresh(0 if a.cmd in ("sync", "save", "delete", "import-mailrc", "add-address") else 30)
         if not ok and a.cmd in ("save", "delete", "import-mailrc", "add-address"):
@@ -746,7 +883,7 @@ def main(argv=None):
             card.props = [pr for pr in card.props if pr[0] != "NICKNAME"]
             if _split(a.nicks):
                 card.props.append(["NICKNAME", "", ",".join(_esc(n) for n in _split(a.nicks))])
-            book.save(card)
+            book.save(card, a.book or None)
             print(card.uid)
     except ContactsError as e:
         sys.stderr.write("%s\n" % e)

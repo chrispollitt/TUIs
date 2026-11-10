@@ -62,8 +62,11 @@ std::string trim(const std::string &s)
 struct Row
 {
     bool group = false;
-    std::string uid, name, nicks, detail;
+    std::string uid, name, nicks, detail, book; // book: the label of the address book it is in (mine, family ...)
 };
+
+// The books there are, the person's own first; one entry when there is no shared book.
+std::vector<std::string> gBooks;
 
 std::vector<std::string> tabs(const std::string &ln)
 {
@@ -84,7 +87,9 @@ std::vector<std::string> tabs(const std::string &ln)
 bool editDialog(Row &row, bool isNew)
 {
     const bool g = row.group;
-    TDialog *d = new TDialog(TRect(0, 0, 66, g ? 12 : 14), g ? (isNew ? "New group" : "Edit group") : (isNew ? "New contact" : "Edit contact"));
+    const bool pick = isNew && gBooks.size() > 1;
+    const int extra = pick ? 3 + (int)gBooks.size() : 0;
+    TDialog *d = new TDialog(TRect(0, 0, 66, (g ? 12 : 14) + extra), g ? (isNew ? "New group" : "Edit group") : (isNew ? "New contact" : "Edit contact"));
     d->options |= ofCentered;
     TInputLine *name = new TInputLine(TRect(3, 3, 63, 4), 120);
     d->insert(name);
@@ -103,6 +108,17 @@ bool editDialog(Row &row, bool isNew)
     d->insert(new TLabel(TRect(2, y, 63, y + 1), g ? "~M~embers (names, nicknames or addresses, comma separated)"
                                                     : "~E~mail addresses (comma separated)", what));
     y += 3;
+    TRadioButtons *where = nullptr;
+    if (pick)
+    {
+        TSItem *items = nullptr;
+        for (size_t i = gBooks.size(); i-- > 0;)
+            items = new TSItem((std::string(i == 0 ? "~M~ine (only you)" : "~") + (i == 0 ? "" : gBooks[i].substr(0, 1) + "~" + gBooks[i].substr(1) + " (shared)")).c_str(), items);
+        where = new TRadioButtons(TRect(3, y + 1, 63, y + 1 + (int)gBooks.size()), items);
+        d->insert(where);
+        d->insert(new TLabel(TRect(2, y, 63, y + 1), "Save ~i~n", where));
+        y += 2 + (int)gBooks.size();
+    }
     d->insert(new TButton(TRect(16, y, 28, y + 2), "O~K~", cmOK, bfDefault));
     d->insert(new TButton(TRect(32, y, 44, y + 2), "Cancel", cmCancel, bfNormal));
     char b[801];
@@ -123,6 +139,12 @@ bool editDialog(Row &row, bool isNew)
         row.name = trim(name->data ? name->data : "");
         row.nicks = nick ? trim(nick->data ? nick->data : "") : std::string();
         row.detail = trim(what->data ? what->data : "");
+        if (where)
+        {
+            ushort sel = 0;
+            where->getData(&sel);
+            row.book = sel < gBooks.size() ? gBooks[sel] : std::string();
+        }
     }
     TObject::destroy(d);
     return r != cmCancel;
@@ -134,7 +156,16 @@ public:
     std::vector<Row> rows;
     std::string note;
 
-    TContactsPane(const TRect &b, TScrollBar *vsb) : TListViewer(b, 1, nullptr, vsb) { reload(false); }
+    TContactsPane(const TRect &b, TScrollBar *vsb) : TListViewer(b, 1, nullptr, vsb)
+    {
+        gBooks.clear();
+        Result br = runCli("books");
+        if (br.ok)
+            for (const std::string &l : splitLines(br.out))
+                if (!trim(l).empty())
+                    gBooks.push_back(trim(l));
+        reload(false);
+    }
 
     void reload(bool force)
     {
@@ -166,6 +197,7 @@ public:
                 row.name = f[2];
                 row.nicks = f[3];
                 row.detail = f[4];
+                row.book = f.size() > 6 ? f[6] : std::string();
                 rows.push_back(row);
             }
             else if (!ln.empty())
@@ -190,7 +222,8 @@ public:
             return;
         }
         const Row &r = rows[item];
-        std::string line = std::string(r.group ? "[G] " : "    ") + fitCols(r.name, 24) + " " +
+        std::string tag = (gBooks.size() > 1 && !r.book.empty() && r.book != gBooks[0]) ? "[" + r.book + "] " : std::string();
+        std::string line = std::string(r.group ? "[G] " : "    ") + tag + fitCols(r.name, 24) + " " +
                            (r.nicks.empty() ? std::string() : "(" + r.nicks + ") ") + r.detail;
         putText(dest, line, maxLen);
     }
@@ -217,7 +250,8 @@ public:
 
     void save(const Row &row, const std::string &uid)
     {
-        std::string args = "save --name " + shq(row.name) + (uid.empty() ? "" : " --uid " + shq(uid));
+        std::string args = "save --name " + shq(row.name) + (uid.empty() ? "" : " --uid " + shq(uid)) +
+                           (uid.empty() && !row.book.empty() ? " --book " + shq(row.book) : std::string());
         if (row.group)
             args += " --group --members " + shq(row.detail);
         else
