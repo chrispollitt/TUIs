@@ -88,6 +88,8 @@ const ushort cmToggleWrap = 2043;   // View > Wrap long lines (body pane / focus
 const ushort cmRedrawScreen = 2044; // Window > Redraw screen (Ctrl-L)
 const ushort cmNotifications = 2046; // Window > Notification history
 const ushort cmEditConfig = 2045;   // File > Edit configuration... (the app opens configwin.cpp's window)
+const ushort cmContacts = 2047;     // File > Contacts... (the address book window, contactswin.cpp; TTvApp opens it)
+const ushort cmContactsNote = 2048; // broadcast to the Contacts window: its note line changed
 
 // -------------------------------------------------------- classic colors ----
 // The Turbo Vision DOS look, in exact RGB.  BIOS colour numbers are not
@@ -185,6 +187,9 @@ void putText(char *dest, const std::string &s, short maxLen);
 std::string expandTabs(const std::string &s);
 extern TTimerId gFlashTimer;
 void flashStatus(const std::string &msg);
+// contactswin.cpp: the Contacts window (add, edit, delete contacts and groups in the address book on the server)
+TWindow *newContactsWindow(const TRect &bounds);
+bool contactsAddAddress(const std::string &name, const std::string &email, std::string &say); // false: say is the reason
 
 // ---------------------------------------------------- toasts + history ---
 // notify.cpp: a message that needs no answer.  A small note at the bottom right

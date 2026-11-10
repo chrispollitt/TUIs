@@ -530,6 +530,71 @@ def help_has_no_lr_column(opts):
     return tv
 
 
+@case()
+def contacts_window_adds_edits_and_deletes(opts):
+    # File > Contacts... (tvcommon's window, the same in tvmail, tvchat and tvcal): the address book on the server,
+    # against a fake CardDAV server in this process; every change goes through tvcontacts.py
+    import http.server
+    import importlib.util
+    import threading
+    spec = importlib.util.spec_from_file_location(
+        "tvcontacts_tests", str(HERE.parent.parent / "tvcommon" / "tests" / "test_tvcontacts.py"))
+    fake = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fake)
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), fake.Fake)
+    srv.cards = {"alice.vcf": (fake.ALICE, "1"), "family.vcf": (fake.FAMILY, "1"), "bob.vcf": (fake.BOB, "1")}
+    srv.log = []
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    ours = lambda needle: [k for k, v in srv.cards.items() if needle in v[0]]
+
+    def setup(t):
+        t.env["TVCONTACTS_URL"] = "http://127.0.0.1:%d/c/" % srv.server_address[1]
+        t.env["TVCONTACTS_USER"] = "chris"
+        t.env["TVCONTACTS_PASS"] = "secret"                      # allowlist secret: test value
+        t.env["TVCONTACTS_PY"] = str(HERE.parent.parent / "tvcommon" / "py" / "tvcontacts.py")
+        t.cleanups.append(srv.shutdown)
+    tv = Tv(opts, setup=setup)
+    c = Case(tv)
+    started(tv, c)
+    tv.send(alt("f"), "n", settle=1.5)                          # File > Contacts...
+    c.check(tv.wait("Alice Archer", 8) and tv.has("Bob Baker") and tv.has("[G] Family"),
+            "the Contacts window does not list the address book")
+    c.check(tv.has("(Al,Ally)") and tv.has("alice@example.org"), "nicknames and addresses are not shown")
+    # a new contact
+    tv.send("n", settle=0.8)
+    c.check(tv.wait("New contact", 3), "n did not open the new-contact dialog")
+    tv.send("Carol Carter", "Tab", "Caz", "Tab", "carol@example.org", "Enter", settle=2.0)
+    c.check(tv.wait("Carol Carter", 6), "the new contact is not in the list")
+    c.check(len(ours("carol@example.org")) == 1, "the server did not get the new contact")
+    # change her address (the list is Alice, Bob, Carol, then the group)
+    tv.send("Down", "Down", "e", settle=0.8)
+    c.check(tv.wait("Edit contact", 3) and tv.has("carol@example.org"), "e did not open Carol for editing")
+    tv.send("Tab", "Tab", "carol@new.example", "Enter", settle=2.0)
+    c.check(tv.wait("carol@new.example", 6), "the changed address is not shown")
+    c.check(ours("carol@new.example") and not ours("carol@example.org"), "the server did not take the change")
+    # delete her
+    tv.send("Delete", settle=0.8)
+    c.check(tv.wait("Delete the contact", 3), "Del did not ask")
+    tv.send("y", settle=2.0)
+    c.check(tv.wait(lambda: not tv.has("Carol Carter"), 6) and not ours("Carol Carter"), "Carol was not deleted")
+    # a group from names
+    tv.send("g", settle=0.8)
+    c.check(tv.wait("New group", 3), "g did not open the new-group dialog")
+    tv.send("Pals", "Tab", "Alice Archer, Bob Baker", "Enter", settle=2.0)
+    c.check(tv.wait("[G] Pals", 6) and ours("Pals"), "the new group is not there")
+    # a member that is not in the book is refused in words, and nothing is written
+    tv.send("g", settle=0.8)
+    tv.send("Nope", "Tab", "Zed Zoe", "Enter", settle=2.0)
+    c.check(tv.wait("not in the address book: Zed Zoe", 4) and not ours("Nope"), "an unknown member was not refused")
+    # Message > Send to > Contacts: the sender of the message shown goes into the book (once)
+    tv.send("", settle=0.6)                                  # close the Contacts window
+    tv.send(alt("m"), "e", "s", settle=2.5)
+    c.check(tv.wait("added Bob <bob@example.com>", 6) and ours("bob@example.com"), "the sender was not added to the book")
+    tv.send(alt("m"), "e", "s", settle=2.5)
+    c.check(tv.wait("already in the address book", 6) and len(ours("bob@example.com")) == 1, "the sender was added twice")
+    return tv
+
+
 @case(31)
 def send_menu_label(opts):
     tv = Tv(opts)

@@ -5,6 +5,8 @@ Releases are tagged `tvmail-vX.Y.Z`; `git log` has the rest.
 
 ## Unreleased
 
+- **Contacts window and Send to > Contacts:** File > Contacts... (shared with tvchat and tvcal) adds, edits and deletes contacts and groups in the address book on the server; Message > Send to > Contacts adds the sender once.
+
 - **Address book on the server:** the Address book window and the To: expansion also use your contacts and groups kept in
   Radicale (CardDAV), through tvcommon's `tvcontacts.py` ([contacts] in tvmail.conf, or the one beside tvcal's calendar).
   A group name in To: expands to its members; the server being down just leaves the copy or the mailrc entries.

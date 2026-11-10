@@ -54,7 +54,8 @@ set(TVCOMMON_SOURCES
     ${TVCOMMON_DIR}/src/textwin.cpp
     ${TVCOMMON_DIR}/src/configwin.cpp
     ${TVCOMMON_DIR}/src/notify.cpp
-    ${TVCOMMON_DIR}/src/spool.cpp)
+    ${TVCOMMON_DIR}/src/spool.cpp
+    ${TVCOMMON_DIR}/src/contactswin.cpp)
 
 function(tvcommon_setup target)
     target_link_libraries(${target} PRIVATE tvision)

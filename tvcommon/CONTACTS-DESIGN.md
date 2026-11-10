@@ -1,7 +1,7 @@
 # Design: central contacts and mail groups for the TUI suite via Radicale CardDAV
 
-Status: FUTURE TO-DO. Start only after the centralized Delta Chat work (dcgw on cpbee, thin tvchat clients, multi-user)
-reaches a satisfactory working state. Not started; nothing in the repo has been changed for it.
+Status: BUILT 2026-11-09 in part: tvcommon/py/tvcontacts.py (CardDAV read/write, copy, groups, mailrc import, CLI), File > Contacts... (tvcommon/src/contactswin.cpp) in tvmail, tvchat and tvcal, tvmail Address book and To: expansion. Not yet: tvmail "save sender", tvchat chat-with-from-book, tvcal attendee completion, the shared family book (needs a root rights change), sentinel check. Original note: start only after the
+Delta Chat gateway work (dcgw) was satisfactory.
 
 ## Goal
 One address book per person plus shared groups, kept on cpbee in Radicale (which already serves tvcal's calendars and also

@@ -634,6 +634,9 @@ def main(argv=None):
     p.add_argument("--emails", default="")
     p.add_argument("--group", action="store_true")
     p.add_argument("--members", default="", help="a group's members: names, nicknames or addresses, comma separated")
+    p = sub.add_parser("add-address", help="add an address (a sender) unless the book already has it")
+    p.add_argument("--email", required=True)
+    p.add_argument("--name", default="")
     p = sub.add_parser("complete"); p.add_argument("text")
     p = sub.add_parser("import-mailrc"); p.add_argument("--dry-run", action="store_true")
     a = ap.parse_args(argv)
@@ -643,12 +646,19 @@ def main(argv=None):
         return 2
     try:
         if a.cmd == "init":
-            if not book.sync():
-                raise ContactsError("the address book server cannot be reached")
-            print("the address book is there")
+            try:
+                if not book.sync():
+                    raise ContactsError("the address book server cannot be reached")
+                print("the address book is there")
+            except ContactsError as e:
+                if "does not exist" not in str(e):
+                    raise
+                book.make()
+                book.sync()
+                print("the address book was made")
             return 0
-        ok = book.refresh(0 if a.cmd in ("sync", "save", "delete", "import-mailrc") else 30)
-        if not ok and a.cmd in ("save", "delete", "import-mailrc"):
+        ok = book.refresh(0 if a.cmd in ("sync", "save", "delete", "import-mailrc", "add-address") else 30)
+        if not ok and a.cmd in ("save", "delete", "import-mailrc", "add-address"):
             raise ContactsError("the address book server cannot be reached: contacts are read-only until it is back")
         if a.cmd == "sync":
             print("offline: using the copy" if book.offline else "up to date")
@@ -662,6 +672,17 @@ def main(argv=None):
             if c is None:
                 raise ContactsError("no such entry")
             print(_row(c, book))
+        elif a.cmd == "add-address":
+            addr = a.email.strip()
+            if "@" not in addr:
+                raise ContactsError("not an email address: %s" % addr)
+            for c in book.cards.values():
+                if addr.lower() in [e.lower() for e in c.emails]:
+                    print("%s is already in the address book (%s)" % (addr, c.name))
+                    return 0
+            name = _clean(a.name).strip(" \"'") or addr.split("@")[0]
+            book.save(Card.new(name, [addr]))
+            print("added %s <%s> to the address book" % (name, addr))
         elif a.cmd == "complete":
             for name, addr in book.complete(a.text):
                 print("%s\t%s" % (_clean(name), _clean(addr)))

@@ -116,6 +116,14 @@ void TTvApp::handleEvent(TEvent &e)
         clearEvent(e);
         return;
     }
+    if (e.what == evCommand && e.message.command == cmContacts)
+    {
+        TRect r = deskTop->getExtent();
+        r.grow(-4, -2);
+        deskTop->insert(newContactsWindow(r));
+        clearEvent(e);
+        return;
+    }
     if (e.what == evCommand && e.message.command == cmNotifications)
     {
         notifyHistoryWindow(deskTop);
@@ -337,4 +345,9 @@ void tvAboutBox(TDeskTop *desk, const char *app, const char *version,
     d->insert(new TButton(TRect(21, 14, 33, 16), "O~K~", cmOK, bfDefault));
     desk->execView(d);
     TObject::destroy(d);
+}
+
+TMenuItem &tvContactsItem()
+{
+    return *new TMenuItem("Co~n~tacts...", cmContacts, kbNoKey, hcNoContext);
 }

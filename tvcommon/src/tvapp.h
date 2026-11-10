@@ -35,6 +35,8 @@ TMenuItem &tvExitItem();
 TMenuItem &tvReloadItem();
 // File's "Edit configuration..." (cmEditConfig; the app answers it with openConfigWindow)
 TMenuItem &tvConfigItem();
+// File's "Contacts..." (cmContacts; TTvApp answers it with the shared window)
+TMenuItem &tvContactsItem();
 // Edit: Find... / Replace... (if withReplace) / Find again; the apps add
 // Undo, Cut, Copy and Paste before them.
 TMenuItem &tvFindItems(bool withReplace);

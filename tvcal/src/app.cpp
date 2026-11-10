@@ -42,6 +42,7 @@ TMenuBar *TVCalApp::initMenuBar(TRect r)
     return new TMenuBar(
         r, *new TSubMenu("~F~ile", kbAltF) +
                *new TMenuItem("~F~loyd, the assistant...", cmFloyd, kbF7, hcNoContext, "F7") +
+               tvContactsItem() +
                tvConfigItem() +
                tvReloadItem() +
                *new TMenuItem("~I~mport .ics file...", cmCalImport, kbNoKey, hcNoContext) +

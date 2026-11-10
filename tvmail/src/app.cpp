@@ -23,6 +23,7 @@ TMenuBar *TVMailApp::initMenuBar(TRect r)
                             *new TMenuItem("Empty ~t~rash...", cmEmptyTrash, kbNoKey, hcNoContext) +
                             newLine() +
                             *new TMenuItem("~F~loyd, the assistant...", cmFloyd, kbF7, hcNoContext, "F7") +
+                            tvContactsItem() +
                             *new TMenuItem("Edit si~g~nature", cmEditSig, kbNoKey, hcNoContext) +
                             tvConfigItem() +
                             *new TMenuItem("Resume dead.~l~etter", cmResumeDead, kbNoKey, hcNoContext) +
@@ -40,7 +41,8 @@ TMenuBar *TVMailApp::initMenuBar(TRect r)
                             *new TMenuItem("S~e~nd to", kbNoKey,
                                            new TMenu(*new TMenuItem("~C~hat (sender and subject)", cmShareChat, kbNoKey, hcNoContext) +
                                                      *new TMenuItem("C~a~lendar", cmToCal, kbNoKey, hcNoContext) +
-                                                     *new TMenuItem("~T~o-do", cmToTodo, kbNoKey, hcNoContext))) +
+                                                     *new TMenuItem("~T~o-do", cmToTodo, kbNoKey, hcNoContext) +
+                                                     *new TMenuItem("Contact~s~ (add the sender)", cmSaveSender, kbNoKey, hcNoContext))) +
                             newLine() +
                             *new TMenuItem("~C~ompose", kbNoKey,
                                            new TMenu(*new TMenuItem("~E~dit draft", cmEditDraft, kbNoKey, hcNoContext, "Enter") +
@@ -1149,6 +1151,28 @@ void TVMailApp::handleEvent(TEvent &e)
     case cmShareChat:
         shareInChat(currentRow());
         break;
+    case cmSaveSender: // Message > Send to > Contacts: the sender goes into the address book on the server
+    {
+        int r = currentRow();
+        if (r < 0)
+            break;
+        const std::string &from = gRows[r].from;
+        std::string name = from;
+        size_t lt = name.find('<');
+        if (lt != std::string::npos && lt > 0)
+            name = name.substr(0, lt);
+        name = stripped(name);
+        // the list row holds the display name only: the address is in the message itself (as for Chat with sender)
+        std::string addr = senderOf(shCapture(backendCommand("raw " + std::to_string(gRows[r].idx) + " " + gMbox))), say;
+        if (addr.empty())
+            notify("This message has no sender address to add.", noteInfo);
+        else
+        {
+            bool ok = contactsAddAddress(name == addr ? std::string() : name, addr, say);
+            notify(ok ? say : "Not added: " + say, ok ? noteInfo : noteWarn);
+        }
+        break;
+    }
     case cmToCal:
         toCalendar(currentRow(), false);
         break;

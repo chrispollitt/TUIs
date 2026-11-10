@@ -46,3 +46,15 @@
 #claude_dir = ~
 # where he keeps what he learns (!learn, !addquote); "none" = nowhere
 #memory = ~/.local/share/tvfloyd/memory.json
+
+[contacts]
+# The address book on the server (Radicale, CardDAV): File > Contacts... adds, edits and deletes entries in tvmail, tvchat
+# and tvcal alike, and tvmail's Address book and To: field use it.  Nothing here is needed if tvcal's [server] is set: the
+# book is then the one beside its calendar (calendar/ replaced by contacts/).  The password is found like tvcal's
+# ($TVCONTACTS_PASS, ~/.mu-tickets, ~/.netrc).  The first of tvmail.conf, tvchat.conf, tvcal.conf with a url wins.
+#url = https://cpbee.cmnet/radicale/chris/contacts/
+#user = chris
+#ca = ~/.config/tvmail/cpbee-ca.pem
+#insecure = no
+# enabled = no switches the address book off for every app
+#enabled = yes

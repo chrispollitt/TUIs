@@ -43,6 +43,7 @@ const ushort cmPurgeMsgs = 2029;    // open the purge dialog
 const ushort cmMoveMsg = 2030;      // move the focused message to another folder
 const ushort cmEmptyTrash = 2031;   // permanently delete everything in the trash folder
 const ushort cmMarkToggle = 2057;   // Message > Mark read/unread: whichever applies to the focused message
+const ushort cmSaveSender = 2058;   // Message > Send to > Contacts: add the sender to the address book on the server
 const ushort cmMarkRead = 2032;     // mark the focused message read
 const ushort cmSaveMsg = 2033;      // save the focused message to a file (.eml)
 const ushort cmSortDate = 2035;     // list order: mailbox order (oldest first)

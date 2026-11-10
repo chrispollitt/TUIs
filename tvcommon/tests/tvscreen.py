@@ -144,7 +144,7 @@ K = dict(
     F6="\x1b[17~", F8="\x1b[19~", F9="\x1b[20~", End="\x1b[F", PgUp="\x1b[5~",
     CtrlEnd="\x1b[1;5F",
     AltF3="\x1b[1;3R", Up="\x1b[A", Down="\x1b[B", PgDn="\x1b[6~",
-    Home="\x1b[H", ShiftTab="\x1b[Z", ShiftDown="\x1b[1;2B",
+    Home="\x1b[H", Delete="\x1b[3~", ShiftTab="\x1b[Z", ShiftDown="\x1b[1;2B",
     CtrlIns="\x1b[2;5~", ShiftIns="\x1b[2;2~", Tab="\t", Enter="\r",
     CtrlN="\x0e", CtrlD="\x04", CtrlR="\x12",
 )
