@@ -13,7 +13,7 @@
 # SAFE:   re-runnable.  Moves itself to DONE/ only when every machine worked.  DRY_RUN=1 shows the plan.
 set -uo pipefail
 
-HERE_HOST=$(hostname -s)
+HERE_HOST=$(hostname | cut -d. -f1)
 CLIENTS="cmdesktop"
 here=$(cd "$(dirname "$0")" && pwd)
 name=$(basename "$0")
