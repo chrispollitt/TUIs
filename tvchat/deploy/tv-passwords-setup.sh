@@ -33,6 +33,12 @@ if [[ -z $HOST && -f $conf ]]; then
   HOST=$(sed -n '/^\[imap\]/,/^\[/{s/^[[:space:]]*host[[:space:]]*=[[:space:]]*\([^ #]*\).*/\1/p}' "$conf" | head -1)
 fi
 HOST=${HOST:-cpbee.cmnet}
+# her own tvmail.conf says whether the mail server's certificate is checked ([imap] verify = false is what the LAN's
+# self-signed one needs, and what tvmail then does with this very password anyway): follow it, so no --insecure is needed  # allowlist secret: prose, no secret
+if [[ -f $conf && $INSECURE == 0 ]]; then
+  v=$(sed -n '/^\[imap\]/,/^\[/{s/^[[:space:]]*verify[[:space:]]*=[[:space:]]*\([^ #]*\).*/\1/p}' "$conf" | head -1)
+  case ${v,,} in false|no|0|off) INSECURE=1; echo "  (your tvmail.conf has [imap] verify = false: the mail server's certificate is not checked here either)" ;; esac
+fi
 if [[ ${DRY_RUN:-0} == 1 ]]; then
   echo "DRY RUN as $me: would ask for your cpbee password (hidden), try IMAPS and Radicale on $HOST, and file tickets for the"  # allowlist secret: prose / format string, no secret
   echo "ones that accept it in ~/.mu-tickets (mode 600, the old file kept). Nothing was changed."
@@ -89,25 +95,38 @@ try:
 except (OSError, ssl.SSLError) as e:
     print("  mail (IMAP on %s): could not be reached (%s)" % (host, e))
 
-# --- Radicale: calendar and contacts, if she has a login
+# --- Radicale: calendar and contacts, if she has a login.  Its host name and certificate are the ones her own tvcal.conf
+# names (the server's certificate is made for the short name, cpbee, and its own file is the CA).
+import configparser
+rhost, rca = "cpbee", None
+cp = configparser.ConfigParser(interpolation=None)
+try:
+    cp.read(os.path.join(home, ".config", "tvcal", "tvcal.conf"), encoding="utf-8")
+    u = urllib.parse.urlparse(cp.get("server", "url", fallback=""))
+    if u.hostname:
+        rhost = u.hostname
+        rport = u.port or rport
+    rca = os.path.expanduser(cp.get("server", "ca", fallback="").strip()) or None
+except (configparser.Error, OSError):
+    pass
 rad_ok = False
 try:
     tok = base64.b64encode(("%s:%s" % (me, pw)).encode("utf-8")).decode("ascii")
-    req = urllib.request.Request("https://%s:%d/%s/" % (host, rport, urllib.parse.quote(me)),
+    req = urllib.request.Request("https://%s:%d/%s/" % (rhost, rport, urllib.parse.quote(me)),
                                  method="PROPFIND", headers={"Authorization": "Basic " + tok, "Depth": "0"})
     try:
-        with urllib.request.urlopen(req, timeout=15, context=ctx_verified()) as r:
+        with urllib.request.urlopen(req, timeout=15, context=ctx_verified(rca)) as r:
             rad_ok = r.status in (200, 207)
     except urllib.error.HTTPError as e:
         rad_ok = False
         print("  calendar / contacts (Radicale on %s:%d): %s" % (
-            host, rport, "no login for %s there, or another password" % me if e.code in (401, 403) else "answered %d" % e.code))
+            rhost, rport, "no login for %s there, or another password" % me if e.code in (401, 403) else "answered %d" % e.code))
     else:
         if rad_ok:
             accepted.append("https")
-            print("  calendar / contacts (Radicale on %s:%d): accepted" % (host, rport))
+            print("  calendar / contacts (Radicale on %s:%d): accepted" % (rhost, rport))
 except (OSError, ssl.SSLError) as e:
-    print("  calendar / contacts (Radicale on %s:%d): could not be reached (%s)" % (host, rport, e))
+    print("  calendar / contacts (Radicale on %s:%d): could not be reached (%s)" % (rhost, rport, e))
 
 for n in notes:
     print(n)
@@ -129,7 +148,7 @@ if short != host:
     hosts.append(short)        # the same machine under the short name
 mine = lambda ln, scheme, h: re.match(r"^%s://%s:[^@]*@%s(:\d+)?/?$" % (re.escape(scheme), re.escape(enc(me)), re.escape(h)), ln.strip())  # allowlist secret: prose / format string, no secret
 for scheme in accepted:
-    for h in hosts:
+    for h in ([rhost] + ([rhost.partition(".")[0]] if "." in rhost else [rhost + ".cmnet"]) if scheme == "https" else hosts):
         port = ":%d" % rport if scheme == "https" else ""
         lines = [ln for ln in lines if not mine(ln, scheme, h)]
         lines.append("%s://%s:%s@%s%s" % (scheme, enc(me), enc(pw), h, port))  # allowlist secret: prose / format string, no secret
