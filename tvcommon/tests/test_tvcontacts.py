@@ -72,6 +72,58 @@ class Fake(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
+    def _body(self):
+        return self.rfile.read(int(self.headers.get("Content-Length") or 0))
+
+    def do_PUT(self):
+        body = self._body()
+        if not self._auth():
+            return
+        srv = self.server
+        name = self.path.rsplit("/", 1)[-1]
+        srv.log.append("PUT " + name)
+        have = srv.cards.get(name)
+        if self.headers.get("If-None-Match") == "*" and have is not None:
+            self.send_response(412)
+            self.end_headers()
+            return
+        im = self.headers.get("If-Match")
+        if im is not None and (have is None or '"%s"' % have[1] != im):
+            self.send_response(412)
+            self.end_headers()
+            return
+        etag = str(int(have[1]) + 1) if have else "1"
+        srv.cards[name] = (body.decode(), etag)
+        self.send_response(204 if have else 201)
+        self.send_header("ETag", '"%s"' % etag)
+        self.end_headers()
+
+    def do_DELETE(self):
+        self._body()
+        if not self._auth():
+            return
+        srv = self.server
+        name = self.path.rsplit("/", 1)[-1]
+        srv.log.append("DELETE " + name)
+        have = srv.cards.get(name)
+        im = self.headers.get("If-Match")
+        if have is not None and im is not None and '"%s"' % have[1] != im:
+            self.send_response(412)
+            self.end_headers()
+            return
+        srv.cards.pop(name, None)
+        self.send_response(204 if have else 404)
+        self.end_headers()
+
+    def do_MKCOL(self):
+        self._body()
+        if not self._auth():
+            return
+        self.server.log.append("MKCOL")
+        self.send_response(201)
+        self.end_headers()
+
+
 class Base(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="tvcontacts-"))
@@ -165,6 +217,72 @@ class TestBook(Base):
         self.assertEqual(b.expand("nosuch"), [])
         self.assertEqual(b.complete(""), [])
 
+    def test_save_a_new_contact_and_a_changed_one_and_delete(self):
+        b = self.book()
+        b.sync()
+        card = tc.Card.new("Carol Carter", ["carol@example.org"])
+        b.save(card)
+        self.assertEqual(card.href, "/c/%s.vcf" % card.uid)
+        self.assertIn("%s.vcf" % card.uid, self.srv.cards)
+        self.assertEqual(card.etag, '"1"')
+        card.set_values("EMAIL", ["carol@work.example", "carol@example.org"], "TYPE=INTERNET")
+        b.save(card)                                                    # If-Match: its ETag
+        self.assertEqual(card.etag, '"2"')
+        fresh = self.book()                                            # what a new start reads from the copy
+        self.assertEqual([c.emails for c in fresh.contacts() if c.name == "Carol Carter"],
+                         [["carol@work.example", "carol@example.org"]])
+        b.delete(card)
+        self.assertNotIn("%s.vcf" % card.uid, self.srv.cards)
+        self.assertEqual([c.name for c in self.book().contacts()], ["Alice Archer", "Bob Baker"])
+
+    def test_a_card_changed_by_someone_else_is_refused_not_overwritten(self):
+        b = self.book()
+        b.sync()
+        alice = next(c for c in b.contacts() if c.name == "Alice Archer")
+        self.srv.cards["alice.vcf"] = (ALICE.replace("Alice Archer", "Alice Other"), "2")       # somebody else
+        alice.set_values("NICKNAME", ["Lissie"])
+        with self.assertRaises(tc.ContactsError) as e:
+            b.save(alice)
+        self.assertIn("changed by someone else", str(e.exception))
+        self.assertIn("Alice Other", self.srv.cards["alice.vcf"][0])
+        with self.assertRaises(tc.ContactsError):
+            b.delete(alice)
+        b.sync()                                                         # reload, then it can be changed
+        alice = next(c for c in b.contacts() if c.name == "Alice Other")
+        alice.set_values("NICKNAME", ["Lissie"])
+        b.save(alice)
+
+    def test_writes_are_refused_while_the_server_is_down(self):
+        b = self.book(timeout=2)
+        b.sync()
+        self.srv.shutdown()
+        self.srv.server_close()
+        with self.assertRaises(tc.ContactsError) as e:
+            b.save(tc.Card.new("Dan", ["dan@example.org"]))
+        self.assertIn("read-only until it is back", str(e.exception))
+        self.assertEqual(len(b.contacts()), 2)                         # reading still works
+
+    def test_make_creates_the_collection(self):
+        self.book().make()
+        self.assertEqual(self.srv.log, ["MKCOL"])
+
+    def test_import_from_mailrc_makes_contacts_and_groups_once(self):
+        rc = self.tmp / "mailrc"
+        rc.write_text("alias mum mum@example.org\nalias dad dad@example.org\ngroup parents mum dad\n"
+                      "alias both a@x.y b@x.y\nalias Bob bob@elsewhere.example\n")
+        b = self.book()
+        b.sync()
+        out = tc.import_mailrc(b, [str(rc)], dry=True)
+        self.assertEqual(len(self.srv.cards), 4)                         # a dry run writes nothing
+        self.assertIn("added group parents (2 members)", out)
+        out = tc.import_mailrc(b, [str(rc)])
+        b.sync()
+        self.assertEqual(sorted(g.name for g in b.groups()), ["Everyone", "Family", "both", "parents"])
+        self.assertEqual(b.expand("parents"), ["mum@example.org", "dad@example.org"])
+        self.assertEqual(sorted(b.expand("both")), ["a@x.y", "b@x.y"])
+        again = tc.import_mailrc(b, [str(rc)])
+        self.assertTrue(all(l.startswith("kept") for l in again), again)   # once only
+
     def test_a_wrong_password_and_a_missing_book_are_said_in_words(self):
         with self.assertRaises(tc.ContactsError) as e:
             self.book(password="wrong").sync()
@@ -190,6 +308,72 @@ class TestBook(Base):
                     os.environ.pop(k, None)
                 else:
                     os.environ[k] = v
+
+
+class TestCommandLine(Base):
+    def run_cli(self, *args):
+        import contextlib
+        import io
+        env = {"TVCONTACTS_URL": self.url, "TVCONTACTS_USER": "chris", "TVCONTACTS_PASS": "secret",    # allowlist secret: test value
+               "XDG_STATE_HOME": str(self.tmp / "st")}
+        old = {k: os.environ.get(k) for k in env}
+        os.environ.update(env)
+        out, err = io.StringIO(), io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                rc = tc.main(list(args))
+        finally:
+            for k, v in old.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        return rc, out.getvalue(), err.getvalue()
+
+    def test_list_save_show_delete(self):
+        rc, out, _ = self.run_cli("list")
+        rows = [l.split("\t") for l in out.splitlines()]
+        self.assertEqual([(r[0], r[2]) for r in rows],
+                         [("c", "Alice Archer"), ("c", "Bob Baker"), ("g", "Everyone"), ("g", "Family")])
+        self.assertEqual(rows[2][4], "Family,Alice Archer")
+        rc, uid, _ = self.run_cli("save", "--name", "Eve Evans", "--nicks", "Evie, E",
+                                  "--emails", "eve@example.org, eve@work.example")
+        self.assertEqual(rc, 0)
+        uid = uid.strip()
+        rc, out, _ = self.run_cli("show", uid)
+        self.assertEqual(out.strip().split("\t")[2:5], ["Eve Evans", "Evie,E", "eve@example.org,eve@work.example"])
+        rc, _, _ = self.run_cli("save", "--uid", uid, "--name", "Eve Evans", "--emails", "eve@new.example")
+        rc, out, _ = self.run_cli("show", uid)
+        self.assertEqual(out.strip().split("\t")[4], "eve@new.example")
+        rc, _, err = self.run_cli("save", "--name", "Bad", "--emails", "not-an-address")
+        self.assertEqual((rc, "not an email address" in err), (1, True))
+        rc, out, _ = self.run_cli("delete", uid)
+        self.assertEqual((rc, out.strip()), (0, "deleted Eve Evans"))
+
+    def test_a_group_by_member_names(self):
+        rc, uid, _ = self.run_cli("save", "--group", "--name", "Pals", "--members", "Alice Archer, bob@example.org")
+        self.assertEqual(rc, 0)
+        rc, out, _ = self.run_cli("show", uid.strip())
+        self.assertEqual(out.strip().split("\t")[:5], ["g", uid.strip(), "Pals", "", "Alice Archer,Bob Baker"])
+        rc, _, err = self.run_cli("save", "--group", "--name", "Nope", "--members", "Zed Zoe")
+        self.assertEqual((rc, "not in the address book: Zed Zoe" in err), (1, True))
+        rc, out, _ = self.run_cli("complete", "pal")
+        self.assertEqual(out.strip(), "Pals (group)\talice@example.org, bob@example.org")
+
+    def test_no_book_configured_says_so(self):
+        import contextlib
+        import io
+        os.environ.pop("TVCONTACTS_URL", None)
+        home = os.environ.get("HOME")
+        os.environ["HOME"] = str(self.tmp / "nohome")
+        err = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(err):
+                rc = tc.main(["list"])
+        finally:
+            os.environ["HOME"] = home
+        self.assertEqual(rc, 2)
+        self.assertIn("no address book is configured", err.getvalue())
 
 
 if __name__ == "__main__":

@@ -260,8 +260,8 @@ class Book(object):
             if e.code in (401, 403):
                 raise ContactsError("the address book server refused the login for %s (password: $TVCONTACTS_PASS, "
                                     "~/.mu-tickets or ~/.netrc)" % (self.user or "(no user)"))
-            if e.code == 404:
-                return 404, b"", {}
+            if e.code in (404, 412):
+                return e.code, b"", {}
             raise ContactsError("the address book server said %d %s" % (e.code, e.reason))
         except (urllib.error.URLError, OSError) as e:
             raise ConnectionError(str(getattr(e, "reason", e)))
@@ -374,6 +374,61 @@ class Book(object):
                 pass
         return ok
 
+    # -- writing (refused while the server cannot be reached: nothing is queued)
+    def _write_call(self, method, url, body=None, headers=None):
+        try:
+            return self.request(method, url, body, headers)
+        except ConnectionError as e:
+            self.offline = True
+            raise ContactsError("the address book server cannot be reached (%s): contacts are read-only until it is back" % e)
+
+    def make(self):
+        """Create the collection (an address book) when it is not there yet."""
+        body = (b'<?xml version="1.0"?><mkcol xmlns="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav"><set><prop>'
+                b'<resourcetype><collection/><C:addressbook/></resourcetype><displayname>Contacts</displayname>'
+                b'</prop></set></mkcol>')
+        st, _, _ = self._write_call("MKCOL", self.url, body, {"Content-Type": "application/xml"})
+        if st not in (200, 201, 204):
+            raise ContactsError("could not create the address book (the server said %d)" % st)
+
+    def _href_for(self, card):
+        return urllib.parse.urlparse(self.url).path + urllib.parse.quote(card.uid or str(uuid.uuid4()), safe="") + ".vcf"
+
+    def save(self, card):
+        """Write a card: a new one (If-None-Match) or a changed one (If-Match its ETag).  A card somebody else changed
+        meanwhile is refused with a ContactsError saying so; sync() and try again."""
+        if not card.uid:
+            card.props.append(["UID", "", str(uuid.uuid4())])
+        new = not card.href
+        href = card.href or self._href_for(card)
+        hdr = {"Content-Type": "text/vcard; charset=utf-8"}
+        if new:
+            hdr["If-None-Match"] = "*"
+        elif card.etag:
+            hdr["If-Match"] = card.etag
+        st, _, rh = self._write_call("PUT", self._abs(urllib.parse.quote(href)), card.text().encode("utf-8"), hdr)
+        if st == 412:
+            raise ContactsError("%s was changed by someone else meanwhile: reload (sync) and try again" % card.name)
+        if st not in (200, 201, 204):
+            raise ContactsError("the address book server did not take %s (it said %d)" % (card.name, st))
+        card.href = href
+        card.etag = rh.get("ETag") or rh.get("Etag") or ""
+        self.cards[href] = card
+        self._save_cache()
+        return card
+
+    def delete(self, card):
+        if not card.href:
+            return
+        hdr = {"If-Match": card.etag} if card.etag else {}
+        st, _, _ = self._write_call("DELETE", self._abs(urllib.parse.quote(card.href)), None, hdr)
+        if st == 412:
+            raise ContactsError("%s was changed by someone else meanwhile: reload (sync) and try again" % card.name)
+        if st not in (200, 204, 404):
+            raise ContactsError("the address book server did not delete %s (it said %d)" % (card.name, st))
+        self.cards.pop(card.href, None)
+        self._save_cache()
+
     # -- asking
     def contacts(self):
         return sorted((c for c in self.cards.values() if not c.is_group), key=lambda c: c.name.lower())
@@ -424,3 +479,230 @@ class Book(object):
                     if a not in out:
                         out.append(a)
         return out
+
+
+# ------------------------------------------------------------ configuration ---
+def _conf(app):
+    import configparser
+    c = configparser.ConfigParser(interpolation=None)
+    try:
+        c.read(os.path.expanduser("~/.config/%s/%s.conf" % (app, app)), encoding="utf-8")
+    except configparser.Error:
+        pass
+    return c
+
+
+def default_book(apps=("tvmail", "tvchat", "tvcal")):
+    """The Book the person's configuration names, or None.  The first of tvmail.conf, tvchat.conf, tvcal.conf with a
+    [contacts] url (user, ca, insecure beside it) wins; failing that, the one beside tvcal's calendar:
+    [server] url of tvcal.conf with its last part (calendar) replaced by contacts.  [contacts] enabled = no switches it off.
+    $TVCONTACTS_URL / $TVCONTACTS_USER name one directly."""
+    if os.environ.get("TVCONTACTS_URL"):
+        return Book(os.environ["TVCONTACTS_URL"], os.environ.get("TVCONTACTS_USER", ""),
+                    ca=os.environ.get("TVCONTACTS_CA", ""), insecure=bool(os.environ.get("TVCONTACTS_INSECURE")))
+    yes = ("yes", "true", "1", "y", "on")
+    for app in apps:
+        c = _conf(app)
+        if c.get("contacts", "enabled", fallback="yes").strip().lower() in ("no", "false", "0", "off"):
+            return None
+        url = c.get("contacts", "url", fallback="").strip()
+        if url:
+            return Book(url, c.get("contacts", "user", fallback="").strip(), ca=c.get("contacts", "ca", fallback="").strip(),
+                        insecure=c.get("contacts", "insecure", fallback="no").strip().lower() in yes)
+    cal = _conf("tvcal")
+    cu = cal.get("server", "url", fallback="").strip().rstrip("/")
+    if cu and cal.get("server", "mode", fallback="").strip().lower() != "local":
+        return Book(cu.rpartition("/")[0] + "/contacts/", cal.get("server", "user", fallback="").strip(),
+                    ca=cal.get("server", "ca", fallback="").strip(),
+                    insecure=cal.get("server", "insecure", fallback="no").strip().lower() in yes)
+    return None
+
+
+# ------------------------------------------------------------- command line ---
+def _clean(v):
+    return " ".join(str(v).replace("\t", " ").split())
+
+
+def _row(card, book):
+    kind = "g" if card.is_group else "c"
+    names = []
+    if card.is_group:
+        for uid in card.members:
+            m = book.by_uid(uid)
+            names.append(m.name if m is not None else uid)
+    return "\t".join([kind, card.uid, _clean(card.name), _clean(",".join(card.nicknames)),
+                      _clean(",".join(names if card.is_group else card.emails)), _clean(card.get("NOTE")[:60])])
+
+
+def _split(text):
+    return [x.strip() for x in re.split(r"[,;\n]", text or "") if x.strip()]
+
+
+def _member_uids(book, names):
+    """The uids for member names or addresses; a ContactsError naming those not in the book."""
+    uids, missing = [], []
+    for n in names:
+        found = None
+        for c in book.cards.values():
+            if c.name.lower() == n.lower() or n.lower() in [e.lower() for e in c.emails] or n.lower() in [x.lower() for x in c.nicknames]:
+                found = c
+                break
+        if found is None:
+            missing.append(n)
+        else:
+            uids.append(found.uid)
+    if missing:
+        raise ContactsError("not in the address book: %s" % ", ".join(missing))
+    return uids
+
+
+def import_mailrc(book, paths=None, dry=False):
+    """One-off: each ~/.mailrc / /etc/mailrc alias with ONE address becomes a contact, each alias or group with several (or
+    naming other aliases) a group.  Entries the book already has by name are left alone.  Returns the lines to report."""
+    import shlex
+    paths = paths or ["/etc/mailrc", os.path.expanduser("~/.mailrc")]
+    raw = {}
+    for f in paths:
+        try:
+            with open(f, encoding="utf-8", errors="replace") as fh:
+                for ln in fh:
+                    head = ln.strip().split(None, 1)
+                    if len(head) == 2 and head[0] in ("alias", "group"):
+                        try:
+                            toks = shlex.split(head[1])
+                        except ValueError:
+                            continue
+                        if len(toks) >= 2:
+                            raw[toks[0]] = toks[1:]
+        except OSError:
+            continue
+    have = {c.name.lower() for c in book.cards.values()}
+    out = []
+    singles = {k: v[0] for k, v in raw.items() if len(v) == 1 and "@" in v[0] and v[0] not in raw}
+    for name, addr in sorted(singles.items()):
+        if name.lower() in have:
+            out.append("kept  %s (already there)" % name)
+            continue
+        out.append("added %s <%s>" % (name, addr))
+        if not dry:
+            book.save(Card.new(name, [addr]))
+            have.add(name.lower())
+    for name, members in sorted(raw.items()):
+        if name in singles:
+            continue
+        if name.lower() in have:
+            out.append("kept  group %s (already there)" % name)
+            continue
+        uids = []
+        for m in members:
+            target = m if m in raw else None
+            if target is not None and target in singles:
+                m = singles[target]
+            card = None
+            for c in book.cards.values():
+                if m in c.emails or c.name == m:
+                    card = c
+                    break
+            if card is None and "@" in m and m not in raw:
+                card = Card.new(m.split("@")[0], [m])
+                out.append("added %s <%s>" % (card.name, m))
+                if not dry:
+                    book.save(card)
+            if card is not None and card.uid:
+                uids.append(card.uid)
+        out.append("added group %s (%d member%s)" % (name, len(uids), "" if len(uids) == 1 else "s"))
+        if not dry:
+            book.save(Card.new(name, group_members=uids))
+            have.add(name.lower())
+    return out
+
+
+def main(argv=None):
+    import argparse
+    import sys
+    ap = argparse.ArgumentParser(prog="tvcontacts", description="the TUI suite's address book (Radicale, CardDAV)")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("sync", help="bring the local copy up to date")
+    sub.add_parser("list", help="TSV: kind(c/g) uid name nicknames emails-or-members note")
+    sub.add_parser("init", help="create the address book on the server if it is not there")
+    p = sub.add_parser("show"); p.add_argument("uid")
+    p = sub.add_parser("delete"); p.add_argument("uid")
+    p = sub.add_parser("save", help="add or change a contact (or a group with --group); prints its uid")
+    p.add_argument("--uid", default="")
+    p.add_argument("--name", required=True)
+    p.add_argument("--nicks", default="")
+    p.add_argument("--emails", default="")
+    p.add_argument("--group", action="store_true")
+    p.add_argument("--members", default="", help="a group's members: names, nicknames or addresses, comma separated")
+    p = sub.add_parser("complete"); p.add_argument("text")
+    p = sub.add_parser("import-mailrc"); p.add_argument("--dry-run", action="store_true")
+    a = ap.parse_args(argv)
+    book = default_book()
+    if book is None:
+        sys.stderr.write("no address book is configured: [contacts] url in tvmail.conf, or tvcal's [server] url\n")
+        return 2
+    try:
+        if a.cmd == "init":
+            if not book.sync():
+                raise ContactsError("the address book server cannot be reached")
+            print("the address book is there")
+            return 0
+        ok = book.refresh(0 if a.cmd in ("sync", "save", "delete", "import-mailrc") else 30)
+        if not ok and a.cmd in ("save", "delete", "import-mailrc"):
+            raise ContactsError("the address book server cannot be reached: contacts are read-only until it is back")
+        if a.cmd == "sync":
+            print("offline: using the copy" if book.offline else "up to date")
+        elif a.cmd == "list":
+            for c in sorted(book.cards.values(), key=lambda c: (c.is_group, c.name.lower())):
+                print(_row(c, book))
+            if book.offline:
+                sys.stderr.write("offline: this is the copy from the last time the server answered\n")
+        elif a.cmd == "show":
+            c = book.by_uid(a.uid)
+            if c is None:
+                raise ContactsError("no such entry")
+            print(_row(c, book))
+        elif a.cmd == "complete":
+            for name, addr in book.complete(a.text):
+                print("%s\t%s" % (_clean(name), _clean(addr)))
+        elif a.cmd == "delete":
+            c = book.by_uid(a.uid)
+            if c is None:
+                raise ContactsError("no such entry")
+            book.delete(c)
+            print("deleted %s" % c.name)
+        elif a.cmd == "import-mailrc":
+            for ln in import_mailrc(book, dry=a.dry_run):
+                print(ln)
+        elif a.cmd == "save":
+            card = book.by_uid(a.uid) if a.uid else None
+            if a.uid and card is None:
+                raise ContactsError("no such entry")
+            if card is None:
+                card = Card.new(a.name, group_members=[] if a.group else None)
+            card.set_values("FN", [a.name])
+            card.props = [pr for pr in card.props if pr[0] != "N" or not a.name]
+            if a.group:
+                if not card.is_group:
+                    card.props.append(["KIND", "", "group"])
+                card.props = [pr for pr in card.props if pr[0] != "MEMBER"] + \
+                    [["MEMBER", "", "urn:uuid:" + u] for u in _member_uids(book, _split(a.members))]
+            else:
+                bad = [e for e in _split(a.emails) if "@" not in e]
+                if bad:
+                    raise ContactsError("not an email address: %s" % ", ".join(bad))
+                card.props = [pr for pr in card.props if pr[0] != "EMAIL"] + \
+                    [["EMAIL", "TYPE=INTERNET", _esc(e)] for e in _split(a.emails)]
+            card.props = [pr for pr in card.props if pr[0] != "NICKNAME"]
+            if _split(a.nicks):
+                card.props.append(["NICKNAME", "", ",".join(_esc(n) for n in _split(a.nicks))])
+            book.save(card)
+            print(card.uid)
+    except ContactsError as e:
+        sys.stderr.write("%s\n" % e)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

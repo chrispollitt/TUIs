@@ -259,36 +259,15 @@ def _load_contacts():
 
 
 def _contact_book():
-    """The address book on the server, or None when there is none: [contacts] url, user, ca, insecure in tvmail.conf; with
-    no url, the one beside tvcal's calendar ([server] url of tvcal.conf, calendar/ replaced by contacts/).
-    [contacts] enabled = no (or $TVMAIL_NO_CONTACTS) switches it off."""
+    """The address book on the server, or None when there is none (tvcontacts.default_book: [contacts] url in tvmail.conf,
+    tvchat.conf or tvcal.conf, else the one beside tvcal's calendar).  $TVMAIL_NO_CONTACTS switches it off."""
     if os.environ.get("TVMAIL_NO_CONTACTS"):
-        return None
-    c = _conf()
-    if c.get("contacts", "enabled", fallback="yes").strip().lower() in ("no", "false", "0", "off"):
         return None
     tvc = _load_contacts()
     if tvc is None:
         return None
-    url = c.get("contacts", "url", fallback="").strip()
-    user = c.get("contacts", "user", fallback="").strip()
-    ca = c.get("contacts", "ca", fallback="").strip()
-    insecure = c.get("contacts", "insecure", fallback="no").strip().lower() in ("yes", "true", "1")
-    if not url:
-        cal = configparser.ConfigParser()
-        try:
-            cal.read(os.path.expanduser("~/.config/tvcal/tvcal.conf"))
-        except configparser.Error:
-            return None
-        cu = cal.get("server", "url", fallback="").strip().rstrip("/")
-        if not cu or cal.get("server", "mode", fallback="").strip().lower() == "local":
-            return None
-        url = cu.rpartition("/")[0] + "/contacts/"
-        user = user or cal.get("server", "user", fallback="").strip()
-        ca = ca or cal.get("server", "ca", fallback="").strip()
-        insecure = insecure or cal.get("server", "insecure", fallback="no").strip().lower() in ("yes", "true", "1")
     try:
-        return tvc.Book(url, user, ca=ca, insecure=insecure)
+        return tvc.default_book()
     except Exception:
         _log.debug("address book not usable", exc_info=True)
         return None
