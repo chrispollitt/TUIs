@@ -63,3 +63,10 @@ Pinned ideas (Chris, Nov 2, 2026; not started, not designed)
    with one memory and Claude from the server.  Suite rule (2026-11-04): every app (tvmail, tvchat, tvcal)
    has a local Floyd as the fall-back AND a link to the master on cpbee when reachable ([floyd] server = ...;
    master first, local when cpbee is out of reach).  Same item as tvcal/TO-DO.txt 15: decide the transport once, in tvcommon/py/tvfloyd.py.
+30 tvmail sends on port 587 WITH a login (decision 2026-11-10, POSIX/net-utils/TO-DO.txt phase 1).  Point [smtp] at
+   host = cpbee, port = 587, starttls = true, auth = true, user = chris; the password comes from the smtp:// ticket
+   (tvmail-backend _cred already asks for the scheme smtp, then *).  Port 25 stays for LAN relay only.  Check: a mail
+   from cmlaptop to an OUTSIDE address leaves as chris@cpbee.cmnet (the lan-canonical rule), and the `from =` override in
+   tvmail.conf still wins when it is set.  Port 587 presents its own self-signed certificate (CN=cpbee.cmnet): [smtp]
+   verify = false today; `auth ca` (phase 3) will hand out a CA file to pin instead.  Mostly configuration; look at the
+   code path once for the smtp ticket lookup under both host spellings (cpbee, cpbee.cmnet).
