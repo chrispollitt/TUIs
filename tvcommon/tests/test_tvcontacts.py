@@ -445,6 +445,29 @@ class TestLibrary(Base):
         with self.assertRaises(tc.ContactsError):
             lib.save(tc.Card.new("X", ["x@y.z"]), "nosuch")
 
+    def test_a_group_in_the_shared_book_gets_its_members_into_that_book(self):
+        lib = self.lib()
+        lib.refresh(0)
+        bob = next(c for c in lib.contacts() if c.name == "Bob Baker" and c.book == "mine")
+        g = tc.Card.new("Clan", group_members=[bob.uid])
+        lib.save(g, "family")
+        self.assertEqual(g.book, "family")
+        copies = [k for k, v in self.srv2.cards.items() if "bob@example.org" in v[0]]
+        self.assertEqual(len(copies), 1)                                    # copied into the family book
+        # somebody who has ONLY the family book can use the group
+        only = tc.Library([tc.Book(self.url2, "chris", cache=str(self.tmp / "c3"), password="secret", label="family")])   # allowlist secret: test value
+        only.refresh(0)
+        self.assertEqual(only.expand("Clan"), ["bob@example.org"])
+        # saving it again reuses the copy (a card with that address is there already)
+        lib.refresh(0)
+        g2 = next(c for c in lib.groups() if c.name == "Clan")
+        lib.save(g2)
+        self.assertEqual(len([k for k, v in self.srv2.cards.items() if "bob@example.org" in v[0]]), 1)
+        # a group in MY book keeps pointing at the cards where they are
+        mine = tc.Card.new("Mine", group_members=[bob.uid])
+        lib.save(mine)
+        self.assertEqual(len([k for k, v in self.srv2.cards.items() if "bob@example.org" in v[0]]), 1)
+
     def test_the_shared_book_being_down_leaves_my_own(self):
         lib = self.lib()
         lib.refresh(0)

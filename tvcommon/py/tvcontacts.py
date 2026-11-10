@@ -575,7 +575,35 @@ class Library(_Asking):
                 b.sync()
 
     def save(self, card, label=None):
-        return self.book_of(card.book or label or self.books[0].label).save(card)
+        book = self.book_of(card.book or label or self.books[0].label)
+        if card.is_group and book is not self.books[0]:
+            self._own_members(card, book)
+        return book.save(card)
+
+    def _own_members(self, card, book):
+        """A group in a shared book is read by everyone who reads that book, and they have not got YOUR contacts: so its
+        members must live in that same book.  A member that lives in another book is copied into this one (a card with an
+        address in common is reused, not copied twice) and the group points at the copy."""
+        props = []
+        for p in card.props:
+            if p[0] != "MEMBER":
+                props.append(p)
+                continue
+            uid = _unesc(p[2]).strip()
+            uid = uid[9:] if uid.lower().startswith("urn:uuid:") else uid
+            m = self.by_uid(uid)
+            if m is None or not m.book or m.book == book.label or m.is_group:
+                props.append(p)
+                continue
+            mine = set(e.lower() for e in m.emails)
+            twin = next((c for c in book.cards.values() if not c.is_group and mine & set(e.lower() for e in c.emails)), None)
+            if twin is None:
+                twin = Card.new(m.name, m.emails)
+                nick = [pr for pr in m.props if pr[0] == "NICKNAME"]
+                twin.props += [list(pr) for pr in nick]
+                book.save(twin)
+            props.append(["MEMBER", "", "urn:uuid:" + twin.uid])
+        card.props = props
 
     def delete(self, card):
         self.book_of(card.book or self.books[0].label).delete(card)
