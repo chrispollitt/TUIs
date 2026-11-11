@@ -711,6 +711,40 @@ def group_name_in_to_expands_on_send(opts):
     return tv
 
 
+FIXTURE_UNORDERED = "".join([
+    _msg("Late <late@example.com>", "Mon, 01 Sep 2026 12:00:00 -0700", "SUBJ-LATE", "l"),
+    _msg("Early <early@example.com>", "Mon, 01 Sep 2026 08:00:00 -0700", "SUBJ-EARLY", "e"),
+    _msg("Middle <mid@example.com>", "Mon, 01 Sep 2026 10:00:00 -0700", "SUBJ-MID", "m")])
+
+
+@case()
+def sort_by_date_is_date_order_not_mailbox_order(opts):
+    # issue #2 (BUGS.md #13): mail that was moved or pulled in lands out of date order in the mbox; View > Sort by date
+    # (the default) must still list it oldest first, and a second choice of it reverses the order
+    tv = Tv(opts, fixture=FIXTURE_UNORDERED)
+    c = Case(tv)
+    c.check(tv.wait("SUBJ-MID", 15), "tvmail never showed the fixture folder")
+    ys = {s: tv.find(s)[0] for s in ("SUBJ-EARLY", "SUBJ-MID", "SUBJ-LATE") if tv.find(s)}
+    c.check(len(ys) == 3 and ys["SUBJ-EARLY"] < ys["SUBJ-MID"] < ys["SUBJ-LATE"],
+            "the list is not in date order (mailbox order is late, early, middle): %r" % ys)
+    c.check(tv.wait(lambda: "Subject: SUBJ-LATE" in tv.text(), 5), "the folder did not open on the newest message by date")
+    return tv
+
+
+@case()
+def a_failing_list_is_an_error_not_an_empty_folder(opts):
+    # issue #10 (BUGS.md #25): the backend's error for `list` used to be dropped, so a folder that could not be read looked
+    # empty.  Here the inbox is a directory, which the backend cannot read.
+    def setup(t):
+        (t.tmp / "notamailbox").mkdir()
+        t.env["MAIL"] = str(t.tmp / "notamailbox")
+    tv = Tv(opts, setup=setup)
+    c = Case(tv)
+    c.check(tv.wait("Cannot list", 15), "no error toast: a folder that cannot be listed looks empty")
+    c.check(tv.has("Is a directory") or tv.has("directory"), "the toast does not say what went wrong")
+    return tv
+
+
 @case()
 def send_to_calendar_and_todo_leave_requests_for_tvcal(opts):
     # Message > Send to > Calendar / To-do: a request file for tvcal (which asks the person before adding anything).
