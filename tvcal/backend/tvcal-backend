@@ -378,12 +378,15 @@ def trigger_minutes(v):
 
 
 # ------------------------------------------------------------ the model ---
+KINDS = ("VEVENT", "VTODO", "VJOURNAL")      # what the calendar holds: events, to-dos, notes
+
+
 class Item:
-    """Event or to-do view of a Comp."""
+    """Event, to-do or note (a VJOURNAL) view of a Comp."""
 
     def __init__(self, comp):
         self.c = comp
-        self.kind = "event" if comp.name == "VEVENT" else "todo"
+        self.kind = {"VEVENT": "event", "VTODO": "todo"}.get(comp.name, "note")
         self.uid = comp.text("UID")
         self.summary = comp.text("SUMMARY")
         self.notes = comp.text("DESCRIPTION")
@@ -442,6 +445,16 @@ class Item:
             w = parse_ics_when(["UNTIL", "", r["UNTIL"]])
             until = w[0].isoformat() if w else ""
         return freq, int(r.get("INTERVAL", "1") or 1), until
+
+    # -- notes
+    def read_note(self):
+        c = self.c
+        w = parse_ics_when(c.get("DTSTART"))
+        self.date = w[0] if w else None
+        m = parse_ics_when(c.get("LAST-MODIFIED")) or parse_ics_when(c.get("DTSTAMP"))
+        self.modified = m[0] if m else self.date
+        self.cats = c.text("CATEGORIES")
+        return self
 
     # -- to-dos
     def read_todo(self):
@@ -751,11 +764,11 @@ class Store:
             self.root = Comp("VCALENDAR")
             self.root.props = [["VERSION", "", "2.0"], ["PRODID", "", "-//chrispollitt//tvcal %s//EN" % __version__]]
         if self.remote:     # what the server held, to send only what changed
-            self.before = {k.text("UID"): comp_text(k) for k in self.root.kids if k.name in ("VEVENT", "VTODO")}
+            self.before = {k.text("UID"): comp_text(k) for k in self.root.kids if k.name in KINDS}
 
     def save(self):
         if self.remote:
-            now = {k.text("UID"): k for k in self.root.kids if k.name in ("VEVENT", "VTODO")}
+            now = {k.text("UID"): k for k in self.root.kids if k.name in KINDS}
             for uid, k in now.items():
                 if self.before.get(uid) != comp_text(k):
                     self.remote.put(uid, k)
@@ -769,7 +782,7 @@ class Store:
 
     def items(self, kind=None):
         for k in self.root.kids:
-            if k.name in ("VEVENT", "VTODO"):
+            if k.name in KINDS:
                 it = Item(k)
                 if kind is None or it.kind == kind:
                     yield it
@@ -778,16 +791,16 @@ class Store:
         for it in self.items():
             if it.uid == uid:
                 return it
-        raise UserError("no event or to-do %s" % uid)
+        raise UserError("no event, to-do or note %s" % uid)
 
     def add(self, comp):
         self.root.kids.append(comp)
 
     def remove(self, uid):
         n = len(self.root.kids)
-        self.root.kids = [k for k in self.root.kids if not (k.name in ("VEVENT", "VTODO") and k.text("UID") == uid)]
+        self.root.kids = [k for k in self.root.kids if not (k.name in KINDS and k.text("UID") == uid)]
         if len(self.root.kids) == n:
-            raise UserError("no event or to-do %s" % uid)
+            raise UserError("no event, to-do or note %s" % uid)
 
 
 def stamp():
@@ -913,6 +926,26 @@ def apply_todo(c, o, creating):
     c.set("LAST-MODIFIED", stamp())
 
 
+def apply_note(c, o, creating):
+    """Set the VJOURNAL c from the options o.  A note has a title, free text and categories; without a title
+    the first line of the text is the title."""
+    title = o.summary.strip() if o.summary is not None else c.text("SUMMARY")
+    text = o.notes.strip() if o.notes is not None else c.text("DESCRIPTION")
+    if not title and text:
+        title = text.splitlines()[0].strip()[:60]
+    if not title:
+        raise UserError("a note needs a title or some text")
+    c.set("SUMMARY", esc(title))
+    if o.notes is not None:
+        c.set("DESCRIPTION", esc(text) if text else None)
+    if o.cats is not None:
+        c.set("CATEGORIES", ",".join(esc(x.strip()) for x in o.cats.split(",") if x.strip()) or None)
+    if creating:
+        c.set("DTSTART", ics_date(today()), ";VALUE=DATE")
+        c.set("CLASS", "PRIVATE")
+    c.set("LAST-MODIFIED", stamp())
+
+
 # -------------------------------------------------------------- output ---
 def field(s):
     return str(s).replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n").replace("\r", "\\r")
@@ -973,6 +1006,9 @@ def cmd_show(a):
         rep, interval, until = ev.repeat_fields()
         row("event", ev.uid, ev.summary, ev.location, ev.date.isoformat() if ev.date else "", ev.start, ev.end,
             ev.days, rep, interval, until, "" if ev.remind is None else ev.remind, ev.notes)
+    elif it.kind == "note":
+        n = it.read_note()
+        row("note", n.uid, n.summary, n.modified.isoformat() if n.modified else "", n.cats, n.notes)
     else:
         t = it.read_todo()
         row("todo", t.uid, t.summary, t.due.isoformat() if t.due else "", t.prio, "done" if t.done else "open",
@@ -1000,7 +1036,7 @@ def cmd_set_event(a):
     s = Store()
     it = s.find(a.uid)
     if it.kind != "event":
-        raise UserError("%s is a to-do" % a.uid)
+        raise UserError("%s is a %s, not an event" % (a.uid, it.kind))
     a.summary = " ".join(a.words) if a.words else None
     apply_event(it.c, a, False)
     s.save()
@@ -1032,7 +1068,7 @@ def cmd_set_todo(a):
     s = Store()
     it = s.find(a.uid)
     if it.kind != "todo":
-        raise UserError("%s is an event" % a.uid)
+        raise UserError("%s is %s, not a to-do" % (a.uid, "an event" if it.kind == "event" else "a note"))
     apply_todo(it.c, a, False)
     s.save()
     return 0
@@ -1042,7 +1078,7 @@ def cmd_done(a):
     s = Store()
     it = s.find(a.uid)
     if it.kind != "todo":
-        raise UserError("%s is an event" % a.uid)
+        raise UserError("%s is %s, not a to-do" % (a.uid, "an event" if it.kind == "event" else "a note"))
     c = it.c
     if a.undo:
         c.set("STATUS", "NEEDS-ACTION")
@@ -1053,6 +1089,41 @@ def cmd_done(a):
         c.set("COMPLETED", stamp())
         c.set("PERCENT-COMPLETE", "100")
     c.set("LAST-MODIFIED", stamp())
+    s.save()
+    return 0
+
+
+def note_row(n):
+    first = " ".join(n.notes.split())
+    return (n.modified.isoformat() if n.modified else "", n.summary, n.cats, first[:80])
+
+
+def cmd_notes(a):
+    """notes: newest first - uid, changed, title, categories, the start of the text."""
+    its = [i.read_note() for i in Store().items("note")]
+    its.sort(key=lambda n: (n.modified.isoformat() if n.modified else "", n.summary.lower()), reverse=True)
+    for n in its:
+        row(n.uid, *note_row(n))
+    return 0
+
+
+def cmd_add_note(a):
+    a.summary = " ".join(a.words) if a.words else None
+    s = Store()
+    c = new_comp("VJOURNAL")
+    apply_note(c, a, True)
+    s.add(c)
+    s.save()
+    sys.stdout.write(c.text("UID") + "\n")
+    return 0
+
+
+def cmd_set_note(a):
+    s = Store()
+    it = s.find(a.uid)
+    if it.kind != "note":
+        raise UserError("%s is %s, not a note" % (a.uid, "an event" if it.kind == "event" else "a to-do"))
+    apply_note(it.c, a, False)
     s.save()
     return 0
 
@@ -1078,6 +1149,10 @@ def cmd_find(a):
         td = it.read_todo()
         if needle in (td.summary + "\n" + td.notes + "\n" + td.cats).lower():
             row("todo", td.uid, *todo_row(td))
+    for it in s.items("note"):
+        n = it.read_note()
+        if needle in (n.summary + "\n" + n.notes + "\n" + n.cats).lower():
+            row("note", n.uid, *note_row(n))
     return 0
 
 
@@ -1091,6 +1166,8 @@ def describe(it, date=None):
             s += " " + ev.start + ("-" + ev.end if ev.end else "")
         s = "%s - %s" % (ev.summary, s)
         return s + (" (%s)" % ev.location if ev.location else "")
+    if it.kind == "note":
+        return "note: %s" % it.summary
     t = it.read_todo()
     return "to do: %s%s" % (t.summary, " (due %s)" % t.due.isoformat() if t.due else "")
 
@@ -1159,17 +1236,17 @@ def cmd_ics(a):
 
 
 def merge_into(store, comps):
-    """Add VEVENT/VTODO comps (an update to a uid already here replaces it); count."""
+    """Add VEVENT/VTODO/VJOURNAL comps (an update to a uid already here replaces it); count."""
     n = 0
     for c in comps:
-        if c.name not in ("VEVENT", "VTODO"):
+        if c.name not in KINDS:
             continue
         uid = c.text("UID")
         if not uid:
             c.set("UID", new_uid())
         else:
             store.root.kids = [k for k in store.root.kids
-                               if not (k.name in ("VEVENT", "VTODO") and k.text("UID") == uid)]
+                               if not (k.name in KINDS and k.text("UID") == uid)]
         if not c.get("DTSTAMP"):
             c.set("DTSTAMP", stamp())
         if c.name == "VEVENT" and Item(c).read_event().date is None:
@@ -1183,8 +1260,8 @@ def comps_of(roots):
     out = []
     for r in roots:
         if r.name == "VCALENDAR":
-            out.extend(k for k in r.kids if k.name in ("VEVENT", "VTODO"))
-        elif r.name in ("VEVENT", "VTODO"):
+            out.extend(k for k in r.kids if k.name in KINDS)
+        elif r.name in KINDS:
             out.append(r)
     return out
 
@@ -1668,13 +1745,32 @@ def build_parser():
     sub = ap.add_subparsers(dest="cmd", parser_class=_ArgParser)
     sub.required = True
 
+    def unx(v):         # --notesx: the text with \n for a new line and \\ for a backslash (a request is one line)
+        out, i = [], 0
+        while i < len(v):
+            if v[i] == "\\" and i + 1 < len(v) and v[i + 1] in "n\\":
+                out.append("\n" if v[i + 1] == "n" else "\\")
+                i += 2
+            else:
+                out.append(v[i])
+                i += 1
+        return "".join(out)
+
     def ev_opts(p):
         for o in ("date", "start", "end", "days", "location", "notes", "repeat", "interval", "until", "remind"):
             p.add_argument("--" + o, default=None)
+        p.add_argument("--notesx", dest="notes", default=None, type=unx)
 
     def todo_opts(p):
         for o in ("due", "prio", "cats", "notes"):
             p.add_argument("--" + o, default=None)
+        p.add_argument("--notesx", dest="notes", default=None, type=unx)
+
+    def note_opts(p):
+        for o in ("cats", "notes"):
+            p.add_argument("--" + o, default=None)
+        p.add_argument("--notesx", dest="notes", default=None, type=unx)
+        p.add_argument("--summary", default=None)
 
     def add(name, fn, *args, **kw):
         p = sub.add_parser(name)
@@ -1701,6 +1797,12 @@ def build_parser():
     p = add("set-todo", cmd_set_todo, "uid")
     todo_opts(p)
     p.add_argument("--summary", default=None)
+    add("notes", cmd_notes)
+    p = add("add-note", cmd_add_note)
+    note_opts(p)
+    p.add_argument("words", nargs="*")
+    p = add("set-note", cmd_set_note, "uid")
+    note_opts(p)
     p = add("done", cmd_done, "uid")
     p.add_argument("--undo", action="store_true")
     add("rm", cmd_rm, "uid")
@@ -1729,7 +1831,7 @@ def build_parser():
 
 
 _COMMANDS = frozenset(("serve", "ping", "range", "show", "add-event", "set-event", "todos", "add-todo",
-                       "set-todo", "done", "rm", "find", "due", "describe", "ics", "import", "mail-event",
+                       "set-todo", "notes", "add-note", "set-note", "done", "rm", "find", "due", "describe", "ics", "import", "mail-event",
                        "has-tvmail", "requests", "pending", "pending-get", "pending-drop", "check-config",
                        "settings", "norm-date", "floyd", "floyd-poll"))
 

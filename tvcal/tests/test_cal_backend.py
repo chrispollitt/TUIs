@@ -303,6 +303,89 @@ class Verbs(Env):
         self.assertIn("warning: [cal] what", p.stdout)
 
 
+class Notes(Env):
+    """Notes are VJOURNALs: a title, free text of several lines, categories."""
+
+    def test_note_lifecycle(self):
+        uid = self.run_be("add-note", "--cats", "home,ideas", "--notesx", "line one\\nline two", "Shopping").stdout.strip()
+        row = self.lines("notes")[0]
+        self.assertEqual([row[0], row[2], row[3]], [uid, "Shopping", "home,ideas"])
+        self.assertEqual(row[4], "line one line two")                   # the list shows the text on one line
+        show = self.run_be("show", uid).stdout.rstrip("\n").split("\t")
+        self.assertEqual(show[0], "note")
+        self.assertEqual(show[2], "Shopping")
+        self.assertEqual(show[5], "line one\\nline two")                  # the whole text, a new line as \\n
+        self.run_be("set-note", uid, "--summary", "Groceries", "--notesx", "a\\\\b\\nc")
+        show = self.run_be("show", uid).stdout.rstrip("\n").split("\t")
+        self.assertEqual(show[2], "Groceries")
+        self.assertEqual(show[5], "a\\\\b\\nc")                           # a backslash stays one, a new line stays one
+        self.assertEqual(show[4], "home,ideas")                        # what was not named is left alone
+        self.run_be("rm", uid)
+        self.assertEqual(self.lines("notes"), [])
+
+    def test_the_first_line_is_the_title_when_there_is_none(self):
+        self.run_be("add-note", "--notesx", "Call Ann about the roof\\nbefore Friday")
+        self.assertEqual(self.lines("notes")[0][2], "Call Ann about the roof")
+        p = self.run_be("add-note", check=False)
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("title or some text", p.stderr)
+
+    def test_the_file_is_standard_icalendar(self):
+        self.run_be("add-note", "--notesx", "x\\ny", "Plain")
+        text = open(self.env["TVCAL_DATA"]).read()
+        self.assertIn("BEGIN:VJOURNAL", text)
+        self.assertIn("SUMMARY:Plain", text)
+        self.assertIn("DESCRIPTION:x\\ny", text)
+        self.assertIn("DTSTART;VALUE=DATE:", text)
+
+    def test_notes_are_not_events_or_to_dos(self):
+        uid = self.run_be("add-note", "Just a note").stdout.strip()
+        self.run_be("add-event", "--date", "2026-11-05", "An event")
+        self.run_be("add-todo", "A to-do")
+        self.assertEqual(len(self.lines("todos")), 1)
+        self.assertEqual(len(self.lines("range", "2026-01-01", "2026-12-31")), 1)
+        for verb in (["set-event", uid, "x"], ["set-todo", uid, "--summary", "x"], ["done", uid]):
+            p = self.run_be(*verb, check=False)
+            self.assertEqual(p.returncode, 1, verb)
+            self.assertIn("note", p.stderr)
+        todo = self.lines("todos")[0][0]
+        p = self.run_be("set-note", todo, "--summary", "x", check=False)
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("not a note", p.stderr)
+
+    def test_find_looks_in_notes(self):
+        self.run_be("add-note", "--notesx", "the plumber is Mr Gray", "House")
+        r = self.lines("find", "plumber")
+        self.assertEqual([x[0] for x in r], ["note"])
+        self.assertEqual(r[0][3], "House")
+
+    def test_newest_first(self):
+        old = self.run_be("add-note", "Old one").stdout.strip()
+        new = self.run_be("add-note", "New one").stdout.strip()
+        with open(self.env["TVCAL_DATA"]) as fh:
+            text = fh.read()
+        # the Old one's block: make its LAST-MODIFIED years ago (a note's own block holds its summary)
+        blocks = text.split("BEGIN:VJOURNAL")
+        blocks = [bl.replace("LAST-MODIFIED:20", "LAST-MODIFIED:19", 1) if "Old one" in bl else bl for bl in blocks]
+        with open(self.env["TVCAL_DATA"], "w") as fh:
+            fh.write("BEGIN:VJOURNAL".join(blocks))
+        self.assertEqual([r[0] for r in self.lines("notes")], [new, old])
+
+    def test_import_and_export_keep_notes(self):
+        self.run_be("add-note", "--notesx", "kept", "Travels")
+        ics = self.run_be("ics").stdout
+        other = os.path.join(self.tmp, "other.ics")
+        open(other, "w").write(ics)
+        os.unlink(self.env["TVCAL_DATA"])
+        self.run_be("import", other)
+        self.assertEqual(self.lines("notes")[0][2], "Travels")
+
+    def test_serve_takes_a_note_on_one_line(self):
+        p = self.run_be("serve", stdin="add-note --notesx 'a\\nb' 'Via serve'\nnotes\nquit\n")
+        self.assertIn("Via serve", p.stdout)
+        self.assertEqual(self.lines("notes")[0][4], "a b")
+
+
 class Requests(Env):
     def drop(self, name, line):
         d = self.env["TVCAL_REQUESTS"]
@@ -481,6 +564,15 @@ class RemoteMode(Env):
         self.assertTrue(any(l.startswith("DELETE") for l in self.dav.log))
         self.assertEqual(len(self.dav.items), 1)
 
+    def test_a_note_is_stored_on_the_server_like_the_rest(self):
+        uid = self.run_be("add-note", "--notesx", "a\\nb", "Server note").stdout.strip()
+        self.assertEqual(len(self.dav.items), 1)
+        self.assertIn("BEGIN:VJOURNAL", list(self.dav.items.values())[0])
+        shutil.rmtree(self.env["TVCAL_STATE"])                    # another machine
+        self.assertEqual(self.lines("notes")[0][2], "Server note")
+        self.run_be("rm", uid)
+        self.assertEqual(len(self.dav.items), 0)
+
     def test_reads_use_a_fresh_copy_and_survive_the_server_going(self):
         self.run_be("add-event", "--date", "2026-11-05", "Kept")
         self.dav.close()
@@ -560,6 +652,31 @@ class Floyd(Env):
         self.assertIn("which number", self.say("!todo done 9"))
         self.assertIn("Removed: Call Bob", self.say("!todo rm 1"))
         self.assertIn("Nothing to do", self.say("!todo"))
+
+    def test_notes_are_the_calendars_notes(self):
+        self.assertIn("No notes", self.say("!notes"))
+        self.assertIn("Noted as number 1", self.say("!note Ring the plumber"))
+        self.assertIn("Noted as number 2", self.say("!note Buy a ladder"))
+        self.assertEqual({n[2] for n in self.lines("notes")}, {"Ring the plumber", "Buy a ladder"})       # tvcal's list
+        self.assertIn("1. ", self.say("!notes"))
+        self.assertIn("Ring the plumber", self.say("!notes 1") + self.say("!notes 2"))
+        self.assertIn("which number", self.say("!notes 9"))
+        self.assertIn("will not wipe", self.say("!notes clear"))
+        self.assertEqual(len(self.lines("notes")), 2)
+
+    def test_an_old_notes_file_moves_over(self):
+        import json
+        state = os.path.join(self.tmp, "state")
+        os.makedirs(state, exist_ok=True)
+        with open(os.path.join(state, "notes.json"), "w") as fh:
+            json.dump({"todo": [], "notes": ["from the old file"]}, fh)
+        self.assertIn("from the old file", self.say("!notes"))
+        self.assertEqual(self.lines("notes")[0][2], "from the old file")
+        with open(os.path.join(state, "notes.json")) as fh:
+            self.assertEqual(json.load(fh)["notes"], [])
+        self.assertEqual(len(self.lines("notes")), 1)                  # not again on the next call
+        self.say("!notes")
+        self.assertEqual(len(self.lines("notes")), 1)
 
     def test_event_and_cal(self):
         self.assertIn("Dentist", self.say("!event 2026-11-05 14:00-15:00 Dentist"))
