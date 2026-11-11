@@ -44,6 +44,7 @@ Keys as in tvmail: Tab moves between panes, Enter on the list opens the editor, 
 to-do, `t` today, `g` go to date, `/` find.
 
 ## Build order (one at a time)
+Status 2026-11-10: steps 1 and 2 are built (the window; Notes as VJOURNAL with the multi-line box and Floyd's !note).
 1. The window: service pane, item list pane, detail pane (reusing TMailText from views.h); Calendar and To-do ported; the
    month grid under the services; menus follow the service chosen.  Edit dialogs unchanged.
 2. Notes: tvcal-backend add-note / set-note / notes / show / rm on VJOURNAL (check the collection accepts VJOURNAL; Floyd's

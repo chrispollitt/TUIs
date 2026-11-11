@@ -68,6 +68,10 @@ TMenuBar *TVCalApp::initMenuBar(TRect r)
                *new TMenuItem("~D~elete to-do", cmCalDelTodo, kbNoKey, hcNoContext, "Del") +
                newLine() +
                *new TMenuItem("~S~how completed", cmCalShowDone, kbNoKey, hcNoContext) +
+               *new TSubMenu("~N~otes", kbAltN) +
+               *new TMenuItem("~N~ew note...", cmCalNewNote, kbNoKey, hcNoContext) +
+               *new TMenuItem("~E~dit note...", cmCalEditNote, kbNoKey, hcNoContext, "Enter") +
+               *new TMenuItem("~D~elete note", cmCalDelNote, kbNoKey, hcNoContext, "Del") +
                *new TSubMenu("~E~dit", kbAltE) +
                *new TMenuItem("~C~opy", cmCopy, kbCtrlIns, hcNoContext, "Ctrl-Ins") +
                *new TMenuItem("~P~aste", cmPaste, kbShiftIns, hcNoContext, "Shift-Ins") +

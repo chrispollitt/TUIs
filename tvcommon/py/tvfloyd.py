@@ -401,6 +401,39 @@ class CalNotes(Notes):
         self._run("rm", uid)
         return "Removed: %s." % text
 
+    def _notes_rows(self):
+        rows = []
+        for ln in self._run("notes").splitlines():
+            f = ln.split("\t")
+            if len(f) >= 3:
+                rows.append((f[0], f[2]))                # uid, title
+        return rows
+
+    def note(self, rest):
+        """!note TEXT, !notes, !notes N: the notes are tvcal's (VJOURNALs on the calendar server), the
+        same ones its Notes list shows.  What an older Floyd kept in his own file moves over the first time."""
+        for old in list(self.data.get("notes", [])):
+            self._run("add-note", "--notes=" + old)
+        if self.data.get("notes"):
+            self.data["notes"] = []
+            self.save()
+        r = rest.strip()
+        if r.lower() == "clear":
+            return "Floyd keeps the notes on the calendar server now, so he will not wipe them. Delete one in tvcal."
+        rows = self._notes_rows()
+        if not r:
+            if not rows:
+                return "No notes. Say !note SOMETHING and Floyd will keep it."
+            return "; ".join("%d. %s" % (i, t) for i, (_, t) in enumerate(rows, 1))
+        if r.isdigit():
+            if not 1 <= int(r) <= len(rows):
+                raise CalcError("which number?")
+            f = self._run("show", rows[int(r) - 1][0]).split("\t")
+            return (f[2] + (": " + f[5].replace("\\n", " / ") if len(f) > 5 and f[5] else "")).strip()
+        text = " ".join(r.split())[:300]
+        self._run("add-note", "--notes=" + text)
+        return "Noted as number %d, in tvcal." % (len(rows) + 1)
+
     def cal(self, rest):
         """!cal [today|tomorrow|week|DATE]: what is on."""
         import datetime

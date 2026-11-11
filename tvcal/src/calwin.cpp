@@ -376,6 +376,50 @@ public:
     }
 };
 
+// Notes: a title and free text, newest first.  The list shows the day it was changed, the title and the
+// start of the text; the whole text is in the pane below.
+struct NoteItem
+{
+    std::string uid, date, title, cats, preview;
+};
+
+const TableCols kNoteCols = {{"Date", 5}, {"Note", 0}};
+
+class TNotesPane : public TCalList
+{
+public:
+    std::vector<NoteItem> items;
+
+    TNotesPane(const TRect &b, TScrollBar *vsb) : TCalList(b, vsb) {}
+
+    void setItems(std::vector<NoteItem> v, const std::string &keepUid)
+    {
+        items = std::move(v);
+        setRange((short)items.size());
+        short at = 0;
+        for (size_t i = 0; i < items.size(); ++i)
+            if (items[i].uid == keepUid)
+                at = (short)i;
+        TListViewer::focusItem(at);
+        drawView();
+    }
+    const NoteItem *current() const { return focused >= 0 && focused < (short)items.size() ? &items[focused] : nullptr; }
+
+    void draw() override
+    {
+        drawTableList(*this, kNoteCols, [this](short item) -> std::vector<std::string>
+                      {
+            if (item >= (short)items.size())
+                return {};
+            const NoteItem &n = items[item];
+            return {n.date.size() >= 10 ? n.date.substr(5) : "", n.title + (n.preview.empty() ? "" : "  - " + n.preview)}; });
+    }
+    void getText(char *dest, short item, short maxLen) override
+    {
+        putText(dest, item >= 0 && item < (short)items.size() ? items[item].title : std::string(), maxLen);
+    }
+};
+
 // The services, top left: what the other panes show.  A count at the right of each name.
 struct Service
 {
@@ -390,7 +434,7 @@ public:
 
     TServicePane(const TRect &b) : TCalList(b, nullptr)
     {
-        items = {{"Calendar"}, {"To-do"}};
+        items = {{"Calendar"}, {"To-do"}, {"Notes"}};
         setRange((short)items.size());
     }
     void getText(char *dest, short item, short maxLen) override
@@ -553,6 +597,87 @@ ushort todoDialog(const char *caption, TodoForm &f, int mode)
     return r;
 }
 
+// A multi-line text box with its own scroll bar, in a dialog.  Enter makes a new line; Tab leaves it.
+TMemo *addMemo(TDialog *d, const TRect &r, const std::string &init, int maxLen = 6000)
+{
+    TScrollBar *vsb = new TScrollBar(TRect(r.b.x, r.a.y, r.b.x + 1, r.b.y));
+    d->insert(vsb);
+    TMemo *m = new TMemo(r, nullptr, vsb, nullptr, (ushort)maxLen);
+    d->insert(m);
+    std::vector<char> data(m->dataSize(), 0);
+    std::string t = init.substr(0, (size_t)std::min<size_t>(init.size(), (size_t)maxLen - 1));
+    ((TMemoData *)data.data())->length = (ushort)t.size();
+    memcpy(((TMemoData *)data.data())->buffer, t.data(), t.size());
+    m->setData(data.data());
+    return m;
+}
+
+// What was typed in a memo: lines end in \n, whatever the editor used, and blank ends are cut.
+std::string memoText(TMemo *m)
+{
+    std::vector<char> data(m->dataSize(), 0);
+    m->getData(data.data());
+    TMemoData *md = (TMemoData *)data.data();
+    std::string t(md->buffer, md->length), out;
+    for (size_t i = 0; i < t.size(); ++i)
+    {
+        if (t[i] == '\r')
+        {
+            out += '\n';
+            if (i + 1 < t.size() && t[i + 1] == '\n')
+                ++i;
+        }
+        else
+            out += t[i];
+    }
+    return trimmed(out);
+}
+
+// A request is one line: a new line in the text is sent as \n and a backslash as \\ (--notesx).
+std::string escNl(const std::string &s)
+{
+    std::string o;
+    for (char c : s)
+        o += c == '\\' ? "\\\\" : c == '\n' ? "\\n" : std::string(1, c);
+    return o;
+}
+
+struct NoteForm
+{
+    std::string uid, title, cats, notes;
+};
+
+// mode 0: a new note; 1: editing (+ Delete: cmNo).  The text box is the point of a note.
+ushort noteDialog(const char *caption, NoteForm &f, int mode)
+{
+    TDialog *d = new TDialog(TRect(0, 0, 76, 24), caption);
+    d->options |= ofCentered;
+    TInputLine *title = addField(d, 3, 2, 68, "~T~itle (empty: the first line of the text)", 200, f.title);
+    TInputLine *cats = addField(d, 3, 5, 68, "~C~ategories (separated by commas)", 100, f.cats);
+    TMemo *memo = addMemo(d, TRect(3, 9, 71, 19), f.notes);
+    d->insert(new TLabel(TRect(3, 8, 20, 9), "~N~otes", memo));
+    d->insert(new TStaticText(TRect(3, 19, 72, 20), "Enter starts a new line.  Tab leaves the text.  Alt-O saves, Esc cancels."));
+    d->insert(new TButton(TRect(10, 21, 22, 23), "~O~K", cmOK, bfDefault));
+    d->insert(new TButton(TRect(26, 21, 38, 23), "Cancel", cmCancel, bfNormal));
+    if (mode == 1)
+        d->insert(new TButton(TRect(42, 21, 54, 23), "~D~elete", cmNo, bfNormal));
+    (f.notes.empty() ? title : (TView *)memo)->select();
+    ushort r = TProgram::deskTop->execView(d);
+    f.title = text(title);
+    f.cats = text(cats);
+    f.notes = memoText(memo);
+    TObject::destroy(d);
+    return r;
+}
+
+std::string noteArgs(const NoteForm &f, bool creating)
+{
+    std::string a = opt("cats", f.cats) + opt("notesx", escNl(f.notes));
+    if (creating)
+        return "add-note" + a + (f.title.empty() ? "" : " -- " + shq(f.title));
+    return a + opt("summary", f.title);
+}
+
 std::string eventArgs(const EvForm &f)
 {
     return opt("date", f.date) + opt("start", f.start) + opt("end", f.end) + opt("days", f.days) +
@@ -584,12 +709,13 @@ class TCalWindow : public TWindow
     TMonthPane *month = nullptr;
     TAgendaPane *agenda = nullptr;
     TTodoPane *todo = nullptr;
+    TNotesPane *notes = nullptr;
     TCalDetail *detail = nullptr;
     TPaneTitle *svcTitle = nullptr, *monthTitle = nullptr, *listTitle = nullptr, *detailTitle = nullptr;
-    TTableHead *todoHead = nullptr;
+    TTableHead *todoHead = nullptr, *noteHead = nullptr;
     TDivider *vdiv = nullptr;
-    TScrollBar *agendaVsb = nullptr, *todoVsb = nullptr, *detailVsb = nullptr;
-    int service = 0; // 0 Calendar, 1 To-do
+    TScrollBar *agendaVsb = nullptr, *todoVsb = nullptr, *noteVsb = nullptr, *detailVsb = nullptr;
+    int service = 0; // 0 Calendar, 1 To-do, 2 Notes
 
     Ymd sel, today;
     std::vector<Occ> agendaOcc; // occurrences from agLo to agHi
@@ -652,6 +778,9 @@ public:
         todoHead = new TTableHead(R.todoHead, kTodoCols);
         todoVsb = new TScrollBar(R.todoVsb);
         todo = new TTodoPane(R.todo, todoVsb);
+        noteHead = new TTableHead(R.todoHead, kNoteCols);
+        noteVsb = new TScrollBar(R.todoVsb);
+        notes = new TNotesPane(R.todo, noteVsb);
         vdiv = new TDivider(R.vbar, true);
         listTitle = new TPaneTitle(R.listTitle, "Agenda");
         agendaVsb = new TScrollBar(R.agendaVsb);
@@ -661,13 +790,14 @@ public:
         detail = new TCalDetail(R.detail, detailVsb);
         for (TView *v : {(TView *)svc, (TView *)month, (TView *)todoHead, (TView *)todo, (TView *)agenda, (TView *)svcTitle,
                          (TView *)monthTitle, (TView *)listTitle, (TView *)detailTitle, (TView *)vdiv, (TView *)todoVsb,
-                         (TView *)agendaVsb, (TView *)detail, (TView *)detailVsb})
+                         (TView *)agendaVsb, (TView *)detail, (TView *)detailVsb, (TView *)noteHead, (TView *)notes,
+                         (TView *)noteVsb})
             v->growMode = 0; // placed by changeBounds()
 
         svc->moved = [this] { useService(svc->focused); };
         svc->enter = [this] { focusPane(listPane()); };
         svc->pick = [this] { focusPane(listPane()); };
-        svc->newItem = [this] { service == 0 ? newEvent() : newTodo(); };
+        svc->newItem = [this] { service == 0 ? newEvent() : service == 1 ? newTodo() : newNote(); };
 
         month->moveDays = [this](int n) { setSel(ymdAdd(sel, n), false); };
         month->moveMonths = [this](int n) { setSel(ymdAddMonths(sel, n), false); };
@@ -694,6 +824,12 @@ public:
         todo->newItem = [this] { newTodo(); };
         todo->del = [this] { deleteTodo(); };
 
+        notes->moved = [this] { showDetail(); };
+        notes->enter = [this] { editNote(); };
+        notes->pick = [this] { editNote(); };
+        notes->newItem = [this] { newNote(); };
+        notes->del = [this] { deleteNote(); };
+
         insert(vdiv);
         insert(svcTitle);
         insert(monthTitle);
@@ -701,10 +837,13 @@ public:
         insert(detailTitle);
         insert(todoHead);
         insert(todoVsb);
+        insert(noteHead);
+        insert(noteVsb);
         insert(agendaVsb);
         insert(detailVsb);
         // insert order sets the Tab cycle: services -> month -> the items -> the item shown
         insert(detail);
+        insert(notes);
         insert(todo);
         insert(agenda);
         insert(month);
@@ -727,7 +866,7 @@ public:
     }
 
     // The list of the service shown, and which panes the window cycles through with Tab.
-    TView *listPane() const { return service == 0 ? (TView *)agenda : (TView *)todo; }
+    TView *listPane() const { return service == 0 ? (TView *)agenda : service == 1 ? (TView *)todo : (TView *)notes; }
     std::vector<TView *> cycle() const
     {
         std::vector<TView *> v{svc};
@@ -748,7 +887,9 @@ public:
         for (TView *v : {(TView *)month, (TView *)monthTitle, (TView *)agenda, (TView *)agendaVsb})
             cal ? v->show() : v->hide();
         for (TView *v : {(TView *)todo, (TView *)todoHead, (TView *)todoVsb})
-            cal ? v->hide() : v->show();
+            s == 1 ? v->show() : v->hide();
+        for (TView *v : {(TView *)notes, (TView *)noteHead, (TView *)noteVsb})
+            s == 2 ? v->show() : v->hide();
         showDetail();
         updateTitles();
         if (svc->focused != s)
@@ -760,16 +901,18 @@ public:
     {
         svc->items[0].count = (int)monthCountOn(sel);
         svc->items[1].count = (int)todo->items.size();
+        svc->items[2].count = (int)notes->items.size();
         svc->drawView();
         monthTitle->setLabel(std::string(kMonthNames[sel.m - 1]) + " " + std::to_string(sel.y));
         int n = (int)todo->items.size();
         listTitle->setLabel(service == 0 ? "Agenda from " + niceDate(sel)
-                                         : std::string("To-do (") + std::to_string(n) + (showDone ? ", with done" : "") + ")");
-        detailTitle->setLabel(service == 0 ? (detailIsDay ? "Day" : "Event") : "To-do");
+                            : service == 1 ? std::string("To-do (") + std::to_string(n) + (showDone ? ", with done" : "") + ")"
+                                           : "Notes (" + std::to_string(notes->items.size()) + ")");
+        detailTitle->setLabel(service == 0 ? (detailIsDay ? "Day" : "Event") : service == 1 ? "To-do" : "Note");
         TView *c = current;
         svcTitle->setActive(c == svc ? True : False);
         monthTitle->setActive(c == month ? True : False);
-        listTitle->setActive(c == agenda || c == todo ? True : False);
+        listTitle->setActive(c == agenda || c == todo || c == notes ? True : False);
         detailTitle->setActive(c == detail ? True : False);
     }
 
@@ -831,6 +974,29 @@ public:
                     if (!f[11].empty())
                         out.push_back("Reminder:  " + f[11] + " min before");
                     addNotes(out, f[12]);
+                }
+            }
+            else
+                out.push_back(err);
+        }
+        else if (service == 2)
+        {
+            const NoteItem *n = notes->current();
+            if (!n)
+                out.push_back("(no notes: Ins or n writes one)");
+            else if (calAsk("show " + shq(n->uid), body, err))
+            {
+                auto rows = rowsOf(body);
+                if (!rows.empty() && rows[0].size() >= 6 && rows[0][0] == "note")
+                {
+                    const auto &f = rows[0];
+                    out.push_back(f[2]);
+                    out.push_back(std::string());
+                    if (!f[3].empty())
+                        out.push_back("Changed:   " + f[3]);
+                    if (!f[4].empty())
+                        out.push_back("Categories: " + f[4]);
+                    addNotes(out, f[5]);
                 }
             }
             else
@@ -983,6 +1149,22 @@ public:
             updateTitles();
     }
 
+    void refreshNotes()
+    {
+        std::string keep = notes->current() ? notes->current()->uid : std::string();
+        std::vector<NoteItem> v;
+        std::string body, err;
+        if (calAsk("notes", body, err))
+            for (auto &f : rowsOf(body))
+                if (f.size() >= 5)
+                    v.push_back({f[0], f[1], f[2], f[3], f[4]});
+        notes->setItems(std::move(v), keep);
+        if (service == 2)
+            showDetail();
+        else
+            updateTitles();
+    }
+
     // Everything again from the backend; `top`: the agenda starts at the date picked.
     void refreshAll(bool top)
     {
@@ -993,6 +1175,7 @@ public:
         buildAgenda(from, sel, keep);
         refreshGrid();
         refreshTodos();
+        refreshNotes();
         if (service == 0)
             showDetail();
     }
@@ -1212,6 +1395,74 @@ public:
         refreshTodos();
     }
 
+    // ---- notes
+    void newNote()
+    {
+        NoteForm f;
+        if (noteDialog("New note", f, 0) != cmOK)
+            return;
+        if (f.title.empty() && f.notes.empty())
+            return;
+        std::string body, err;
+        if (!calAsk(noteArgs(f, true), body, err))
+        {
+            notify(err, noteError);
+            return;
+        }
+        refreshNotes();
+    }
+
+    void editNote()
+    {
+        const NoteItem *n = notes->current();
+        if (!n)
+        {
+            newNote();
+            return;
+        }
+        std::string body, err, uid = n->uid;
+        if (!calAsk("show " + shq(uid), body, err))
+        {
+            notify(err, noteError);
+            return;
+        }
+        auto rows = rowsOf(body);
+        if (rows.empty() || rows[0].size() < 6)
+            return;
+        NoteForm f;
+        f.uid = uid;
+        f.title = rows[0][2];
+        f.cats = rows[0][4];
+        f.notes = rows[0][5];
+        ushort r = noteDialog("Edit note", f, 1);
+        if (r == cmNo)
+        {
+            deleteNote();
+            return;
+        }
+        if (r != cmOK)
+            return;
+        if (!calAsk("set-note " + shq(uid) + noteArgs(f, false), body, err))
+        {
+            notify(err, noteError);
+            return;
+        }
+        refreshNotes();
+    }
+
+    void deleteNote()
+    {
+        const NoteItem *n = notes->current();
+        if (!n)
+            return;
+        if (messageBox("Delete the note \"" + n->title + "\"?", mfConfirmation | mfYesButton | mfNoButton) != cmYes)
+            return;
+        std::string body, err;
+        if (!calAsk("rm " + shq(n->uid), body, err))
+            notify(err, noteError);
+        refreshNotes();
+    }
+
     // The item Send to works on: the to-do when that pane has the focus, else the event shown.
     bool shareTarget(std::string &uid, std::string &date, std::string &what) const
     {
@@ -1269,6 +1520,9 @@ public:
         todoHead->changeBounds(R.todoHead);
         todo->changeBounds(R.todo);
         todoVsb->changeBounds(R.todoVsb);
+        noteHead->changeBounds(R.todoHead);
+        notes->changeBounds(R.todo);
+        noteVsb->changeBounds(R.todoVsb);
         vdiv->changeBounds(R.vbar);
         listTitle->changeBounds(R.listTitle);
         agenda->changeBounds(R.agenda);
@@ -1419,6 +1673,8 @@ void findDialog()
         }
         else if (f[0] == "todo" && f.size() >= 7)
             out += std::string(f[2] == "done" ? "[x] " : "[ ] ") + f[5] + (f[4].empty() ? "" : "   (due " + f[4] + ")") + "\n";
+        else if (f[0] == "note" && f.size() >= 6)
+            out += "note: " + f[3] + (f[5].empty() ? "" : "  - " + f[5]) + "\n";
     }
     if (out.empty())
     {
@@ -1632,6 +1888,8 @@ bool calCommand(ushort cmd)
         w->useService(0);
     else if (cmd >= cmCalNewTodo && cmd <= cmCalShowDone)
         w->useService(1);
+    else if (cmd >= cmCalNewNote && cmd <= cmCalDelNote)
+        w->useService(2);
     switch (cmd)
     {
     case cmCalNewEvent:
@@ -1669,6 +1927,15 @@ bool calCommand(ushort cmd)
         break;
     case cmCalShowDone:
         w->setShowDone(!w->showsDone());
+        break;
+    case cmCalNewNote:
+        w->newNote();
+        break;
+    case cmCalEditNote:
+        w->editNote();
+        break;
+    case cmCalDelNote:
+        w->deleteNote();
         break;
     case cmCalMail:
         mailInvite();

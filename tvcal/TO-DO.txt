@@ -15,7 +15,8 @@ tvcal - features and wishes not done yet
     could run `tvcal-backend due` and mail or chat the result when no tvcal is open.
 10. The to-do list: sub-tasks, sort choices, a due time (not only a date), recurring to-dos.
 11. A man page (tvcal.1, tvcal-backend.1); the screenshots in images/ (tests/screenshot.py like the others).
-12. Notes are one line in the dialog; a multi-line editor for them.
+12. Notes: DONE for the Notes service (2026-11-10, a multi-line text box).  Still one line for events and to-dos:
+    step 3 of UI-REDESIGN.md gives them the same box.
 13. Floyd's clippy tips in tvcal (the "Floyd, not clippy, but ..." ones) - only his commands are in.
 14. tvchat's Add selection offers the lines as they are; picking a time out of the text ("lunch at 12:30
     tomorrow") would save a step.
