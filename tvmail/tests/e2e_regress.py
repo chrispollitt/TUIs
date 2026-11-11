@@ -782,6 +782,25 @@ def address_book_adds_to_the_compose_window_you_were_in(opts):
 
 
 @case()
+def unread_first_keeps_the_highlight_on_the_message_you_read(opts):
+    # issue 3 (BUGS.md #3): with View > Unread first, reading a message re-sorts the list; the highlight (and the body shown)
+    # must stay on that message, which moves down, not stay on the row it left
+    tv = Tv(opts)
+    c = Case(tv)
+    started(tv, c)
+    tv.send(alt("v"), "u", settle=1.0)                             # View > Unread first
+    c.check(tv.wait("sort: unread first", 4), "View > Unread first did not take effect")
+    tv.send("Tab", "Up", "Up", settle=0.8)                         # the Messages pane, on the top row (SUBJ1)
+    c.check(tv.wait(lambda: "Subject: SUBJ1" in tv.text(), 4), "the top row (SUBJ1) is not the one shown")
+    y_before = tv.find("SUBJ1")[0]
+    tv.send("Tab", settle=1.5)                                     # into the body: SUBJ1 is read, so it sorts below the unread ones
+    c.check(tv.wait(lambda: tv.find("SUBJ1") is not None and tv.find("SUBJ1")[0] > y_before, 5),
+            "SUBJ1 did not move down the list when it was read")
+    c.check("Subject: SUBJ1" in tv.text(), "the body no longer shows the message that was read (the highlight stayed on the row)")
+    return tv
+
+
+@case()
 def a_failing_list_is_an_error_not_an_empty_folder(opts):
     # issue #10 (BUGS.md #25): the backend's error for `list` used to be dropped, so a folder that could not be read looked
     # empty.  Here the inbox is a directory, which the backend cannot read.
