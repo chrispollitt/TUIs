@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shellcheck:
+    name: ShellCheck (errors only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # -S error keeps this green on day one; raise it to warning as the scripts are cleaned up.
+      - name: ShellCheck
+        run: |
+          git ls-files '*.sh' | grep -v -e '/BAK/' -e 'third_party/' | xargs shellcheck -S error -x
+
+  apps:
+    name: ${{ matrix.app }} build and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [tvcommon, tvmail, tvchat, tvcal]
+    env:
+      TERM: xterm-256color
+    steps:
+      - uses: actions/checkout@v4
+      - name: Packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake g++ make libncurses-dev python3 python3-pip git
+          python3 -m pip install --user --break-system-packages pyte
+      # The apps are built from source against Turbo Vision (patched), which third_party.sh fetches;
+      # POSIX supplies mail-setup for tvmail's mail_setup test (skipped without it).
+      - name: Fetch Turbo Vision and POSIX
+        if: matrix.app != 'tvcommon'
+        run: tvcommon/third_party.sh tvision posix
+      - name: Build and test the app
+        if: matrix.app != 'tvcommon'
+        working-directory: ${{ matrix.app }}
+        run: ./test.sh
+      - name: Shared Python code (tvcommon)
+        if: matrix.app == 'tvcommon'
+        working-directory: tvcommon/tests
+        run: python3 test_tvcontacts.py
+      - name: Floyd (tvfloyd.py)
+        if: matrix.app == 'tvcommon'
+        working-directory: tvcommon/tests
+        run: python3 test_tvfloyd.py
