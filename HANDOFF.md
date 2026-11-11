@@ -83,12 +83,13 @@ passed 4 times since (not reproduced; if it fails again, check `contactswin.cpp`
 calls moved(), focusItem is overridden). Builds need cmake, C++17, ncurses headers, python3; the tests
 need `pip install pyte`.
 
-**Not installed on every machine** (checked Nov 10-11): this laptop has a tvcal of Nov 9 (before steps 3-5); cmdesktop and
-cpbee are at `ffe47cf` (Nov 9, 15 commits behind `main`). Chris runs `update-tv-apps-everywhere.sh` himself (it pulls
-`origin/main`, so anything not merged and pushed is not deployed; quit the apps first, see its header).
-**Branch** `tvcal-contacts-service` is merged and safe to delete; Chris keeps the list in
-`/home/chris/gh_cp/tmp-branches.txt` (append `TUIs tvcal-contacts-service` - not possible from the
-cloud session). The repo is now `chrispollitt/TUIs` (GitHub redirects the old `tuis` name).
+**Installed on all three machines** (Nov 11, `update-tv-apps-everywhere.sh`, run by Chris): the laptop, cmdesktop and cpbee
+were at `6d92b9f` when checked; the script pulls `origin/main`, so anything not merged and pushed is not deployed (quit the
+apps first, see its header). Later commits on `main` are the update script's pull retry, docs and issue forms: no app code. Restart tvmail, tvchat and tvcal where
+they were running.
+**Branch** `tvcal-contacts-service` is merged into `main` but Chris is still using it for the contacts smoke test: do NOT
+delete it and do not append it to `/home/chris/gh_cp/tmp-branches.txt` until he says. The repo is `chrispollitt/TUIs`
+(GitHub redirects the old `tuis` name).
 
 **Waiting on Chris:**
 - `tvcal-floyd-on-cpbee.sh` (installs backend + Floyd on cpbee, makes the `floyd` Radicale user with rights on
