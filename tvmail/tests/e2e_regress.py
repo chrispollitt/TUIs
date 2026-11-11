@@ -667,6 +667,50 @@ def contacts_window_shows_and_saves_in_the_family_book(opts):
     return tv
 
 
+@case()
+def group_name_in_to_expands_on_send(opts):
+    # a group of the server's address book typed in To: is sent to its members: the whole chain from the compose window
+    # through tvmail-backend send and tvcontacts.py, against a fake CardDAV server and a fake sendmail that logs its
+    # arguments (the group's member Alice and Bob; the third member is not in the book and is skipped)
+    import http.server
+    import importlib.util
+    import threading
+    spec = importlib.util.spec_from_file_location(
+        "tvcontacts_tests3", str(HERE.parent.parent / "tvcommon" / "tests" / "test_tvcontacts.py"))
+    fake = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fake)
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), fake.Fake)
+    srv.cards = {"alice.vcf": (fake.ALICE, "1"), "family.vcf": (fake.FAMILY, "1"), "bob.vcf": (fake.BOB, "1")}
+    srv.log = []
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+    def setup(t):
+        t.env["TVCONTACTS_URL"] = "http://127.0.0.1:%d/c/" % srv.server_address[1]
+        t.env["TVCONTACTS_USER"] = "chris"
+        t.env["TVCONTACTS_PASS"] = "secret"                      # allowlist secret: test value
+        t.env["TVCONTACTS_PY"] = str(HERE.parent.parent / "tvcommon" / "py" / "tvcontacts.py")
+        sm = t.tmp / "fake-sendmail"
+        sm.write_text('#!/bin/sh\necho "$@" >> "%s"\ncat > /dev/null\n' % (t.tmp / "sendmail.log"))
+        sm.chmod(0o755)
+        t.env["SENDMAIL"] = str(sm)
+        t.cleanups.append(srv.shutdown)
+    tv = Tv(opts, setup=setup)
+    c = Case(tv)
+    started(tv, c)
+    open_compose(tv, c)
+    tv.send(alt("t"), "Family", settle=0.5)
+    tv.send(alt("s"), "Group test", settle=0.5)
+    c.check(field(tv, "To") == "Family", "the group name was not typed in To:")
+    tv.send("F2", settle=2.5)
+    log = tv.tmp / "sendmail.log"
+    c.check(tv.wait(lambda: log.exists(), 8), "nothing was handed to sendmail: the mail was not sent")
+    args = log.read_text() if log.exists() else ""
+    c.check("alice@example.org" in args and "bob@example.org" in args,
+            "the group was not expanded to its members: sendmail got %r" % args.strip())
+    c.check("Family" not in args and "nobody" not in args, "sendmail was given the group name itself: %r" % args.strip())
+    return tv
+
+
 @case(31)
 def send_menu_label(opts):
     tv = Tv(opts)
