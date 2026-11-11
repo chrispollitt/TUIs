@@ -549,5 +549,61 @@ class TestLibraryCommandLine(Base):
         self.assertEqual((rc, "no address book called nosuch" in err), (1, True))
 
 
+class TestPasswordCmd(unittest.TestCase):
+    """password_cmd: an option; the files stay the default and the fallback (each app still runs alone)."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="tvc-pwcmd-")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.old = dict(os.environ)
+        self.addCleanup(lambda: (os.environ.clear(), os.environ.update(self.old)))
+        for k in ("TVCONTACTS_PASS", "TVCONTACTS_PASSWORD_CMD"):
+            os.environ.pop(k, None)
+        self.tickets = os.path.join(self.tmp, "tickets")
+        with open(self.tickets, "w") as fh:
+            fh.write("*://chris:fromfile@cpbee\n")  # allowlist secret: test value
+        os.environ["TVMAIL_MU_TICKETS"] = self.tickets
+        os.environ["HOME"] = self.tmp                       # no ~/.netrc
+
+    def script(self, body):
+        p = os.path.join(self.tmp, "fakeauth")
+        with open(p, "w") as fh:
+            fh.write("#!/bin/sh\n" + body + "\n")
+        os.chmod(p, 0o755)
+        return p
+
+    def test_the_command_gives_the_password(self):
+        cmd = self.script("echo fromvault; echo 'vault chatter' >&2")  # allowlist secret: test value
+        self.assertEqual(tc.find_password("https://cpbee/c/", "chris", cmd), "fromvault")
+
+    def test_arguments_are_passed_without_a_shell(self):
+        cmd = self.script('echo "$1 $2 $3"') + " https cpbee 'a b'"
+        self.assertEqual(tc.run_password_cmd(cmd), "https cpbee a b")
+
+    def test_no_record_or_a_locked_vault_falls_back_to_the_files(self):
+        for code in (1, 4):
+            cmd = self.script("exit %d" % code)
+            self.assertEqual(tc.find_password("https://cpbee/c/", "chris", cmd), "fromfile")
+
+    def test_a_missing_or_silly_command_falls_back_to_the_files(self):
+        self.assertEqual(tc.find_password("https://cpbee/c/", "chris", "/nonexistent/auth get x"), "fromfile")
+        self.assertEqual(tc.find_password("https://cpbee/c/", "chris", "unterminated 'quote"), "fromfile")
+        self.assertEqual(tc.find_password("https://cpbee/c/", "chris", ""), "fromfile")
+
+    def test_the_env_password_still_wins(self):
+        os.environ["TVCONTACTS_PASS"] = "fromenv"  # allowlist secret: test value
+        self.assertEqual(tc.find_password("https://cpbee/c/", "chris", self.script("echo fromvault")), "fromenv")
+
+    def test_a_slow_command_is_given_up_on(self):
+        self.assertEqual(tc.run_password_cmd(self.script("sleep 5; echo late"), timeout=0.3), "")
+
+    def test_default_book_reads_password_cmd_from_the_conf(self):
+        os.makedirs(os.path.join(self.tmp, ".config", "tvmail"))
+        with open(os.path.join(self.tmp, ".config", "tvmail", "tvmail.conf"), "w") as fh:
+            fh.write("[contacts]\nurl = https://cpbee/contacts/\nuser = chris\npassword_cmd = auth get https cpbee chris\n")
+        lib = tc.default_book()
+        self.assertEqual([b.password_cmd for b in lib.books], ["auth get https cpbee chris"])
+
+
 if __name__ == "__main__":
     unittest.main()

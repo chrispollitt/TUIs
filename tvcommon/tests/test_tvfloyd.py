@@ -2,6 +2,7 @@
 tvmail's Floyd share.  Stdlib unittest, no network."""
 import importlib.util
 import os
+import shutil
 import tempfile
 import time
 import unittest
@@ -764,6 +765,35 @@ class TestWizard(unittest.TestCase):
         self.assertFalse(tvf.conf_autoconnect_add(self.path("tvchat"), "a"))
         self.assertTrue(tvf.conf_autoconnect_add(self.path("tvchat"), "n"))
         self.assertEqual(tvf.conf_get(self.path("tvchat"), "chat", "autoconnect"), "a, n")
+
+
+class TestTokenCmd(unittest.TestCase):
+    """[floyd] token_cmd: an option; the token line stays the default, and a command that finds nothing leaves the token empty."""
+
+    def script(self, body):
+        d = tempfile.mkdtemp(prefix="tvf-tokcmd-")
+        self.addCleanup(shutil.rmtree, d, True)
+        p = os.path.join(d, "fakeauth")
+        with open(p, "w") as fh:
+            fh.write("#!/bin/sh\n" + body + "\n")
+        os.chmod(p, 0o755)
+        return p
+
+    def settings(self, **kw):
+        return tvf.master_settings(lambda k, d: dict({"server": "cpbee"}, **kw).get(k, d))
+
+    def test_the_command_gives_the_token_when_the_line_is_empty(self):
+        m = self.settings(token_cmd=self.script("echo hubtoken; echo chatter >&2"))  # allowlist secret: test value
+        self.assertEqual(m["token"], "hubtoken")
+
+    def test_the_token_line_wins_over_the_command(self):
+        m = self.settings(token="fromline", token_cmd=self.script("echo hubtoken"))  # allowlist secret: test value
+        self.assertEqual(m["token"], "fromline")
+
+    def test_a_locked_vault_or_a_missing_command_leaves_it_empty(self):
+        self.assertEqual(self.settings(token_cmd=self.script("exit 4"))["token"], "")
+        self.assertEqual(self.settings(token_cmd="/nonexistent/auth get floyd hub")["token"], "")
+        self.assertEqual(self.settings()["token"], "")
 
 
 if __name__ == "__main__":
