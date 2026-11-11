@@ -75,7 +75,7 @@ $TVCAL_REQUESTS, else ~/.local/state/tvcal/requests):
   eml PATH             a mail message (its calendar part, else its subject)
   ics PATH             an .ics file
   kind@source (todo@tvmail ...) says who asked.  Nothing is added until the
-  user says yes in tvcal (Calendar > Incoming...).
+  user says yes in tvcal (the Inbox service).
 """
 import sys, os, io, re, argparse, configparser, datetime as dt, json, shlex, time, uuid
 import calendar as _cal
@@ -1222,6 +1222,40 @@ def cmd_due(a):
     return 0
 
 
+def cmd_upcoming(a):
+    """upcoming [--days N]: what will remind you, soonest first (nothing is marked as reported).
+    Rows: when it fires (YYYY-MM-DD HH:MM), kind, uid, day, start, title, then for an event the minutes
+    before, for a to-do "overdue" or "due"."""
+    now = dt.datetime.now()
+    t = now.date()
+    last = t + dt.timedelta(days=max(1, min(int(a.days), 366)))
+    s = Store()
+    out = []
+    for it in s.items("event"):
+        ev = it.read_event()
+        if ev.remind is None or ev.date is None:
+            continue
+        for d in occurrences(ev, t - dt.timedelta(days=1), last):
+            begin = dt.datetime.combine(d, dt.time(int(ev.start[:2]), int(ev.start[3:]))) if ev.start \
+                else dt.datetime.combine(d, dt.time(9, 0))
+            over = begin + dt.timedelta(hours=1) if ev.start else dt.datetime.combine(d, dt.time(23, 59))
+            if over <= now:
+                continue
+            fire = begin - dt.timedelta(minutes=ev.remind)
+            out.append((fire.strftime("%Y-%m-%d %H:%M"), "event", ev.uid, d.isoformat(), ev.start, ev.summary,
+                        ev.remind))
+    for it in s.items("todo"):
+        td = it.read_todo()
+        if td.done or td.due is None or td.due > last:
+            continue
+        out.append((td.due.isoformat() + " 00:00", "todo", td.uid, td.due.isoformat(), "", td.summary,
+                    "overdue" if td.due < t else "due"))
+    out.sort(key=lambda r: (r[0], r[5].lower()))
+    for r in out:
+        row(*r)
+    return 0
+
+
 def cmd_ics(a):
     s = Store()
     if a.uid:
@@ -1442,11 +1476,11 @@ def requests_once():
             continue
         for x in new:
             if len(pend) >= PENDING_MAX:
-                notes.append("too many requests are waiting - Calendar > Incoming...")
+                notes.append("too many requests are waiting - tvcal's Inbox")
                 break
             x["id"] = uuid.uuid4().hex[:8]
             pend.append(x)
-            notes.append("%s asks to add %s \"%s\" - Calendar > Incoming..." %
+            notes.append("%s asks to add %s \"%s\" - tvcal's Inbox" %
                          (source, "a to-do" if x["kind"] == "todo" else "an event", x["summary"][:50]))
     if names:
         pending_save(pend)
@@ -1809,6 +1843,8 @@ def build_parser():
     p = add("find", cmd_find)
     p.add_argument("words", nargs="*")
     add("due", cmd_due)
+    p = add("upcoming", cmd_upcoming)
+    p.add_argument("--days", default="14")
     p = add("describe", cmd_describe, "uid")
     p.add_argument("date", nargs="?", default=None)
     p = add("ics", cmd_ics)
@@ -1831,7 +1867,7 @@ def build_parser():
 
 
 _COMMANDS = frozenset(("serve", "ping", "range", "show", "add-event", "set-event", "todos", "add-todo",
-                       "set-todo", "notes", "add-note", "set-note", "done", "rm", "find", "due", "describe", "ics", "import", "mail-event",
+                       "set-todo", "notes", "add-note", "set-note", "done", "rm", "find", "due", "upcoming", "describe", "ics", "import", "mail-event",
                        "has-tvmail", "requests", "pending", "pending-get", "pending-drop", "check-config",
                        "settings", "norm-date", "floyd", "floyd-poll"))
 

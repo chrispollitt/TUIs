@@ -420,6 +420,49 @@ public:
     }
 };
 
+// A table of text rows: the Inbox (what other apps asked to add) and the Reminders (what fires next).
+// `data` holds each row as the backend gave it; `cells` what the table shows.
+class TRowsPane : public TCalList
+{
+    TableCols cols;
+
+public:
+    std::vector<std::vector<std::string>> cells, data;
+
+    TRowsPane(const TRect &b, TScrollBar *vsb, TableCols c) : TCalList(b, vsb), cols(std::move(c)) {}
+
+    void setRows(std::vector<std::vector<std::string>> shown, std::vector<std::vector<std::string>> raw, const std::string &keepKey)
+    {
+        cells = std::move(shown);
+        data = std::move(raw);
+        setRange((short)cells.size());
+        short at = 0;
+        for (size_t i = 0; i < data.size(); ++i)
+            if (!keepKey.empty() && !data[i].empty() && key(data[i]) == keepKey)
+                at = (short)i;
+        TListViewer::focusItem(at);
+        drawView();
+    }
+    // what identifies a row across refreshes: the id (Inbox) or the uid and day (Reminders)
+    static std::string key(const std::vector<std::string> &d) { return d.size() >= 7 ? d[2] + d[3] : d.empty() ? std::string() : d[0]; }
+    const std::vector<std::string> *current() const
+    {
+        return focused >= 0 && focused < (short)data.size() ? &data[focused] : nullptr;
+    }
+    void draw() override
+    {
+        drawTableList(*this, cols, [this](short item) -> std::vector<std::string>
+                      { return item < (short)cells.size() ? cells[item] : std::vector<std::string>(); });
+    }
+    void getText(char *dest, short item, short maxLen) override
+    {
+        putText(dest, item >= 0 && item < (short)cells.size() && !cells[item].empty() ? cells[item].back() : std::string(), maxLen);
+    }
+};
+
+const TableCols kInboxCols = {{"From", 8}, {"Day", 5}, {"Request", 0}};
+const TableCols kRemCols = {{"Fires", 11}, {"Day", 5}, {"Reminder", 0}};
+
 // The services, top left: what the other panes show.  A count at the right of each name.
 struct Service
 {
@@ -434,7 +477,7 @@ public:
 
     TServicePane(const TRect &b) : TCalList(b, nullptr)
     {
-        items = {{"Calendar"}, {"To-do"}, {"Notes"}};
+        items = {{"Calendar"}, {"To-do"}, {"Notes"}, {"Inbox"}, {"Reminders"}};
         setRange((short)items.size());
     }
     void getText(char *dest, short item, short maxLen) override
@@ -700,6 +743,110 @@ int repeatIndex(const std::string &r)
     return 0;
 }
 
+// ---------------------------------------- an item as text (the details pane) ---
+// A rule, then the free text as it was written.
+void addNotes(std::vector<std::string> &out, const std::string &notes)
+{
+    if (notes.empty())
+        return;
+    out.push_back(std::string());
+    out.push_back(std::string(30, '-'));
+    for (const std::string &l : splitLines(notes))
+        out.push_back(l);
+}
+
+// An event from a `show` row (13 fields), on the day `date` (an occurrence), from `start` to `end`.
+void eventLines(std::vector<std::string> &out, const std::vector<std::string> &f, const std::string &date, const std::string &start,
+                const std::string &end)
+{
+    Ymd d;
+    out.push_back(f[2]);
+    out.push_back(std::string());
+    std::string when = (ymdParse(date, d) ? niceDate(d) : date) + "  " +
+                       (start.empty() ? std::string("all day") : start + (end.empty() ? "" : "-" + end));
+    if (atoi(f[7].c_str()) > 1)
+        when += "  (" + f[7] + " days)";
+    out.push_back("When:      " + when);
+    if (!f[3].empty())
+        out.push_back("Where:     " + f[3]);
+    if (f[8] != "none" && !f[8].empty())
+        out.push_back("Repeats:   " + f[8] + (f[9] != "1" && !f[9].empty() ? ", every " + f[9] : "") +
+                      (f[10].empty() ? "" : ", until " + f[10]));
+    if (!f[11].empty())
+        out.push_back("Reminder:  " + f[11] + " min before");
+    addNotes(out, f[12]);
+}
+
+// A to-do from a `show` row (8 fields).
+void todoLines(std::vector<std::string> &out, const std::vector<std::string> &f, bool done)
+{
+    out.push_back(f[2]);
+    out.push_back(std::string());
+    out.push_back(std::string("Status:    ") + (done ? "done" : "not done"));
+    if (!f[3].empty())
+        out.push_back("Due:       " + f[3]);
+    if (f[4] != "0" && !f[4].empty())
+        out.push_back("Priority:  " + f[4]);
+    if (!f[6].empty())
+        out.push_back("Categories: " + f[6]);
+    addNotes(out, f[7]);
+}
+
+// ------------------------------------------------------ a request from another app ---
+// Its dialog, filled in: Add (cmOK) keeps it, Discard (cmNo) drops it, Skip (cmCancel) leaves it for later.
+// 0 when the request is gone or not understood.  `p` is a `pending` row: id, kind, source, summary, day.
+ushort incomingHandle(const std::vector<std::string> &p)
+{
+    if (p.size() < 5)
+        return 0;
+    std::string id = p[0], kind = p[1], source = p[2], got, err, out;
+    if (!calAsk("pending-get " + shq(id), got, err))
+        return 0;
+    auto rows = rowsOf(got);
+    if (rows.empty())
+        return 0;
+    const auto &r = rows[0];
+    std::string cap = "From " + source;
+    ushort res;
+    if (kind == "event" && r.size() >= 13)
+    {
+        EvForm f;
+        f.title = r[2];
+        f.location = r[3];
+        f.date = r[4];
+        f.start = r[5];
+        f.end = r[6];
+        f.remind = gSet.remind;
+        f.notes = r[12];
+        res = eventDialog(cap.c_str(), f, 2);
+        if (res == cmOK && !calAsk("add-event" + eventArgs(f), out, err))
+        {
+            notify(err, noteError);
+            res = cmCancel;
+        }
+    }
+    else if (kind == "todo" && r.size() >= 8)
+    {
+        TodoForm f;
+        f.title = r[2];
+        f.due = r[3];
+        f.prio = r[4];
+        f.cats = r[6];
+        f.notes = r[7];
+        res = todoDialog(cap.c_str(), f, 2);
+        if (res == cmOK && !calAsk("add-todo" + todoArgs(f) + " -- " + shq(f.title), out, err))
+        {
+            notify(err, noteError);
+            res = cmCancel;
+        }
+    }
+    else
+        return 0;
+    if (res == cmOK || res == cmNo)
+        calAsk("pending-drop " + shq(id), out, err);
+    return res;
+}
+
 // ------------------------------------------------------------ the window ---
 class TCalWindow;
 TCalWindow *gWin = nullptr;
@@ -712,12 +859,14 @@ class TCalWindow : public TWindow
     TAgendaPane *agenda = nullptr;
     TTodoPane *todo = nullptr;
     TNotesPane *notes = nullptr;
+    TRowsPane *inbox = nullptr, *rem = nullptr;
     TCalDetail *detail = nullptr;
     TPaneTitle *svcTitle = nullptr, *monthTitle = nullptr, *listTitle = nullptr, *detailTitle = nullptr;
-    TTableHead *todoHead = nullptr, *noteHead = nullptr;
+    TTableHead *todoHead = nullptr, *noteHead = nullptr, *inboxHead = nullptr, *remHead = nullptr;
     TDivider *vdiv = nullptr;
-    TScrollBar *agendaVsb = nullptr, *todoVsb = nullptr, *noteVsb = nullptr, *detailVsb = nullptr;
-    int service = 0; // 0 Calendar, 1 To-do, 2 Notes
+    TScrollBar *agendaVsb = nullptr, *todoVsb = nullptr, *noteVsb = nullptr, *inboxVsb = nullptr, *remVsb = nullptr,
+                *detailVsb = nullptr;
+    int service = 0; // 0 Calendar, 1 To-do, 2 Notes, 3 Inbox, 4 Reminders
 
     Ymd sel, today;
     std::vector<Occ> agendaOcc; // occurrences from agLo to agHi
@@ -783,6 +932,12 @@ public:
         noteHead = new TTableHead(R.todoHead, kNoteCols);
         noteVsb = new TScrollBar(R.todoVsb);
         notes = new TNotesPane(R.todo, noteVsb);
+        inboxHead = new TTableHead(R.todoHead, kInboxCols);
+        inboxVsb = new TScrollBar(R.todoVsb);
+        inbox = new TRowsPane(R.todo, inboxVsb, kInboxCols);
+        remHead = new TTableHead(R.todoHead, kRemCols);
+        remVsb = new TScrollBar(R.todoVsb);
+        rem = new TRowsPane(R.todo, remVsb, kRemCols);
         vdiv = new TDivider(R.vbar, true);
         listTitle = new TPaneTitle(R.listTitle, "Agenda");
         agendaVsb = new TScrollBar(R.agendaVsb);
@@ -793,13 +948,18 @@ public:
         for (TView *v : {(TView *)svc, (TView *)month, (TView *)todoHead, (TView *)todo, (TView *)agenda, (TView *)svcTitle,
                          (TView *)monthTitle, (TView *)listTitle, (TView *)detailTitle, (TView *)vdiv, (TView *)todoVsb,
                          (TView *)agendaVsb, (TView *)detail, (TView *)detailVsb, (TView *)noteHead, (TView *)notes,
-                         (TView *)noteVsb})
+                         (TView *)noteVsb, (TView *)inboxHead, (TView *)inbox,
+                         (TView *)inboxVsb, (TView *)remHead, (TView *)rem, (TView *)remVsb})
             v->growMode = 0; // placed by changeBounds()
 
         svc->moved = [this] { useService(svc->focused); };
         svc->enter = [this] { focusPane(listPane()); };
         svc->pick = [this] { focusPane(listPane()); };
-        svc->newItem = [this] { service == 0 ? newEvent() : service == 1 ? newTodo() : newNote(); };
+        svc->newItem = [this]
+        {
+            if (service <= 2)
+                service == 0 ? newEvent() : service == 1 ? newTodo() : newNote();
+        };
 
         month->moveDays = [this](int n) { setSel(ymdAdd(sel, n), false); };
         month->moveMonths = [this](int n) { setSel(ymdAddMonths(sel, n), false); };
@@ -832,6 +992,15 @@ public:
         notes->newItem = [this] { newNote(); };
         notes->del = [this] { deleteNote(); };
 
+        inbox->moved = [this] { showDetail(); };
+        inbox->enter = [this] { inboxAct(); };
+        inbox->pick = [this] { inboxAct(); };
+        inbox->del = [this] { inboxDiscard(); };
+
+        rem->moved = [this] { showDetail(); };
+        rem->enter = [this] { remGo(); };
+        rem->pick = [this] { remGo(); };
+
         insert(vdiv);
         insert(svcTitle);
         insert(monthTitle);
@@ -841,10 +1010,16 @@ public:
         insert(todoVsb);
         insert(noteHead);
         insert(noteVsb);
+        insert(inboxHead);
+        insert(inboxVsb);
+        insert(remHead);
+        insert(remVsb);
         insert(agendaVsb);
         insert(detailVsb);
         // insert order sets the Tab cycle: services -> month -> the items -> the item shown
         insert(detail);
+        insert(rem);
+        insert(inbox);
         insert(notes);
         insert(todo);
         insert(agenda);
@@ -868,7 +1043,14 @@ public:
     }
 
     // The list of the service shown, and which panes the window cycles through with Tab.
-    TView *listPane() const { return service == 0 ? (TView *)agenda : service == 1 ? (TView *)todo : (TView *)notes; }
+    TView *listPane() const
+    {
+        return service == 0 ? (TView *)agenda
+               : service == 1 ? (TView *)todo
+               : service == 2 ? (TView *)notes
+               : service == 3 ? (TView *)inbox
+                              : (TView *)rem;
+    }
     std::vector<TView *> cycle() const
     {
         std::vector<TView *> v{svc};
@@ -885,13 +1067,15 @@ public:
         if (s < 0 || s >= (int)svc->items.size())
             return;
         service = s;
-        bool cal = s == 0;
-        for (TView *v : {(TView *)month, (TView *)monthTitle, (TView *)agenda, (TView *)agendaVsb})
-            cal ? v->show() : v->hide();
-        for (TView *v : {(TView *)todo, (TView *)todoHead, (TView *)todoVsb})
-            s == 1 ? v->show() : v->hide();
-        for (TView *v : {(TView *)notes, (TView *)noteHead, (TView *)noteVsb})
-            s == 2 ? v->show() : v->hide();
+        // each service's own panes: shown for it, hidden for the others
+        const std::vector<std::vector<TView *>> groups = {{month, monthTitle, agenda, agendaVsb},
+                                                          {todo, todoHead, todoVsb},
+                                                          {notes, noteHead, noteVsb},
+                                                          {inbox, inboxHead, inboxVsb},
+                                                          {rem, remHead, remVsb}};
+        for (int g = 0; g < (int)groups.size(); ++g)
+            for (TView *v : groups[g])
+                g == s ? v->show() : v->hide();
         showDetail();
         updateTitles();
         if (svc->focused != s)
@@ -904,17 +1088,25 @@ public:
         svc->items[0].count = (int)monthCountOn(sel);
         svc->items[1].count = (int)todo->items.size();
         svc->items[2].count = (int)notes->items.size();
+        svc->items[3].count = (int)inbox->cells.size();
+        svc->items[4].count = (int)rem->cells.size();
         svc->drawView();
         monthTitle->setLabel(std::string(kMonthNames[sel.m - 1]) + " " + std::to_string(sel.y));
         int n = (int)todo->items.size();
         listTitle->setLabel(service == 0 ? "Agenda from " + niceDate(sel)
                             : service == 1 ? std::string("To-do (") + std::to_string(n) + (showDone ? ", with done" : "") + ")"
-                                           : "Notes (" + std::to_string(notes->items.size()) + ")");
-        detailTitle->setLabel(service == 0 ? (detailIsDay ? "Day" : "Event") : service == 1 ? "To-do" : "Note");
+                            : service == 2 ? "Notes (" + std::to_string(notes->items.size()) + ")"
+                            : service == 3 ? "Inbox (" + std::to_string(inbox->cells.size()) + ") - asked for by tvmail and tvchat"
+                                           : "Reminders (" + std::to_string(rem->cells.size()) + ") - the next two weeks");
+        detailTitle->setLabel(service == 0   ? (detailIsDay ? "Day" : "Event")
+                              : service == 1 ? "To-do"
+                              : service == 2 ? "Note"
+                              : service == 3 ? "Request"
+                                             : "Reminder");
         TView *c = current;
         svcTitle->setActive(c == svc ? True : False);
         monthTitle->setActive(c == month ? True : False);
-        listTitle->setActive(c == agenda || c == todo || c == notes ? True : False);
+        listTitle->setActive(c == agenda || c == todo || c == notes || c == inbox || c == rem ? True : False);
         detailTitle->setActive(c == detail ? True : False);
     }
 
@@ -959,24 +1151,49 @@ public:
                 auto rows = rowsOf(body);
                 if (!rows.empty() && rows[0].size() >= 13 && rows[0][0] == "event")
                 {
-                    const auto &f = rows[0];
-                    const Occ &o = r->occ;
-                    out.push_back(f[2]);
-                    out.push_back(std::string());
-                    std::string when = niceDate(r->date) + "  " +
-                                       (o.start.empty() ? std::string("all day") : o.start + (o.end.empty() ? "" : "-" + o.end));
-                    if (atoi(f[7].c_str()) > 1)
-                        when += "  (" + f[7] + " days)";
-                    out.push_back("When:      " + when);
-                    if (!f[3].empty())
-                        out.push_back("Where:     " + f[3]);
-                    if (f[8] != "none" && !f[8].empty())
-                        out.push_back("Repeats:   " + f[8] + (f[9] != "1" && !f[9].empty() ? ", every " + f[9] : "") +
-                                      (f[10].empty() ? "" : ", until " + f[10]));
-                    if (!f[11].empty())
-                        out.push_back("Reminder:  " + f[11] + " min before");
-                    addNotes(out, f[12]);
+                    eventLines(out, rows[0], ymdIso(r->date), r->occ.start, r->occ.end);
                 }
+            }
+            else
+                out.push_back(err);
+        }
+        else if (service == 3)
+        {
+            const std::vector<std::string> *p = inbox->current();
+            if (!p || p->size() < 5)
+                out.push_back("(nothing is waiting: tvmail's Message > Send to > Calendar and To-do, and tvchat's Chat > Send selection to, leave requests here)");
+            else if (calAsk("pending-get " + shq((*p)[0]), body, err))
+            {
+                auto rows = rowsOf(body);
+                out.push_back("From " + (*p)[2] + " - not in your calendar until you say yes");
+                out.push_back(std::string());
+                if (!rows.empty() && rows[0][0] == "event" && rows[0].size() >= 13)
+                    eventLines(out, rows[0], rows[0][4], rows[0][5], rows[0][6]);
+                else if (!rows.empty() && rows[0].size() >= 8)
+                    todoLines(out, rows[0], false);
+                out.push_back(std::string());
+                out.push_back("Enter: look at it and add it.  Del: discard it.");
+            }
+            else
+                out.push_back(err);
+        }
+        else if (service == 4)
+        {
+            const std::vector<std::string> *p = rem->current();
+            if (!p || p->size() < 7)
+                out.push_back("(no reminders in the next two weeks)");
+            else if (calAsk("show " + shq((*p)[2]), body, err))
+            {
+                auto rows = rowsOf(body);
+                out.push_back((*p)[1] == "todo" ? std::string((*p)[6] == "overdue" ? "Overdue since " : "Due ") + (*p)[3]
+                                              : "Reminds you " + (*p)[0] + ", " + (*p)[6] + " min before");
+                out.push_back(std::string());
+                if (!rows.empty() && (*p)[1] == "event" && rows[0].size() >= 13)
+                    eventLines(out, rows[0], (*p)[3], (*p)[4], rows[0][6]);
+                else if (!rows.empty() && rows[0].size() >= 8)
+                    todoLines(out, rows[0], false);
+                out.push_back(std::string());
+                out.push_back("Enter: go to it.");
             }
             else
                 out.push_back(err);
@@ -1011,17 +1228,7 @@ public:
                 auto rows = rowsOf(body);
                 if (!rows.empty() && rows[0].size() >= 8)
                 {
-                    const auto &f = rows[0];
-                    out.push_back(f[2]);
-                    out.push_back(std::string());
-                    out.push_back(std::string("Status:    ") + (t->done ? "done" : "not done"));
-                    if (!f[3].empty())
-                        out.push_back("Due:       " + f[3]);
-                    if (f[4] != "0" && !f[4].empty())
-                        out.push_back("Priority:  " + f[4]);
-                    if (!f[6].empty())
-                        out.push_back("Categories: " + f[6]);
-                    addNotes(out, f[7]);
+                    todoLines(out, rows[0], t->done);
                 }
             }
             else
@@ -1031,17 +1238,6 @@ public:
             out.push_back("(no to-dos: Ins or n adds one)");
         detail->setLines(std::move(out));
         updateTitles();
-    }
-
-    // A rule, then the free text as it was written.
-    static void addNotes(std::vector<std::string> &out, const std::string &notes)
-    {
-        if (notes.empty())
-            return;
-        out.push_back(std::string());
-        out.push_back(std::string(30, '-'));
-        for (const std::string &l : splitLines(notes))
-            out.push_back(l);
     }
 
     bool detailIsDay = false;
@@ -1167,6 +1363,104 @@ public:
             updateTitles();
     }
 
+    void refreshInbox()
+    {
+        std::string keep = inbox->current() ? TRowsPane::key(*inbox->current()) : std::string();
+        std::vector<std::vector<std::string>> shown, raw;
+        std::string body, err;
+        if (calAsk("pending", body, err))
+            for (auto &f : rowsOf(body))
+                if (f.size() >= 5)
+                {
+                    shown.push_back({f[2], f[4].size() >= 10 ? f[4].substr(5) : "", std::string(f[1] == "todo" ? "to do: " : "") + f[3]});
+                    raw.push_back(f);
+                }
+        gIncoming = (int)raw.size();
+        inbox->setRows(std::move(shown), std::move(raw), keep);
+        if (service == 3)
+            showDetail();
+        else
+            updateTitles();
+    }
+
+    void refreshReminders()
+    {
+        std::string keep = rem->current() ? TRowsPane::key(*rem->current()) : std::string();
+        std::vector<std::vector<std::string>> shown, raw;
+        std::string body, err;
+        if (calAsk("upcoming", body, err))
+            for (auto &f : rowsOf(body))
+                if (f.size() >= 7)
+                {
+                    shown.push_back({f[1] == "todo" ? std::string(f[6] == "overdue" ? "overdue" : "due") : f[0].substr(5),
+                                     f[3].size() >= 10 ? f[3].substr(5) : "", f[5]});
+                    raw.push_back(f);
+                }
+        rem->setRows(std::move(shown), std::move(raw), keep);
+        if (service == 4)
+            showDetail();
+        else
+            updateTitles();
+    }
+
+    // ---- the Inbox and the Reminders
+    void showInbox()
+    {
+        useService(3);
+        focusPane(inbox);
+    }
+
+    void inboxAct()
+    {
+        const std::vector<std::string> *p = inbox->current();
+        if (!p)
+            return;
+        std::vector<std::string> row = *p; // the list is rebuilt below
+        ushort res = incomingHandle(row);
+        if (res == cmOK)
+            notify("Added: " + row[3]);
+        else if (res == 0)
+            notify("That request is gone.", noteWarn);
+        refreshAll(false);
+    }
+
+    void inboxDiscard()
+    {
+        const std::vector<std::string> *p = inbox->current();
+        if (!p || p->size() < 5)
+            return;
+        if (messageBox("Discard \"" + (*p)[3] + "\" from " + (*p)[2] + "?", mfConfirmation | mfYesButton | mfNoButton) != cmYes)
+            return;
+        std::string body, err;
+        calAsk("pending-drop " + shq((*p)[0]), body, err);
+        refreshInbox();
+    }
+
+    // Reminders: Enter goes to the event on its day, or to the to-do.
+    void remGo()
+    {
+        const std::vector<std::string> *p = rem->current();
+        if (!p || p->size() < 7)
+            return;
+        std::string kind = (*p)[1], uid = (*p)[2], day = (*p)[3];
+        if (kind == "event")
+        {
+            Ymd d;
+            useService(0);
+            if (ymdParse(day, d))
+                setSel(d, false);
+            focusPane(agenda);
+        }
+        else
+        {
+            useService(1);
+            for (size_t i = 0; i < todo->items.size(); ++i)
+                if (todo->items[i].uid == uid)
+                    todo->focusItem((short)i);
+            focusPane(todo);
+        }
+    }
+
     // Everything again from the backend; `top`: the agenda starts at the date picked.
     void refreshAll(bool top)
     {
@@ -1178,6 +1472,8 @@ public:
         refreshGrid();
         refreshTodos();
         refreshNotes();
+        refreshInbox();
+        refreshReminders();
         if (service == 0)
             showDetail();
     }
@@ -1525,6 +1821,12 @@ public:
         noteHead->changeBounds(R.todoHead);
         notes->changeBounds(R.todo);
         noteVsb->changeBounds(R.todoVsb);
+        inboxHead->changeBounds(R.todoHead);
+        inbox->changeBounds(R.todo);
+        inboxVsb->changeBounds(R.todoVsb);
+        remHead->changeBounds(R.todoHead);
+        rem->changeBounds(R.todo);
+        remVsb->changeBounds(R.todoVsb);
         vdiv->changeBounds(R.vbar);
         listTitle->changeBounds(R.listTitle);
         agenda->changeBounds(R.agenda);
@@ -1547,93 +1849,17 @@ TCalWindow *window()
 // ---------------------------------------------------- incoming from others ---
 void incomingRefresh()
 {
-    std::string body, err;
-    gIncoming = 0;
-    if (calAsk("pending", body, err))
-        gIncoming = (int)rowsOf(body).size();
+    if (gWin)
+        gWin->refreshInbox(); // sets gIncoming
+    else
+    {
+        std::string body, err;
+        gIncoming = 0;
+        if (calAsk("pending", body, err))
+            gIncoming = (int)rowsOf(body).size();
+    }
     if (TProgram::statusLine)
         TProgram::statusLine->drawView(); // the "N incoming" at its end
-}
-
-// Calendar > Pending...: what tvmail or tvchat asked to add, one at a time, each with its
-// dialog filled in; Add keeps it, Discard drops it, Skip leaves it for later.
-void incoming()
-{
-    std::string body, err;
-    if (!calAsk("pending", body, err))
-    {
-        notify(err, noteError);
-        return;
-    }
-    auto list = rowsOf(body);
-    if (list.empty())
-    {
-        notify("Nothing is waiting: tvmail's Message > Add to calendar and tvchat's Chat > Add to calendar leave requests here.");
-        return;
-    }
-    int added = 0;
-    for (auto &p : list)
-    {
-        if (p.size() < 5)
-            continue;
-        std::string id = p[0], kind = p[1], source = p[2];
-        std::string got;
-        if (!calAsk("pending-get " + shq(id), got, err))
-            continue;
-        auto rows = rowsOf(got);
-        if (rows.empty())
-            continue;
-        const auto &r = rows[0];
-        std::string cap = "From " + source;
-        ushort res;
-        std::string out;
-        if (kind == "event" && r.size() >= 13)
-        {
-            EvForm f;
-            f.title = r[2];
-            f.location = r[3];
-            f.date = r[4];
-            f.start = r[5];
-            f.end = r[6];
-            f.remind = gSet.remind;
-            f.notes = r[12];
-            res = eventDialog(cap.c_str(), f, 2);
-            if (res == cmOK && !calAsk("add-event" + eventArgs(f), out, err))
-            {
-                notify(err, noteError);
-                res = cmCancel;
-            }
-        }
-        else if (kind == "todo" && r.size() >= 8)
-        {
-            TodoForm f;
-            f.title = r[2];
-            f.due = r[3];
-            f.prio = r[4];
-            f.cats = r[6];
-            f.notes = r[7];
-            res = todoDialog(cap.c_str(), f, 2);
-            if (res == cmOK && !calAsk("add-todo" + todoArgs(f) + " -- " + shq(f.title), out, err))
-            {
-                notify(err, noteError);
-                res = cmCancel;
-            }
-        }
-        else
-            continue;
-        if (res == cmOK)
-            ++added;
-        if (res == cmOK || res == cmNo)
-            calAsk("pending-drop " + shq(id), out, err);
-        if (res == cmCancel && p != list.back() &&
-            messageBox("Look at the next one?", mfConfirmation | mfYesButton | mfNoButton) != cmYes)
-            break;
-    }
-    incomingRefresh();
-    if (added)
-        notify(std::to_string(added) + " added from other apps.");
-    if (gWin)
-        gWin->refreshAll(false);
 }
 
 // ------------------------------------------------------------ menu actions ---
@@ -1913,7 +2139,7 @@ bool calCommand(ushort cmd)
         findDialog();
         break;
     case cmCalIncoming:
-        incoming();
+        w->showInbox();
         break;
     case cmCalNewTodo:
         w->newTodo();

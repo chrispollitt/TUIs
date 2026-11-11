@@ -2194,7 +2194,7 @@ void selectionToCal(bool todo)
         notify(err, noteError);
     else
         notify(std::string("Asked tvcal to add this as ") + (todo ? "a to-do" : "an event") +
-               ". It asks you first: tvcal's Calendar > Incoming... (it need not be running).");
+               ". It asks you first: tvcal's Inbox (it need not be running).");
 }
 
 void mailSelectionDialog()

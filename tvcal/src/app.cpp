@@ -6,7 +6,7 @@
 namespace
 {
 // The status line, with a quiet "N incoming" at its right end while tvmail or tvchat have
-// asked for something to be added (Calendar > Pending...).
+// asked for something to be added (the Inbox service).
 class TVCalStatusLine : public TStatusLine
 {
 public:
@@ -60,7 +60,7 @@ TMenuBar *TVCalApp::initMenuBar(TRect r)
                *new TMenuItem("~S~end to", kbNoKey,
                               new TMenu(*new TMenuItem("~M~ail (an invitation)...", cmCalMail, kbNoKey, hcNoContext) +
                                         *new TMenuItem("~C~hat (share)", cmCalShareChat, kbNoKey, hcNoContext))) +
-               *new TMenuItem("~P~ending (from tvmail / tvchat)...", cmCalIncoming, kbNoKey, hcNoContext) +
+               *new TMenuItem("~I~nbox (from tvmail / tvchat)", cmCalIncoming, kbNoKey, hcNoContext) +
                *new TSubMenu("~T~o-do", kbAltT) +
                *new TMenuItem("~N~ew to-do...", cmCalNewTodo, kbCtrlT, hcNoContext, "Ctrl-T") +
                *new TMenuItem("~E~dit to-do...", cmCalEditTodo, kbNoKey, hcNoContext, "Enter") +

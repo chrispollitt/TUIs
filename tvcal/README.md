@@ -28,6 +28,8 @@ to-dos. Without a server it keeps one local `.ics` file.
   `PgDn`, `Home` (today), `Enter`, `Ins`, `Del` and `Space` do what you would guess (F1 has the list).
 - **Events**: title, date, start / end (empty start = all day), several days, place, notes (a tall text box), a repeat
   (daily, weekly, monthly, yearly, every N, until a date) and a reminder in minutes before.
+- **Inbox and Reminders**: the Inbox lists what tvmail and tvchat asked to add; Reminders lists what will remind
+  you in the next two weeks, soonest first (Enter goes to the event or to-do).
 - **Notes**: a title, categories and free text of any length (a tall text box), newest first; stored as
   standard iCalendar journal entries on the server, so every machine has them. Floyd's `!note` writes here.
 - **To-dos**: text, due date, priority 1-9, categories, notes; `Space` ticks one off; the Due column
@@ -53,7 +55,7 @@ to-dos. Without a server it keeps one local `.ics` file.
 
 Nothing another program asks for is added without your yes: tvmail and tvchat leave a one-line request
 file for tvcal (`~/.local/state/tvcal/requests`, even when tvcal is not running), the status line shows
-"N incoming", and **Calendar > Pending...** opens each with its dialog filled in: Add, Skip or Discard.
+"N incoming", and the **Inbox** service lists them, each shown whole; Enter opens one with its dialog filled in: Add, Skip or Discard.
 Other people's Floyd lists stay in Floyd's own files; only the owner's is the calendar's.
 
 ## Where the calendar lives

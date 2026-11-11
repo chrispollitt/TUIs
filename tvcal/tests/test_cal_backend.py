@@ -386,6 +386,32 @@ class Notes(Env):
         self.assertEqual(self.lines("notes")[0][4], "a b")
 
 
+class Upcoming(Env):
+    """`upcoming`: what will remind you, soonest first, without marking anything as reported."""
+
+    def test_events_and_todos_in_order(self):
+        today = dt.date.today()
+        day = lambda n: (today + dt.timedelta(days=n)).isoformat()
+        far = self.run_be("add-event", "--date", day(3), "--remind", "10", "Later").stdout.strip()
+        near = self.run_be("add-event", "--date", day(1), "--start", "10:00", "--remind", "30", "Soon").stdout.strip()
+        self.run_be("add-event", "--date", day(1), "--remind", "off", "No reminder")
+        self.run_be("add-event", "--date", day(-3), "--start", "10:00", "--remind", "5", "Over")
+        self.run_be("add-event", "--date", day(40), "--remind", "5", "Too far")
+        self.run_be("add-todo", "--due", day(-2), "Overdue one")
+        self.run_be("add-todo", "--due", day(2), "Due soon")
+        self.run_be("add-todo", "--due", day(60), "Much later")
+        done = self.run_be("add-todo", "--due", day(2), "Done already").stdout.strip()
+        self.run_be("done", done)
+        rows = self.lines("upcoming")
+        self.assertEqual([r[5] for r in rows], ["Overdue one", "Soon", "Due soon", "Later"])
+        self.assertEqual(rows[0][1:2] + rows[0][6:], ["todo", "overdue"])
+        self.assertEqual((rows[1][0], rows[1][6]), (day(1) + " 09:30", "30"))     # fires 30 minutes before
+        self.assertEqual(rows[3][2], far)
+        self.assertEqual(rows[1][2], near)
+        self.assertEqual([r[5] for r in self.lines("upcoming", "--days", "60")][-1], "Much later")
+        self.assertEqual(self.lines("upcoming"), rows)                          # nothing was used up
+
+
 class Requests(Env):
     def drop(self, name, line):
         d = self.env["TVCAL_REQUESTS"]
