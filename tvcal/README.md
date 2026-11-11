@@ -26,7 +26,7 @@ to-dos. Without a server it keeps one local `.ics` file.
 - **Three panes**, as in tvmail and tvchat: services (Calendar, To-do) on the left with the month under them, the
   items of the service top right, the item under the bar shown whole (notes in full) bottom right. `Tab` moves between the panes; the arrows, `PgUp` /
   `PgDn`, `Home` (today), `Enter`, `Ins`, `Del` and `Space` do what you would guess (F1 has the list).
-- **Events**: title, date, start / end (empty start = all day), several days, place, notes, a repeat
+- **Events**: title, date, start / end (empty start = all day), several days, place, notes (a tall text box), a repeat
   (daily, weekly, monthly, yearly, every N, until a date) and a reminder in minutes before.
 - **Notes**: a title, categories and free text of any length (a tall text box), newest first; stored as
   standard iCalendar journal entries on the server, so every machine has them. Floyd's `!note` writes here.

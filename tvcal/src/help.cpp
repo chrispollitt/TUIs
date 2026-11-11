@@ -23,6 +23,7 @@ static const char *kHelpText =
     "  The Calendar, To-do and Notes menus switch to their service by themselves.\n"
     "\n"
     "EVENTS\n"
+    "  (Notes of an event or a to-do, as of a note, are a tall text box: Enter makes a new line, Tab leaves it.)\n"
     "  Title, date, start and end (an empty start is an all-day event), days (an all-day event\n"
     "  can span several), place, notes, a repeat (daily, weekly, monthly, yearly, every N, until a\n"
     "  date) and a reminder in minutes before (or off).  Dates: 2026-11-05, 11-05, tomorrow, +3, fri.\n"

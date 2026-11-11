@@ -485,118 +485,6 @@ std::string text(TInputLine *in)
     return trimmed(in->data ? in->data : "");
 }
 
-struct EvForm
-{
-    std::string uid, title, date, start, end, location, remind, interval = "1", until, notes, days = "1";
-    int repeat = 0;
-};
-
-// mode 0: a new event (OK, Cancel); 1: editing (+ Delete: cmNo); 2: asked for by another app
-// (Add, Skip, Discard: cmNo).
-ushort eventDialog(const char *caption, EvForm &f, int mode)
-{
-    TDialog *d = new TDialog(TRect(0, 0, 74, 20), caption);
-    d->options |= ofCentered;
-    TInputLine *title = addField(d, 3, 2, 66, "~T~itle", 200, f.title);
-    TInputLine *date = addField(d, 3, 5, 12, "D~a~te", 20, f.date);
-    TInputLine *start = addField(d, 18, 5, 7, "~S~tart", 5, f.start);
-    TInputLine *end = addField(d, 28, 5, 7, "~E~nd", 5, f.end);
-    TInputLine *days = addField(d, 38, 5, 4, "Da~y~s", 3, f.days);
-    TInputLine *remind = addField(d, 46, 5, 8, "Re~m~ind", 6, f.remind);
-    d->insert(new TStaticText(TRect(56, 6, 72, 7), "min before / off"));
-    TInputLine *loc = addField(d, 3, 8, 66, "~L~ocation", 200, f.location);
-    TRadioButtons *rep = new TRadioButtons(
-        TRect(3, 12, 17, 17),
-        new TSItem("N~o~ne", new TSItem("Dai~l~y", new TSItem("~W~eekly", new TSItem("Mo~n~thly", new TSItem("Y~e~arly", nullptr))))));
-    ushort rv = (ushort)f.repeat;
-    rep->setData(&rv);
-    d->insert(rep);
-    d->insert(new TLabel(TRect(3, 11, 17, 12), "~R~epeat", rep));
-    TInputLine *every = addField(d, 20, 11, 5, "E~v~ery", 3, f.interval);
-    d->insert(new TStaticText(TRect(26, 12, 38, 13), "(n-th)"));
-    TInputLine *until = addField(d, 20, 14, 12, "U~n~til", 20, f.until);
-    TInputLine *notes = addField(d, 36, 11, 33, "No~t~es", 400, f.notes);
-    d->insert(new TStaticText(TRect(36, 14, 70, 17), "Dates: 2026-11-05, 11-05, tomorrow,\n+3, fri.  Times: 14:30.  Empty start\n= all day.  A repeat changes the series."));
-    int y = 17;
-    if (mode == 1)
-    {
-        d->insert(new TButton(TRect(10, y, 22, y + 2), "~O~K", cmOK, bfDefault));
-        d->insert(new TButton(TRect(26, y, 38, y + 2), "Cancel", cmCancel, bfNormal));
-        d->insert(new TButton(TRect(42, y, 54, y + 2), "~D~elete", cmNo, bfNormal));
-    }
-    else if (mode == 2)
-    {
-        d->insert(new TButton(TRect(10, y, 22, y + 2), "~A~dd", cmOK, bfDefault));
-        d->insert(new TButton(TRect(26, y, 38, y + 2), "Ski~p~", cmCancel, bfNormal));
-        d->insert(new TButton(TRect(42, y, 54, y + 2), "Disca~r~d", cmNo, bfNormal));
-    }
-    else
-    {
-        d->insert(new TButton(TRect(22, y, 34, y + 2), "~O~K", cmOK, bfDefault));
-        d->insert(new TButton(TRect(38, y, 50, y + 2), "Cancel", cmCancel, bfNormal));
-    }
-    title->select();
-    ushort r = TProgram::deskTop->execView(d);
-    f.title = text(title);
-    f.date = text(date);
-    f.start = text(start);
-    f.end = text(end);
-    f.days = text(days);
-    f.remind = text(remind);
-    f.location = text(loc);
-    rep->getData(&rv);
-    f.repeat = rv;
-    f.interval = text(every);
-    f.until = text(until);
-    f.notes = text(notes);
-    TObject::destroy(d);
-    return r;
-}
-
-struct TodoForm
-{
-    std::string uid, title, due, prio = "0", cats, notes;
-};
-
-ushort todoDialog(const char *caption, TodoForm &f, int mode)
-{
-    TDialog *d = new TDialog(TRect(0, 0, 74, 15), caption);
-    d->options |= ofCentered;
-    TInputLine *title = addField(d, 3, 2, 66, "~T~o do", 300, f.title);
-    TInputLine *due = addField(d, 3, 5, 12, "~D~ue", 20, f.due);
-    TInputLine *prio = addField(d, 18, 5, 4, "~P~riority", 2, f.prio == "0" ? "" : f.prio);
-    TInputLine *cats = addField(d, 30, 5, 38, "~C~ategories", 100, f.cats);
-    TInputLine *notes = addField(d, 3, 8, 66, "~N~otes", 400, f.notes);
-    d->insert(new TStaticText(TRect(3, 10, 70, 11), "Priority 1 (highest) to 9, empty for none.  Due: 2026-11-05, 11-05, tomorrow, +3, fri."));
-    int y = 12;
-    if (mode == 1)
-    {
-        d->insert(new TButton(TRect(10, y, 22, y + 2), "~O~K", cmOK, bfDefault));
-        d->insert(new TButton(TRect(26, y, 38, y + 2), "Cancel", cmCancel, bfNormal));
-        d->insert(new TButton(TRect(42, y, 54, y + 2), "Dele~t~e", cmNo, bfNormal));
-    }
-    else if (mode == 2)
-    {
-        d->insert(new TButton(TRect(10, y, 22, y + 2), "~A~dd", cmOK, bfDefault));
-        d->insert(new TButton(TRect(26, y, 38, y + 2), "Ski~p~", cmCancel, bfNormal));
-        d->insert(new TButton(TRect(42, y, 54, y + 2), "Disca~r~d", cmNo, bfNormal));
-    }
-    else
-    {
-        d->insert(new TButton(TRect(22, y, 34, y + 2), "~O~K", cmOK, bfDefault));
-        d->insert(new TButton(TRect(38, y, 50, y + 2), "Cancel", cmCancel, bfNormal));
-    }
-    title->select();
-    ushort r = TProgram::deskTop->execView(d);
-    f.title = text(title);
-    f.due = text(due);
-    f.prio = text(prio);
-    f.cats = text(cats);
-    f.notes = text(notes);
-    TObject::destroy(d);
-    return r;
-}
-
 // A multi-line text box with its own scroll bar, in a dialog.  Enter makes a new line; Tab leaves it.
 TMemo *addMemo(TDialog *d, const TRect &r, const std::string &init, int maxLen = 6000)
 {
@@ -642,6 +530,120 @@ std::string escNl(const std::string &s)
     return o;
 }
 
+struct EvForm
+{
+    std::string uid, title, date, start, end, location, remind, interval = "1", until, notes, days = "1";
+    int repeat = 0;
+};
+
+// mode 0: a new event (OK, Cancel); 1: editing (+ Delete: cmNo); 2: asked for by another app
+// (Add, Skip, Discard: cmNo).
+ushort eventDialog(const char *caption, EvForm &f, int mode)
+{
+    TDialog *d = new TDialog(TRect(0, 0, 74, 27), caption);
+    d->options |= ofCentered;
+    TInputLine *title = addField(d, 3, 2, 66, "~T~itle", 200, f.title);
+    TInputLine *date = addField(d, 3, 5, 12, "D~a~te", 20, f.date);
+    TInputLine *start = addField(d, 18, 5, 7, "~S~tart", 5, f.start);
+    TInputLine *end = addField(d, 28, 5, 7, "~E~nd", 5, f.end);
+    TInputLine *days = addField(d, 38, 5, 4, "Da~y~s", 3, f.days);
+    TInputLine *remind = addField(d, 46, 5, 8, "Re~m~ind", 6, f.remind);
+    d->insert(new TStaticText(TRect(56, 6, 72, 7), "min before / off"));
+    TInputLine *loc = addField(d, 3, 8, 66, "~L~ocation", 200, f.location);
+    TRadioButtons *rep = new TRadioButtons(
+        TRect(3, 12, 17, 17),
+        new TSItem("N~o~ne", new TSItem("Dai~l~y", new TSItem("~W~eekly", new TSItem("Mo~n~thly", new TSItem("Y~e~arly", nullptr))))));
+    ushort rv = (ushort)f.repeat;
+    rep->setData(&rv);
+    d->insert(rep);
+    d->insert(new TLabel(TRect(3, 11, 17, 12), "~R~epeat", rep));
+    TInputLine *every = addField(d, 20, 11, 5, "E~v~ery", 3, f.interval);
+    d->insert(new TStaticText(TRect(26, 12, 38, 13), "(n-th)"));
+    TInputLine *until = addField(d, 20, 14, 12, "U~n~til", 20, f.until);
+    d->insert(new TStaticText(TRect(36, 12, 71, 16), "Dates: 2026-11-05, 11-05, tomorrow,\n+3, fri.  Times: 14:30.  Empty start\n= all day.  A repeat changes the series."));
+    TMemo *notes = addMemo(d, TRect(3, 18, 70, 24), f.notes);
+    d->insert(new TLabel(TRect(3, 17, 40, 18), "No~t~es (Enter: new line, Tab: leave)", notes));
+    int y = 24;
+    if (mode == 1)
+    {
+        d->insert(new TButton(TRect(10, y, 22, y + 2), "~O~K", cmOK, bfDefault));
+        d->insert(new TButton(TRect(26, y, 38, y + 2), "Cancel", cmCancel, bfNormal));
+        d->insert(new TButton(TRect(42, y, 54, y + 2), "~D~elete", cmNo, bfNormal));
+    }
+    else if (mode == 2)
+    {
+        d->insert(new TButton(TRect(10, y, 22, y + 2), "~A~dd", cmOK, bfDefault));
+        d->insert(new TButton(TRect(26, y, 38, y + 2), "Ski~p~", cmCancel, bfNormal));
+        d->insert(new TButton(TRect(42, y, 54, y + 2), "Disca~r~d", cmNo, bfNormal));
+    }
+    else
+    {
+        d->insert(new TButton(TRect(22, y, 34, y + 2), "~O~K", cmOK, bfDefault));
+        d->insert(new TButton(TRect(38, y, 50, y + 2), "Cancel", cmCancel, bfNormal));
+    }
+    title->select();
+    ushort r = TProgram::deskTop->execView(d);
+    f.title = text(title);
+    f.date = text(date);
+    f.start = text(start);
+    f.end = text(end);
+    f.days = text(days);
+    f.remind = text(remind);
+    f.location = text(loc);
+    rep->getData(&rv);
+    f.repeat = rv;
+    f.interval = text(every);
+    f.until = text(until);
+    f.notes = memoText(notes);
+    TObject::destroy(d);
+    return r;
+}
+
+struct TodoForm
+{
+    std::string uid, title, due, prio = "0", cats, notes;
+};
+
+ushort todoDialog(const char *caption, TodoForm &f, int mode)
+{
+    TDialog *d = new TDialog(TRect(0, 0, 74, 23), caption);
+    d->options |= ofCentered;
+    TInputLine *title = addField(d, 3, 2, 66, "~T~o do", 300, f.title);
+    TInputLine *due = addField(d, 3, 5, 12, "~D~ue", 20, f.due);
+    TInputLine *prio = addField(d, 18, 5, 4, "~P~riority", 2, f.prio == "0" ? "" : f.prio);
+    TInputLine *cats = addField(d, 30, 5, 38, "~C~ategories", 100, f.cats);
+    TMemo *notes = addMemo(d, TRect(3, 9, 70, 17), f.notes);
+    d->insert(new TLabel(TRect(3, 8, 40, 9), "~N~otes (Enter: new line, Tab: leave)", notes));
+    d->insert(new TStaticText(TRect(3, 17, 70, 18), "Priority 1 (highest) to 9, empty for none.  Due: 2026-11-05, 11-05, tomorrow, +3, fri."));
+    int y = 19;
+    if (mode == 1)
+    {
+        d->insert(new TButton(TRect(10, y, 22, y + 2), "~O~K", cmOK, bfDefault));
+        d->insert(new TButton(TRect(26, y, 38, y + 2), "Cancel", cmCancel, bfNormal));
+        d->insert(new TButton(TRect(42, y, 54, y + 2), "Dele~t~e", cmNo, bfNormal));
+    }
+    else if (mode == 2)
+    {
+        d->insert(new TButton(TRect(10, y, 22, y + 2), "~A~dd", cmOK, bfDefault));
+        d->insert(new TButton(TRect(26, y, 38, y + 2), "Ski~p~", cmCancel, bfNormal));
+        d->insert(new TButton(TRect(42, y, 54, y + 2), "Disca~r~d", cmNo, bfNormal));
+    }
+    else
+    {
+        d->insert(new TButton(TRect(22, y, 34, y + 2), "~O~K", cmOK, bfDefault));
+        d->insert(new TButton(TRect(38, y, 50, y + 2), "Cancel", cmCancel, bfNormal));
+    }
+    title->select();
+    ushort r = TProgram::deskTop->execView(d);
+    f.title = text(title);
+    f.due = text(due);
+    f.prio = text(prio);
+    f.cats = text(cats);
+    f.notes = memoText(notes);
+    TObject::destroy(d);
+    return r;
+}
+
 struct NoteForm
 {
     std::string uid, title, cats, notes;
@@ -681,13 +683,13 @@ std::string noteArgs(const NoteForm &f, bool creating)
 std::string eventArgs(const EvForm &f)
 {
     return opt("date", f.date) + opt("start", f.start) + opt("end", f.end) + opt("days", f.days) +
-           opt("location", f.location) + opt("notes", f.notes) + opt("repeat", kRepeat[f.repeat]) +
+           opt("location", f.location) + opt("notesx", escNl(f.notes)) + opt("repeat", kRepeat[f.repeat]) +
            opt("interval", f.interval) + opt("until", f.until) + opt("remind", f.remind) + " -- " + shq(f.title);
 }
 
 std::string todoArgs(const TodoForm &f)
 {
-    return opt("due", f.due) + opt("prio", f.prio) + opt("cats", f.cats) + opt("notes", f.notes);
+    return opt("due", f.due) + opt("prio", f.prio) + opt("cats", f.cats) + opt("notesx", escNl(f.notes));
 }
 
 int repeatIndex(const std::string &r)
