@@ -244,9 +244,13 @@ def _load_contacts():
     None where it is not installed."""
     import importlib.util
     here = os.path.dirname(os.path.realpath(__file__))
+    paths = []
+    if os.environ.get("TVCONTACTS_PY"):         # the same override the Contacts window honours; the tests use it
+        paths.append(os.environ["TVCONTACTS_PY"])
     for d in (here, os.path.join(here, "..", "..", "tvcommon", "py"), os.path.join(here, "..", "share", "tvmail"),
               "/usr/local/share/tvmail", "/usr/share/tvmail"):
-        path = os.path.join(d, "tvcontacts.py")
+        paths.append(os.path.join(d, "tvcontacts.py"))
+    for path in paths:
         if os.path.isfile(path):
             try:
                 spec = importlib.util.spec_from_file_location("tvcontacts", path)
