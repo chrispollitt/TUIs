@@ -725,6 +725,23 @@ class TestMailutilsInterop(Base):
         self.assertEqual(
             be._cred("cpbee", "chris", "TVMAIL_IMAP_PASS", "imap"), "fromnetrc")
 
+    def test_cred_mu_tickets_match_the_short_and_the_long_spelling_of_a_host(self):
+        # issue 25 (587 with a login): the smtp ticket may be written for cpbee or cpbee.cmnet, the config uses the other
+        self._write_tickets("smtp://chris:spw@cpbee.cmnet\n")  # allowlist secret: test value
+        self.assertEqual(be._cred("cpbee", "chris", "TVMAIL_SMTP_PASS", "smtp"), "spw")
+        self._write_tickets("smtp://chris:spw2@cpbee\n")  # allowlist secret: test value
+        self.assertEqual(be._cred("cpbee.cmnet", "chris", "TVMAIL_SMTP_PASS", "smtp"), "spw2")
+        self._write_tickets("smtp://chris:spw3@cpbee.CMNET.\n")  # allowlist secret: test value
+        self.assertEqual(be._cred("cpbee", "chris", "TVMAIL_SMTP_PASS", "smtp"), "spw3")
+
+    def test_same_host_is_not_fooled_by_other_machines_or_addresses(self):
+        self.assertTrue(be._same_host("cpbee", "cpbee.cmnet"))
+        self.assertFalse(be._same_host("cpbee", "cpbee2.cmnet"))
+        self.assertFalse(be._same_host("cpbee.cmnet", "cpbee.example.org"))     # two long names stay different
+        self.assertFalse(be._same_host("192.168.10", "192.168.10.1"))           # addresses match exactly only
+        self.assertFalse(be._same_host("", "cpbee"))
+        self.assertTrue(be._same_host("CPBEE", "cpbee"))
+
     def test_cred_prefers_env_over_mu_tickets(self):
         self._write_tickets("*://chris:fromticket@cpbee\n")
         os.environ["TVMAIL_IMAP_PASS"] = "fromenv"
