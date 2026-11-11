@@ -166,6 +166,7 @@ def main():
         env["MAIL"] = str(spool)
         term = env.get("TERM", "")
         env["TERM"] = "xterm" if term in ("", "dumb") else term
+        env["TV_NO_HELPER_CHECK"] = "1"   # an older installed tvmail-backend must not stop the test at the version prompt
         bdir = a.backend_dir or str(binpath.parent.parent / "backend")
         env["PATH"] = bdir + os.pathsep + env.get("PATH", "")
 
