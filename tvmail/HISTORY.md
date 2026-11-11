@@ -5,6 +5,11 @@ Releases are tagged `tvmail-vX.Y.Z`; `git log` has the rest.
 
 ## Unreleased
 
+- **Fixes for daily use (BUGS.md #6, #33; #15 turned out to be done already):** Ctrl-D, Ctrl-R and Ctrl-N are the
+  editor's own keys in a compose or signature window (cursor right, page up) and no longer delete, reply or start a
+  new message there; and a backend that answers too slowly is given up on after 8 s (not waited for to the end, then
+  asked again): the next action starts a fresh one.  tvchat shares the second fix.
+
 - **Contacts window and Send to > Contacts:** File > Contacts... (shared with tvchat and tvcal) adds, edits and deletes contacts and groups in the address book on the server; Message > Send to > Contacts adds the sender once.
 
 - **Address book on the server:** the Address book window and the To: expansion also use your contacts and groups kept in

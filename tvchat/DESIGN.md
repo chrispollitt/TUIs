@@ -95,7 +95,9 @@ fixed.
   poll shut menus at once (BUGS tvmail #44), and a dialog swallows commands it
   does not know. Events wait in the backend's queue meanwhile.
 - **`CoProcess`** (tvcommon) forks `<program> serve`, waits for a `0 5\nready`
-  banner, sends one request line per call, polls 8 s for the first byte,
+  banner, sends one request line per call, polls 8 s for the first byte (a
+  backend that is merely slow is let go of, not waited for or asked again: the
+  call returns false and the next one starts a fresh child; tvmail #33),
   restarts a dead child up to three times in a row, and bumps `generation()`.
   Every pipe step retries on `EINTR` (tvmail #43: a `SIGWINCH` was taken for a
   dead backend).

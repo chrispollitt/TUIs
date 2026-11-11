@@ -22,10 +22,20 @@ bool CoProcess::call(const std::string &req, std::string &body, int &status)
 {
     if (permFail)
         return false;
+    reapAbandoned();
+    timedOut = false;
     if (!up && !start())
         return false;
     if (!writeLine(req) || !readFrame(body, status))
     {
+        // No answer in time (bug #33): the backend is slow, not dead.  Waiting for it to finish (what
+        // stop() does) froze the UI for the rest of the reply, and asking again would only wait again,
+        // so let it go - the next call starts a fresh one - and say there was no answer.
+        if (timedOut)
+        {
+            abandon();
+            return false;
+        }
         if (!restart() || !writeLine(req) || !readFrame(body, status))
             return false;
     }
@@ -56,6 +66,48 @@ void CoProcess::stop()
     }
     pid = -1;
     up = false;
+}
+
+// Let go of a backend that is still busy: close the pipes (it ends when it next reads, or on its next write to
+// the closed pipe) and reap it later, without waiting for it here.
+void CoProcess::abandon()
+{
+    if (wr)
+    {
+        std::fclose(wr);
+        wr = nullptr;
+    }
+    if (rd)
+    {
+        std::fclose(rd);
+        rd = nullptr;
+    }
+    if (pid > 0)
+        abandoned.push_back(pid);
+    pid = -1;
+    up = false;
+}
+
+void CoProcess::reapAbandoned()
+{
+    for (size_t i = 0; i < abandoned.size();)
+    {
+        int s;
+        pid_t r = ::waitpid(abandoned[i], &s, WNOHANG);
+        if (r == abandoned[i] || (r < 0 && errno != EINTR))
+            abandoned.erase(abandoned.begin() + (long)i);
+        else
+            ++i;
+    }
+}
+
+// How long a request may take before the answer is given up on: 8 s, or TV_CALL_TIMEOUT_MS (the tests'
+// way to make a slow backend quick to wait for).
+static int callTimeoutMs()
+{
+    const char *e = ::getenv("TV_CALL_TIMEOUT_MS");
+    int n = e ? std::atoi(e) : 0;
+    return n > 0 ? n : 8000;
 }
 
 // Fire-and-forget: run `<program> <args>` detached, stdin from
@@ -225,19 +277,27 @@ bool CoProcess::readFrame(std::string &body, int &status)
     struct pollfd pfd;
     pfd.fd = ::fileno(rd);
     pfd.events = POLLIN;
-    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(8000);
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(callTimeoutMs());
     for (;;)
     {
         long left = (long)std::chrono::duration_cast<std::chrono::milliseconds>(
                         deadline - std::chrono::steady_clock::now())
                         .count();
         if (left <= 0)
+        {
+            timedOut = true;
             return false;
+        }
         pfd.revents = 0;
         int r = ::poll(&pfd, 1, (int)left);
         if (r > 0)
             break;
-        if (r == 0 || errno != EINTR)
+        if (r == 0)
+        {
+            timedOut = true;
+            return false;
+        }
+        if (errno != EINTR)
             return false;
     }
 

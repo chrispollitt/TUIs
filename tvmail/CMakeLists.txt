@@ -75,6 +75,10 @@ if(TVMAIL_PYTHON)
                      --backend-dir "${CMAKE_CURRENT_SOURCE_DIR}/backend")
     set_tests_properties(e2e_regress PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 400)
 endif()
+# backend_timeout : a backend that answers too slowly is given up on, not waited for (BUGS.md #33)
+add_test(NAME backend_timeout
+         COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/backend_timeout.sh" $<TARGET_FILE:tvmail>)
+set_tests_properties(backend_timeout PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "ok: gave up")
 # install_roundtrip : cmake --install into a temp prefix, ./uninstall.sh it
 add_test(NAME install_roundtrip
          COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/install_roundtrip.sh"

@@ -114,6 +114,11 @@ std::string mboxOpt();
 // reaching into its panes.
 TWindow *newMailWindow(const TRect &bounds);
 void showMailWindow(); // bring the 3-pane mail window to the front
+// Ctrl-D / Ctrl-R / Ctrl-N are status-line and menu keys (Delete, Reply, New) but also the editor's own
+// (cursor right, page up, ...), and the menu bar and status line see a key before the focused view.  While
+// an editor window (compose, signature) is the active one, the menu bar and status line let the three keys
+// through to the editor (BUGS.md #6).  Called from the editor windows' setState().
+void editorOwnsCtrlKeys(bool owns);                         // app.cpp
 int mailFocusedRow();             // the highlighted row of gRows, or -1
 void mailMarkFocused(bool read);
 void mailReload();                // F5: counts + the folder, same message
