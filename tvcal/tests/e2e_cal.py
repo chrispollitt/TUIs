@@ -50,7 +50,7 @@ def backend(tv, *argv):
 
 
 def started(tv, c):
-    c.check(tv.wait(lambda: tv.has("Agenda from") and tv.has("To-do (0)"), 15), "tvcal never showed its window")
+    c.check(tv.wait(lambda: tv.has("Agenda from") and tv.has("Services"), 15), "tvcal never showed its window")
 
 
 def tvcal(opts, setup=None):
@@ -65,10 +65,20 @@ def panes(opts):
     today = dt.date.today()
     c.check(tv.has(today.strftime("%B %Y")), "the month heading is missing")
     c.check(tv.has("Mo Tu We Th Fr Sa Su"), "the weekday row is missing")
-    c.check(tv.has("[ " + today.strftime("%B")), "the month pane does not show it has the focus")
+    c.check(tv.has("[ Services"), "the service pane does not show it has the focus")
+    c.check(tv.has("Calendar") and tv.has("To-do"), "the services are not listed")
     c.check(tv.has("(nothing planned)"), "the agenda does not say today is empty")
+    c.check(tv.has("Day"), "the detail pane has no heading")
+    tv.send("Tab")
+    c.check(tv.wait(lambda: tv.has("[ " + today.strftime("%B")), 3), "Tab did not move to the month")
     tv.send("Tab")
     c.check(tv.wait(lambda: tv.has("[ Agenda"), 3), "Tab did not move to the agenda")
+    tv.send("Tab")
+    c.check(tv.wait(lambda: tv.has("[ Day") or tv.has("[ Event"), 3), "Tab did not move to the detail pane")
+    tv.send("Tab")
+    c.check(tv.wait(lambda: tv.has("[ Services"), 3), "Tab did not come back to the services")
+    tv.send("Down")
+    c.check(tv.wait(lambda: tv.has("To-do (0)") and not tv.has("Mo Tu We"), 5), "Down did not show the to-do service")
     tv.send("Tab")
     c.check(tv.wait(lambda: tv.has("[ To-do"), 3), "Tab did not move to the to-do list")
     tv.send("\x18" if False else alt("x"))
@@ -85,6 +95,9 @@ def new_event_shows_in_the_agenda(opts):
     tv.send("Enter")
     c.check(tv.wait(lambda: tv.has("Lunch with Ann"), 8), "the new event is not in the agenda")
     c.check(tv.has("12:30"), "the event's time is missing")
+    c.check(tv.has("Calendar") and tv.has("1"), "the service list does not count the day's event")
+    tv.send("Tab", "Tab", "Down")                        # month, agenda, the event under the day's heading
+    c.check(tv.wait(lambda: tv.has("When:") and tv.has("12:30"), 5), "the detail pane does not show the event")
     out = backend(tv, "range", dt.date.today().isoformat(), dt.date.today().isoformat())
     c.check("Lunch with Ann" in out, "the backend does not hold the event: " + out)
     c.check(tv.has("*"), "the month does not mark the day as busy")
@@ -99,7 +112,8 @@ def todo_add_and_tick(opts):
     tv.send("Water the plants", "Enter")
     c.check(tv.wait(lambda: tv.has("[ ] Water the plants"), 8), "the to-do is not listed")
     c.check(tv.has("To-do (1)"), "the to-do heading does not count it")
-    tv.send("Tab", "Tab", " ")
+    c.check(tv.has("Status:") and tv.has("not done"), "the detail pane does not show the to-do")
+    tv.send("Tab", " ")
     c.check(tv.wait(lambda: tv.has("To-do (0)"), 5), "space did not tick the to-do off")
     c.check("COMPLETED" in open(tv.tmp / "cal.ics").read(), "the file does not record it as completed")
 
@@ -120,6 +134,7 @@ def incoming_request_is_added_on_a_yes(opts):
     c.check(tv.wait("From tvmail", 5), "Pending... did not open the request")
     c.check(tv.has("Reply to Bob"), "the dialog is not filled in")
     tv.send("Enter")                                     # Add
+    tv.send("Down")                                      # the To-do service
     c.check(tv.wait(lambda: tv.has("[ ] Reply to Bob"), 8), "the to-do was not added")
     c.check(not tv.has("incoming"), "the incoming count did not go")
 

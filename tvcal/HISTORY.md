@@ -1,5 +1,11 @@
 # History
 
+## Unreleased
+
+- The three-pane window (tvcal/UI-REDESIGN.md, step 1): Services on the left (Calendar, To-do) with the month
+  under them, the agenda or the to-do list top right, the item under the bar shown whole bottom right.  The
+  Calendar and To-do menus switch to their service.  Notes, Inbox, Reminders and Contacts follow.
+
 ## 0.1.0 (Nov 3, 2026) - first version
 
 - tvcal: month, agenda and to-do list; events with repeats and reminders; to-dos with due dates and

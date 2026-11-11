@@ -376,6 +376,54 @@ public:
     }
 };
 
+// The services, top left: what the other panes show.  A count at the right of each name.
+struct Service
+{
+    const char *name;
+    int count = -1; // -1: none shown
+};
+
+class TServicePane : public TCalList
+{
+public:
+    std::vector<Service> items;
+
+    TServicePane(const TRect &b) : TCalList(b, nullptr)
+    {
+        items = {{"Calendar"}, {"To-do"}};
+        setRange((short)items.size());
+    }
+    void getText(char *dest, short item, short maxLen) override
+    {
+        if (item < 0 || item >= (short)items.size())
+        {
+            putText(dest, std::string(), maxLen);
+            return;
+        }
+        std::string name = items[item].name, n = items[item].count >= 0 ? std::to_string(items[item].count) : "";
+        // fitCols pads on the right to the width it is given
+        // (a column short of the width: the list viewer keeps maxLen - 1 characters)
+        putText(dest, n.empty() ? fitCols(name, size.x - 1) : fitCols(name, std::max(1, size.x - (int)n.size() - 2)) + " " + n, maxLen);
+    }
+};
+
+// The item shown whole, bottom right: read-only text, the notes in full.  Enter on a list edits.
+class TCalDetail : public TMailText
+{
+public:
+    TCalDetail(const TRect &b, TScrollBar *v) : TMailText(b, nullptr, v, {std::string()}, true) {}
+    void setState(ushort aState, Boolean enable) override
+    {
+        TMailText::setState(aState, enable);
+        if (enable && (aState & sfFocused) && owner)
+            message(owner, evBroadcast, cmCalPane, this);
+    }
+    TColorAttr mapColor(uchar i) override
+    {
+        return i == 1 ? cNorm() : (i == 2 ? cHi() : TView::mapColor(i));
+    }
+};
+
 // ----------------------------------------------------------- the dialogs ---
 TInputLine *addField(TDialog *d, int x, int y, int w, const char *label, int maxLen, const std::string &init)
 {
@@ -532,13 +580,16 @@ int gIncoming = 0;
 
 class TCalWindow : public TWindow
 {
+    TServicePane *svc = nullptr;
     TMonthPane *month = nullptr;
     TAgendaPane *agenda = nullptr;
     TTodoPane *todo = nullptr;
-    TPaneTitle *monthTitle = nullptr, *agendaTitle = nullptr, *todoTitle = nullptr;
+    TCalDetail *detail = nullptr;
+    TPaneTitle *svcTitle = nullptr, *monthTitle = nullptr, *listTitle = nullptr, *detailTitle = nullptr;
     TTableHead *todoHead = nullptr;
     TDivider *vdiv = nullptr;
-    TScrollBar *agendaVsb = nullptr, *todoVsb = nullptr;
+    TScrollBar *agendaVsb = nullptr, *todoVsb = nullptr, *detailVsb = nullptr;
+    int service = 0; // 0 Calendar, 1 To-do
 
     Ymd sel, today;
     std::vector<Occ> agendaOcc; // occurrences from agLo to agHi
@@ -547,30 +598,41 @@ class TCalWindow : public TWindow
     bool showDone = false;
     bool settling = false; // a pane was moved by code: it does not move the others again
 
-    int leftWidth() const { return std::max(26, std::min(40, size.x / 3)); }
+    int leftWidth() const { return std::max(26, std::min(30, size.x / 4)); }
 
+    // Left: Services, and under them the month (Calendar only).  Right: the items of the service
+    // (the agenda or the to-do list, one on top of the other) over the item shown whole.
     struct Rects
     {
-        TRect monthTitle, month, todoTitle, todoHead, todo, todoVsb, vbar, agendaTitle, agenda, agendaVsb;
+        TRect svcTitle, svc, monthTitle, month, vbar, listTitle, agenda, agendaVsb, todoHead, todo, todoVsb, detailTitle, detail,
+            detailVsb;
     };
     Rects paneRects() const
     {
         int W = size.x, H = size.y, L = leftWidth();
+        int n = svc ? (int)svc->items.size() : 2;
+        int sy = 1 + (H - 2) * 2 / 5;
+        if (sy < 6)
+            sy = 6; // title + a few rows + the detail title
+        if (sy > H - 5)
+            sy = H - 5;
         Rects r;
-        r.monthTitle = TRect(1, 1, 1 + L, 2);
-        r.month = TRect(1, 2, 1 + L, 9);
-        r.todoTitle = TRect(1, 9, 1 + L, 10);
-        r.todoHead = TRect(1, 10, 1 + L - 1, 11);
-        r.todo = TRect(1, 11, 1 + L - 1, std::max(12, H - 1));
-        r.todoVsb = TRect(L, 11, 1 + L, std::max(12, H - 1));
+        r.svcTitle = TRect(1, 1, 1 + L, 2);
+        r.svc = TRect(1, 2, 1 + L, 2 + n);
+        r.monthTitle = TRect(1, 3 + n, 1 + L, 4 + n);
+        r.month = TRect(1, 4 + n, 1 + L, 11 + n);
         r.vbar = TRect(1 + L, 1, 2 + L, H - 1);
-        r.agendaTitle = TRect(2 + L, 1, W - 1, 2);
-        r.agenda = TRect(2 + L, 2, W - 2, H - 1);
-        r.agendaVsb = TRect(W - 2, 2, W - 1, H - 1);
+        r.listTitle = TRect(2 + L, 1, W - 1, 2);
+        r.agenda = TRect(2 + L, 2, W - 2, sy);
+        r.agendaVsb = TRect(W - 2, 2, W - 1, sy);
+        r.todoHead = TRect(2 + L, 2, W - 2, 3);
+        r.todo = TRect(2 + L, 3, W - 2, std::max(4, sy));
+        r.todoVsb = TRect(W - 2, 3, W - 1, std::max(4, sy));
+        r.detailTitle = TRect(2 + L, sy, W - 1, sy + 1);
+        r.detail = TRect(2 + L, sy + 1, W - 2, H - 1);
+        r.detailVsb = TRect(W - 2, sy + 1, W - 1, H - 1);
         return r;
     }
-
-    TView *panes[3];
 
 public:
     TCalWindow(const TRect &bounds)
@@ -581,23 +643,31 @@ public:
         growMode = gfGrowHiX | gfGrowHiY;
         today = sel = ymdToday();
 
+        svc = new TServicePane(TRect(0, 0, 1, 1));
         Rects R = paneRects();
+        svcTitle = new TPaneTitle(R.svcTitle, "Services");
+        svc->changeBounds(R.svc);
         monthTitle = new TPaneTitle(R.monthTitle, "Month");
         month = new TMonthPane(R.month);
-        todoTitle = new TPaneTitle(R.todoTitle, "To-do");
         todoHead = new TTableHead(R.todoHead, kTodoCols);
         todoVsb = new TScrollBar(R.todoVsb);
         todo = new TTodoPane(R.todo, todoVsb);
         vdiv = new TDivider(R.vbar, true);
-        agendaTitle = new TPaneTitle(R.agendaTitle, "Agenda");
+        listTitle = new TPaneTitle(R.listTitle, "Agenda");
         agendaVsb = new TScrollBar(R.agendaVsb);
         agenda = new TAgendaPane(R.agenda, agendaVsb);
-        for (TView *v : {(TView *)month, (TView *)todoHead, (TView *)todo, (TView *)agenda, (TView *)monthTitle, (TView *)todoTitle,
-                         (TView *)agendaTitle, (TView *)vdiv, (TView *)todoVsb, (TView *)agendaVsb})
+        detailTitle = new TPaneTitle(R.detailTitle, "Event");
+        detailVsb = new TScrollBar(R.detailVsb);
+        detail = new TCalDetail(R.detail, detailVsb);
+        for (TView *v : {(TView *)svc, (TView *)month, (TView *)todoHead, (TView *)todo, (TView *)agenda, (TView *)svcTitle,
+                         (TView *)monthTitle, (TView *)listTitle, (TView *)detailTitle, (TView *)vdiv, (TView *)todoVsb,
+                         (TView *)agendaVsb, (TView *)detail, (TView *)detailVsb})
             v->growMode = 0; // placed by changeBounds()
-        panes[0] = month;
-        panes[1] = agenda;
-        panes[2] = todo;
+
+        svc->moved = [this] { useService(svc->focused); };
+        svc->enter = [this] { focusPane(listPane()); };
+        svc->pick = [this] { focusPane(listPane()); };
+        svc->newItem = [this] { service == 0 ? newEvent() : newTodo(); };
 
         month->moveDays = [this](int n) { setSel(ymdAdd(sel, n), false); };
         month->moveMonths = [this](int n) { setSel(ymdAddMonths(sel, n), false); };
@@ -611,54 +681,202 @@ public:
             const AgRow *r = agenda->current();
             if (r && !settling)
                 setSel(r->date, true);
+            showDetail();
         };
         agenda->enter = [this] { editEvent(); };
         agenda->pick = [this] { editEvent(); };
         agenda->newItem = [this] { newEvent(); };
         agenda->del = [this] { deleteEvent(); };
 
+        todo->moved = [this] { showDetail(); };
         todo->enter = [this] { editTodo(); };
         todo->pick = [this] { toggleTodo(); };
         todo->newItem = [this] { newTodo(); };
         todo->del = [this] { deleteTodo(); };
 
         insert(vdiv);
+        insert(svcTitle);
         insert(monthTitle);
-        insert(todoTitle);
+        insert(listTitle);
+        insert(detailTitle);
         insert(todoHead);
-        insert(agendaTitle);
         insert(todoVsb);
         insert(agendaVsb);
+        insert(detailVsb);
+        // insert order sets the Tab cycle: services -> month -> the items -> the item shown
+        insert(detail);
         insert(todo);
         insert(agenda);
-        insert(month); // first to have the focus
+        insert(month);
+        insert(svc);
         gWin = this;
         refreshAll(true);
-        month->select();
+        useService(0);
+        svc->select();
         updateTitles();
     }
     ~TCalWindow() { gWin = nullptr; }
 
     std::string dateShown() const { return ymdIso(sel); }
     bool showsDone() const { return showDone; }
+    int serviceShown() const { return service; }
     void setShowDone(bool on)
     {
         showDone = on;
         refreshTodos();
     }
 
+    // The list of the service shown, and which panes the window cycles through with Tab.
+    TView *listPane() const { return service == 0 ? (TView *)agenda : (TView *)todo; }
+    std::vector<TView *> cycle() const
+    {
+        std::vector<TView *> v{svc};
+        if (service == 0)
+            v.push_back(month);
+        v.push_back(listPane());
+        v.push_back(detail);
+        return v;
+    }
+
+    // Calendar or To-do: show that service's panes, hide the others', and set the headings.
+    void useService(int s)
+    {
+        if (s < 0 || s >= (int)svc->items.size())
+            return;
+        service = s;
+        bool cal = s == 0;
+        for (TView *v : {(TView *)month, (TView *)monthTitle, (TView *)agenda, (TView *)agendaVsb})
+            cal ? v->show() : v->hide();
+        for (TView *v : {(TView *)todo, (TView *)todoHead, (TView *)todoVsb})
+            cal ? v->hide() : v->show();
+        showDetail();
+        updateTitles();
+        if (svc->focused != s)
+            svc->focusItem((short)s);
+    }
+
     // ---- what the panes show
     void updateTitles()
     {
+        svc->items[0].count = (int)monthCountOn(sel);
+        svc->items[1].count = (int)todo->items.size();
+        svc->drawView();
         monthTitle->setLabel(std::string(kMonthNames[sel.m - 1]) + " " + std::to_string(sel.y));
         int n = (int)todo->items.size();
-        todoTitle->setLabel(std::string("To-do (") + std::to_string(n) + (showDone ? ", with done" : "") + ")");
-        agendaTitle->setLabel("Agenda from " + niceDate(sel));
+        listTitle->setLabel(service == 0 ? "Agenda from " + niceDate(sel)
+                                         : std::string("To-do (") + std::to_string(n) + (showDone ? ", with done" : "") + ")");
+        detailTitle->setLabel(service == 0 ? (detailIsDay ? "Day" : "Event") : "To-do");
         TView *c = current;
+        svcTitle->setActive(c == svc ? True : False);
         monthTitle->setActive(c == month ? True : False);
-        agendaTitle->setActive(c == agenda ? True : False);
-        todoTitle->setActive(c == todo ? True : False);
+        listTitle->setActive(c == agenda || c == todo ? True : False);
+        detailTitle->setActive(c == detail ? True : False);
     }
+
+    // Events on the day: for the count beside Calendar.
+    size_t monthCountOn(const Ymd &d) const
+    {
+        auto it = month->counts.find(ymdIso(d));
+        return it == month->counts.end() ? 0 : (size_t)it->second;
+    }
+
+    // The item under the highlight, whole: its fields, then the notes in full.
+    void showDetail()
+    {
+        std::vector<std::string> out;
+        detailIsDay = false;
+        std::string body, err;
+        if (service == 0)
+        {
+            const AgRow *r = agenda->current();
+            if (!r)
+                out.push_back("(nothing planned)");
+            else if (r->kind != AgRow::event)
+            {
+                detailIsDay = true;
+                out.push_back(niceDate(r->date));
+                out.push_back(std::string());
+                int n = 0;
+                for (const Occ &o : agendaOcc)
+                    if (o.date == ymdIso(r->date))
+                    {
+                        out.push_back("  " + (o.start.empty() ? std::string("all day") : o.start + (o.end.empty() ? "" : "-" + o.end)) +
+                                      "  " + o.summary);
+                        ++n;
+                    }
+                if (!n)
+                    out.push_back("  (nothing planned)");
+                out.push_back(std::string());
+                out.push_back("Ins or n adds an event on this day.");
+            }
+            else if (calAsk("show " + shq(r->occ.uid), body, err))
+            {
+                auto rows = rowsOf(body);
+                if (!rows.empty() && rows[0].size() >= 13 && rows[0][0] == "event")
+                {
+                    const auto &f = rows[0];
+                    const Occ &o = r->occ;
+                    out.push_back(f[2]);
+                    out.push_back(std::string());
+                    std::string when = niceDate(r->date) + "  " +
+                                       (o.start.empty() ? std::string("all day") : o.start + (o.end.empty() ? "" : "-" + o.end));
+                    if (atoi(f[7].c_str()) > 1)
+                        when += "  (" + f[7] + " days)";
+                    out.push_back("When:      " + when);
+                    if (!f[3].empty())
+                        out.push_back("Where:     " + f[3]);
+                    if (f[8] != "none" && !f[8].empty())
+                        out.push_back("Repeats:   " + f[8] + (f[9] != "1" && !f[9].empty() ? ", every " + f[9] : "") +
+                                      (f[10].empty() ? "" : ", until " + f[10]));
+                    if (!f[11].empty())
+                        out.push_back("Reminder:  " + f[11] + " min before");
+                    addNotes(out, f[12]);
+                }
+            }
+            else
+                out.push_back(err);
+        }
+        else if (const TodoItem *t = todo->current())
+        {
+            if (calAsk("show " + shq(t->uid), body, err))
+            {
+                auto rows = rowsOf(body);
+                if (!rows.empty() && rows[0].size() >= 8)
+                {
+                    const auto &f = rows[0];
+                    out.push_back(f[2]);
+                    out.push_back(std::string());
+                    out.push_back(std::string("Status:    ") + (t->done ? "done" : "not done"));
+                    if (!f[3].empty())
+                        out.push_back("Due:       " + f[3]);
+                    if (f[4] != "0" && !f[4].empty())
+                        out.push_back("Priority:  " + f[4]);
+                    if (!f[6].empty())
+                        out.push_back("Categories: " + f[6]);
+                    addNotes(out, f[7]);
+                }
+            }
+            else
+                out.push_back(err);
+        }
+        else
+            out.push_back("(no to-dos: Ins or n adds one)");
+        detail->setLines(std::move(out));
+        updateTitles();
+    }
+
+    // A rule, then the free text as it was written.
+    static void addNotes(std::vector<std::string> &out, const std::string &notes)
+    {
+        if (notes.empty())
+            return;
+        out.push_back(std::string());
+        out.push_back(std::string(30, '-'));
+        for (const std::string &l : splitLines(notes))
+            out.push_back(l);
+    }
+
+    bool detailIsDay = false;
 
     void refreshGrid()
     {
@@ -759,7 +977,10 @@ public:
                 }
         todo->today = today;
         todo->setItems(std::move(v), keep);
-        updateTitles();
+        if (service == 1)
+            showDetail();
+        else
+            updateTitles();
     }
 
     // Everything again from the backend; `top`: the agenda starts at the date picked.
@@ -772,7 +993,8 @@ public:
         buildAgenda(from, sel, keep);
         refreshGrid();
         refreshTodos();
-        updateTitles();
+        if (service == 0)
+            showDetail();
     }
 
     // The date picked changed.  fromAgenda: the user moved the agenda, which stays as it is.
@@ -795,7 +1017,10 @@ public:
             month->today = today;
             month->drawView();
         }
-        updateTitles();
+        if (!fromAgenda && service == 0)
+            showDetail();
+        else
+            updateTitles();
     }
 
     void focusPane(TView *p)
@@ -990,7 +1215,7 @@ public:
     // The item Send to works on: the to-do when that pane has the focus, else the event shown.
     bool shareTarget(std::string &uid, std::string &date, std::string &what) const
     {
-        if (current == todo && todo->current())
+        if (service == 1 && todo->current())
         {
             uid = todo->current()->uid;
             what = todo->current()->summary;
@@ -1015,12 +1240,13 @@ public:
     {
         if (e.what == evKeyDown && (e.keyDown.keyCode == kbTab || e.keyDown.keyCode == kbShiftTab))
         {
-            int at = 0;
-            for (int i = 0; i < 3; ++i)
-                if (panes[i] == current)
+            std::vector<TView *> p = cycle();
+            int n = (int)p.size(), at = 0;
+            for (int i = 0; i < n; ++i)
+                if (p[i] == current)
                     at = i;
-            at = (at + (e.keyDown.keyCode == kbTab ? 1 : 2)) % 3;
-            focusPane(panes[at]);
+            at = (at + (e.keyDown.keyCode == kbTab ? 1 : n - 1)) % n;
+            focusPane(p[at]);
             clearEvent(e);
             return;
         }
@@ -1036,16 +1262,20 @@ public:
     {
         TWindow::changeBounds(bounds);
         Rects R = paneRects();
+        svcTitle->changeBounds(R.svcTitle);
+        svc->changeBounds(R.svc);
         monthTitle->changeBounds(R.monthTitle);
         month->changeBounds(R.month);
-        todoTitle->changeBounds(R.todoTitle);
         todoHead->changeBounds(R.todoHead);
         todo->changeBounds(R.todo);
         todoVsb->changeBounds(R.todoVsb);
         vdiv->changeBounds(R.vbar);
-        agendaTitle->changeBounds(R.agendaTitle);
+        listTitle->changeBounds(R.listTitle);
         agenda->changeBounds(R.agenda);
         agendaVsb->changeBounds(R.agendaVsb);
+        detailTitle->changeBounds(R.detailTitle);
+        detail->changeBounds(R.detail);
+        detailVsb->changeBounds(R.detailVsb);
     }
 
     TColorAttr mapColor(uchar index) override { return cyanWindowColor(index, this); }
@@ -1397,6 +1627,11 @@ bool calCommand(ushort cmd)
     if (cmd <= cmCalPoll || cmd == cmCalPane || cmd > cmFloyd)
         return false;
     TCalWindow *w = window();
+    // a Calendar command shows the Calendar, a To-do command the To-do list
+    if (cmd == cmCalNewEvent || cmd == cmCalEditEvent || cmd == cmCalDelEvent || cmd == cmCalToday || cmd == cmCalGoto)
+        w->useService(0);
+    else if (cmd >= cmCalNewTodo && cmd <= cmCalShowDone)
+        w->useService(1);
     switch (cmd)
     {
     case cmCalNewEvent:
