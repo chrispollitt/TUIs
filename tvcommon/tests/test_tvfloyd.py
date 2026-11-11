@@ -323,6 +323,15 @@ class TestRelay(unittest.TestCase):
         TestMaster.setUp(self)
         self.spool = os.path.join(self.tmp, "spool")
         os.environ["TV_SPOOL_DIR"] = self.spool
+        # The relay writes a toast only for the apps installed here (it looks for tvmail, tvchat, tvcal on PATH), so a
+        # machine without all three (a CI box that builds only some) would fail these tests: put stand-ins on PATH.
+        bindir = os.path.join(self.tmp, "fakebin")
+        os.makedirs(bindir)
+        for app in tvf.RELAY_APPS:
+            with open(os.path.join(bindir, app), "w") as fh:
+                fh.write("#!/bin/sh\nexit 0\n")
+            os.chmod(os.path.join(bindir, app), 0o755)
+        os.environ["PATH"] = bindir + os.pathsep + os.environ.get("PATH", "")
         self.env = {"TVFLOYD_SERVER": self.m["server"], "TVFLOYD_TOKEN": self.TOKEN, "TVFLOYD_MACHINE": "cmlaptop",  # allowlist secret: test value
                     "TVFLOYD_TIMEOUT": "1", "TVFLOYD_RELAY_POLL": "0.05"}
 
