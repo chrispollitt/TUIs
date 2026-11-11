@@ -734,6 +734,20 @@ class TestMailutilsInterop(Base):
         self._write_tickets("smtp://chris:spw3@cpbee.CMNET.\n")  # allowlist secret: test value
         self.assertEqual(be._cred("cpbee", "chris", "TVMAIL_SMTP_PASS", "smtp"), "spw3")
 
+    def test_contacts_library_is_found_through_TVCONTACTS_PY(self):
+        # a machine with no installed tvcontacts.py (a clean CI box) must still expand an address-book group in the e2e test:
+        # the override comes before every installed location
+        import shutil
+        src = Path(__file__).resolve().parent.parent.parent / "tvcommon" / "py" / "tvcontacts.py"
+        mine = self.home / "elsewhere" / "tvcontacts.py"
+        mine.parent.mkdir()
+        shutil.copy(src, mine)
+        os.environ["TVCONTACTS_PY"] = str(mine)
+        self.addCleanup(os.environ.pop, "TVCONTACTS_PY", None)
+        mod = be._load_contacts()
+        self.assertIsNotNone(mod)
+        self.assertEqual(os.path.realpath(mod.__file__), os.path.realpath(str(mine)))
+
     def test_same_host_is_not_fooled_by_other_machines_or_addresses(self):
         self.assertTrue(be._same_host("cpbee", "cpbee.cmnet"))
         self.assertFalse(be._same_host("cpbee", "cpbee2.cmnet"))
