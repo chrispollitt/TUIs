@@ -206,6 +206,11 @@ int shInteractive(const std::string &body)
 // it is and which others exist, and let the user choose.  Returns false = quit.
 bool helperVersionGuard(const char *helper, const char *want)
 {
+    // The tests set TV_NO_HELPER_CHECK=1: a machine that has an older tv* installed (/usr/local/bin) would otherwise stop every
+    // pty test at the prompt below, whatever the test put on PATH.
+    if (const char *skip = ::getenv("TV_NO_HELPER_CHECK"))
+        if (*skip && *skip != '0')
+            return true;
     std::string h = helper;
     std::string out = shCapture(
         "p=$(command -v " + h + ") || { echo MISSING; exit 0; }\n"

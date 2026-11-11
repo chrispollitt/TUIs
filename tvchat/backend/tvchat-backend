@@ -8350,7 +8350,7 @@ def dispatch(parser, argv):
     cap = _CapStream()
     sys.stdout = cap
     try:
-        ns = parser.parse_args(argv)
+        ns = _parse_cli(parser, argv)
         return (ns.fn(ns) or 0), cap.buffer.getvalue()
     except UserError as e:
         return 1, (str(e) + "\n").encode("utf-8", "replace")
@@ -8642,8 +8642,26 @@ def _normalize_cli(argv):
     return out
 
 
+def _parse_cli(parser, argv):
+    """parser.parse_args(argv), but a word list (a positional with nargs="*") may come after the options, as in
+    `set-event UID --date D "some text"`: Python before 3.12.7 (Ubuntu 24.04 has 3.12.3, Debian 11 has 3.9) takes the empty
+    list at the first positional and then calls the trailing words "unrecognized arguments"."""
+    ns, extra = parser.parse_known_args(argv)
+    if extra:
+        words = None
+        for act in parser._subparsers._group_actions if parser._subparsers else ():
+            sp = act.choices.get(getattr(ns, act.dest, None)) if getattr(act, "choices", None) else None
+            for a in (sp._actions if sp is not None else ()):
+                if not a.option_strings and a.nargs == "*":
+                    words = a.dest
+        if words is None or any(e.startswith("-") for e in extra):
+            parser.error("unrecognized arguments: %s" % " ".join(extra))
+        setattr(ns, words, list(getattr(ns, words, None) or []) + extra)
+    return ns
+
+
 def main():
-    a = build_parser().parse_args(_normalize_cli(sys.argv[1:]))
+    a = _parse_cli(build_parser(), _normalize_cli(sys.argv[1:]))
     if a.debug:
         logging.basicConfig(filename=a.debug, level=logging.DEBUG,
                             format="%(asctime)s %(levelname)s %(message)s")
