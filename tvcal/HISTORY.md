@@ -4,7 +4,11 @@
 
 - The three-pane window (tvcal/UI-REDESIGN.md, step 1): Services on the left (Calendar, To-do) with the month
   under them, the agenda or the to-do list top right, the item under the bar shown whole bottom right.  The
-  Calendar and To-do menus switch to their service.  Notes, Inbox, Reminders and Contacts follow.
+  Calendar and To-do menus switch to their service.  Inbox, Reminders and Contacts follow.
+- Notes (step 2): a third service.  A note is a VJOURNAL on the calendar server (title, categories, free
+  text), edited in a multi-line text box.  tvcal-backend: `notes`, `add-note`, `set-note`; `--notesx` takes text
+  with `\n` for a new line (a request is one line); show, find, rm, import and export know notes.  Floyd's
+  `!note` / `!notes` are tvcal's notes now; his old notes.json notes move over the first time.
 
 ## 0.1.0 (Nov 3, 2026) - first version
 

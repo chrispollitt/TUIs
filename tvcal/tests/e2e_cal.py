@@ -119,6 +119,30 @@ def todo_add_and_tick(opts):
 
 
 @case()
+def note_with_several_lines(opts):
+    tv, c = tvcal(opts)
+    started(tv, c)
+    c.check(tv.has("Notes"), "the services do not list Notes")
+    tv.send("\x1b" + "n")                                # Alt-N: the Notes menu
+    c.check(tv.wait("New note...", 3), "there is no Notes menu")
+    tv.send("n")
+    c.check(tv.wait("New note", 5), "New note... did not open the dialog")
+    c.check(tv.has("Enter starts a new line"), "the dialog does not say how the text box works")
+    tv.send("Shopping", "Tab", "home", "Tab")                 # title, categories, then the text box
+    tv.send("milk", "Enter", "bread", "Enter", "eggs")
+    tv.send("\x1b" + "o")                                # Alt-O: OK
+    c.check(tv.wait(lambda: tv.has("Notes (1)"), 8), "the note is not listed")
+    c.check(tv.wait(lambda: tv.has("milk") and tv.has("bread") and tv.has("eggs"), 5), "the details pane does not show all the lines")
+    c.check(tv.has("Categories: home"), "the categories are missing")
+    out = backend(tv, "show", backend(tv, "notes").split("\t")[0])
+    c.check("milk\\nbread\\neggs" in out, "the backend does not hold the lines: " + out)
+    tv.send("Tab", "Enter")                                  # the list, then Enter edits
+    c.check(tv.wait("Edit note", 5), "Enter did not open the edit dialog")
+    c.check(tv.has("bread"), "the dialog does not hold the text")
+    tv.send("\x1b")
+
+
+@case()
 def incoming_request_is_added_on_a_yes(opts):
     tv, c = tvcal(opts)
     started(tv, c)

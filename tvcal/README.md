@@ -28,6 +28,8 @@ to-dos. Without a server it keeps one local `.ics` file.
   `PgDn`, `Home` (today), `Enter`, `Ins`, `Del` and `Space` do what you would guess (F1 has the list).
 - **Events**: title, date, start / end (empty start = all day), several days, place, notes, a repeat
   (daily, weekly, monthly, yearly, every N, until a date) and a reminder in minutes before.
+- **Notes**: a title, categories and free text of any length (a tall text box), newest first; stored as
+  standard iCalendar journal entries on the server, so every machine has them. Floyd's `!note` writes here.
 - **To-dos**: text, due date, priority 1-9, categories, notes; `Space` ticks one off; the Due column
   shows `!` when overdue. View > Show completed brings the done ones back.
 - **Reminders** fire once, show here as a toast, and are passed on to tvmail and tvchat as toasts too
