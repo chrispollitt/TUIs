@@ -28,7 +28,25 @@ update_script='
 set -u
 export PATH=/usr/local/bin:/usr/bin:$PATH
 cd ~/gh_cp/TUIs || { echo "no ~/gh_cp/TUIs here"; exit 1; }
-git pull --ff-only | tail -2 || exit 1
+# A failed pull must stop this machine (it used to be hidden by the pipe into tail, and the script said
+# Done while the machine kept its old code).  The first DNS lookup of github.com on cpbee sometimes fails
+# and the next works, so try three times.  (No single quotes in here: the text goes through ssh bash -lc.)
+pulled=0
+for try in 1 2 3; do
+  if git pull --ff-only > /tmp/tv-pull.log 2>&1; then pulled=1; break; fi
+  echo "  git pull failed (try $try of 3): $(tail -1 /tmp/tv-pull.log)"
+  sleep 5
+done
+if [ $pulled != 1 ]; then
+  tail -5 /tmp/tv-pull.log
+  echo "  git pull did not work: this machine is NOT updated"
+  exit 1
+fi
+tail -2 /tmp/tv-pull.log
+if [ "$(git rev-parse HEAD)" != "$(git rev-parse @{u})" ]; then
+  echo "  after the pull this checkout is not at its upstream: this machine is NOT updated"
+  exit 1
+fi
 echo "  at: $(git log --oneline | head -1)"
 for app in $APPS; do
   echo "  $app: build ..."
@@ -54,8 +72,12 @@ done
 
 say "== cpbee (all three, then dcgw and tvchat-floyd; sudo asks)"
 if ssh -o BatchMode=yes -o ConnectTimeout=8 cpbee true 2>/dev/null; then
-  ssh -t cpbee "APPS='tvmail tvchat tvcal' bash -lc '$update_script'" || failed=1
-  ssh -t cpbee 'cd ~/gh_cp/TUIs && sudo install -m 755 tvchat/backend/dcgw /usr/local/bin/dcgw && sudo systemctl restart dcgw tvchat-floyd && sleep 6 && systemctl is-active dcgw tvchat-floyd' || failed=1
+  if ssh -t cpbee "APPS='tvmail tvchat tvcal' bash -lc '$update_script'"; then
+    ssh -t cpbee 'cd ~/gh_cp/TUIs && sudo install -m 755 tvchat/backend/dcgw /usr/local/bin/dcgw && sudo systemctl restart dcgw tvchat-floyd && sleep 6 && systemctl is-active dcgw tvchat-floyd' || failed=1
+  else
+    say "  cpbee was not updated: dcgw and tvchat-floyd left as they are"
+    failed=1
+  fi
 else
   say "  cannot reach cpbee over ssh: skipped"
   failed=1
