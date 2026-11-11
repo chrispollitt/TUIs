@@ -119,6 +119,34 @@ def todo_add_and_tick(opts):
 
 
 @case()
+def event_and_todo_notes_are_several_lines(opts):
+    tv, c = tvcal(opts)
+    started(tv, c)
+    tv.send("CtrlN")
+    c.check(tv.wait("New event", 5), "Ctrl-N did not open the New event dialog")
+    tv.send("Planning day", *["Tab"] * 10)                 # down to the text box
+    tv.send("agenda one", "Enter", "agenda two", "Enter", "agenda three")
+    tv.send("\x1b" + "o")                                # Alt-O: OK
+    c.check(tv.wait(lambda: tv.has("Planning day"), 8), "the event is not in the agenda")
+    tv.send("Tab", "Tab", "Down")                            # month, agenda, the event
+    c.check(tv.wait(lambda: tv.has("agenda one") and tv.has("agenda two") and tv.has("agenda three"), 5),
+            "the details pane does not show the event's notes whole")
+    out = backend(tv, "range", dt.date.today().isoformat(), dt.date.today().isoformat())
+    uid = out.split("\t")[3]
+    c.check("agenda one\\nagenda two\\nagenda three" in backend(tv, "show", uid), "the backend lost the new lines")
+    tv.send("Enter")                                         # edit it: the lines are in the box
+    c.check(tv.wait("Edit event", 5), "Enter did not open the edit dialog")
+    c.check(tv.has("agenda two"), "the edit dialog does not hold the notes")
+    tv.send("\x1b")
+    tv.send("\x14")                                         # Ctrl-T
+    c.check(tv.wait("New to-do", 5), "Ctrl-T did not open the New to-do dialog")
+    tv.send("Pack the car", *["Tab"] * 4)
+    tv.send("tent", "Enter", "stove")
+    tv.send("\x1b" + "o")
+    c.check(tv.wait(lambda: tv.has("tent") and tv.has("stove"), 8), "the to-do's notes are not shown whole")
+
+
+@case()
 def note_with_several_lines(opts):
     tv, c = tvcal(opts)
     started(tv, c)
