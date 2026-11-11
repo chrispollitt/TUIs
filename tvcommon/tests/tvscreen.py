@@ -191,6 +191,7 @@ class Tv:
             HOME=str(self.home), XDG_DATA_HOME=str(self.tmp / "xdg"),
             TERM="xterm-256color", LANG="C.UTF-8", LC_ALL="C.UTF-8",
             USER="tester",
+            TV_NO_HELPER_CHECK="1",          # an older installed tv* helper must not stop the test at the version prompt
             # the shell preamble puts ~/bin first: an installed (older)
             # helper there would win over the one under test, so a
             # prepare() puts ours there
