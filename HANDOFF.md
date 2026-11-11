@@ -1,7 +1,7 @@
 # Handoff
 
 Where the work stands, for whoever picks it up next (Claude or Chris). Updated
-Oct 27, 2026. Facts about the code live in the code and in the files listed
+Nov 11, 2026 (tvcal section below; the rest is from Oct 27). Facts about the code live in the code and in the files listed
 under "Where things are"; this file is what they do not say: the state, what
 is next, what was decided, and the live setup.
 
@@ -68,6 +68,41 @@ attachments, a member picker for groups, tvchat sending an invite through tvmail
 
 After that: tvchat/TO-DO.txt (small things), tvmail/TO-DO.txt (periodic pull
 first), and the open bugs in tvmail/BUGS.md.
+
+## Nov 11: tvcal (calendar, to-dos, notes, contacts) - state for the next session
+
+**On `main` (e715f55, pushed):** tvcal 0.1.0 plus the three-pane redesign, steps 1-5 of
+`tvcal/UI-REDESIGN.md`: window (Services / list / details), Notes (VJOURNAL, multi-line box, Floyd's
+`!note`), Inbox + Reminders, and Contacts as a service (`TContactsPane` now lives in
+`tvcommon/src/contactspane.h`, shared with tvmail's contacts window). Calendar is CalDAV (Radicale on
+cpbee) with a local fallback; it works with tvmail (Message > Add to calendar / to-do) and tvchat
+(Chat > Add selection) and Floyd (`!todo`, `!cal`, `!event`, `!note`).
+**Tested Nov 11:** tvcal e2e 11/11 and backend tests; tvmail contacts e2e (both cases) pass; tvchat
+builds. tvmail's `contacts_window_adds_edits_and_deletes` failed once right after the refactor and
+passed 4 times since (not reproduced; if it fails again, check `contactswin.cpp` - reload() now also
+calls moved(), focusItem is overridden). Builds need cmake, C++17, ncurses headers, python3; the tests
+need `pip install pyte`.
+
+**Not installed anywhere yet** (steps 1-5): Chris runs `update-tv-apps-everywhere.sh` himself.
+**Branch** `tvcal-contacts-service` is merged and safe to delete; Chris keeps the list in
+`/home/chris/gh_cp/tmp-branches.txt` (append `TUIs tvcal-contacts-service` - not possible from the
+cloud session). The repo is now `chrispollitt/TUIs` (GitHub redirects the old `tuis` name).
+
+**Waiting on Chris:**
+- Run `tvcal-floyd-on-cpbee.sh` (POSIX repo; installs backend + Floyd on cpbee, makes the `floyd`
+  Radicale user with rights on `/chris/calendar/` only, tests a `!todo` round trip). Then add the
+  `floyd` calendar login to the `identity` registry.
+- Hands-on smoke test: New event, F7 for Floyd, tvmail Add to calendar, tvchat Add selection.
+- POSIX repo, uncommitted when last seen: `netrc-to-tickets` (run with `--move` to migrate
+  `~/.netrc` to `~/.mu-tickets`) and `identity` (phase 1, read-only audit; list active at
+  `~/.config/identities`), with tests and README rows.
+
+**Later (tvcal/TO-DO.txt):** time zones, editing one occurrence of a repeating event, RSVP, man page
+(tvcal.1, tvcal-backend.1), offline write queue, week view.
+
+**Cloud-session notes:** clone with `--depth 1` is single-branch, so `origin/main` goes stale and the
+"unpushed commits" stop hook is a false alarm - check with `git ls-remote origin main`. Moving a cloud
+session to cmlaptop is not possible; start a new session there after `git pull`.
 
 ## Oct 27: Floyd - central bot (merged), levels, useful tools, Floyd in tvmail (branch `floyd-levels`, for review)
 
