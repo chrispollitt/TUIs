@@ -54,10 +54,7 @@ jobs:
         if: matrix.app == 'tvcommon'
         working-directory: tvcommon/tests
         run: python3 test_tvcontacts.py
-      # TestRelay (3 tests) fails on a fresh Ubuntu 24.04 though it passes under Cygwin; not diagnosed yet.
-      # Allowed to fail until that is looked at, so the rest of test_tvfloyd.py still counts.
       - name: Floyd (tvfloyd.py)
         if: matrix.app == 'tvcommon'
         working-directory: tvcommon/tests
         run: python3 test_tvfloyd.py
-        continue-on-error: true
