@@ -93,9 +93,14 @@ cloud session). The repo is now `chrispollitt/TUIs` (GitHub redirects the old `t
   Radicale user with rights on `/chris/calendar/` only, tests a `!todo` round trip). Then add the
   `floyd` calendar login to the `identity` registry.
 - Hands-on smoke test: New event, F7 for Floyd, tvmail Add to calendar, tvchat Add selection.
-- POSIX repo, uncommitted when last seen: `netrc-to-tickets` (run with `--move` to migrate
-  `~/.netrc` to `~/.mu-tickets`) and `identity` (phase 1, read-only audit; list active at
-  `~/.config/identities`), with tests and README rows.
+- Contacts service, hands-on (Nov 11, built tvcal against the real cpbee book): opens, the list and card,
+  new contact and new group worked. Not yet reported: edit, the tvmail round trip (the group expands in
+  To:), and deleting the two test entries `Zz Smoketest` and `Zz Smokegroup` from the real book.
+  After a terminal resize the right frame can show holes: that is the terminal not repainting (Redraw
+  screen fixes it), not the pane; a fresh start and a shrink both draw clean in the e2e harness.
+- POSIX repo: `netrc-to-tickets` (run with `--move` to migrate `~/.netrc` to `~/.mu-tickets`) and
+  `identity` (phase 1, read-only audit; list active at `~/.config/identities`) are committed and pushed
+  (net-utils/, with tests and README rows); only running `netrc-to-tickets --move` is left for Chris.
 
 **Later (tvcal/TO-DO.txt):** time zones, editing one occurrence of a repeating event, RSVP, man page
 (tvcal.1, tvcal-backend.1), offline write queue, week view.
@@ -153,8 +158,8 @@ tvchat/DESIGN.md "The central Floyd".
    `/home/chris/gh_cp/tmp-branches.txt` (Chris's rule).
 
 **Cautions:** the Claude consult runs as chris and `Read` is not confined to a directory, hence
-read-only plus admin-only; keep `admins` short. `DEV-NOTES.txt` in the repo root holds plaintext
-passwords in a git-tracked repo - Chris should move it out and rotate them.
+read-only plus admin-only; keep `admins` short. (`DEV-NOTES.txt`, with plaintext passwords, sits in
+`gh_cp/` outside any repo and is not tracked by git: checked Nov 11, nothing to do.)
 
 Env notes: Git Bash has no `python3`; use
 `/c/Users/chris/AppData/Local/Programs/Python/Python311/python`, or Cygwin's python through
