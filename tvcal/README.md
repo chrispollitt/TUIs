@@ -9,20 +9,22 @@ to-dos. Without a server it keeps one local `.ics` file.
 ```
  File  Calendar  To-do   Edit  Window  Help
 ╔═════════════════════════════════ tvcal ═══════════════════════════════════╗
-║──[ November 2026 ]─────────────│──  Agenda from Tue 2026-11-03  ──────────║
-║  Mo Tu We Th Fr Sa Su          │Tue 2026-11-03  today                   ▲║
-║ 26 27 28 29 30 31  1           │  12:30        Lunch with Ann           ■║
-║  2  3* 4  5  6  7  8           │Thu 2026-11-05                           ▒║
-║  9 10 11 12 13 14 15           │  14:00-15:00  Dentist @ Clinic          ▒║
-║──  To-do (2)  ─────────────────│                                         ▒║
-║Due  │P│To do                   │                                         ▒║
-║11-04│1│[ ] Write the report    │                                         ▒║
-║     │ │[ ] Mow the lawn        │                                         ▒║
+║──[ Services ]──────────────────│──  Agenda from Tue 2026-11-03  ──────────║
+║ Calendar                      1│Tue 2026-11-03  today                   ▲║
+║ To-do                         2│  12:30        Lunch with Ann           ■║
+║──  November 2026  ─────────────│Thu 2026-11-05                           ▒║
+║  Mo Tu We Th Fr Sa Su          │  14:00-15:00  Dentist @ Clinic          ▒║
+║ 26 27 28 29 30 31  1           │──  Event  ──────────────────────────────║
+║  2  3* 4  5  6  7  8           │Lunch with Ann                           ║
+║  9 10 11 12 13 14 15           │                                         ║
+║                                │When:      Tue 2026-11-03  12:30         ║
+║                                │Reminder:  15 min before                 ║
 ```
 
 ## What it does
 
-- **Month, agenda and to-do list** in one window. `Tab` moves between the panes; the arrows, `PgUp` /
+- **Three panes**, as in tvmail and tvchat: services (Calendar, To-do) on the left with the month under them, the
+  items of the service top right, the item under the bar shown whole (notes in full) bottom right. `Tab` moves between the panes; the arrows, `PgUp` /
   `PgDn`, `Home` (today), `Enter`, `Ins`, `Del` and `Space` do what you would guess (F1 has the list).
 - **Events**: title, date, start / end (empty start = all day), several days, place, notes, a repeat
   (daily, weekly, monthly, yearly, every N, until a date) and a reminder in minutes before.
