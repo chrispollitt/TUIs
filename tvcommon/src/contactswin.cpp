@@ -2,7 +2,7 @@
 // on the server (Radicale, CardDAV) with add, edit and delete for contacts and for groups.  It does no networking of its
 // own: it asks tvcommon's tvcontacts.py (list, save, delete, sync), which keeps the copy, checks ETags and says in
 // words what went wrong.  With the server unreachable the list is the copy and every change is refused with that message.
-#include "views.h"
+#include "contactspane.h"
 #include <cstdio>
 
 namespace
@@ -59,12 +59,6 @@ std::string trim(const std::string &s)
     return a == std::string::npos ? std::string() : s.substr(a, b - a + 1);
 }
 
-struct Row
-{
-    bool group = false;
-    std::string uid, name, nicks, detail, book; // book: the label of the address book it is in (mine, family ...)
-};
-
 // The books there are, the person's own first; one entry when there is no shared book.
 std::vector<std::string> gBooks;
 
@@ -84,7 +78,7 @@ std::vector<std::string> tabs(const std::string &ln)
 }
 
 // One entry's dialog: a contact (name, nicknames, addresses) or a group (name, members).  False = cancelled.
-bool editDialog(Row &row, bool isNew)
+bool editDialog(ContactRow &row, bool isNew)
 {
     const bool g = row.group;
     const bool pick = isNew && gBooks.size() > 1;
@@ -150,178 +144,242 @@ bool editDialog(Row &row, bool isNew)
     return r != cmCancel;
 }
 
-class TContactsPane : public TListViewer
+} // namespace
+
+TContactsPane::TContactsPane(const TRect &b, TScrollBar *vsb) : TListViewer(b, 1, nullptr, vsb)
 {
-public:
-    std::vector<Row> rows;
-    std::string note;
+    gBooks.clear();
+    Result br = runCli("books");
+    if (br.ok)
+        for (const std::string &l : splitLines(br.out))
+            if (!trim(l).empty())
+                gBooks.push_back(trim(l));
+    reload(false);
+}
 
-    TContactsPane(const TRect &b, TScrollBar *vsb) : TListViewer(b, 1, nullptr, vsb)
+void TContactsPane::reload(bool force)
+{
+    std::string keep = focused >= 0 && focused < (short)rows.size() ? rows[focused].uid : std::string();
+    Result r = runCli(force ? "sync" : "list");
+    if (force && r.ok)
+        r = runCli("list");
+    rows.clear();
+    note.clear();
+    if (!r.ok)
     {
-        gBooks.clear();
-        Result br = runCli("books");
-        if (br.ok)
-            for (const std::string &l : splitLines(br.out))
-                if (!trim(l).empty())
-                    gBooks.push_back(trim(l));
-        reload(false);
+        note = r.out;
+        notify(r.out, noteError);
     }
-
-    void reload(bool force)
+    size_t at = 0;
+    while (r.ok && at <= r.out.size())
     {
-        std::string keep = focused >= 0 && focused < (short)rows.size() ? rows[focused].uid : std::string();
-        Result r = runCli(force ? "sync" : "list");
-        if (force && r.ok)
-            r = runCli("list");
-        rows.clear();
-        note.clear();
-        if (!r.ok)
+        size_t nl = r.out.find('\n', at);
+        std::string ln = r.out.substr(at, nl == std::string::npos ? std::string::npos : nl - at);
+        at = nl == std::string::npos ? r.out.size() + 1 : nl + 1;
+        if (!ln.empty() && ln.back() == '\r')
+            ln.pop_back();
+        std::vector<std::string> f = tabs(ln);
+        if (f.size() >= 5 && (f[0] == "c" || f[0] == "g"))
         {
-            note = r.out;
-            notify(r.out, noteError);
+            ContactRow row;
+            row.group = f[0] == "g";
+            row.uid = f[1];
+            row.name = f[2];
+            row.nicks = f[3];
+            row.detail = f[4];
+            row.book = f.size() > 6 ? f[6] : std::string();
+            rows.push_back(row);
         }
+        else if (!ln.empty())
+            note = ln; // e.g. "offline: this is the copy from the last time ..."
+    }
+    setRange((short)rows.size());
+    short sel = 0;
+    for (size_t i = 0; i < rows.size(); ++i)
+        if (rows[i].uid == keep)
+            sel = (short)i;
+    if (!rows.empty())
+        focusItem(sel);
+    drawView();
+    message(owner, evBroadcast, cmContactsNote, nullptr); // let the window refresh its note line
+    if (moved)
+        moved();
+}
+
+void TContactsPane::getText(char *dest, short item, short maxLen)
+{
+    if (item < 0 || item >= (short)rows.size())
+    {
+        dest[0] = 0;
+        return;
+    }
+    const ContactRow &r = rows[item];
+    std::string tag = (gBooks.size() > 1 && !r.book.empty() && r.book != gBooks[0]) ? "[" + r.book + "] " : std::string();
+    std::string line = std::string(r.group ? "[G] " : "    ") + tag + fitCols(r.name, 24) + " " +
+                       (r.nicks.empty() ? std::string() : "(" + r.nicks + ") ") + r.detail;
+    putText(dest, line, maxLen);
+}
+
+// The entry whole: a contact's nicknames and each address on a line; a group's members one by one.
+std::vector<std::string> TContactsPane::detailLines() const
+{
+    std::vector<std::string> out;
+    const ContactRow *r = current();
+    if (!r)
+    {
+        out.push_back(note.empty() ? "(no contacts: Ins or n adds one, g a group)" : note);
+        return out;
+    }
+    auto each = [&out](const std::string &list)
+    {
         size_t at = 0;
-        while (r.ok && at <= r.out.size())
+        while (at <= list.size())
         {
-            size_t nl = r.out.find('\n', at);
-            std::string ln = r.out.substr(at, nl == std::string::npos ? std::string::npos : nl - at);
-            at = nl == std::string::npos ? r.out.size() + 1 : nl + 1;
-            if (!ln.empty() && ln.back() == '\r')
-                ln.pop_back();
-            std::vector<std::string> f = tabs(ln);
-            if (f.size() >= 5 && (f[0] == "c" || f[0] == "g"))
-            {
-                Row row;
-                row.group = f[0] == "g";
-                row.uid = f[1];
-                row.name = f[2];
-                row.nicks = f[3];
-                row.detail = f[4];
-                row.book = f.size() > 6 ? f[6] : std::string();
-                rows.push_back(row);
-            }
-            else if (!ln.empty())
-                note = ln; // e.g. "offline: this is the copy from the last time ..."
+            size_t e = list.find_first_of(",;", at);
+            std::string tok = trim(list.substr(at, e == std::string::npos ? std::string::npos : e - at));
+            if (!tok.empty())
+                out.push_back("  " + tok);
+            if (e == std::string::npos)
+                break;
+            at = e + 1;
         }
-        setRange((short)rows.size());
-        short sel = 0;
-        for (size_t i = 0; i < rows.size(); ++i)
-            if (rows[i].uid == keep)
-                sel = (short)i;
-        if (!rows.empty())
-            focusItem(sel);
-        drawView();
-        message(owner, evBroadcast, cmContactsNote, nullptr); // let the window refresh its note line
-    }
-
-    void getText(char *dest, short item, short maxLen) override
+    };
+    out.push_back(r->name);
+    out.push_back(std::string());
+    if (r->group)
     {
-        if (item < 0 || item >= (short)rows.size())
-        {
-            dest[0] = 0;
-            return;
-        }
-        const Row &r = rows[item];
-        std::string tag = (gBooks.size() > 1 && !r.book.empty() && r.book != gBooks[0]) ? "[" + r.book + "] " : std::string();
-        std::string line = std::string(r.group ? "[G] " : "    ") + tag + fitCols(r.name, 24) + " " +
-                           (r.nicks.empty() ? std::string() : "(" + r.nicks + ") ") + r.detail;
-        putText(dest, line, maxLen);
+        out.push_back("A group.  Members:");
+        each(r->detail);
     }
-
-    void addEntry(bool group)
+    else
     {
-        Row row;
-        row.group = group;
-        if (!editDialog(row, true) || row.name.empty())
-            return;
-        save(row, std::string());
+        if (!r->nicks.empty())
+            out.push_back("Nicknames: " + r->nicks);
+        out.push_back("Addresses:");
+        each(r->detail);
     }
-
-    void editEntry()
+    if (!r->book.empty())
+        out.push_back(std::string("Book:      ") + r->book + (gBooks.size() > 1 && r->book != gBooks[0] ? " (shared)" : ""));
+    if (!note.empty())
     {
-        if (focused < 0 || focused >= (short)rows.size())
-            return;
-        Row row = rows[focused];
-        std::string uid = row.uid;
-        if (!editDialog(row, false) || row.name.empty())
-            return;
-        save(row, uid);
+        out.push_back(std::string());
+        out.push_back(note);
     }
+    out.push_back(std::string());
+    out.push_back("Enter: edit   Ins/n: new   g: new group   Del: delete   r/F5: reload");
+    return out;
+}
 
-    void save(const Row &row, const std::string &uid)
+void TContactsPane::addEntry(bool group)
+{
+    ContactRow row;
+    row.group = group;
+    if (!editDialog(row, true) || row.name.empty())
+        return;
+    save(row, std::string());
+}
+
+void TContactsPane::editEntry()
+{
+    if (focused < 0 || focused >= (short)rows.size())
+        return;
+    ContactRow row = rows[focused];
+    std::string uid = row.uid;
+    if (!editDialog(row, false) || row.name.empty())
+        return;
+    save(row, uid);
+}
+
+void TContactsPane::save(const ContactRow &row, const std::string &uid)
+{
+    std::string args = "save --name " + shq(row.name) + (uid.empty() ? "" : " --uid " + shq(uid)) +
+                       (uid.empty() && !row.book.empty() ? " --book " + shq(row.book) : std::string());
+    if (row.group)
+        args += " --group --members " + shq(row.detail);
+    else
+        args += " --nicks " + shq(row.nicks) + " --emails " + shq(row.detail);
+    Result r = runCli(args);
+    if (!r.ok)
+        notify(r.out, noteError);
+    reload(false);
+}
+
+void TContactsPane::deleteEntry()
+{
+    if (focused < 0 || focused >= (short)rows.size())
+        return;
+    const ContactRow &row = rows[focused];
+    if (messageBox(mfConfirmation | mfYesButton | mfNoButton, row.group ? "Delete the group \"%s\"?\n\nIts members stay in the book."
+                                                                        : "Delete the contact \"%s\"?",
+                   row.name.c_str()) != cmYes)
+        return;
+    Result r = runCli("delete " + shq(row.uid));
+    if (!r.ok)
+        notify(r.out, noteError);
+    reload(false);
+}
+
+void TContactsPane::focusItem(short item)
+{
+    bool changed = item != focused;
+    TListViewer::focusItem(item);
+    if (changed && moved)
+        moved();
+}
+
+void TContactsPane::setState(ushort aState, Boolean enable)
+{
+    TListViewer::setState(aState, enable);
+    if (enable && (aState & sfFocused) && gotFocus)
+        gotFocus();
+}
+
+void TContactsPane::handleEvent(TEvent &e)
+{
+    if (e.what == evKeyDown)
     {
-        std::string args = "save --name " + shq(row.name) + (uid.empty() ? "" : " --uid " + shq(uid)) +
-                           (uid.empty() && !row.book.empty() ? " --book " + shq(row.book) : std::string());
-        if (row.group)
-            args += " --group --members " + shq(row.detail);
+        ushort k = e.keyDown.keyCode;
+        char c = e.keyDown.charScan.charCode;
+        if (k == kbEnter || c == 'e' || c == 'E')
+            editEntry();
+        else if (k == kbIns || c == 'n' || c == 'N')
+            addEntry(false);
+        else if (c == 'g' || c == 'G')
+            addEntry(true);
+        else if (k == kbDel)
+            deleteEntry();
+        else if (k == kbF5 || c == 'r' || c == 'R')
+            reload(true);
         else
-            args += " --nicks " + shq(row.nicks) + " --emails " + shq(row.detail);
-        Result r = runCli(args);
-        if (!r.ok)
-            notify(r.out, noteError);
-        reload(false);
-    }
-
-    void deleteEntry()
-    {
-        if (focused < 0 || focused >= (short)rows.size())
-            return;
-        const Row &row = rows[focused];
-        if (messageBox(mfConfirmation | mfYesButton | mfNoButton, row.group ? "Delete the group \"%s\"?\n\nIts members stay in the book."
-                                                                            : "Delete the contact \"%s\"?",
-                       row.name.c_str()) != cmYes)
-            return;
-        Result r = runCli("delete " + shq(row.uid));
-        if (!r.ok)
-            notify(r.out, noteError);
-        reload(false);
-    }
-
-    void handleEvent(TEvent &e) override
-    {
-        if (e.what == evKeyDown)
         {
-            ushort k = e.keyDown.keyCode;
-            char c = e.keyDown.charScan.charCode;
-            if (k == kbEnter || c == 'e' || c == 'E')
-                editEntry();
-            else if (k == kbIns || c == 'n' || c == 'N')
-                addEntry(false);
-            else if (c == 'g' || c == 'G')
-                addEntry(true);
-            else if (k == kbDel)
-                deleteEntry();
-            else if (k == kbF5 || c == 'r' || c == 'R')
-                reload(true);
-            else
-            {
-                TListViewer::handleEvent(e);
-                return;
-            }
-            clearEvent(e);
+            TListViewer::handleEvent(e);
             return;
         }
-        TListViewer::handleEvent(e);
+        clearEvent(e);
+        return;
     }
+    TListViewer::handleEvent(e);
+}
 
-    TColorAttr mapColor(uchar i) override
+TColorAttr TContactsPane::mapColor(uchar i)
+{
+    switch (i)
     {
-        switch (i)
-        {
-        case 1:
-        case 2:
-            return cNorm();
-        case 3:
-            return cFocus();
-        case 4:
-            return cCur();
-        case 5:
-            return cDiv();
-        }
-        return TView::mapColor(i);
+    case 1:
+    case 2:
+        return cNorm();
+    case 3:
+        return cFocus();
+    case 4:
+        return cCur();
+    case 5:
+        return cDiv();
     }
-};
+    return TView::mapColor(i);
+}
 
+namespace
+{
 // a one-line note whose text can be changed
 class TNoteLine : public TStaticText
 {
