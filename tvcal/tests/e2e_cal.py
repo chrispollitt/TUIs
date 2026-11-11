@@ -180,15 +180,29 @@ def incoming_request_is_added_on_a_yes(opts):
     c.check(tv.wait(lambda: tv.has("1 incoming"), 10), "the status line does not say something is incoming")
     c.check("Reply to Bob" not in open(tv.tmp / "cal.ics").read() if (tv.tmp / "cal.ics").exists() else True,
             "it was added without a yes")
+    c.check(tv.wait(lambda: tv.has("Inbox") and tv.has("1"), 5), "the service list does not count the Inbox")
     tv.send("\x1b" + "c")                                # Alt-C: the Calendar menu
-    c.check(tv.wait("Pending (from", 3), "the Calendar menu has no Pending item")
-    tv.send("p")
-    c.check(tv.wait("From tvmail", 5), "Pending... did not open the request")
+    c.check(tv.wait("Inbox (from", 3), "the Calendar menu has no Inbox item")
+    tv.send("i")
+    c.check(tv.wait(lambda: tv.has("[ Inbox") and tv.has("Reply to Bob"), 5), "the Inbox does not list the request")
+    c.check(tv.wait(lambda: tv.has("not in your calendar until you say yes"), 5), "the details do not say it is waiting")
+    tv.send("Enter")                                     # look at it
+    c.check(tv.wait("From tvmail", 5), "Enter did not open the request")
     c.check(tv.has("Reply to Bob"), "the dialog is not filled in")
     tv.send("Enter")                                     # Add
-    tv.send("Down")                                      # the To-do service
+    c.check(tv.wait(lambda: not tv.has("incoming"), 8), "the incoming count did not go")
+    tv.send("Tab", "Tab", "Up", "Up")                    # details, services, then To-do
     c.check(tv.wait(lambda: tv.has("[ ] Reply to Bob"), 8), "the to-do was not added")
-    c.check(not tv.has("incoming"), "the incoming count did not go")
+    # a second one is discarded from the list
+    (req / "2.req").write_text("todo@tvmail Not wanted\n")
+    c.check(tv.wait(lambda: tv.has("1 incoming"), 10), "the second request did not arrive")
+    tv.send("Down", "Down")                              # Notes, Inbox
+    c.check(tv.wait(lambda: tv.has("Not wanted"), 5), "the Inbox does not list the second request")
+    tv.send("Tab", "Delete")
+    c.check(tv.wait("Discard", 5), "Del did not ask")
+    tv.send("Enter")                                     # Yes
+    c.check(tv.wait(lambda: not tv.has("incoming") and not tv.has("Not wanted"), 8), "the request was not discarded")
+    c.check("Not wanted" not in backend(tv, "todos"), "a discarded request was added")
 
 
 @case()
@@ -226,6 +240,25 @@ def floyd_asks_claude_and_the_answer_arrives_by_itself(opts):
     c.check(tv.wait(lambda: tv.has("Claude: four"), 20), "Claude's answer did not arrive in the window")
     tv.send("!status", "Enter")
     c.check(tv.wait(lambda: tv.has("Calendar: a local file"), 8), "!status did not answer")
+
+
+@case()
+def reminders_service_lists_what_fires_next(opts):
+    tv, c = tvcal(opts)
+    started(tv, c)
+    day = (dt.date.today() + dt.timedelta(days=2)).isoformat()
+    backend(tv, "add-event", "--date", day, "--start", "09:00", "--remind", "30", "Dentist")
+    backend(tv, "add-todo", "--due", day, "Send the form")
+    tv.send("F5")                                        # read it all again
+    tv.send("Down", "Down", "Down", "Down")              # To-do, Notes, Inbox, Reminders
+    c.check(tv.wait(lambda: tv.has("[ Services") and tv.has("Reminders (2)"), 8), "the Reminders list is not shown")
+    c.check(tv.has("Dentist") and tv.has("Send the form"), "the reminders are not listed")
+    c.check(tv.has(day[5:] + " 08:30"), "the event's reminder time is wrong")
+    c.check(tv.has("due"), "the to-do is not marked as due")
+    tv.send("Tab", "Down", "Tab")                       # the list, the event (the to-do is first), the details
+    c.check(tv.wait(lambda: tv.has("Reminds you") and tv.has("30 min before"), 5), "the details do not say what reminds")
+    tv.send("ShiftTab", "Enter")                         # back to the list, go to it
+    c.check(tv.wait(lambda: tv.has("[ Agenda") and tv.has("Agenda from"), 5), "Enter did not go to the event")
 
 
 @case()
