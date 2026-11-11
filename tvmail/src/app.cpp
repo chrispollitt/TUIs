@@ -9,10 +9,54 @@
 #include "views.h"
 #include "coprocess.h"
 
+// (BUGS.md #6) tvision cannot grey a command above 255, so the keys are held back instead: the menu bar and
+// the status line, which see a key before the focused view, let these three through to the editor.
+static bool gEditorOwnsCtrl = false;
+
+void editorOwnsCtrlKeys(bool owns)
+{
+    gEditorOwnsCtrl = owns;
+}
+
+static bool editorCtrlKey(const TEvent &e)
+{
+    if (!gEditorOwnsCtrl || e.what != evKeyDown)
+        return false;
+    ushort k = e.keyDown.keyCode;
+    return k == kbCtrlD || k == kbCtrlR || k == kbCtrlN;
+}
+
+namespace
+{
+class TMailMenuBar : public TMenuBar
+{
+public:
+    using TMenuBar::TMenuBar;
+    void handleEvent(TEvent &e) override
+    {
+        if (editorCtrlKey(e))
+            return;
+        TMenuBar::handleEvent(e);
+    }
+};
+
+class TMailStatusLine : public TStatusLine
+{
+public:
+    using TStatusLine::TStatusLine;
+    void handleEvent(TEvent &e) override
+    {
+        if (editorCtrlKey(e))
+            return;
+        TStatusLine::handleEvent(e);
+    }
+};
+} // namespace
+
 TMenuBar *TVMailApp::initMenuBar(TRect r)
 {
     r.b.y = r.a.y + 1;
-    return new TMenuBar(r,
+    return new TMailMenuBar(r,
                         *new TSubMenu("~F~ile", kbAltF) +
                             *new TMenuItem(gRemote ? "File ~s~pam" : "~P~ull mail",
                                            cmPull, kbF3, hcNoContext, "F3") +
@@ -78,7 +122,7 @@ TMenuBar *TVMailApp::initMenuBar(TRect r)
 TStatusLine *TVMailApp::initStatusLine(TRect r)
 {
     r.a.y = r.b.y - 1;
-    return new TStatusLine(r,
+    return new TMailStatusLine(r,
                            tvStatusDef(*new TStatusDef(0, 0xFFFF) +
                                        *new TStatusItem(gRemote ? "~F3~ Spam" : "~F3~ Pull", kbF3, cmPull) +
                                        *new TStatusItem("~^R~ Reply", kbCtrlR, cmReplyMsg) +

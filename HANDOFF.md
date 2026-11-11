@@ -83,19 +83,27 @@ passed 4 times since (not reproduced; if it fails again, check `contactswin.cpp`
 calls moved(), focusItem is overridden). Builds need cmake, C++17, ncurses headers, python3; the tests
 need `pip install pyte`.
 
-**Not installed anywhere yet** (steps 1-5): Chris runs `update-tv-apps-everywhere.sh` himself.
+**Not installed on every machine** (checked Nov 10-11): this laptop has a tvcal of Nov 9 (before steps 3-5); cmdesktop and
+cpbee are at `ffe47cf` (Nov 9, 15 commits behind `main`). Chris runs `update-tv-apps-everywhere.sh` himself (it pulls
+`origin/main`, so anything not merged and pushed is not deployed; quit the apps first, see its header).
 **Branch** `tvcal-contacts-service` is merged and safe to delete; Chris keeps the list in
 `/home/chris/gh_cp/tmp-branches.txt` (append `TUIs tvcal-contacts-service` - not possible from the
 cloud session). The repo is now `chrispollitt/TUIs` (GitHub redirects the old `tuis` name).
 
 **Waiting on Chris:**
-- Run `tvcal-floyd-on-cpbee.sh` (POSIX repo; installs backend + Floyd on cpbee, makes the `floyd`
-  Radicale user with rights on `/chris/calendar/` only, tests a `!todo` round trip). Then add the
-  `floyd` calendar login to the `identity` registry.
+- `tvcal-floyd-on-cpbee.sh` (installs backend + Floyd on cpbee, makes the `floyd` Radicale user with rights on
+  `/chris/calendar/` only): its stub is in `TO_BE_RUN/DONE` (Nov 3) and `/usr/local/share/tvcal` on cpbee dates from then,
+  so it ran.  Not checked from here (floyd's files are root-only): ask Floyd `!todo` on IRC to see the round trip works.
+  Still to do: add the `floyd` calendar login to the `identity` registry.
 - Hands-on smoke test: New event, F7 for Floyd, tvmail Add to calendar, tvchat Add selection.
-- POSIX repo, uncommitted when last seen: `netrc-to-tickets` (run with `--move` to migrate
-  `~/.netrc` to `~/.mu-tickets`) and `identity` (phase 1, read-only audit; list active at
-  `~/.config/identities`), with tests and README rows.
+- Contacts service, hands-on (Nov 11, built tvcal against the real cpbee book): opens, the list and card,
+  new contact and new group worked. Not yet reported: edit, the tvmail round trip (the group expands in
+  To:), and deleting the two test entries `Zz Smoketest` and `Zz Smokegroup` from the real book.
+  After a terminal resize the right frame can show holes: that is the terminal not repainting (Redraw
+  screen fixes it), not the pane; a fresh start and a shrink both draw clean in the e2e harness.
+- POSIX repo: `netrc-to-tickets` (run with `--move` to migrate `~/.netrc` to `~/.mu-tickets`) and
+  `identity` (phase 1, read-only audit; list active at `~/.config/identities`) are committed and pushed
+  (net-utils/, with tests and README rows); only running `netrc-to-tickets --move` is left for Chris.
 
 **Later (tvcal/TO-DO.txt):** time zones, editing one occurrence of a repeating event, RSVP, man page
 (tvcal.1, tvcal-backend.1), offline write queue, week view.
@@ -104,7 +112,7 @@ cloud session). The repo is now `chrispollitt/TUIs` (GitHub redirects the old `t
 "unpushed commits" stop hook is a false alarm - check with `git ls-remote origin main`. Moving a cloud
 session to cmlaptop is not possible; start a new session there after `git pull`.
 
-## Oct 27: Floyd - central bot (merged), levels, useful tools, Floyd in tvmail (branch `floyd-levels`, for review)
+## Oct 27: Floyd - central bot (merged), levels, useful tools, Floyd in tvmail (all merged since: `floyd-levels` ca0d9ee, `floyd-service-user` 757c608)
 
 **Merged to `main` (71b0c4e): the central Floyd.** `tvchat-backend floyd-daemon` runs him on cpbee as his
 own IRC nick (`configure/floyd.conf.example`, `tvchat-floyd.service`, INSTALL.md "The central
@@ -112,7 +120,7 @@ Floyd"); admins = services accounts (IRCv3 account tag); `!claude QUESTION` asks
 read-only as the service user; a Floyd account in a tvchat session needs `local = yes`. Design:
 tvchat/DESIGN.md "The central Floyd".
 
-**On branch `floyd-levels` (not merged; Chris asked for these three):**
+**Were on branch `floyd-levels` (merged into `main`, ca0d9ee; Chris asked for these three):**
 1. *Levels* `off | minimal | helpful | chatty | clippy` ("full clippy mode" = clippy: tips introduced
    "Floyd not clippy but ..."). tvchat: `level =` per account, `!level NAME` per conversation (admins
    on the server). tvmail: `[floyd] level`, `level NAME` in his window, kept in
@@ -137,7 +145,7 @@ tvchat/DESIGN.md "The central Floyd".
    `account-tag` to the daemon and that `claude -p` takes the prompt on stdin with
    `--tools/--allowedTools/--permission-mode dontAsk` there (flags checked only against
    `claude --help` on Windows; tests use a fake script).
-2. **Done (Oct 27, branches `floyd-service-user` in TUIs and `floyd-daemon-setup` in POSIX, unmerged):**
+2. **Done (Oct 27, branches `floyd-service-user` in TUIs and `floyd-daemon-setup` in POSIX; TUIs side merged, 757c608):**
    POSIX `chat-setup/scripts/configure-floyd.sh` now also writes `/etc/tvchat/floyd.conf`, installs
    `tvchat-floyd.service` and starts it, and the service runs as the **floyd** user (not chris), so the
    Claude consult only reads what floyd can. Chris must still log floyd in to Claude once:
@@ -149,12 +157,12 @@ tvchat/DESIGN.md "The central Floyd".
    no "draft a reply / summarise" (that would be the Claude CLI; tvchat's admin-only consult is the
    model). Mail `find` scans the folder listing (headers), not bodies.
 5. Decide: the old "speaks as you" attach (`/floyd on`) needs `local = yes` now; remove it later?
-6. Merge `floyd-levels` into `main` after review; then add `TUIs floyd-levels` to
+6. DONE: `floyd-levels` is merged into `main`; the branch no longer exists (the `tmp-branches.txt` rule was applied).  Was: add `TUIs floyd-levels` to
    `/home/chris/gh_cp/tmp-branches.txt` (Chris's rule).
 
 **Cautions:** the Claude consult runs as chris and `Read` is not confined to a directory, hence
-read-only plus admin-only; keep `admins` short. `DEV-NOTES.txt` in the repo root holds plaintext
-passwords in a git-tracked repo - Chris should move it out and rotate them.
+read-only plus admin-only; keep `admins` short. (`DEV-NOTES.txt`, with plaintext passwords, sits in
+`gh_cp/` outside any repo and is not tracked by git: checked Nov 11, nothing to do.)
 
 Env notes: Git Bash has no `python3`; use
 `/c/Users/chris/AppData/Local/Programs/Python/Python311/python`, or Cygwin's python through

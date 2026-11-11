@@ -2,9 +2,9 @@ What tvmail does not do yet. Defects live in BUGS.md, not here; what it does
 today is in README.md. The numbers are stable (code and notes refer to them),
 so finished items are gone and the gaps stay.
 
-Done: 1-10, 13, 16 and 23 - attachment browser, forward, reply all and Bcc,
+Done: 1-10, 13, 14, 16 and 23 - attachment browser, forward, reply all and Bcc,
 mark unread, purge, move to folder, Window list, type-to-filter, column sort,
-folder counts, mark-read only after you look, save as .eml, out of office.
+folder counts, mark-read only after you look, save as .eml, out of office, periodic pull (`[ui] check`, quiet, a toast for new mail).
 
 Classic TUI polish
 11 Status-line context - when focus is in Folders vs Messages vs a compose
@@ -13,9 +13,6 @@ Classic TUI polish
    to open would make the cyan desktop feel finished.
 
 Behaviour that would make it feel "done"
-14 Periodic pull - an idle timer calling the existing background pull, with a
-   quiet "N new" on the status line instead of a blocking message box every
-   time. (The folder counts are the first half of it.)
 15 tvmailrc - colours, default folder, poll-on-start, list date format,
    HTML-vs-plain preference. Keeps ~/.mailrc for mail(1) and puts tvmail-only
    knobs somewhere else.
@@ -34,7 +31,7 @@ Worth doing later (higher design cost)
 22 Resizable split - drag or +/- on the folder width and the list/body ratio.
    The layout is a fixed 22-column / 2:5 split.
 
-A short order for what stays in character: periodic pull (14), then tvmailrc
+A short order for what stays in character: tvmailrc
 (15), the status-line context swap (11) and mouse manners (12), then the
 address-book write path (17). That uses code that exists and does not turn
 tvmail into mutt.

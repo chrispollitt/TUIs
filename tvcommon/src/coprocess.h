@@ -20,7 +20,11 @@ public:
     // names a file for the child's stderr (else /dev/null).  diagTag: pass
     // the app's --debug / --trace on, as FILE.<diagTag>.ext (nullptr: don't).
     CoProcess(const char *program, const char *logEnv, const char *diagTag);
-    ~CoProcess() { stop(); }
+    ~CoProcess()
+    {
+        stop();
+        reapAbandoned();
+    }
     CoProcess(const CoProcess &) = delete;
     CoProcess &operator=(const CoProcess &) = delete;
 
@@ -46,11 +50,15 @@ private:
     pid_t pid = -1;
     bool up = false;
     bool permFail = false;
+    bool timedOut = false;        // the last readFrame() ran out of time
+    std::vector<pid_t> abandoned; // slow backends let go of, reaped later without waiting
     int restarts = 0;
     unsigned starts = 0;
 
     std::string command(const std::string &args) const;
     bool giveUp();
+    void abandon();
+    void reapAbandoned();
     bool start();
     bool restart();
     bool writeLine(const std::string &s);

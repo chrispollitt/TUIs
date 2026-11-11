@@ -414,6 +414,33 @@ def compose_label_hotkeys(opts):
     return tv
 
 
+@case(6)
+def editor_keeps_ctrl_d_r_n(opts):
+    # Ctrl-D / Ctrl-R / Ctrl-N are Delete / Reply / New in the menu bar and status line, but in an editor they
+    # are cursor right, page up, ...: while a compose window is active the editor gets them
+    tv = Tv(opts)
+    c = Case(tv)
+    started(tv, c)
+    open_compose(tv, c)
+    tv.send("Tab", "Tab", "Tab", "Tab", "ab", "Home", settle=0.5)       # To, Cc, Bcc, Subject, then the body
+    tv.send("CtrlD", "Z", settle=0.5)                                    # right one character, then type
+    c.check(tv.wait(lambda: tv.has("aZb"), 3),
+            "#6 Ctrl-D in the compose body did not move the cursor right")
+    c.check(not tv.has("to the trash?"), "#6 Ctrl-D in the compose body asked to delete a message")
+    tv.send("CtrlN", settle=0.7)
+    c.check(sum(1 for l in tv.lines() if " Compose " in l) == 1,
+            "#6 Ctrl-N in the compose body opened another compose window")
+    # and the keys are the app's again once the window is gone
+    tv.send("AltF3")                                                     # close it, discarding the draft
+    c.check(tv.wait("Unsent message", 3), "#6 closing the modified compose window did not ask")
+    tv.send("d", settle=0.5)
+    c.check(tv.wait(lambda: not compose_open(tv), 5), "#6 the compose window did not close")
+    tv.send("Tab", "CtrlD")
+    c.check(tv.wait("to the trash?", 4),
+            "#6 Ctrl-D did not ask to delete after the compose window was closed")
+    return tv
+
+
 @case(27, 35)
 def utf8_columns_align(opts):
     tv = Tv(opts)

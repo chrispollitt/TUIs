@@ -115,6 +115,14 @@ public:
         TWindow::shutDown();
     }
 
+    // while this window is the active one, Ctrl-D / Ctrl-R / Ctrl-N are the editor's keys (BUGS.md #6)
+    void setState(ushort aState, Boolean enable) override
+    {
+        TWindow::setState(aState, enable);
+        if (aState & sfActive)
+            editorOwnsCtrlKeys(enable);
+    }
+
     TComposeWindow(const TRect &bounds,
                    const std::string &to, const std::string &cc,
                    const std::string &subj, const std::string &body,

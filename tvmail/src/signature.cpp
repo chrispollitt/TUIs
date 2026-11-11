@@ -57,6 +57,13 @@ public:
         }
         editor->select();
     }
+    // while this window is the active one, Ctrl-D / Ctrl-R / Ctrl-N are the editor's keys (BUGS.md #6)
+    void setState(ushort aState, Boolean enable) override
+    {
+        TWindow::setState(aState, enable);
+        if (aState & sfActive)
+            editorOwnsCtrlKeys(enable);
+    }
     void handleEvent(TEvent &e) override
     {
         if (e.what == evKeyDown && e.keyDown.keyCode == kbCtrlS)
