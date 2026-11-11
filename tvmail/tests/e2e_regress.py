@@ -711,6 +711,34 @@ def group_name_in_to_expands_on_send(opts):
     return tv
 
 
+@case()
+def send_to_calendar_and_todo_leave_requests_for_tvcal(opts):
+    # Message > Send to > Calendar / To-do: a request file for tvcal (which asks the person before adding anything).
+    # An event hands over the whole message as an .eml; a to-do is "Subject (from Name)".  tvcal itself need not run:
+    # its side (the Inbox that reads these files) is tested in tvcal/tests/e2e_cal.py.
+    def setup(t):
+        t.env["TVCAL_REQUESTS"] = str(t.tmp / "reqs")
+        t.env["TVCAL_STATE"] = str(t.tmp / "calstate")
+    tv = Tv(opts, setup=setup)
+    c = Case(tv)
+    started(tv, c)
+    reqs = lambda: sorted((tv.tmp / "reqs").glob("*.req")) if (tv.tmp / "reqs").is_dir() else []
+    tv.send(alt("m"), "e", "a", settle=2.0)                       # Message > Send to > Calendar
+    c.check(tv.wait("Asked tvcal to add this as an event", 6), "no toast after Send to > Calendar")
+    c.check(tv.wait(lambda: len(reqs()) == 1, 4), "Send to > Calendar left no request file for tvcal")
+    line = reqs()[0].read_text().strip() if reqs() else ""
+    c.check(line.startswith("eml@tvmail "), "the event request is not an eml@tvmail line: %r" % line)
+    eml = Path(line.split(" ", 1)[1]) if line.startswith("eml@tvmail ") else None
+    c.check(eml is not None and eml.exists() and "Subject: SUBJ2 plain" in eml.read_text(errors="replace"),
+            "the .eml handed to tvcal is not the selected message: %r" % line)
+    tv.send(alt("m"), "e", "t", settle=2.0)                       # Message > Send to > To-do
+    c.check(tv.wait("Asked tvcal to add this as a to-do", 6), "no toast after Send to > To-do")
+    c.check(tv.wait(lambda: len(reqs()) == 2, 4), "Send to > To-do left no request file for tvcal")
+    lines = [r.read_text().strip() for r in reqs()]
+    c.check("todo@tvmail SUBJ2 plain (from Bob)" in lines, "the to-do request is wrong: %r" % lines)
+    return tv
+
+
 @case(31)
 def send_menu_label(opts):
     tv = Tv(opts)
