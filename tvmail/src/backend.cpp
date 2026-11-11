@@ -59,6 +59,30 @@ std::string backendRun(const std::string &args)
     return shCapture("tvmail-backend" + backendFlags() + " " + args + " 2>&1");
 }
 
+// The lines of a tab-separated listing (list, aliases, parts) that are not rows: a backend error comes back as plain text
+// (BUGS.md #25 / issue #10), and a window that skipped it looked like an empty folder.  Said once, as an error toast.
+void reportListError(const std::string &what, const std::string &raw)
+{
+    std::string err;
+    size_t p = 0;
+    while (p < raw.size())
+    {
+        size_t e = raw.find('\n', p);
+        std::string ln = raw.substr(p, e == std::string::npos ? std::string::npos : e - p);
+        p = e == std::string::npos ? raw.size() : e + 1;
+        while (!ln.empty() && (ln.back() == '\r' || ln.back() == ' '))
+            ln.pop_back();
+        if (ln.empty() || ln.find('\t') != std::string::npos)
+            continue;
+        err += (err.empty() ? "" : " ") + ln;
+    }
+    if (err.empty())
+        return;
+    if (err.size() > 300)
+        err.resize(300);
+    notify(what + ": " + err, noteError);
+}
+
 std::string readSigFile()
 {
     std::string s = slurp(homePath(".signature"));

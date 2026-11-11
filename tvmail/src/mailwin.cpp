@@ -34,6 +34,14 @@ static std::string mailWindowTitle()
     return "tvmail - " + gHost + (gRemote ? " (remote)" : " (local)");
 }
 
+// The sort key of a list date: the text when it is "YYYY-MM-DD HH:MM", else "" (older than any date).
+static std::string dateKey(const std::string &d)
+{
+    if (d.size() != 16 || d[4] != '-' || d[7] != '-' || d[10] != ' ' || d[13] != ':')
+        return std::string();
+    return d;
+}
+
 // Rebuild gRows from gAll: apply the type-to-filter text, then the sort.
 static void applyView()
 {
@@ -45,8 +53,11 @@ static void applyView()
             gRows.push_back(r);
     switch (gSortKey)
     {
-    case sortDate:
-        break; // mailbox order
+    case sortDate: // by the date shown (the backend prints it as local "YYYY-MM-DD HH:MM", so the text sorts as time does);
+                   // mail with no readable date goes first; equal dates keep mailbox order (BUGS.md #13 / issue #2)
+        std::stable_sort(gRows.begin(), gRows.end(), [](const MsgRow &a, const MsgRow &b)
+                         { return dateKey(a.date) < dateKey(b.date); });
+        break;
     case sortFrom:
         std::stable_sort(gRows.begin(), gRows.end(), [](const MsgRow &a, const MsgRow &b)
                          { return lowered(a.from) < lowered(b.from); });
@@ -110,6 +121,7 @@ static void loadList()
 {
     gAll.clear();
     std::string raw = backendRun("list " + gMbox);
+    reportListError("Cannot list " + (gMbox.empty() ? std::string("the folder") : gMbox), raw);
     std::istringstream is(raw);
     std::string line;
     while (std::getline(is, line))
@@ -445,17 +457,21 @@ public:
     }
 
     // Where to put the highlight when there is no message to stay on: in
-    // date (mailbox) order the newest message - the last row, or the first
-    // when reversed - so a folder opens on what just arrived, not on the
-    // oldest mail at the top; in the other orders, the first row.
+    // date order the newest message by date (the last row, or the first
+    // when reversed; of equal dates the later in the mailbox) so a folder
+    // opens on the latest mail, not on the oldest at the top; in the other
+    // orders, the first row.
     static int startRow()
     {
         if (gSortKey != sortDate || gRows.empty())
             return 0;
         int best = 0;
         for (int i = 1; i < (int)gRows.size(); ++i)
-            if (gRows[i].idx > gRows[best].idx)
+        {
+            std::string a = dateKey(gRows[i].date), b = dateKey(gRows[best].date);
+            if (a > b || (a == b && gRows[i].idx > gRows[best].idx))
                 best = i;
+        }
         return best;
     }
 

@@ -18,7 +18,9 @@ public:
     TPartsPane(const TRect &b, TScrollBar *vsb, int idx, const std::string &mbox)
         : TListViewer(b, 1, nullptr, vsb), msgIdx(idx), msgMbox(mbox)
     {
-        std::istringstream is(backendRun("parts " + std::to_string(idx) + " " + mbox));
+        std::string raw = backendRun("parts " + std::to_string(idx) + " " + mbox);
+        reportListError("Cannot list the parts", raw);
+        std::istringstream is(raw);
         std::string ln;
         while (std::getline(is, ln))
         {

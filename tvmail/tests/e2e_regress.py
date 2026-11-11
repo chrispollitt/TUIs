@@ -711,6 +711,68 @@ def group_name_in_to_expands_on_send(opts):
     return tv
 
 
+FIXTURE_UNORDERED = "".join([
+    _msg("Late <late@example.com>", "Mon, 01 Sep 2026 12:00:00 -0700", "SUBJ-LATE", "l"),
+    _msg("Early <early@example.com>", "Mon, 01 Sep 2026 08:00:00 -0700", "SUBJ-EARLY", "e"),
+    _msg("Middle <mid@example.com>", "Mon, 01 Sep 2026 10:00:00 -0700", "SUBJ-MID", "m")])
+
+
+@case()
+def sort_by_date_is_date_order_not_mailbox_order(opts):
+    # issue #2 (BUGS.md #13): mail that was moved or pulled in lands out of date order in the mbox; View > Sort by date
+    # (the default) must still list it oldest first, and a second choice of it reverses the order
+    tv = Tv(opts, fixture=FIXTURE_UNORDERED)
+    c = Case(tv)
+    c.check(tv.wait("SUBJ-MID", 15), "tvmail never showed the fixture folder")
+    ys = {s: tv.find(s)[0] for s in ("SUBJ-EARLY", "SUBJ-MID", "SUBJ-LATE") if tv.find(s)}
+    c.check(len(ys) == 3 and ys["SUBJ-EARLY"] < ys["SUBJ-MID"] < ys["SUBJ-LATE"],
+            "the list is not in date order (mailbox order is late, early, middle): %r" % ys)
+    c.check(tv.wait(lambda: "Subject: SUBJ-LATE" in tv.text(), 5), "the folder did not open on the newest message by date")
+    return tv
+
+
+@case()
+def a_failing_list_is_an_error_not_an_empty_folder(opts):
+    # issue #10 (BUGS.md #25): the backend's error for `list` used to be dropped, so a folder that could not be read looked
+    # empty.  Here the inbox is a directory, which the backend cannot read.
+    def setup(t):
+        (t.tmp / "notamailbox").mkdir()
+        t.env["MAIL"] = str(t.tmp / "notamailbox")
+    tv = Tv(opts, setup=setup)
+    c = Case(tv)
+    c.check(tv.wait("Cannot list", 15), "no error toast: a folder that cannot be listed looks empty")
+    c.check(tv.has("Is a directory") or tv.has("directory"), "the toast does not say what went wrong")
+    return tv
+
+
+@case()
+def send_to_calendar_and_todo_leave_requests_for_tvcal(opts):
+    # Message > Send to > Calendar / To-do: a request file for tvcal (which asks the person before adding anything).
+    # An event hands over the whole message as an .eml; a to-do is "Subject (from Name)".  tvcal itself need not run:
+    # its side (the Inbox that reads these files) is tested in tvcal/tests/e2e_cal.py.
+    def setup(t):
+        t.env["TVCAL_REQUESTS"] = str(t.tmp / "reqs")
+        t.env["TVCAL_STATE"] = str(t.tmp / "calstate")
+    tv = Tv(opts, setup=setup)
+    c = Case(tv)
+    started(tv, c)
+    reqs = lambda: sorted((tv.tmp / "reqs").glob("*.req")) if (tv.tmp / "reqs").is_dir() else []
+    tv.send(alt("m"), "e", "a", settle=2.0)                       # Message > Send to > Calendar
+    c.check(tv.wait("Asked tvcal to add this as an event", 6), "no toast after Send to > Calendar")
+    c.check(tv.wait(lambda: len(reqs()) == 1, 4), "Send to > Calendar left no request file for tvcal")
+    line = reqs()[0].read_text().strip() if reqs() else ""
+    c.check(line.startswith("eml@tvmail "), "the event request is not an eml@tvmail line: %r" % line)
+    eml = Path(line.split(" ", 1)[1]) if line.startswith("eml@tvmail ") else None
+    c.check(eml is not None and eml.exists() and "Subject: SUBJ2 plain" in eml.read_text(errors="replace"),
+            "the .eml handed to tvcal is not the selected message: %r" % line)
+    tv.send(alt("m"), "e", "t", settle=2.0)                       # Message > Send to > To-do
+    c.check(tv.wait("Asked tvcal to add this as a to-do", 6), "no toast after Send to > To-do")
+    c.check(tv.wait(lambda: len(reqs()) == 2, 4), "Send to > To-do left no request file for tvcal")
+    lines = [r.read_text().strip() for r in reqs()]
+    c.check("todo@tvmail SUBJ2 plain (from Bob)" in lines, "the to-do request is wrong: %r" % lines)
+    return tv
+
+
 @case(31)
 def send_menu_label(opts):
     tv = Tv(opts)

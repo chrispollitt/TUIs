@@ -10,7 +10,9 @@ class TAddrPane : public TListViewer
 public:
     TAddrPane(const TRect &b, TScrollBar *vsb) : TListViewer(b, 1, nullptr, vsb)
     {
-        std::istringstream is(backendRun("aliases"));
+        std::string raw = backendRun("aliases");
+        reportListError("Cannot read the address book", raw);
+        std::istringstream is(raw);
         std::string ln;
         while (std::getline(is, ln))
         {

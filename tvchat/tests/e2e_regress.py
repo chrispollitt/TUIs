@@ -409,6 +409,39 @@ def chat_mail_selection(opts):
 
 
 @case()
+def chat_selection_to_calendar_and_todo_leaves_requests_for_tvcal(opts):
+    # Chat > Send selection to > Calendar / To-do: the lines selected in the log, as one line, in a request file for tvcal
+    # (which asks the person before adding anything; its side is tested in tvcal/tests/e2e_cal.py)
+    def setup(t):
+        t.env["TVCAL_REQUESTS"] = str(t.tmp / "reqs")
+    tv, srv = chat_tv(opts, setup=setup)
+    c = Case(tv)
+    started(tv, c)
+    srv.say(":alice!a@h PRIVMSG #e2e :lunch at noon", ":alice!a@h PRIVMSG #e2e :bring the report")
+    tv.pump(1.0)
+    open_chat(tv, c, srv)
+    reqs = lambda: sorted((tv.tmp / "reqs").glob("*.req")) if (tv.tmp / "reqs").is_dir() else []
+    tv.send(alt("c"), "s", "a", settle=0.5)
+    c.check(tv.wait("Select lines in the log first", 2) and not reqs(), "nothing selected: no hint, or a request was left")
+    (r1, c1), (r2, c2) = tv.find("lunch at noon"), tv.find("bring the report")
+    tv.send("\x1b[<0;%d;%dM" % (c1 + 1, r1 + 1), "\x1b[<32;%d;%dM" % (c2 + 1, r2 + 1),
+            "\x1b[<0;%d;%dm" % (c2 + 1, r2 + 1), settle=0.5)         # a mouse drag over the two lines
+    tv.send(alt("c"), "s", "a", settle=1.5)
+    c.check(tv.wait("Asked tvcal to add this as an event", 4), "no toast after Send selection to > Calendar")
+    c.check(tv.wait(lambda: len(reqs()) == 1, 4), "Send selection to > Calendar left no request file")
+    line = reqs()[0].read_text().strip() if reqs() else ""
+    c.check(line.startswith("event@tvchat ") and "lunch at noon" in line and "bring the report" in line,
+            "the event request is not the two selected lines: %r" % line)
+    c.check("\t" not in line and "\n" not in line.strip(), "the request is not one line: %r" % line)
+    tv.send(alt("c"), "s", "t", settle=1.5)                           # the selection is still there
+    c.check(tv.wait("Asked tvcal to add this as a to-do", 4), "no toast after Send selection to > To-do")
+    c.check(tv.wait(lambda: len(reqs()) == 2, 4), "Send selection to > To-do left no request file")
+    lines = [r.read_text().strip() for r in reqs()]
+    c.check(any(l.startswith("todo@tvchat ") and "lunch at noon" in l for l in lines), "the to-do request is wrong: %r" % lines)
+    return tv
+
+
+@case()
 def chat_typed_commands(opts):
     tv, srv = chat_tv(opts)
     c = Case(tv)
