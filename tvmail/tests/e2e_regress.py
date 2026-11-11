@@ -732,6 +732,56 @@ def sort_by_date_is_date_order_not_mailbox_order(opts):
 
 
 @case()
+def purge_preview_window_goes_away_after_each_answer(opts):
+    # issue 7 (BUGS.md #7): File > Purge... left the "Purge preview" window open after the confirmation (yes, no) and after
+    # "Nothing matches that filter."
+    tv = Tv(opts)
+    c = Case(tv)
+    started(tv, c)
+    tv.send(alt("f"), "u", settle=1.2)
+    c.check(tv.wait("Older than", 4), "File > Purge... did not open its dialog")
+    tv.send("nomatch-zzz", "Enter", settle=2.0)
+    c.check(tv.wait("Nothing matches", 6), "no 'Nothing matches that filter' for a filter that matches nothing")
+    c.check(not tv.has("Purge preview"), "the Purge preview window stayed open after 'Nothing matches'")
+    tv.send(alt("f"), "u", settle=1.2)
+    tv.send("Bob", "Enter", settle=2.0)
+    c.check(tv.wait("Purge 1 message", 6) and tv.has("Purge preview"), "no preview and question for a filter matching one message")
+    tv.send("n", settle=1.0)                                       # No
+    c.check(tv.wait(lambda: not tv.has("Purge preview") and not tv.has("Purge 1 message"), 4),
+            "the Purge preview window stayed open after answering No")
+    c.check(tv.has("SUBJ2 plain"), "the message was purged although the answer was No")
+    return tv
+
+
+@case()
+def address_book_adds_to_the_compose_window_you_were_in(opts):
+    # issue 8 (BUGS.md #8): the address book put the address into the most recently OPENED compose window, and said "open a
+    # compose window first" once that one was closed although another was open
+    def setup(t):
+        (t.home / ".mailrc").write_text("alias zed zed@example.com\n")
+        t.env["MAILRC"] = str(t.home / ".mailrc")
+    tv = Tv(opts, setup=setup)
+    c = Case(tv)
+    started(tv, c)
+    open_compose(tv, c)                                            # A
+    tv.send(alt("s"), "AAA", settle=0.4)
+    tv.send(alt("m"), "n", settle=1.0)                             # B (the newest): Message > New message (Ctrl-N is the editor's key in A)
+    c.check(tv.wait(lambda: field(tv, "Subject") == "", 4), "Message > New message did not open a second compose window")
+    tv.send(alt("s"), "BBB", settle=0.4)
+    tv.send("AltF3", "d", settle=0.8)                              # close B (discard): only A is left
+    c.check(tv.wait(lambda: not tv.has("Unsent message") and field(tv, "Subject") == "AAA", 5), "B did not close, or A is not in front")
+    tv.send("F4", settle=1.2)
+    c.check(tv.wait("zed", 4), "F4 did not open the address book")
+    tv.send("Enter", settle=1.0)
+    c.check(not tv.has("Open a compose window first"), "the address book said 'open a compose window first' with A still open")
+    tv.send("\x1b", settle=0.6)                                    # close the address book
+    c.check(compose_open(tv) and field(tv, "Subject") == "AAA", "compose window A is not in front again")
+    c.check(tv.wait(lambda: "zed@example.com" in (field(tv, "To") or ""), 4),
+            "the address was not added to compose window A: To = %r" % field(tv, "To"))
+    return tv
+
+
+@case()
 def a_failing_list_is_an_error_not_an_empty_folder(opts):
     # issue #10 (BUGS.md #25): the backend's error for `list` used to be dropped, so a folder that could not be read looked
     # empty.  Here the inbox is a directory, which the backend cannot read.

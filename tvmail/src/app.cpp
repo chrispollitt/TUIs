@@ -937,7 +937,11 @@ void TVMailApp::purgeDialog()
     std::string preview = shCapture(cmd + " -n 2>&1");
     TRect pr = deskTop->getExtent();
     pr.grow(-6, -3);
-    deskTop->insert(new TMailViewWindow(pr, "Purge preview", splitLines(preview), /*wrap=*/true));
+    TMailViewWindow *previewWin = new TMailViewWindow(pr, "Purge preview", splitLines(preview), /*wrap=*/true);
+    deskTop->insert(previewWin);
+    // the preview stays up while the question is asked, and goes with the answer (BUGS.md #7 / issue 7)
+    auto closePreview = [&]()
+    { previewWin->close(); };
 
     int n = -1;
     {
@@ -952,10 +956,13 @@ void TVMailApp::purgeDialog()
     }
     if (n <= 0)
     {
+        closePreview();
         notify(n == 0 ? std::string("Nothing matches that filter.") : preview, n == 0 ? noteInfo : noteError);
         return;
     }
-    if (messageBox(mfConfirmation | mfYesNoCancel, "Purge %d message(s)?", n) != cmYes)
+    ushort answer = messageBox(mfConfirmation | mfYesNoCancel, "Purge %d message(s)?", n);
+    closePreview();
+    if (answer != cmYes)
         return;
     std::string out = shCapture(cmd + " 2>&1");
     reload();

@@ -8,7 +8,8 @@
 // F2 sends via `tvmail-backend send`; closing a modified draft asks first.
 
 class TComposeWindow;
-static TComposeWindow *gLastCompose = nullptr; // address book / menu target
+static TComposeWindow *gLastCompose = nullptr; // the newest compose window (fallback for the address book)
+static std::vector<TComposeWindow *> gComposes; // every open compose window (the address book picks the topmost)
 
 class TComposeWindow : public TWindow
 {
@@ -112,6 +113,7 @@ public:
     {
         if (gLastCompose == this)
             gLastCompose = nullptr;
+        gComposes.erase(std::remove(gComposes.begin(), gComposes.end(), this), gComposes.end());
         TWindow::shutDown();
     }
 
@@ -133,6 +135,7 @@ public:
         palette = wpCyanWindow;
         options |= ofTileable;
         gLastCompose = this;
+        gComposes.push_back(this);
         const int W = size.x;
 
         auto addField = [&](int y, const char *label, const std::string &val)
@@ -381,11 +384,28 @@ void openCompose(const std::string &raw, const std::string &linkMbox,
     TProgram::deskTop->insert(w);
 }
 
-// The address book's Enter: into the most recently opened compose window.
+// The address book's Enter: into the compose window you were in, i.e. the topmost one on the desktop (the address book
+// window itself is above it), not the most recently opened one (BUGS.md #8 / issue 8); none open = false.
 bool composeAddRecipient(const std::string &addr)
 {
-    if (!gLastCompose)
+    TComposeWindow *target = nullptr;
+    if (TProgram::deskTop && TProgram::deskTop->last)
+    {
+        TView *top = TProgram::deskTop->last, *v = top;
+        do
+        {
+            for (TComposeWindow *w : gComposes)
+                if (static_cast<TView *>(w) == v)
+                    target = w;
+            if (target)
+                break;
+            v = v->prev();
+        } while (v && v != top);
+    }
+    if (!target)
+        target = gLastCompose;
+    if (!target)
         return false;
-    gLastCompose->addRecipient(addr);
+    target->addRecipient(addr);
     return true;
 }
