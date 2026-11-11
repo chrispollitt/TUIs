@@ -20,7 +20,9 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import ssl
+import subprocess
 import time
 import urllib.error
 import urllib.parse
@@ -175,9 +177,31 @@ class Card(object):
 
 
 # ----------------------------------------------------------------- the book ---
-def find_password(url, user):
-    """$TVCONTACTS_PASS, then ~/.mu-tickets (a URL with user and password in front of the host), then ~/.netrc: an entry for this host AND user."""
+def run_password_cmd(cmd, timeout=15):
+    """The secret a `password_cmd` prints (its first line), or "" when it is not set, not found, fails or is too slow.  The
+    command is split like a shell would, but no shell runs it: `auth get https cpbee chris` (the vault client, which exits 1 for
+    "none" and 4 for "vault locked").  Its error output is dropped: it must never reach the screen or a log."""
+    if not cmd or not cmd.strip():
+        return ""
+    try:
+        p = subprocess.run(shlex.split(cmd), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                           timeout=timeout)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return ""
+    if p.returncode != 0:
+        return ""
+    lines = p.stdout.decode("utf-8", "replace").splitlines()
+    return lines[0].strip("\r\n") if lines else ""
+
+
+def find_password(url, user, cmd=""):
+    """$TVCONTACTS_PASS, then the password_cmd ($TVCONTACTS_PASSWORD_CMD or [contacts] password_cmd; an option, off by default),
+    then ~/.mu-tickets (a URL with user and password in front of the host), then ~/.netrc: an entry for this host AND user.
+    A password_cmd that finds nothing (vault locked, no record) falls through to the files, so each app still runs alone."""
     pw = os.environ.get("TVCONTACTS_PASS")
+    if pw:
+        return pw
+    pw = run_password_cmd(os.environ.get("TVCONTACTS_PASSWORD_CMD") or cmd)
     if pw:
         return pw
     u = urllib.parse.urlparse(url)
@@ -314,8 +338,10 @@ class _Asking(object):
 class Book(_Asking):
     """One address book: a CardDAV collection and its local copy (a directory of .vcf files and an index of ETags)."""
 
-    def __init__(self, url, user, ca="", insecure=False, cache=None, password=None, timeout=8, label="mine"):
+    def __init__(self, url, user, ca="", insecure=False, cache=None, password=None, timeout=8, label="mine",
+                 password_cmd=""):
         self.label = label
+        self.password_cmd = password_cmd
         self.url = url if url.endswith("/") else url + "/"
         self.user, self.ca, self.insecure, self.timeout = user, ca, insecure, timeout
         self._password = password  # allowlist secret: the caller passes it in
@@ -330,7 +356,7 @@ class Book(_Asking):
 
     # -- the wire
     def request(self, method, url, body=None, headers=None):
-        pw = self._password if self._password is not None else find_password(self.url, self.user)
+        pw = self._password if self._password is not None else find_password(self.url, self.user, self.password_cmd)
         req = urllib.request.Request(url, data=body, method=method, headers=headers or {})
         req.add_header("Authorization", "Basic " + base64.b64encode(("%s:%s" % (self.user, pw)).encode("utf-8")).decode("ascii"))
         ctx = None
@@ -629,6 +655,7 @@ def default_book(apps=("tvmail", "tvchat", "tvcal")):
     $TVCONTACTS_SHARED the shared one."""
     yes = ("yes", "true", "1", "y", "on")
     personal = None
+    pcmd = ""      # [contacts] password_cmd, e.g. `auth get https cpbee chris`: an option; the files stay the default
     shared_url, shared_label = os.environ.get("TVCONTACTS_SHARED", ""), os.environ.get("TVCONTACTS_SHARED_LABEL", "family")
     if os.environ.get("TVCONTACTS_URL"):
         personal = dict(url=os.environ["TVCONTACTS_URL"], user=os.environ.get("TVCONTACTS_USER", ""),
@@ -638,6 +665,8 @@ def default_book(apps=("tvmail", "tvchat", "tvcal")):
             c = _conf(app)
             if c.get("contacts", "enabled", fallback="yes").strip().lower() in ("no", "false", "0", "off"):
                 return None
+            if not pcmd:
+                pcmd = c.get("contacts", "password_cmd", fallback="").strip()
             if personal is None and c.get("contacts", "url", fallback="").strip():
                 personal = dict(url=c.get("contacts", "url").strip(), user=c.get("contacts", "user", fallback="").strip(),
                                 ca=c.get("contacts", "ca", fallback="").strip(),
@@ -654,9 +683,11 @@ def default_book(apps=("tvmail", "tvchat", "tvcal")):
                                 insecure=cal.get("server", "insecure", fallback="no").strip().lower() in yes)
     if personal is None:
         return None
-    books = [Book(personal["url"], personal["user"], ca=personal["ca"], insecure=personal["insecure"], label="mine")]
+    books = [Book(personal["url"], personal["user"], ca=personal["ca"], insecure=personal["insecure"], label="mine",
+                  password_cmd=pcmd)]
     if shared_url:
-        books.append(Book(shared_url, personal["user"], ca=personal["ca"], insecure=personal["insecure"], label=shared_label))
+        books.append(Book(shared_url, personal["user"], ca=personal["ca"], insecure=personal["insecure"], label=shared_label,
+                          password_cmd=pcmd))
     return Library(books)
 
 

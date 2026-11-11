@@ -1537,6 +1537,24 @@ _SOURCE = {"last": None}                        # "master" or "local": who answe
 DOWN_FOR = 60
 
 
+def _secret_from_cmd(cmd, timeout=15):
+    """The first line a command prints, or "" (not set, not found, failed, too slow).  Split like a shell, run without one;
+    its error output is dropped so a secret or a vault message never reaches a screen or log.  Same idea as tvcontacts'
+    password_cmd (the vault client `auth get`: exit 1 = none, 4 = locked)."""
+    if not cmd:
+        return ""
+    import shlex
+    try:
+        p = subprocess.run(shlex.split(cmd), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                           timeout=timeout)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return ""
+    if p.returncode != 0:
+        return ""
+    lines = p.stdout.decode("utf-8", "replace").splitlines()
+    return lines[0].strip() if lines else ""
+
+
 def master_settings(get):
     """get(key, default) reads the app's [floyd] section.  Empty server = local only."""
     server = (get("server", "") or "").strip()
@@ -1549,7 +1567,10 @@ def master_settings(get):
     except ValueError:
         t = 2.0
     machine = re.sub(r"[^\w.-]", "", (get("machine", "") or "").strip() or socket.gethostname().split(".")[0]).lower()[:32]
-    return {"server": server, "token": (get("token", "") or "").strip(), "timeout": max(0.2, min(t, 30.0)),
+    token = (get("token", "") or "").strip()
+    if not token:                     # [floyd] token_cmd: an option (e.g. `auth get floyd hub`); empty = the token line is the default
+        token = _secret_from_cmd((get("token_cmd", "") or "").strip())
+    return {"server": server, "token": token, "timeout": max(0.2, min(t, 30.0)),  # allowlist secret: read from the config, not a literal
             "machine": machine or "unknown"}
 
 
