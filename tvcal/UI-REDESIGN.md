@@ -44,15 +44,15 @@ Keys as in tvmail: Tab moves between panes, Enter on the list opens the editor, 
 to-do, `t` today, `g` go to date, `/` find.
 
 ## Build order (one at a time)
-Status 2026-11-10: steps 1 to 4 are built (the window; Notes as VJOURNAL with the multi-line box and Floyd's !note).
+Status 2026-11-11: steps 1 to 5 are built (the window; Notes as VJOURNAL with the multi-line box and Floyd's !note; Inbox, Reminders; Contacts).
 1. The window: service pane, item list pane, detail pane (reusing TMailText from views.h); Calendar and To-do ported; the
    month grid under the services; menus follow the service chosen.  Edit dialogs unchanged.
 2. Notes: tvcal-backend add-note / set-note / notes / show / rm on VJOURNAL (check the collection accepts VJOURNAL; Floyd's
    `!note` and notes.json move over); the Notes list.
 3. Edit dialogs: a tall multi-line memo for event, to-do and note (TO-DO 12 done).
 4. Inbox and Reminders services (Calendar > Pending... goes away).
-5. Contacts as a service: contactswin.cpp split into reusable list/detail panes in tvcommon; until then the entry opens
-   the existing window.
+5. DONE: Contacts as a service: TContactsPane lives in tvcommon/src/contactspane.h (contactswin.cpp, tvmail's window,
+   uses it too); tvcal's File > Contacts selects the service, created the first time it is used.
 Each step: update tests/e2e_cal.py, help.cpp, README, man page, HISTORY.md.
 
 ## Rules kept
