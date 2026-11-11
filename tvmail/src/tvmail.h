@@ -66,6 +66,7 @@ const ushort cmFloyd = 2053;        // File > Floyd... (the assistant)
 // backend.cpp
 std::string backendCommand(const std::string &args); // for shCapture / shInteractive
 std::string backendRun(const std::string &args);     // warm co-process, else the shell
+void reportListError(const std::string &what, const std::string &raw); // the non-row lines of a listing, as an error toast
 std::string readSigFile();
 std::string readDeadLetter();
 
