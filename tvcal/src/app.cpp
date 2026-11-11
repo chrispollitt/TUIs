@@ -156,6 +156,12 @@ void TVCalApp::aboutBox()
 
 void TVCalApp::handleEvent(TEvent &e)
 {
+    if (e.what == evCommand && e.message.command == cmContacts) // here the address book is a service, not a window
+    {
+        calShowContacts();
+        clearEvent(e);
+        return;
+    }
     TTvApp::handleEvent(e); // the flash timer, Window > List
     if (e.what != evCommand)
         return;

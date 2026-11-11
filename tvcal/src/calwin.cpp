@@ -3,6 +3,7 @@
 // is the backend's: every view here is built from a few `range` / `todos` calls.
 #include "tvcal.h"
 #include "views.h"
+#include "contactspane.h"
 #include <map>
 
 namespace
@@ -477,7 +478,7 @@ public:
 
     TServicePane(const TRect &b) : TCalList(b, nullptr)
     {
-        items = {{"Calendar"}, {"To-do"}, {"Notes"}, {"Inbox"}, {"Reminders"}};
+        items = {{"Calendar"}, {"To-do"}, {"Notes"}, {"Inbox"}, {"Reminders"}, {"Contacts"}};
         setRange((short)items.size());
     }
     void getText(char *dest, short item, short maxLen) override
@@ -860,13 +861,15 @@ class TCalWindow : public TWindow
     TTodoPane *todo = nullptr;
     TNotesPane *notes = nullptr;
     TRowsPane *inbox = nullptr, *rem = nullptr;
+    TContactsPane *contacts = nullptr; // made the first time Contacts is chosen: it reads the address book
+    TScrollBar *contactsVsb = nullptr;
     TCalDetail *detail = nullptr;
     TPaneTitle *svcTitle = nullptr, *monthTitle = nullptr, *listTitle = nullptr, *detailTitle = nullptr;
     TTableHead *todoHead = nullptr, *noteHead = nullptr, *inboxHead = nullptr, *remHead = nullptr;
     TDivider *vdiv = nullptr;
     TScrollBar *agendaVsb = nullptr, *todoVsb = nullptr, *noteVsb = nullptr, *inboxVsb = nullptr, *remVsb = nullptr,
                 *detailVsb = nullptr;
-    int service = 0; // 0 Calendar, 1 To-do, 2 Notes, 3 Inbox, 4 Reminders
+    int service = 0; // 0 Calendar, 1 To-do, 2 Notes, 3 Inbox, 4 Reminders, 5 Contacts
 
     Ymd sel, today;
     std::vector<Occ> agendaOcc; // occurrences from agLo to agHi
@@ -959,6 +962,8 @@ public:
         {
             if (service <= 2)
                 service == 0 ? newEvent() : service == 1 ? newTodo() : newNote();
+            else if (service == 5 && contacts)
+                contacts->addEntry(false);
         };
 
         month->moveDays = [this](int n) { setSel(ymdAdd(sel, n), false); };
@@ -1049,7 +1054,8 @@ public:
                : service == 1 ? (TView *)todo
                : service == 2 ? (TView *)notes
                : service == 3 ? (TView *)inbox
-                              : (TView *)rem;
+               : service == 4 ? (TView *)rem
+                              : (TView *)contacts;
     }
     std::vector<TView *> cycle() const
     {
@@ -1067,12 +1073,16 @@ public:
         if (s < 0 || s >= (int)svc->items.size())
             return;
         service = s;
+        if (s == 5)
+            ensureContacts();
         // each service's own panes: shown for it, hidden for the others
-        const std::vector<std::vector<TView *>> groups = {{month, monthTitle, agenda, agendaVsb},
-                                                          {todo, todoHead, todoVsb},
-                                                          {notes, noteHead, noteVsb},
-                                                          {inbox, inboxHead, inboxVsb},
-                                                          {rem, remHead, remVsb}};
+        std::vector<std::vector<TView *>> groups = {{month, monthTitle, agenda, agendaVsb},
+                                                    {todo, todoHead, todoVsb},
+                                                    {notes, noteHead, noteVsb},
+                                                    {inbox, inboxHead, inboxVsb},
+                                                    {rem, remHead, remVsb}};
+        if (contacts)
+            groups.push_back({contacts, contactsVsb});
         for (int g = 0; g < (int)groups.size(); ++g)
             for (TView *v : groups[g])
                 g == s ? v->show() : v->hide();
@@ -1090,6 +1100,7 @@ public:
         svc->items[2].count = (int)notes->items.size();
         svc->items[3].count = (int)inbox->cells.size();
         svc->items[4].count = (int)rem->cells.size();
+        svc->items[5].count = contacts ? (int)contacts->rows.size() : -1;
         svc->drawView();
         monthTitle->setLabel(std::string(kMonthNames[sel.m - 1]) + " " + std::to_string(sel.y));
         int n = (int)todo->items.size();
@@ -1097,16 +1108,18 @@ public:
                             : service == 1 ? std::string("To-do (") + std::to_string(n) + (showDone ? ", with done" : "") + ")"
                             : service == 2 ? "Notes (" + std::to_string(notes->items.size()) + ")"
                             : service == 3 ? "Inbox (" + std::to_string(inbox->cells.size()) + ") - asked for by tvmail and tvchat"
-                                           : "Reminders (" + std::to_string(rem->cells.size()) + ") - the next two weeks");
+                            : service == 4 ? "Reminders (" + std::to_string(rem->cells.size()) + ") - the next two weeks"
+                                           : "Contacts (" + std::to_string(contacts ? contacts->rows.size() : 0) + ")");
         detailTitle->setLabel(service == 0   ? (detailIsDay ? "Day" : "Event")
                               : service == 1 ? "To-do"
                               : service == 2 ? "Note"
                               : service == 3 ? "Request"
-                                             : "Reminder");
+                              : service == 4 ? "Reminder"
+                                             : "Contact");
         TView *c = current;
         svcTitle->setActive(c == svc ? True : False);
         monthTitle->setActive(c == month ? True : False);
-        listTitle->setActive(c == agenda || c == todo || c == notes || c == inbox || c == rem ? True : False);
+        listTitle->setActive(c == agenda || c == todo || c == notes || c == inbox || c == rem || (contacts && c == contacts) ? True : False);
         detailTitle->setActive(c == detail ? True : False);
     }
 
@@ -1157,6 +1170,8 @@ public:
             else
                 out.push_back(err);
         }
+        else if (service == 5)
+            out = contacts ? contacts->detailLines() : std::vector<std::string>{"(reading the address book)"};
         else if (service == 3)
         {
             const std::vector<std::string> *p = inbox->current();
@@ -1401,6 +1416,29 @@ public:
             showDetail();
         else
             updateTitles();
+    }
+
+    // ---- Contacts: the same list and the same dialogs as File > Contacts in the other apps
+    void ensureContacts()
+    {
+        if (contacts)
+            return;
+        Rects R = paneRects();
+        flashStatus("Reading the address book...");
+        contactsVsb = new TScrollBar(R.agendaVsb);
+        contacts = new TContactsPane(R.agenda, contactsVsb);
+        contactsVsb->growMode = 0;
+        contacts->growMode = 0;
+        contacts->moved = [this] { showDetail(); };
+        contacts->gotFocus = [this] { updateTitles(); };
+        insert(contactsVsb);
+        insert(contacts);
+    }
+
+    void showContacts()
+    {
+        useService(5);
+        focusPane(contacts);
     }
 
     // ---- the Inbox and the Reminders
@@ -1827,6 +1865,11 @@ public:
         remHead->changeBounds(R.todoHead);
         rem->changeBounds(R.todo);
         remVsb->changeBounds(R.todoVsb);
+        if (contacts)
+        {
+            contacts->changeBounds(R.agenda);
+            contactsVsb->changeBounds(R.agendaVsb);
+        }
         vdiv->changeBounds(R.vbar);
         listTitle->changeBounds(R.listTitle);
         agenda->changeBounds(R.agenda);
@@ -2097,6 +2140,11 @@ void calPoll()
         if (gWin)
             gWin->refreshAll(false);
     }
+}
+
+void calShowContacts()
+{
+    window()->showContacts();
 }
 
 void calWindowRefresh()

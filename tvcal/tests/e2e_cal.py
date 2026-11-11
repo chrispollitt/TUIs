@@ -243,6 +243,52 @@ def floyd_asks_claude_and_the_answer_arrives_by_itself(opts):
 
 
 @case()
+def contacts_service_lists_shows_and_edits(opts):
+    # the address book as a service (File > Contacts... goes there): the same list and dialogs as the window in the other
+    # apps, against a fake CardDAV server in this process; every change goes through tvcontacts.py
+    import http.server
+    import importlib.util
+    import threading
+    spec = importlib.util.spec_from_file_location(
+        "tvcontacts_tests", str(HERE.parent.parent / "tvcommon" / "tests" / "test_tvcontacts.py"))
+    fake = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fake)
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), fake.Fake)
+    srv.cards = {"alice.vcf": (fake.ALICE, "1"), "family.vcf": (fake.FAMILY, "1"), "bob.vcf": (fake.BOB, "1")}
+    srv.log = []
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    ours = lambda needle: [k for k, v in srv.cards.items() if needle in v[0]]
+
+    def setup(t):
+        t.env["TVCONTACTS_URL"] = "http://127.0.0.1:%d/c/" % srv.server_address[1]
+        t.env["TVCONTACTS_USER"] = "chris"
+        t.env["TVCONTACTS_PASS"] = "secret"                      # allowlist secret: test value
+        t.env["TVCONTACTS_PY"] = str(HERE.parent.parent / "tvcommon" / "py" / "tvcontacts.py")
+        t.cleanups.append(srv.shutdown)
+    tv, c = tvcal(opts, setup=setup)
+    started(tv, c)
+    c.check(tv.has("Contacts"), "the services do not list Contacts")
+    tv.send(alt("f"), "n", settle=2.0)                           # File > Contacts... goes to the service
+    c.check(tv.wait(lambda: tv.has("[ Contacts (3)") and tv.has("Alice Archer") and tv.has("Bob Baker"), 10),
+            "the Contacts list is not shown")
+    c.check(tv.has("[G] Family"), "the group is not listed")
+    c.check(tv.wait(lambda: tv.has("Addresses:") and tv.has("alice@example.org"), 5), "the details do not show the contact whole")
+    tv.send("Down", "Down")                                      # Bob, then the group
+    c.check(tv.wait(lambda: tv.has("A group.  Members:"), 5), "the details do not show the group's members")
+    tv.send("n", settle=0.8)
+    c.check(tv.wait("New contact", 3), "n did not open the new-contact dialog")
+    tv.send("Carol Carter", "Tab", "Caz", "Tab", "carol@example.org", "Enter", settle=2.0)
+    c.check(tv.wait("Carol Carter", 6), "the new contact is not in the list")
+    c.check(len(ours("carol@example.org")) == 1, "the server did not get the new contact")
+    tv.send("Up")                                                # the list keeps the group; Carol is above it
+    c.check(tv.wait(lambda: tv.has("Nicknames: Caz"), 5), "the new contact is not shown whole")
+    tv.send("Delete", settle=0.8)
+    c.check(tv.wait("Delete the contact", 3), "Del did not ask")
+    tv.send("y", settle=2.0)
+    c.check(tv.wait(lambda: not tv.has("Carol Carter"), 6) and not ours("Carol Carter"), "Carol was not deleted")
+
+
+@case()
 def reminders_service_lists_what_fires_next(opts):
     tv, c = tvcal(opts)
     started(tv, c)

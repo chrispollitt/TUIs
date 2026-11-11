@@ -49,7 +49,7 @@ static const char *kHelpText =
     "  the title, day, time and place in its channel (you agree there first).\n"
     "  File > Import / Export .ics moves whole files to and from any other calendar program.\n"
     "\n"
-    "CONTACTS   (File > Contacts...)\n"
+    "CONTACTS   (File > Contacts, a service in the left pane)\n"
     "  The address book kept on the server (Radicale, CardDAV), the same in tvmail, tvchat and tvcal.\n"
     "  Ins or n: new contact   g: new group   Enter or e: edit   Del: delete   r or F5: reload.\n"
     "  A group lists its members by name, nickname or address; a group name in tvmail's To: expands to them.\n"

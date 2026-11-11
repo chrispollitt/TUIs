@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Step 5: Contacts is a service (File > Contacts goes there): the list and the card in the same panes as the other
+  services.  The pane (`TContactsPane`) moved from tvcommon's contactswin.cpp to contactspane.h, shared with tvmail.
 - The three-pane window (tvcal/UI-REDESIGN.md, step 1): Services on the left (Calendar, To-do) with the month
   under them, the agenda or the to-do list top right, the item under the bar shown whole bottom right.  The
   Calendar and To-do menus switch to their service.  Inbox, Reminders and Contacts follow.

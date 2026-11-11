@@ -30,6 +30,8 @@ to-dos. Without a server it keeps one local `.ics` file.
   (daily, weekly, monthly, yearly, every N, until a date) and a reminder in minutes before.
 - **Inbox and Reminders**: the Inbox lists what tvmail and tvchat asked to add; Reminders lists what will remind
   you in the next two weeks, soonest first (Enter goes to the event or to-do).
+- **Contacts**: the address book on the server (CardDAV), the same as in tvmail and tvchat, as a service: the list
+  top right, the card bottom right; `Ins` new, `g` group, `Enter` edit, `Del` delete. File > Contacts goes there.
 - **Notes**: a title, categories and free text of any length (a tall text box), newest first; stored as
   standard iCalendar journal entries on the server, so every machine has them. Floyd's `!note` writes here.
 - **To-dos**: text, due date, priority 1-9, categories, notes; `Space` ticks one off; the Due column
