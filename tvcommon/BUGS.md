@@ -11,8 +11,7 @@ mingw build did not compile: `setenv()`).
 
 ## To be squashed
 
-| # | Bug | Notes |
-|---|-----|-------|
+Open bugs are GitHub Issues now (moved 2026-11-11): https://github.com/chrispollitt/TUIs/issues?q=is%3Aissue+label%3Abug+label%3Atvcommon
 
 ## Squashed
 

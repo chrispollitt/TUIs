@@ -5,8 +5,7 @@ next free number is the highest in both tables plus one.
 
 ## To be squashed
 
-| # | Bug | Notes |
-|---|-----|-------|
+Open bugs are GitHub Issues now (moved 2026-11-11): https://github.com/chrispollitt/TUIs/issues?q=is%3Aissue+label%3Abug+label%3Atvchat
 
 ## Squashed
 

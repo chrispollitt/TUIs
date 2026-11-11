@@ -1,38 +1,4 @@
 Shared code that is not done. A feature for one app is in that app's TO-DO.
 
-1 The tvmail and tvchat panes still differ in small ways that could be one
-  class: the list pane base (`TChatList` in tvchat, `TFolderPane` in tvmail)
-  repeats the same colours, focus and broadcast plumbing. Move it to views.h.
-2 Both apps' menu bars grey items by hand (tvision tracks only commands
-  0-255); a shared helper would save each app doing it.
-3 `third_party/POSIX.stale-20261021` is an old mail-setup checkout whose 13
-  commits were all rebased into POSIX already; safe to delete.
-4 `tests/tvscreen.py`'s screenshot renderer draws no cursor and no bold.
-5 The combined identity / auth / tv-suite plan (decided 2026-11-10; the whole plan, with its phase numbers, is
-  POSIX/net-utils/TO-DO.txt, commit 177f111 - it replaces the earlier 5dce858).  What it asks of the tv suite:
-  Decisions: logins unified on `chris` (mail, calendar, LAN IRC, VAX); outside accounts that cannot be renamed (Libera
-  chris-pollitt, the VAX's own accounts) stay as aliases in identity.  tvmail sends on 587 WITH a login (tvmail/TO-DO.txt 30).
-  Phase 1  tvmail on 587 with a login (config; tvmail/TO-DO.txt 30); look once at the Delta Chat account's smtp ticket (port 587).
-  Phase 2  no code change here.  The vault gets: a Radicale record per person (Michelle first), the dcgw token and mail
-           login, Floyd's passwords.  tvcontacts, tvcal and the dcgw scripts already read the rendered files.
-  Phase 3  replace tvchat/deploy/tv-passwords-setup with `auth render` (the full ticket set: cpbee and cpbee.cmnet,
-           imaps/smtp, Radicale https://USER:PW@cpbee:5232 with host and CA from tvcal.conf); mail-setup, chat-setup and  # allowlist secret: example, no secret
-           tvchat/deploy/dcgw-client-setup.sh call `auth`; Floyd's `!setup passwords` (the wizard never handles a password
-           itself) calls `auth` on the machine with the vault; Floyd's admins / invite_from / contact and tvchat's [people]
-           table are derived from `identity`.
-  Phase 4  tvmail, tvchat, tvcal, tvcontacts and Floyd ask `auth get` / `identity login` first and keep the present order
-           ($TVCONTACTS_PASS, ~/.mu-tickets, ~/.netrc) as the fallback.  RULE: every app must still run alone.
-  Phase 5  retire tv-passwords-setup (and its copies in /usr/local/bin on cmlaptop and cmdesktop) once `auth render` replaces it.
-  Notes from this side (no conflict with the plan):
-  - tv-passwords-setup (TUIs/tvchat/deploy) writes the same ticket shapes the plan names: imaps/smtp under both host
-    spellings, and Radicale as https://USER:PW@HOST:5232 with the host and CA read from the person's tvcal.conf.  It tries the  # allowlist secret: example, no secret
-    password on the real servers before it files anything, and honours the person's [imap] verify setting.
-  - Radicale people so far: chris, floyd (calendar share), michelle (added with radicale-user-on-cpbee.sh, which runs
-    tvcal/configure/configure-radicale.sh server).  A shared family book is shared with share-book (rights only, no password change).  # allowlist secret: example, no secret
-  - The webterm change (the five web services now run as the no-login system user webterm, /opt/webterm, /etc/webterm)
-    does not touch the vault or its agent.  waxweb's VMS password sits in /etc/webterm/waxweb.env (root:webterm 640): it is
-    a record to move into the vault in phase 2 and to render from it afterwards.
-  - Michelle and other Unix users cannot unlock chris's vault: until the plan's phase 4, their files are rendered once while
-    chris is unlocked (the plan's option (a)), or filled by tv-passwords-setup.
-  - The tv suite's own contacts/shared-book settings live in [contacts] of tvmail.conf, tvchat.conf and tvcal.conf (the first
-    with a url wins); nothing there is a secret.
+Moved to GitHub Issues on 2026-11-11 (label "tvcommon"):
+  https://github.com/chrispollitt/TUIs/issues?q=is%3Aissue+label%3Atvcommon

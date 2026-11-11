@@ -1,69 +1,10 @@
-What tvmail does not do yet. Defects live in BUGS.md, not here; what it does
-today is in README.md. The numbers are stable (code and notes refer to them),
-so finished items are gone and the gaps stay.
+tvmail - what it does not do yet. Defects live in BUGS.md.
+
+The open items moved to GitHub Issues on 2026-11-11 (label "tvmail"):
+  https://github.com/chrispollitt/TUIs/issues?q=is%3Aissue+label%3Atvmail+label%3Aenhancement
+The numbers (11-30) were used in code and notes; each issue title/body keeps its old number
+(items 24, 25 and 28 are shared with tvchat: see the "tvmail + tvchat" issues).
 
 Done: 1-10, 13, 14, 16 and 23 - attachment browser, forward, reply all and Bcc,
 mark unread, purge, move to folder, Window list, type-to-filter, column sort,
 folder counts, mark-read only after you look, save as .eml, out of office, periodic pull (`[ui] check`, quiet, a toast for new mail).
-
-Classic TUI polish
-11 Status-line context - when focus is in Folders vs Messages vs a compose
-   window, swap the F-keys (e.g. Enter = Edit draft only in Drafts).
-12 Mouse - tvision already supports it; click-to-focus panes and double-click
-   to open would make the cyan desktop feel finished.
-
-Behaviour that would make it feel "done"
-15 tvmailrc - colours, default folder, poll-on-start, list date format,
-   HTML-vs-plain preference. Keeps ~/.mailrc for mail(1) and puts tvmail-only
-   knobs somewhere else.
-17 Address-book write path - F4 is read-only aliases today. Add/edit alias
-   lines in ~/.mailrc so the book is not a one-way dump into To:.
-18 Pipe the body through $PAGER / less or an external $EDITOR - an escape
-   hatch for huge mail and for people who still want vi for a long reply.
-
-Worth doing later (higher design cost)
-19 Threading - useful, but it fights mbox + IMAP UID indexing and the current
-   one-line list. Filter + sort get you 80% of the way on a small store.
-20 HTML mail as a second view - the backend already has an HTML fallback; a
-   "view HTML as text" toggle is enough. A real renderer is out of character.
-21 Multi-select - space-tag then delete/move/mark, like Midnight Commander.
-   Purge and Move to... already give bulk action without it.
-22 Resizable split - drag or +/- on the folder width and the list/body ratio.
-   The layout is a fixed 22-column / 2:5 split.
-
-A short order for what stays in character: tvmailrc
-(15), the status-line context swap (11) and mouse manners (12), then the
-address-book write path (17). That uses code that exists and does not turn
-tvmail into mutt.
-
-Setup and integration
-24 The config editor (File > Edit configuration..., F9 verify, F8 save + apply: the
-   backend starts afresh on the file) is a plain text editor over the INI. To do:
-   a form per section, and a Verify that logs in to IMAP and SMTP (without touching
-   mail). It is tvcommon's (configwin.cpp); tvchat has the same (tvchat/TO-DO.txt 13).
-25 tvmail and tvchat talking to each other - OPTIONAL (tvchat/TO-DO.txt 12).
-   Done (Oct 25): Message > Chat with sender and Open chat invite, and tvchat's
-   Invite mailing the link through tvmail's account. Still to do: tvmail starting
-   a compose window when tvchat asks to "write an email to this contact".
-
-Pinned ideas (Chris, Nov 2, 2026; not started, not designed)
-26 Multi-server support: more than one mail account/server at once (several IMAP/SMTP
-   accounts in tvmail.conf, a folder tree per account, compose from a chosen identity).
-27 A forum-style source (phpBB or a modern equivalent): threads and posts suit tvmail much
-   better than they suit tvchat. phpBB has no real API (mail notifications / mail-in, RSS,
-   or an extension); a modern one such as Discourse has an API and mailing-list mode.
-   Decide which, then read threads as folders and post replies by mail or API.
-28 An amalgamated view: the recent messages (last N hours or N days) from ALL accounts in
-   one list, newest first, each marked with its account. Same idea for tvchat
-   (tvchat/TO-DO.txt, "Picking up"); share the design through tvcommon.
-29 DONE 2026-11-04 (tvcommon/FLOYD-MASTER.md). Floyd (F7) could talk to the real, central Floyd on cpbee instead of being a local helper: one Floyd
-   with one memory and Claude from the server.  Suite rule (2026-11-04): every app (tvmail, tvchat, tvcal)
-   has a local Floyd as the fall-back AND a link to the master on cpbee when reachable ([floyd] server = ...;
-   master first, local when cpbee is out of reach).  Same item as tvcal/TO-DO.txt 15: decide the transport once, in tvcommon/py/tvfloyd.py.
-30 tvmail sends on port 587 WITH a login (decision 2026-11-10, POSIX/net-utils/TO-DO.txt phase 1).  Point [smtp] at
-   host = cpbee, port = 587, starttls = true, auth = true, user = chris; the password comes from the smtp:// ticket
-   (tvmail-backend _cred already asks for the scheme smtp, then *).  Port 25 stays for LAN relay only.  Check: a mail
-   from cmlaptop to an OUTSIDE address leaves as chris@cpbee.cmnet (the lan-canonical rule), and the `from =` override in
-   tvmail.conf still wins when it is set.  Port 587 presents its own self-signed certificate (CN=cpbee.cmnet): [smtp]
-   verify = false today; `auth ca` (phase 3) will hand out a CA file to pin instead.  Mostly configuration; look at the
-   code path once for the smtp ticket lookup under both host spellings (cpbee, cpbee.cmnet).

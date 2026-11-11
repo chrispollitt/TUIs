@@ -1,141 +1,13 @@
-tvchat does IRC (with IRCv3) and talk(1). What is left is below, in the order
-it is likely to be done. Defects live in BUGS.md, not here.
+tvchat does IRC (with IRCv3) and talk(1). Defects live in BUGS.md.
 
-Picking up: Floyd on Live Helper Chat, and Joy (PLAN.md has the phases; Nov 2, 2026, night)
- State: BOTH Live Helper Chat sites are live and tested.
-  - chat.u-l.ca = the fun/test site: the playful Floyd (account lhc + floyd on cpbee; API
-    https://chat.u-l.ca/index.php). Start page https://chat.u-l.ca/index.php/chat/start
-  - chat.universal-laughter.com = the pro site: JOY (account lhc_pro + pro): FAQ only
-    (/etc/tvchat/faq.txt, seeded from configure/faq.example.txt), no 8ball and friends, shares only
-    !joke; her fallback gives chris@universal-laughter.com and +1.604.318.6658. Operator `joy` id 2,
-    department 2 "assist" (email joy@universal-laughter.com forwards to chris@), API key restricted to
-    209.121.12.0/22. Start page https://chat.universal-laughter.com/index.php/chat/start/(department)/2
-  - They are two SEPARATE installs (own database, settings, cache, var). The cPanel host is reached with
-    ssh-wwl: code at /home/whatwelo/www/u-l/chat (fun) and /home/whatwelo/www/ul/chat (pro; database
-    whatwelo_ulchatpro, creds in ~/.lhc-ulchat-pro-db.txt on the host).
-  - Joy's widget is on universal-laughter.com in BETA mode (footer.php; shows only after a visit with
-    ?chat=1; ul-chat-widget-on-whatwelove.sh). The clock fix is verified live.
-  - Questions log (faq_log; Joy writes one JSON line per visitor question, emails and numbers blanked)
-    and `tvchat-backend faq-report [--days N]` (joy-report.sh): deployed Nov 2. First miss it caught:
-    "arer you a human?" (now answered, and typos are mended).
-  - BUILT, NOT DEPLOYED (run joy-update-on-cpbee.sh): typo mending, "are you a real person?" entry,
-    abuse flagging (polite warning, then the chat is closed and the address turned away for an hour).
- JOY IS ON THE WEB HOST (switched over Nov 3, 2026, tested live: answers in ~2 s, first-message path and later lines both work, the
- log records, joy-report.sh reads it). She is a Live Helper Chat EXTENSION in PHP (tvchat/lhc-joy): she answers the instant a visitor writes, inside the chat site's own request - no daemon, no polling, nothing on cpbee
- (the ~10 s answers came from the round trip cpbee <-> the web host). The Python Floyd-pro stays as the REFERENCE and the way back; the
- drift guard is lhc-joy/tests (gen_joy_golden.py + joy_golden.php: 107 steps, 0 mismatches). Her FAQ and log live in
- /home/whatwelo/joy/ (faq.txt = the one to edit now; questions.log). The playful Floyd stays on cpbee.
- Done in this order (never both Joys on at once: two answers): install silent -> deploy/joy-cpbee-pro.sh ACTION=off -> host script
- ACTION=enable. Way back: ACTION=disable on the host script (deploy/joy-webhost-on-whatwelove.sh), then ACTION=on on the cpbee one
- (the old Joy's sections are kept in /etc/tvchat/joy-pro-accounts.saved). ACTION=status says where things are. EDIT HER FAQ ON THE
- HOST (/home/whatwelo/joy/faq.txt) from now on; the repo's configure/faq.example.txt is the seed and the Python reference's FAQ:
- new entries go in both, and deploy/faq_merge.py carries repo additions to a live FAQ without touching its edits.
- Still to do for the new Joy: her questions log has no rotation by size for the .1 file beyond one; nothing else open.
- Chris, next:
-  a. Run TO_BE_RUN/joy-update-on-cpbee.sh when Claude puts it there (a stub: the real script is
-     tvchat/deploy/joy-update-on-cpbee.sh; it moves itself to DONE): installs the latest backend
-     (typo mending, abuse flagging, the questions log) and merges new FAQ entries and stock lines into
-     the live /etc/tvchat/faq.txt without touching yours. Do this after any change Claude announces.
-  b. Try the widget on the beta (https://universal-laughter.com/?chat=1) on desktop AND phone; ask odd
-     questions. A few days of real use.
-  c. Then REUSABLE/joy-report.sh (your own tool; DAYS or an argument): what she missed and what was weak.
-     Paste it to Claude.
-  d. Go live: MODE=live REUSABLE/ul-chat-widget-on-whatwelove.sh (MODE=off removes the widget again).
-     (How the scripts are kept: the REAL scripts are in the repo, tvchat/deploy/. TO_BE_RUN/ holds stubs
-     Claude asks you to run: they move to DONE/ on success. TO_BE_RUN/REUSABLE/ holds stubs for YOUR OWN
-     ad hoc tools, which never move: joy-report.sh, ul-chat-widget-on-whatwelove.sh,
-     lhc-pro-sync-on-whatwelove.sh.)
-  e2. The visitor's own chat window looks for news only every 3.5 s: `chat_message_sinterval` in the pro site's
-     settings/settings.ini.php (NOT in the admin menus). TO_BE_RUN/lhc-sinterval-on-whatwelove.sh (VALUE=1.5)
-     changes it; whether the embedded widget obeys it is being tested.
-  e1. FAQ gaps from testing: online sessions, a video of Chris, "is he certified", the wellness app are ANSWERED
-     (Nov 3). Still open: maybe "What time is it?" (she says Vancouver is where Chris is).
-  e. Optional: Joy's profile name in the pro admin (still "joy-assistant"; the fun site's is "floyd-bot");
-     a privacy line in the widget's start text ("chats may be reviewed to improve our answers"), because
-     the questions log keeps what visitors type.
- Claude, next:
-  - Read the report; add FAQ entries and K: keywords for what was missed (both /etc/tvchat/faq.txt and
-    configure/faq.example.txt); retune FAQ_MIN / FAQ_COVER if she is too eager or too shy.
-  - Flip lhc-pro-sync-on-whatwelove.sh so the PRO site is the master copy (copy pro -> fun; it already
-    takes SRC= and DST=). Maybe later symlink the read-only folders (lib/vendor, translations,
-    ezcomponents) after auditing; keep design/, settings/, cache/ and var/ per site.
-  - media.universal-laughter.com is "very broken" (pinned, not looked at): do it soon after go-live,
-    it is public-facing. First ask: what does it show, where is it hosted.
-  - Small: Joy answers an unknown !command with the fallback or a loose FAQ match ("!time in Vancouver"
-    gave the "where are you based" entry): say plainly that she only answers questions?
-  - Small: man page / README for `tvchat-backend faq-report` and the faq / faq_log options.
- Later:
-  - An AI layer for Joy (the FAQ as its only material; per-visitor and daily caps; a human handoff),
-    ONLY if the questions report shows the keyword matching is not enough.
-  - Phase 3: a public IRC server on a small VPS (Ergo + Floyd + gamja on chat.u-l.ca), then the
-    admin-only bridge to cpbee, then a tvchat web app (ttyd/xterm.js first).
-  - XMPP for tvchat (Live Helper Chat supports it; "Decided: not doing" below says no XMPP: revisit
-    that line if this is wanted).
- Pinned ideas (Chris, Nov 2, 2026; none started, none designed; nothing new starts until the list
- above is quiet):
-  - tvchat AND tvmail: an "amalgamated view" - the recent messages (last N hours or N days) from all the
-    servers/accounts of the app in one list, newest first, each marked with its source (tvchat: a
-    "recent" window across IRC/talk/Delta Chat/mail conversations; tvmail: its TO-DO.txt 28). Design
-    it once in tvcommon.
-  - tvmail (not tvchat): multi-server support (tvmail/TO-DO.txt 26) and a forum source such as phpBB or
-    a modern equivalent (27), which suit mail-style threads better than chat.
-  - A third app, tvcal (calendar): reuse tvcommon (config editor, backend co-process protocol);
-    CalDAV/iCal; mail invitations could tie it to tvmail.
-  - A to-do list manager to go with tvcal (maybe tvtodo, or inside tvcal): seed is Floyd's !todo / !note
-    (tvcommon/py/tvfloyd.py, the Notes class), which keep a to-do list and notes per person; due dates
-    would tie it to tvcal.
- Watching: the odd encrypted Delta Chat mail from floyd@cpbee.cmnet dated Oct 28 (deleted; save the
- raw headers if another arrives). Open: Postfix 587 login for Floyd's Delta Chat replies; the
- servers-page admin buttons on cpbee; the LAN Floyd nick (configure-floyd.sh --nick floyd-bot);
- getmail delete = true only affects mail fetched from now on.
+The open items (the Joy / Live Helper Chat rollout, "Next", "Smaller things", open questions, the
+wish list and the pinned ideas) moved to GitHub Issues on 2026-11-11 (label "tvchat"):
+  https://github.com/chrispollitt/TUIs/issues?q=is%3Aissue+label%3Atvchat
+Old item numbers (1-13) are kept in each issue's body; items 12 and 13 are shared with tvmail
+(the "tvmail + tvchat" issues).  What stays here is the record of what is done or decided.
 
-Next
-1 Delta Chat, what is left (tvchat/DESIGN.md "Delta Chat adapter"; tried live on
-  cpbee with two mailboxes, and on cmlaptop and cmdesktop):
-  - Attachments (shown as `[attachment: NAME]`), reactions,
-    a chat renamed on another device (the title is refreshed but no event tells the
-    UI), a group's picture and description, broadcast channels.
-  - Groups: the member picker could list the people you already hold keys for
-    (Add member asks for an address today); Leave deletes the chat but does not
-    block the sender, so a new message may come back as a request.
-  - Invitations by mail need the account's mail servers (imap_server /
-    smtp_server, or the address's domain): ask the core for its transport when
-    they are not in tvchat.conf.
-  - An invitation could also arrive from tvmail (see 12).
-  - Tests: `TestDeltaChat`, `TestDeltaInvitations` (a stub core and a fake mail
-    server) and `TestDeltaChatRealCore` (skipped without a core that runs;
-    `$TVCHAT_TEST_DC_RPC`); `delta_invite_join_and_send` in e2e_regress.
-
-Smaller things
-2 Reconnect a lost talkd connection by itself (IRC's backoff is not reused
-  for talk yet).
-3 `/join` and `/msg` list the new conversation but do not switch to it.
-4 A member list view (the `members` verb exists; nothing shows it).
-5 Show a new query (a direct message from someone new) by itself: today it
-  appears in the list with its count and in "N new".
-6 Edit > Paste has no handler in tvchat.
-7 `labeled-response` is requested from the server but unused.
-8 A pasted line ending in a newline is pasted, not sent (tvision delivers a
-  fast burst of keys as a paste).
-9 Redraw of the other side's screen in a talk (Ctrl-L today redraws only ours).
-10 Retest the Libera "Connection reset by peer" right after a send (seen once
-  in an early live check, not since): send a line in a channel with
-  `tvchat --debug` and read `debug.tvchat.backend.log`; the end-of-connection
-  line says phase, error and bytes unsent.
 11 (dropped Oct 27) The native Windows (mingw) build: tvmail and tvchat support Cygwin only.
 
-12 tvmail and tvchat talking to each other - OPTIONAL. Done (Oct 25): tvmail's
-   Message > Chat with sender and Open chat invite hand a request to tvchat
-   through a directory (DESIGN.md "The optional tvmail link"), and tvchat's
-   Invite can mail the link through tvmail's account. Not done: a tvchat
-   conversation could "write an email to this contact" in tvmail (a request
-   directory the other way). Never required, never the Delta Chat mailbox
-   itself (that stays dedicated).
-13 The config editor (File > Edit configuration..., F9 verify, F8 save + apply) is a
-   plain text editor over the INI. To do: forms - an account list with a dialog per
-   protocol so nobody has to know the keys - and a Verify that tries each account's
-   login (IMAP / SMTP / SASL) without joining anything. The window and plumbing are
-   tvcommon's (configwin.cpp); tvmail has the same (tvmail/TO-DO.txt 24).
 14 DONE 2026-11-09/10 (tvcommon/py/tvcontacts.py, tvcommon/src/contactswin.cpp, tvcommon/CONTACTS-DESIGN.md): tvcontacts
    library with ETag copy and offline reads, File > Contacts... (add, edit, delete contacts and groups) in all three apps,
    a shared family book beside each person's own, tvmail Address book / To: / Send to > Contacts, tvchat Chat with... takes
@@ -147,51 +19,6 @@ Smaller things
    tvchat email -> Delta contact lookup (a group may seed a Delta group once), tvcal attendee completion, a sentinel check;
    extend configure-radicale.sh for per-user books and rights.  Design: tvcommon/CONTACTS-DESIGN.md (not started; how tvmail
    stores addresses today and where Chris's existing contacts live are unchecked).
-
-Open questions
-- Should IRC logs persist to disk between sessions? Not for now: the log is
-  the backend's in-memory ring (2,000 lines per conversation). Worth asking
-  again if an always-on backend ever happens - that would be an IRC bouncer.
-- Self-hosting Ergo on cpbee is done; how to keep it reachable if cpbee moves
-  to a phone-tethered connection is not.
-
-Wish list (not planned)
-- A web version (an installable PWA that looks like the terminal app). The
-  backend's protocol stays free of anything terminal-specific so a browser
-  front end can reuse it.
-  * Browsers cannot open raw sockets, so it needs a server-side WebSocket
-    gateway relaying the same verbs and sequenced events to tvchat-backend.
-  * Option A: the real app in a browser - xterm.js plus a pty over WebSocket
-    (ttyd-style). Identical look, almost no new code, but a server-side
-    session and account per visitor: a hosting and security project.
-  * Option B: a Turbo Vision look-alike - a CSS character grid with the cyan
-    desktop, menus and shadowed dialogs, talking to the gateway. More work,
-    installable as a PWA.
-  * IRC-only shortcut: a self-hosted Ergo accepts WebSocket clients directly;
-    Delta Chat still needs the gateway.
-  * Hosting: the static front end on GitHub Pages or cp1; the gateway (with
-    the backends behind it) on cpbee or a small VPS - not cp1 (below).
-  * The server needs the backends running permanently (one per logged-in user,
-    holding their connections and credentials), a small WebSocket gateway
-    (login, spawn, relay), a reverse proxy (nginx or Caddy: TLS via Let's
-    Encrypt, WebSocket upgrade, rate limiting) and service units. On cpbee
-    that also means an inbound 443 in the nftables input chain (policy drop
-    today), and a tunnel (Cloudflare Tunnel, Tailscale Funnel) or a VPS relay
-    if cpbee loses its public address. It is a public login page in front of
-    mail and chat credentials: auth, TLS only, lockout. Server-side setup
-    would be a new tool in chrispollitt/POSIX beside mail-setup.
-- "Crazy talk": a gateway to OpenVMS PHONE, e.g. on the SIMH VAX (cpvax).
-  PHONE speaks DECnet task-to-task (object 29), so it needs DECnet on both
-  sides.
-
-Why not cp1 (u-l.ca, the cPanel webhost; checked Oct 20, 2026)
-- It can serve a static front end but cannot host the gateway or the
-  backends: CloudLinux shared account; outbound IRC (irc.libera.chat 6697 /
-  6667) refused over IPv4 and unreachable over IPv6, outbound 443 to Libera
-  times out, only outbound HTTPS works; apps run under Passenger and are
-  stopped when idle, with per-account LVE limits, so a permanently connected
-  backend fights the idle shutdown, and credentials would sit on a shared
-  server.
 
 Decided: not doing
 - No WhatsApp (unofficial clients risk banning the real mobile number), no

@@ -12,21 +12,7 @@ close).
 
 ## To be squashed
 
-| # | Bug | Notes |
-|---|-----|-------|
-| 10 | Body pane: Home goes to column 0 but End goes to the last line; no page-up key to pair with Space | |
-| 13 | View > Sort by date is mailbox order, not date order - moved or pulled mail lands out of date order | |
-| 16 | With "Unread first", reading a message re-sorts the list and moves it out from under the highlight | |
-| 17 | Every filter keystroke and every arrow key in the folder pane waits on a backend round trip - felt over IMAP | Needs debouncing |
-| 18 | Send, delete, move, purge, empty trash, save part / message show no "Working...", and run a cold one-shot backend | |
-| 20 | Long text (send errors, backend output, the 8-line pull summary) is clipped in the small message box | Needs a sized dialog |
-| 21 | Purge leaves the "Purge preview" window open after confirm / cancel / "nothing matches" | |
-| 23 | The address book adds to the most recently opened compose window, not the focused one, and says "open a compose window first" when that one closed but others are open | |
-| 24 | Every compose window is titled "Compose" - Window > List cannot tell them apart | Fix: title by subject |
-| 25 | A backend error from `list` is dropped (non-tab lines skipped), so a failure looks like an empty folder; Address book / Parts likewise show an empty window | The raw-UTF-8 From crash (#35) hid behind this |
-| 32 | Commands that cannot apply (Edit draft outside Drafts; Reply / Parts / Move on an empty list) are never greyed and silently do nothing | |
-| 39 | The dialog drop shadow is still drawn in a terminal-theme colour (tvision applies shadowAttr directly, not through mapColor) | Cosmetic |
-| 42 | Compose window header labels are under 3:1 contrast under Windows Terminal Dark+: the To / Cc / Bcc / Subject hotkey letters are themed white on light red (2.8:1), the label text white on cyan #00AFAF (2.7:1) | Found by e2e_regress #36; not scored there until fixed |
+Open bugs are GitHub Issues now (moved 2026-11-11): https://github.com/chrispollitt/TUIs/issues?q=is%3Aissue+label%3Abug+label%3Atvmail
 
 ## Squashed
 

@@ -2,7 +2,8 @@
 
 ## Open
 
-None known. Not yet exercised against a real Radicale (only a fake CalDAV server in the tests): see TO-DO 1.
+None known. Not yet exercised against a real Radicale (only a fake CalDAV server in the tests): see issue #26 (https://github.com/chrispollitt/TUIs/issues/26).
+Open bugs are GitHub Issues: https://github.com/chrispollitt/TUIs/issues?q=is%3Aissue+label%3Abug+label%3Atvcal
 
 ## Squashed
 
