@@ -20,7 +20,7 @@ jobs:
     name: ShellCheck (errors only)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # -S error keeps this green on day one; raise it to warning as the scripts are cleaned up.
       - name: ShellCheck
         run: |
@@ -37,7 +37,7 @@ jobs:
     env:
       TERM: xterm-256color
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Packages
         run: |
           sudo apt-get update
