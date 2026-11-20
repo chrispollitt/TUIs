@@ -1166,6 +1166,91 @@ def redraw_clears_scribbles(opts):
 
 
 @case()
+def usenet_service_reads_threads_and_posts(opts):
+    # SERVICES-DESIGN.md step 2: with [news] configured the Services pane lists Usenet; picking it shows the
+    # subscribed groups, their articles in threads, reads (the group's new count goes down), follows up with a
+    # post to the news server, catches up and subscribes - against a fake NNTP server in this process
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "tvnntp_tests", str(HERE.parent.parent / "tvcommon" / "tests" / "test_tvnntp.py"))
+    tn = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tn)
+    fourth = tn.article("Dan <dan@example.org>", "Wed, 03 Sep 2026 12:00:00 +0000", "Third level", "deep", "<a4@x>",
+                        refs="<a1@x> <a2@x>")
+    fake = tn.FakeNNTP({"lan.test": {1: tn.A1, 2: tn.A2, 3: tn.A3, 4: fourth},
+                        "lan.other": {1: tn.A1}})
+
+    def setup(t):
+        t.conf = t.tmp / "tvmail.conf"
+        t.conf.write_text("[service]\nmode = local\n[services]\norder = mail, news\n[news]\nhost = 127.0.0.1\n"
+                          "port = %d\nsubscribed = lan.test\n[smtp]\nfrom = Chris <chris@example.org>\n" % fake.port)
+        t.env["TVMAIL_CONF"] = str(t.conf)
+        t.env["TVNNTP_PY"] = str(HERE.parent.parent / "tvcommon" / "py" / "tvnntp.py")
+        t.cleanups.append(fake.stop)
+    tv = Tv(opts, setup=setup)
+    c = Case(tv)
+    started(tv, c)
+    c.check(tv.has("Services") and tv.has("Usenet"), "Usenet is not in the Services pane although [news] is set")
+    tv.send("ShiftTab", settle=0.5)
+    c.check(tv.has("[ Services ]"), "Shift-Tab did not go to the Services pane")
+    tv.send("Down", settle=1.5)
+    c.check(tv.wait("lan.test", 8) and tv.has("Groups") and tv.has("Articles"),
+            "picking Usenet did not show the groups")
+    # the articles, in threads: a reply under its article, the other thread after
+    c.check(tv.wait("Third level", 8), "the group's articles are not listed")
+    where = {s: tv.find(s) for s in ("Hello", "Re: Hello", "Third level", "Other thread")}
+    c.check(all(where.values()), "an article is missing from the list: %r" % where)
+    if all(where.values()):
+        order = sorted(where, key=lambda s: where[s][0])
+        c.check(order == ["Hello", "Re: Hello", "Third level", "Other thread"], "not in thread order: %r" % order)
+        c.check(where["Third level"][1] - where["Hello"][1] == 4 and where["Re: Hello"][1] - where["Hello"][1] == 2,
+                "replies are not indented by depth: %r" % where)
+    # reading the newest article: the body shows it, and the group's new count goes 4 -> 3
+    tv.send("Tab", "Tab", "Tab", settle=1.0)                      # Services -> Folders -> Articles -> Article
+    c.check(tv.wait("deep", 6), "the article body is not shown")
+    row = lambda: next((l for l in tv.lines() if "lan.test" in l and "│" in l), "")
+    c.check(tv.wait(lambda: re.search(r"lan\.test\s*│\s*4│\s*3", row()) is not None, 6),
+            "reading did not take one off the group's new count: %r" % row())
+    # a followup: Ctrl-R opens a post with the groups, the subject and the References filled in
+    tv.send("CtrlR", settle=1.5)
+    c.check(tv.wait("Post to Usenet", 6) and tv.has("Newsgroups") and tv.has("Re: Third level"),
+            "Ctrl-R did not open a followup")
+    tv.send("my followup", "F2", settle=2.5)
+    c.check(tv.wait("Article posted", 8), "the followup was not posted")
+    c.check(len(fake.posted) == 1, "the news server did not get the article")
+    if fake.posted:
+        txt = fake.posted[0].decode("utf-8", "replace")
+        c.check("Newsgroups: lan.test" in txt and "References: <a1@x> <a2@x> <a4@x>" in txt and "my followup" in txt
+                and "From: Chris <chris@example.org>" in txt, "the posted article is wrong:\n" + txt)
+    # View > Threads: flat, in date order
+    tv.send(alt("v"), "t", settle=1.0)
+    where = {s: tv.find(s) for s in ("Hello", "Re: Hello", "Third level", "Other thread")}
+    if all(where.values()):
+        c.check(sorted(where, key=lambda s: where[s][0]) == ["Hello", "Re: Hello", "Other thread", "Third level"],
+                "View > Threads did not flatten the list: %r" % where)
+    # Catch up
+    tv.send(alt("m"), "u", "c", settle=1.0)
+    c.check(tv.wait("Mark every article in lan.test", 4), "Catch up did not ask")
+    tv.send("y", settle=2.0)
+    c.check(tv.wait(lambda: re.search(r"lan\.test\s*│\s*[45]│\s*0", row()) is not None, 8),
+            "catching up did not zero the group: %r" % row())
+    # Subscribe to another group by name
+    tv.send(alt("m"), "u", "s", settle=1.0)
+    c.check(tv.wait("Subscribe to newsgroup", 4), "Subscribe did not ask for a name")
+    tv.send("lan.other", "Enter", settle=2.0)
+    c.check(tv.wait("lan.other", 6) and tv.wait("subscribed lan.other", 6), "the new group was not subscribed")
+    # an unknown group is refused in words
+    tv.send(alt("m"), "u", "s", settle=1.0)
+    tv.send("no.such", "Enter", settle=2.0)
+    c.check(tv.wait("411 no such", 6), "an unknown group was not refused")
+    # back to Mail: the folders, and Ctrl-R is a reply to mail again
+    tv.send("ShiftTab", "ShiftTab", "ShiftTab", settle=0.6)
+    tv.send("Up", settle=1.5)
+    c.check(tv.wait("inbox", 6) and tv.has("Folders") and not tv.has("Groups"), "picking Mail did not bring the folders back")
+    return tv
+
+
+@case()
 def services_pane_is_the_fourth_pane(opts):
     # SERVICES-DESIGN.md step 1: with one service the window is the three panes it always was; View >
     # Services pane adds the fourth (Services over Folders, Mail with the inbox's new count) and takes

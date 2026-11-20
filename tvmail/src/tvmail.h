@@ -63,6 +63,12 @@ const ushort cmOutOfOffice = 2042;  // File > Out of office... (Sieve vacation r
 const ushort cmFloyd = 2053;        // File > Floyd... (the assistant)
 const ushort cmServicePicked = 2059;   // broadcast: the Services pane's highlight moved
 const ushort cmToggleServices = 2060;  // View > Services pane: show or hide it
+const ushort cmNewsSubscribe = 2061;   // Message > Usenet > Subscribe to group...
+const ushort cmNewsUnsub = 2062;       //                    Unsubscribe from this group
+const ushort cmNewsCatchUp = 2063;     //                    Catch up (mark the group read)
+const ushort cmNewsGroups = 2064;      //                    All groups...
+const ushort cmNewsOlder = 2065;       //                    Load older articles
+const ushort cmToggleThreads = 2066;   // View > Threads
 
 // ------------------------------------------------------ tvmail-backend ---
 // backend.cpp
@@ -75,6 +81,10 @@ std::string readDeadLetter();
 // ------------------------------------------------------------- dialogs ---
 // dialogs.cpp
 ushort askSaveDraft();
+// One line of text in a small dialog; "" when cancelled.
+std::string askLine(const char *title, const char *label, const std::string &suggested = std::string());
+// A list to choose from (the newsgroups on the server); the row picked, -1 when cancelled.
+int pickFromList(const char *title, const std::vector<std::string> &rows, int start = 0);
 std::string askSavePath(const std::string &suggested,
                         const char *title = "Save attachment as");
 
@@ -85,6 +95,8 @@ struct MsgRow
     int idx = 0;
     char flag = '.';
     std::string date, from, subj;
+    std::string id, refs; // Usenet: Message-ID and References, for the threaded view
+    int depth = 0;        // Usenet threads: how far down a thread the row is (set by applyView)
 };
 enum SortKey
 {
@@ -124,6 +136,12 @@ extern bool gRemote;        // backend "mode" == remote (IMAP)
 extern std::string gHost;   // backend "host": the box we're talking to
 extern bool gWrap;          // the body pane's wrap setting
 std::string serviceFlag();  // "--service NAME " for a service other than mail, else ""; backendRun/backendCommand add it
+                            // to the verbs that are about a service (list, show, mark, ...), not to the account's (send, pull, ...)
+std::string serviceKind();  // the selected service's kind: "mail" or "usenet"
+bool notForUsenet(const char *what); // in the Usenet service: says "<what> is for mail" in a toast and returns true
+void serviceCommandsChanged();       // enable the Usenet commands in the Message menu only while Usenet is selected (app.cpp)
+extern bool gThreads;       // View > Threads: the Usenet list in thread order
+extern int gNewsLimit;      // how many articles the Usenet list asks for (0 = the backend's window)
 std::string mboxArg();
 std::string mboxOpt();
 
@@ -140,6 +158,7 @@ int mailFocusedRow();             // the highlighted row of gRows, or -1
 void mailMarkFocused(bool read);
 void mailReload();                // F5: counts + the folder, same message
 void mailToggleServices();        // View > Services pane: show or hide it
+void mailNews(ushort command);    // the Usenet commands (cmNews*, cmToggleThreads)
 int mailInboxUnread();            // unread in the inbox as of the last counts, -1 if not known
 void mailViewChanged(bool resetSel);
 void mailSetWrap(bool wrap);

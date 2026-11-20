@@ -2,6 +2,7 @@
 // sort) and the 3-pane mail window that shows it.
 #include "tvmail.h"
 #include "views.h"
+#include <map>
 
 std::vector<MsgRow> gAll;  // everything the backend listed
 std::vector<MsgRow> gRows; // what the pane shows: gAll, filtered and sorted
@@ -32,6 +33,22 @@ std::string serviceFlag()
     return "--service " + shq(gServices[gServiceIdx].name) + " ";
 }
 
+bool gThreads = true;
+int gNewsLimit = 0;
+
+std::string serviceKind()
+{
+    return gServiceIdx >= 0 && gServiceIdx < (int)gServices.size() ? gServices[gServiceIdx].kind : std::string("mail");
+}
+
+bool notForUsenet(const char *what)
+{
+    if (serviceKind() != "usenet")
+        return false;
+    notify(std::string(what) + " is for mail, not for Usenet.", noteInfo);
+    return true;
+}
+
 std::string mboxArg() { return gMbox.empty() ? std::string() : " '" + gMbox + "'"; }
 std::string mboxOpt() { return gMbox.empty() ? std::string() : " --mbox '" + gMbox + "'"; }
 
@@ -50,6 +67,67 @@ static std::string dateKey(const std::string &d)
     return d;
 }
 
+// Usenet: put the rows in thread order - each article under the one it answers (the last Message-ID of its
+// References that is in the list), threads and replies in the order they arrived (article number, not date:
+// the dates of old articles are not to be trusted) - and set each row's depth.
+static void threadOrder(std::vector<MsgRow> &rows)
+{
+    const int n = (int)rows.size();
+    std::map<std::string, int> byId;
+    for (int i = 0; i < n; ++i)
+        if (!rows[i].id.empty())
+            byId[rows[i].id] = i;
+    std::vector<int> parent(n, -1);
+    for (int i = 0; i < n; ++i)
+    {
+        std::vector<std::string> refs;
+        std::istringstream is(rows[i].refs);
+        for (std::string t; is >> t;)
+            refs.push_back(t);
+        for (int k = (int)refs.size() - 1; k >= 0; --k)
+        {
+            auto it = byId.find(refs[k]);
+            if (it != byId.end() && it->second != i)
+            {
+                parent[i] = it->second;
+                break;
+            }
+        }
+    }
+    for (int i = 0; i < n; ++i) // a loop of References has no root: cut it here
+    {
+        int p = parent[i], steps = 0;
+        while (p >= 0 && p != i && steps++ < n)
+            p = parent[p];
+        if (p == i)
+            parent[i] = -1;
+    }
+    std::vector<int> byIdx(n);
+    for (int i = 0; i < n; ++i)
+        byIdx[i] = i;
+    std::stable_sort(byIdx.begin(), byIdx.end(), [&](int a, int b)
+                     { return rows[a].idx < rows[b].idx; });
+    std::vector<std::vector<int>> kids(n);
+    std::vector<int> roots;
+    for (int i : byIdx)
+        (parent[i] < 0 ? roots : kids[parent[i]]).push_back(i);
+    std::vector<MsgRow> out;
+    out.reserve(n);
+    std::vector<std::pair<int, int>> stack; // (row, depth), the next to show on top
+    for (auto r = roots.rbegin(); r != roots.rend(); ++r)
+        stack.push_back({*r, 0});
+    while (!stack.empty())
+    {
+        std::pair<int, int> cur = stack.back();
+        stack.pop_back();
+        out.push_back(rows[cur.first]);
+        out.back().depth = cur.second;
+        for (auto k = kids[cur.first].rbegin(); k != kids[cur.first].rend(); ++k)
+            stack.push_back({*k, cur.second + 1});
+    }
+    rows.swap(out);
+}
+
 // Rebuild gRows from gAll: apply the type-to-filter text, then the sort.
 static void applyView()
 {
@@ -59,6 +137,13 @@ static void applyView()
         if (f.empty() || lowered(r.from).find(f) != std::string::npos ||
             lowered(r.subj).find(f) != std::string::npos)
             gRows.push_back(r);
+    for (MsgRow &r : gRows)
+        r.depth = 0;
+    if (serviceKind() == "usenet" && gThreads && gSortKey == sortDate && !gSortRev)
+    {
+        threadOrder(gRows); // the thread view is the date order of Usenet: the other sorts are flat
+        return;
+    }
     switch (gSortKey)
     {
     case sortDate: // by the date shown (the backend prints it as local "YYYY-MM-DD HH:MM", so the text sorts as time does);
@@ -123,6 +208,20 @@ static void loadServices()
         gServiceIdx = 0;
 }
 
+// The badge of the service shown: what is new in it - Mail: the inbox; Usenet: all the groups together.
+static void setBadge()
+{
+    if (gServiceIdx < 0 || gServiceIdx >= (int)gServices.size() || gFolders.empty())
+        return;
+    int n = 0;
+    if (gServices[gServiceIdx].kind == "usenet")
+        for (const Folder &f : gFolders)
+            n += std::max(0, f.unread);
+    else
+        n = gFolders[0].unread;
+    gServices[gServiceIdx].unread = n;
+}
+
 // The selected service's folders and their message / unread counts (-1 = not known), from the backend.
 // The highlight stays on the same folder when it is still there.
 static void loadFolders()
@@ -162,15 +261,14 @@ static void loadFolders()
             gFolderIdx = i;
     if (!gFolders.empty())
         gMbox = gFolders[gFolderIdx].mbox;
-    // the badge of the service shown: what is new in its first folder (Mail: the inbox)
-    if (gServiceIdx >= 0 && gServiceIdx < (int)gServices.size() && !gFolders.empty())
-        gServices[gServiceIdx].unread = gFolders[0].unread;
+    setBadge();
 }
 
 static void loadList()
 {
     gAll.clear();
-    std::string raw = backendRun("list " + gMbox);
+    bool usenet = serviceKind() == "usenet";
+    std::string raw = backendRun("list " + gMbox + (usenet && gNewsLimit > 0 ? " --limit " + std::to_string(gNewsLimit) : std::string()));
     reportListError("Cannot list " + (gMbox.empty() ? std::string("the folder") : gMbox), raw);
     std::istringstream is(raw);
     std::string line;
@@ -179,18 +277,27 @@ static void loadList()
         if (line.empty() || line.find('\t') == std::string::npos)
             continue;
         std::istringstream ls(line);
-        std::string idx, flag, date, from, subj;
+        std::string idx, flag, date, from, subj, id, refs;
         std::getline(ls, idx, '\t');
         std::getline(ls, flag, '\t');
         std::getline(ls, date, '\t');
         std::getline(ls, from, '\t');
-        std::getline(ls, subj);
+        if (usenet) // the subject, then the Message-ID and References the threads are built from
+        {
+            std::getline(ls, subj, '\t');
+            std::getline(ls, id, '\t');
+            std::getline(ls, refs);
+        }
+        else
+            std::getline(ls, subj);
         MsgRow r;
         r.idx = std::atoi(idx.c_str());
         r.flag = flag.empty() ? '.' : flag[0];
         r.date = date;
         r.from = from;
         r.subj = subj;
+        r.id = id;
+        r.refs = refs;
         gAll.push_back(r);
     }
     applyView();
@@ -345,7 +452,7 @@ public:
         }
         const MsgRow &r = gRows[item];
         putText(dest, std::string(1, r.flag) + " " + fitCols(r.date, 16) + " " +
-                          fitCols(r.from, 20) + " " + r.subj,
+                          fitCols(r.from, 20) + " " + std::string(2 * std::min(r.depth, 8), ' ') + r.subj, // a reply sits under its thread
                 maxLen);
     }
     void focusItem(short item) override
@@ -361,7 +468,7 @@ public:
             return;
         // Enter on a draft opens it for editing; otherwise jump to the body
         message(owner, evBroadcast,
-                gMbox == "drafts" ? cmEditDraft : cmFocusContent, this);
+                gMbox == "drafts" && serviceKind() == "mail" ? cmEditDraft : cmFocusContent, this);
     }
     void handleEvent(TEvent &e) override
     {
@@ -486,6 +593,7 @@ class TMailWindow : public TWindow
     TTableHead *folderHead = nullptr;
     TPaneTitle *folderTitle = nullptr, *msgTitle = nullptr, *contentTitle = nullptr, *svcTitle = nullptr;
     int activePane = 0; // 0 folders, 1 messages, 2 body, 3 services
+    int leftW = 22;     // the width of the left column: wider for Usenet's group names
     // The Services pane takes the top of the left column.  With one service there is nothing to choose, so
     // the window is then the three panes it always was; View > Services pane shows it anyway.
     bool showServices = false;
@@ -501,7 +609,7 @@ class TMailWindow : public TWindow
     Rects paneRects() const
     {
         int W = size.x, H = size.y;
-        const int FW = 22;
+        const int FW = leftW;
         int sy = 1 + (H - 2) * 2 / 5;
         if (sy < 6)
             sy = 6; // title + a few rows + body title
@@ -582,6 +690,7 @@ public:
         ready = True;
         folderPane->select();
         setActivePane(0);
+        serviceCommandsChanged(); // the Usenet commands stay off until Usenet is picked
     }
 
     // View > Services pane
@@ -604,10 +713,11 @@ public:
             svcTitle->hide();
             svcPane->hide();
         }
-        unlock(); // draws the window ...
-        // ... but not the heading row, which was moved while the Folders list still covered its new place
-        // (found by the e2e case: a stale row of the old list stayed there)
-        folderHead->drawView();
+        unlock();
+        // A window keeps its picture in a buffer and draws only what a view tells it to, and a view moved
+        // while another still covered its new place is "not exposed" and draws nothing (found by the e2e
+        // case: a stale row of the old list stayed): so draw every pane again, now that all are in place.
+        redraw();
         (want == 0 ? (TView *)folderPane : want == 1 ? (TView *)msgPane : want == 2 ? (TView *)contentPane : (TView *)svcPane)->select();
     }
 
@@ -649,6 +759,14 @@ public:
     // orders, the first row.
     static int startRow()
     {
+        if (!gRows.empty() && serviceKind() == "usenet") // the newest article (dates in old articles are not to be trusted)
+        {
+            int newest = 0;
+            for (int i = 1; i < (int)gRows.size(); ++i)
+                if (gRows[i].idx > gRows[newest].idx)
+                    newest = i;
+            return newest;
+        }
         if (gSortKey != sortDate || gRows.empty())
             return 0;
         int best = 0;
@@ -680,8 +798,9 @@ public:
         {
             gMbox = gFolders[gFolderIdx].mbox;
             loadList();
-            // the list we just read is the freshest word on this folder's counts
-            if (gMbox != "dead")
+            // the list we just read is the freshest word on this folder's counts (a Usenet list is only
+            // the newest articles of the group: its counts are the server's)
+            if (gMbox != "dead" && serviceKind() == "mail")
             {
                 gFolders[gFolderIdx].total = (int)gAll.size();
                 gFolders[gFolderIdx].unread = (int)std::count_if(gAll.begin(), gAll.end(),
@@ -713,8 +832,7 @@ public:
     // The badge of the service shown follows its first folder (Mail: the inbox).
     void syncBadge()
     {
-        if (gServiceIdx >= 0 && gServiceIdx < (int)gServices.size() && !gFolders.empty())
-            gServices[gServiceIdx].unread = gFolders[0].unread;
+        setBadge();
         if (svcPane)
             svcPane->drawView();
     }
@@ -725,9 +843,162 @@ public:
         gFilter.clear();
         gFolders.clear();
         gFolderIdx = 0;
+        gNewsLimit = 0;
+        retitle();
+        lock();
+        layout(); // Usenet's group names are long: a wider left column
+        unlock();
         loadFolders();
         folderPane->reloadRows();
         loadFolder();
+        serviceCommandsChanged();
+        redraw(); // the left column changed width: every pane again (see toggleServices)
+    }
+
+    // The service decides what the panes are called and how wide the left column is.
+    void retitle()
+    {
+        bool usenet = serviceKind() == "usenet";
+        leftW = usenet ? 32 : 22;
+        folderTitle->setLabel(usenet ? "Groups" : "Folders");
+        contentTitle->setLabel(usenet ? "Article" : "Message");
+    }
+
+    // ---- the Usenet commands (Message > Usenet) ----
+    // After a change on the server side of things: the folders again, the highlight on `group` if it is there.
+    void newsRefresh(const std::string &group = std::string())
+    {
+        std::string want = group.empty() && gFolderIdx >= 0 && gFolderIdx < (int)gFolders.size() ? gFolders[gFolderIdx].mbox : group;
+        gFolderIdx = 0;
+        loadFolders();
+        for (int i = 0; i < (int)gFolders.size(); ++i)
+            if (gFolders[i].mbox == want)
+                gFolderIdx = i;
+        gNewsLimit = 0;
+        folderPane->reloadRows();
+        loadFolder();
+    }
+
+    static std::string firstLine(std::string s)
+    {
+        s = s.substr(0, s.find('\n'));
+        while (!s.empty() && (s.back() == '\r' || s.back() == ' '))
+            s.pop_back();
+        return s;
+    }
+
+    void newsSubscribe(const std::string &name)
+    {
+        std::string g = name;
+        if (g.empty())
+            g = askLine("Subscribe to newsgroup", "~G~roup name (for example comp.os.linux)");
+        if (g.empty())
+            return;
+        std::string out = firstLine(backendRun("news-subscribe " + shq(g)));
+        bool ok = out.rfind("subscribed", 0) == 0;
+        notify(out.empty() ? "No answer from tvmail-backend." : out, ok ? noteInfo : noteError);
+        if (ok)
+            newsRefresh(g);
+    }
+
+    void newsUnsubscribe()
+    {
+        if (gFolderIdx < 0 || gFolderIdx >= (int)gFolders.size())
+            return;
+        std::string g = gFolders[gFolderIdx].mbox;
+        if (messageBox(mfConfirmation | mfYesButton | mfNoButton, "Unsubscribe from %s?", g.c_str()) != cmYes)
+            return;
+        notify(firstLine(backendRun("news-unsubscribe " + shq(g))), noteInfo);
+        gFolderIdx = 0;
+        newsRefresh();
+    }
+
+    void newsCatchUp()
+    {
+        if (gFolderIdx < 0 || gFolderIdx >= (int)gFolders.size())
+            return;
+        std::string g = gFolders[gFolderIdx].mbox;
+        if (messageBox(mfConfirmation | mfYesButton | mfNoButton, "Mark every article in %s as read?", g.c_str()) != cmYes)
+            return;
+        std::string out = firstLine(backendRun("news-catchup " + shq(g)));
+        notify(out, out.rfind("caught up", 0) == 0 ? noteInfo : noteError);
+        newsRefresh(g);
+    }
+
+    // Every group on the server, to subscribe to (or just go to) one.
+    void newsAllGroups()
+    {
+        std::string raw = backendRun("news-groups");
+        std::vector<std::string> names, rows;
+        std::istringstream is(raw);
+        std::string line;
+        while (std::getline(is, line))
+        {
+            std::vector<std::string> f;
+            std::istringstream ls(line);
+            for (std::string c; std::getline(ls, c, '\t');)
+                f.push_back(c);
+            if (f.size() < 5)
+                continue; // an error line, not a group
+            names.push_back(f[0]);
+            int n = std::max(0, std::atoi(f[2].c_str()) - std::atoi(f[1].c_str()) + 1);
+            std::string desc = f.size() > 5 ? f[5] : std::string();
+            rows.push_back(std::string(f[4] == "*" ? "* " : "  ") + fitCols(f[0], 38) + " " +
+                           fitCols(std::to_string(n), 7) + " " + desc);
+        }
+        if (names.empty())
+        {
+            reportListError("Cannot list the groups", raw);
+            if (raw.find('\t') == std::string::npos && raw.empty())
+                notify("The news server has no groups.", noteInfo);
+            return;
+        }
+        int at = pickFromList("All groups  (* = subscribed; Enter subscribes)", rows);
+        if (at < 0)
+            return;
+        if (rows[at][0] == '*')
+            newsRefresh(names[at]); // already yours: go there
+        else
+            newsSubscribe(names[at]);
+    }
+
+    // The list shows the newest articles; this asks for more of them.
+    void newsLoadOlder()
+    {
+        if (gFolderIdx < 0 || gFolderIdx >= (int)gFolders.size())
+            return;
+        size_t before = gAll.size();
+        int base = std::max<int>(gNewsLimit, (int)before);
+        gNewsLimit = base + 500;
+        loadFolder(true); // stays on the article you were reading
+        if (gAll.size() == before)
+            notify("There are no older articles.", noteInfo);
+    }
+
+    void newsCommand(ushort command)
+    {
+        switch (command)
+        {
+        case cmNewsSubscribe:
+            newsSubscribe(std::string());
+            break;
+        case cmNewsUnsub:
+            newsUnsubscribe();
+            break;
+        case cmNewsCatchUp:
+            newsCatchUp();
+            break;
+        case cmNewsGroups:
+            newsAllGroups();
+            break;
+        case cmNewsOlder:
+            newsLoadOlder();
+            break;
+        case cmToggleThreads:
+            gThreads = !gThreads;
+            viewChanged(false);
+            break;
+        }
     }
 
     // Folder-pane numbers and the Messages heading (filter, sort order).
@@ -735,7 +1006,11 @@ public:
     {
         if (!msgTitle)
             return;
-        std::string t = "Messages";
+        bool usenet = serviceKind() == "usenet";
+        std::string t = usenet ? "Articles" : "Messages";
+        if (usenet && gFolderIdx >= 0 && gFolderIdx < (int)gFolders.size() && gFolders[gFolderIdx].total > (int)gAll.size())
+            t += "  (newest " + std::to_string(gAll.size()) + " of " + std::to_string(gFolders[gFolderIdx].total) +
+                 " - Message > Usenet > Load older)";
         if (!gFilter.empty())
             t += "  filter: " + gFilter + "_  (" + std::to_string(gRows.size()) +
                  " of " + std::to_string(gAll.size()) + ")";
@@ -843,6 +1118,7 @@ public:
                 clearEvent(e);
                 break;
             case cmFolderPicked:
+                gNewsLimit = 0;  // a Usenet group starts at its newest articles again
                 gFilter.clear(); // a filter belongs to the folder it was typed in
                 loadFolder();
                 clearEvent(e);
@@ -949,6 +1225,12 @@ void mailToggleServices()
 {
     if (gMailWin)
         gMailWin->toggleServices();
+}
+
+void mailNews(ushort command)
+{
+    if (gMailWin)
+        gMailWin->newsCommand(command);
 }
 
 void mailViewChanged(bool resetSel)

@@ -593,12 +593,12 @@ class TestServices(Base):
 
     def test_service_option_names_a_service_that_exists(self):
         self.assertEqual(self.be("--service", "mail", "folders").returncode, 0)
-        p = self.be("--service", "news", "folders")
+        p = self.be("--service", "nosuch", "folders")
         self.assertNotEqual(p.returncode, 0)
-        self.assertIn(b"unknown service 'news'", p.stderr)
+        self.assertIn(b"unknown service 'nosuch'", p.stderr)
         # every verb takes it, not only folders
         self.assertEqual(self.be("--service", "mail", "ping").stdout, b"pong\n")
-        self.assertNotEqual(self.be("--service", "news", "ping").returncode, 0)
+        self.assertNotEqual(self.be("--service", "nosuch", "ping").returncode, 0)
 
 
 # --------------------------------------------------------------------------

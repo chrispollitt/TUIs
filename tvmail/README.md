@@ -184,6 +184,18 @@ whichever pane is active — including scrolling the body. Moving the highlight
 in **Folders** reloads the message list; moving it in **Messages** loads the
 body. `Enter` on a message jumps focus to the body pane.
 
+## Usenet
+
+With `[news] host = ...` in `tvmail.conf` (see `configure/tvmail.conf.example`) the Services pane lists **Usenet**, read
+from an NNTP server on your LAN. Its folders are the groups you subscribe to, with the number of new articles; the
+Messages pane shows the group's newest `window` articles (default 500) in threads - **View ▸ Threads** for a flat list,
+**Message ▸ Usenet ▸ Load older articles** for more. What you have read is kept in `~/.local/share/tvmail/newsrc-HOST`,
+a classic `.newsrc`. **Ctrl-R** is a followup (Newsgroups, References and the quote filled in), **Ctrl-N** a new article in
+the group, **F2** posts it. **Message ▸ Usenet** subscribes to a group by name or from the list of every group on the
+server, unsubscribes, and catches up (marks a group read). Delete, Move to, Purge and Forward are for mail only.
+The NNTP client is the stdlib-only `../tvcommon/py/tvnntp.py`. The server side is planned as `news-setup` in
+chrispollitt/POSIX (INN2); see [SERVICES-DESIGN.md](SERVICES-DESIGN.md).
+
 ## Folders
 
 | name | path | notes |
@@ -379,7 +391,10 @@ tvmail-backend list  [MBOX]              idx <TAB> flags <TAB> date <TAB> from <
 tvmail-backend counts [MBOX...]          name <TAB> total <TAB> unseen (default: every folder)
 tvmail-backend services                  name <TAB> kind <TAB> label (the Services pane)
 tvmail-backend folders                   label <TAB> MBOX <TAB> total <TAB> unseen (the Folders pane)
-tvmail-backend --service NAME VERB ...   the service a verb is about (default mail)
+tvmail-backend --service NAME VERB ...   the service a verb is about (default mail; `news` = Usenet: list, show, raw, mark,
+                                         counts, folders, compose-template, send, with the group as MBOX)
+tvmail-backend news-groups [PATTERN]     every group on the news server: name first last status subscribed(*) description
+tvmail-backend news-subscribe|news-unsubscribe|news-catchup GROUP
 tvmail-backend show  IDX [MBOX]          decoded headers + text/plain body
 tvmail-backend raw   IDX [MBOX]          the raw RFC822 message
 tvmail-backend parts IDX [MBOX]          list MIME parts

@@ -5,8 +5,12 @@ tvmail gets a fourth pane and learns two more kinds of service besides mail: a *
 the old days).  The servers are set up by two new directories beside `mail-setup` and
 `chat-setup` in chrispollitt/POSIX.
 
-Status: **step 1 built** (branch `tvmail-services-pane`: the Services pane, `services` / `folders` / `--service`, Mail only);
-the rest is design.  Decisions marked (Chris) were made on 2026-11-19;
+Status: **steps 1 and 2 built** (branches `tvmail-services-pane`: the Services pane; `tvmail-usenet`: the Usenet service
+in tvmail, against a fake NNTP server); the servers and Lists are design.  Where step 2 differs from the text below: the
+Usenet commands are a **Message > Usenet** submenu (enabled only while Usenet is selected), not a top-level menu; the
+NNTP client lives in `tvcommon/py/tvnntp.py`; the group's unread count is an upper bound where its article numbers
+have gaps (exact otherwise); Followup to an *archive* group (the `lan.*` redirect) waits for the server step, since
+only the server knows which groups are read-only.  Decisions marked (Chris) were made on 2026-11-19;
 the rest are proposals to confirm or overturn at review.
 
 ## The window

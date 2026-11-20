@@ -1199,18 +1199,25 @@ def cmd_counts(a):
 # [services] order = mail, ... in tvmail.conf names the ones to show (absent:
 # just mail); a name nobody implements yet is left out.
 # --------------------------------------------------------------------------
-_SERVICES = {"mail": ("mail", "Mail")}      # name -> (kind, label)
+_SERVICES = {"mail": ("mail", "Mail"), "news": ("usenet", "Usenet")}      # name -> (kind, label)
 
 # the Mail service's folders: the label shown, and the MBOX shorthand every verb takes
 _MAIL_FOLDERS = (("inbox", "spool"), ("drafts", "drafts"), ("sent", "sent"), ("saved", "mbox"),
                  ("spam", "spam"), ("trash", "trash"), ("dead.letter", "dead"))
 
 
+def _service_ready(name):
+    """A service that needs setting up is listed only when it has been: Usenet wants [news] host."""
+    if _SERVICES[name][0] == "usenet":
+        return bool(_news_conf()["host"])
+    return True
+
+
 def _service_names():
     order = _conf().get("services", "order", fallback="mail")
     names = []
     for n in re.split(r"[,\s]+", order.strip().lower()):
-        if n in _SERVICES and n not in names:
+        if n in _SERVICES and n not in names and _service_ready(n):
             names.append(n)
     return names or ["mail"]
 
@@ -1220,7 +1227,31 @@ def _check_service(a):
     name = getattr(a, "service", None)
     if name and name not in _SERVICES:
         sys.exit("tvmail-backend: unknown service '%s' (have: %s)" % (name, ", ".join(sorted(_SERVICES))))
+    if name and not _service_ready(name):
+        sys.exit("tvmail-backend: service '%s' is not set up (see tvmail.conf.example: [news] host)" % name)
     return name or "mail"
+
+
+# What a verb does depends on the service when it is one of these; every other verb is about the account
+# (send, save-draft, pull, vacation, aliases, ...) and ignores --service.  A verb a service has no
+# answer for is an error, not a silent mail.
+_SERVICE_VERBS = frozenset(("list", "counts", "folders", "show", "raw", "mark", "compose-template",
+                            "parts", "save", "delete", "purge", "empty-trash"))
+_KIND_VERBS = {}        # kind -> {verb: function}, filled in below by each kind
+
+
+def _run_verb(ns):
+    """Run the parsed verb for the service it names."""
+    name = _check_service(ns)
+    kind = _SERVICES[name][0]
+    if kind == "mail":
+        return ns.fn(ns)
+    table = _KIND_VERBS[kind]
+    if ns.cmd in table:
+        return table[ns.cmd](ns)
+    if ns.cmd in _SERVICE_VERBS:
+        sys.exit("tvmail-backend: '%s' is not available for the %s service" % (ns.cmd, _SERVICES[name][1]))
+    return ns.fn(ns)
 
 
 def cmd_services(a):
@@ -1234,7 +1265,6 @@ def cmd_services(a):
 def cmd_folders(a):
     """label TAB MBOX TAB total TAB unseen, one line per folder of the service
     (--service, default mail): what the Folders pane shows."""
-    _check_service(a)
     for label, mbox in _MAIL_FOLDERS:
         total, unseen = _count_one(mbox)
         print("%s\t%s\t%d\t%d" % (label, mbox, total, unseen))
@@ -2739,6 +2769,347 @@ def cmd_host(a):
 
 
 # --------------------------------------------------------------------------
+# The Usenet service (SERVICES-DESIGN.md): NNTP through tvcommon's tvnntp.py.  Folders are the subscribed
+# groups, a message's index is its article number, the MBOX argument is the group's name.  What you have
+# read is a .newsrc-style file, ~/.local/share/tvmail/newsrc-HOST, kept by this program (NNTP has no
+# server-side read state).  [news] in tvmail.conf:  host (required), port 119, tls = no, window = 500
+# (articles a list shows before "load older"), subscribed = groups to start with, user (AUTHINFO; the
+# password from ~/.mu-tickets / ~/.netrc as for IMAP).
+# --------------------------------------------------------------------------
+_NNTP_MOD = None
+
+
+def _load_nntp():
+    """tvcommon's tvnntp.py, found beside this program like tvfloyd.py ($TVNNTP_PY first, for the tests).
+    Loaded once: the exception classes must stay the same ones."""
+    global _NNTP_MOD
+    if _NNTP_MOD is not None:
+        return _NNTP_MOD
+    import importlib.util
+    here = os.path.dirname(os.path.realpath(__file__))
+    paths = []
+    if os.environ.get("TVNNTP_PY"):
+        paths.append(os.environ["TVNNTP_PY"])
+    for d in (here, os.path.join(here, "..", "..", "tvcommon", "py"), os.path.join(here, "..", "share", "tvmail"),
+              "/usr/local/share/tvmail", "/usr/share/tvmail"):
+        paths.append(os.path.join(d, "tvnntp.py"))
+    for path in paths:
+        if os.path.isfile(path):
+            try:
+                spec = importlib.util.spec_from_file_location("tvnntp", path)
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                _NNTP_MOD = mod
+                return mod
+            except Exception:
+                _log.debug("cannot load %s", path, exc_info=True)
+    sys.exit("tvmail-backend: tvnntp.py (the NNTP client) is not installed beside tvmail-backend")
+
+
+def _news_conf():
+    c = _conf()
+
+    def get(k, d=""):
+        return (c.get("news", k, fallback=d) or d).strip()
+    try:
+        port = int(get("port", "119"))
+    except ValueError:
+        port = 119
+    try:
+        window = max(1, int(get("window", "500")))
+    except ValueError:
+        window = 500
+    return {"host": os.environ.get("TVMAIL_NEWS_HOST") or get("host"), "port": port,
+            "tls": get("tls", "no").lower() in ("1", "yes", "true", "on", "y"),
+            "window": window, "user": get("user"), "cafile": get("cafile"),
+            "subscribed": [g for g in re.split(r"[,\s]+", get("subscribed")) if g]}
+
+
+_NNTP = None        # the warm connection of the serve process
+
+
+def _news_open():
+    global _NNTP
+    if _NNTP is None:
+        cf = _news_conf()
+        tvn = _load_nntp()
+        pw = _cred(cf["host"], cf["user"], "TVMAIL_NNTP_PASS", "nntp") if cf["user"] else None
+        _NNTP = tvn.NNTP(cf["host"], cf["port"], tls=cf["tls"], cafile=cf["cafile"] or None,
+                         user=cf["user"] or None, password=pw)
+    return _NNTP
+
+
+def _news_call(fn):
+    """fn(connection), reconnecting once when the connection has died (a serve process keeps it between requests).
+    A server's refusal ends the program with its words."""
+    global _NNTP
+    tvn = _load_nntp()
+    for attempt in (0, 1):
+        try:
+            return fn(_news_open())
+        except (tvn.NNTPAbort, OSError) as e:
+            try:
+                _NNTP.close()
+            except Exception:
+                pass
+            _NNTP = None
+            if attempt:
+                sys.exit("tvmail-backend: news server %s: %s" % (_news_conf()["host"], e))
+        except tvn.NNTPError as e:
+            sys.exit("tvmail-backend: news server says: %s" % e)
+
+
+def _newsrc():
+    cf = _news_conf()
+    tvn = _load_nntp()
+    return tvn.Newsrc(os.path.join(_data_home(), "tvmail", "newsrc-%s" % _hdr_safe(cf["host"])), seed=cf["subscribed"])
+
+
+def _news_date(raw):
+    try:
+        return _short_date(raw)
+    except Exception:
+        return _clean(raw, 16)
+
+
+def _news_dec(s):
+    try:
+        return str(make_header(decode_header(s)))
+    except Exception:
+        return s
+
+
+def _news_group_arg(a):
+    g = (a.mbox or "").strip()
+    if not g:
+        sys.exit("tvmail-backend: which newsgroup?")
+    return g
+
+
+def news_folders(a):
+    rc = _newsrc()
+    groups = rc.subscribed()
+
+    def go(c):
+        out = []
+        for g in groups:
+            try:
+                count, low, high = c.group(g)
+            except _load_nntp().NNTPError:
+                out.append((g, 0, 0))               # the group is gone from the server
+                continue
+            out.append((g, count, rc.unread_estimate(g, count, low, high)))
+        return out
+    rows = _news_call(go) if groups else []
+    for g, total, unread in rows:
+        print("%s\t%s\t%d\t%d" % (g, g, total, unread))
+    return 0
+
+
+def news_counts(a):
+    rc = _newsrc()
+
+    def go(c):
+        out = []
+        for g in a.mboxes or rc.subscribed():
+            try:
+                count, low, high = c.group(g)
+                out.append((g, count, rc.unread_estimate(g, count, low, high)))
+            except _load_nntp().NNTPError:
+                out.append((g, 0, 0))
+        return out
+    for g, total, unread in _news_call(go):
+        print("%s\t%d\t%d" % (g, total, unread))
+    return 0
+
+
+def news_list(a):
+    """number TAB flag TAB date TAB from TAB subject TAB message-id TAB references -- the newest --limit
+    articles (default [news] window) of the group.  The last two columns are what the threaded view needs."""
+    g = _news_group_arg(a)
+    rc = _newsrc()
+    limit = a.limit if a.limit and a.limit > 0 else _news_conf()["window"]
+
+    def go(c):
+        count, low, high = c.group(g)
+        return c.over(max(low, high - limit + 1), high) if high >= low and count else []
+    for r in _news_call(go):
+        n = r["number"]
+        print("\t".join((str(n), "." if rc.is_read(g, n) else "N", _news_date(r["date"]),
+                         _clean(_short_from(r["from"]), 28),
+                         _clean(_news_dec(r["subject"]) or "(no subject)", 200),
+                         _clean(r["message-id"]), _clean(r["references"]))))
+    return 0
+
+
+def _news_article(g, n):
+    def go(c):
+        c.group(g)
+        return c.article(n)
+    return _news_call(go)
+
+
+def news_show(a):
+    g = _news_group_arg(a)
+    msg = email.message_from_bytes(_news_article(g, a.idx))
+    out = []
+    for h in ("Date", "From", "Newsgroups", "Followup-To", "Organization", "Subject"):
+        v = _hdr(msg, h)
+        if v:
+            out.append("%-11s %s" % (h + ":", v))
+    out.append("")
+    out.append(_best_body(msg).replace("\r\n", "\n").rstrip() + "\n")
+    if getattr(a, "mark_read", False):
+        rc = _newsrc()
+        rc.mark(g, a.idx, True)
+        rc.save()
+    sys.stdout.write("\n".join(out))
+    return 0
+
+
+def news_raw(a):
+    sys.stdout.buffer.write(_news_article(_news_group_arg(a), a.idx))
+    return 0
+
+
+def news_mark(a):
+    g = _news_group_arg(a)
+    rc = _newsrc()
+    rc.mark(g, a.idx, a.state == "read")
+    rc.save()
+    print("marked")
+    return 0
+
+
+def news_compose_template(a):
+    """Newsgroups / Followup-To / References / Subject, then the quoted article for a followup; a new article in the group
+    when no article is named."""
+    g = _news_group_arg(a)
+    out_h, body = [], ""
+    if a.in_reply_to is None and getattr(a, "forward", None) is None:
+        out_h = [("Newsgroups", g), ("Subject", a.subject or "")]
+    elif getattr(a, "forward", None) is not None:
+        sys.exit("tvmail-backend: forwarding is for mail; post a new article instead")
+    else:
+        src = email.message_from_bytes(_news_article(g, a.in_reply_to))
+        ft = (_hdr(src, "Followup-To") or "").strip()
+        groups = _hdr(src, "Newsgroups") or g
+        if ft and ft.lower() != "poster":
+            groups = ft
+        s = _hdr(src, "Subject", "")
+        subj = a.subject or (s if s.lower().startswith("re:") else "Re: " + s)
+        mid = _hdr(src, "Message-ID")
+        refs = " ".join(x for x in ((_hdr(src, "References") or "").strip(), mid) if x)
+        out_h = [("Newsgroups", groups), ("Subject", subj)]
+        if refs:
+            out_h.insert(1, ("References", refs))
+        who = _short_from(_hraw(src, "From") or "someone")
+        quoted = "\n".join("> " + ln for ln in _best_body(src).splitlines())
+        body = "\nIn article %s, %s wrote:\n%s\n" % (mid or "(no id)", who, quoted)
+    sys.stdout.write("".join("%s: %s\n" % kv for kv in out_h) + "\n" + body)
+    return 0
+
+
+def news_send(a):
+    """Post the article on stdin (headers, a blank line, the text).  Newsgroups: is required; From, Date and Message-ID are
+    added when missing."""
+    data = sys.stdin.buffer.read()
+    msg = email.message_from_bytes(data)
+    groups = ",".join(x.strip() for x in (msg.get("Newsgroups", "") or "").split(",") if x.strip())
+    if not groups:
+        sys.exit("tvmail-backend: no newsgroup to post to (Newsgroups: header)")
+    del msg["Newsgroups"]
+    msg["Newsgroups"] = groups
+    for h in ("Followup-To", "Distribution"):
+        if h in msg and not (msg.get(h, "") or "").strip():
+            del msg[h]
+    cf = _news_conf()
+    if "From" not in msg:
+        c = _conf()
+        msg["From"] = a.getfrom or c.get("smtp", "from", fallback=None) or "%s@%s" % (_me(), socket.getfqdn())
+    if "Subject" not in msg:
+        msg["Subject"] = a.subject or "(no subject)"
+    if "Date" not in msg:
+        msg["Date"] = email.utils.formatdate(localtime=True)
+    if "Message-ID" not in msg:
+        dom = email.utils.parseaddr(msg.get("From", ""))[1].rpartition("@")[2]
+        msg["Message-ID"] = email.utils.make_msgid(domain=dom or None)
+    if "User-Agent" not in msg and "X-Mailer" not in msg:
+        msg["User-Agent"] = "tvmail-backend %s" % __version__
+    _stamp(msg)
+    payload = msg.get_payload(decode=False)
+    if isinstance(payload, str) and any(ord(ch) > 127 for ch in payload):
+        if "Content-Type" not in msg:
+            msg["Content-Type"] = "text/plain; charset=utf-8"
+        if "Content-Transfer-Encoding" not in msg:
+            msg["Content-Transfer-Encoding"] = "8bit"
+        if "MIME-Version" not in msg:
+            msg["MIME-Version"] = "1.0"
+    raw = msg.as_bytes(policy=email.policy.compat32)
+
+    def go(c):
+        if not c.can_post:
+            sys.exit("tvmail-backend: the news server does not allow posting")
+        c.post(raw)
+    _news_call(go)
+    print("sent")
+    return 0
+
+
+_KIND_VERBS["usenet"] = {"folders": news_folders, "counts": news_counts, "list": news_list, "show": news_show,
+                         "raw": news_raw, "mark": news_mark, "compose-template": news_compose_template,
+                         "send": news_send}
+
+
+def cmd_news_groups(a):
+    """name TAB first TAB last TAB status TAB subscribed(*) TAB description, every group on the server matching PATTERN
+    (a wildmat; default all)."""
+    rc = _newsrc()
+    tvn = _load_nntp()
+
+    def go(c):
+        return c.list_active(a.pattern), c.list_newsgroups(a.pattern)
+    active, desc = _news_call(go)
+    subbed = set(rc.subscribed())
+    for name, high, low, status in sorted(active):
+        print("%s\t%d\t%d\t%s\t%s\t%s" % (name, low, high, status, "*" if name in subbed else "", _clean(desc.get(name, ""), 200)))
+    return 0
+
+
+def cmd_news_subscribe(a):
+    rc = _newsrc()
+
+    def go(c):
+        return c.group(a.group)
+    count, low, high = _news_call(go)               # a group the server does not have is refused here
+    rc.subscribe(a.group)
+    rc.save()
+    print("subscribed %s (%d articles)" % (a.group, count))
+    return 0
+
+
+def cmd_news_unsubscribe(a):
+    rc = _newsrc()
+    rc.unsubscribe(a.group)
+    rc.save()
+    print("unsubscribed %s" % a.group)
+    return 0
+
+
+def cmd_news_catchup(a):
+    rc = _newsrc()
+
+    def go(c):
+        return c.group(a.group)
+    count, low, high = _news_call(go)
+    rc.catch_up(a.group, high)
+    rc.save()
+    print("caught up %s" % a.group)
+    return 0
+
+
+
+# --------------------------------------------------------------------------
 # serve: a persistent request loop so the tvmail UI stops paying Python
 # start-up (and, on Cygwin, fork/exec) three times per folder switch.
 # --------------------------------------------------------------------------
@@ -2768,7 +3139,8 @@ class _CapStream:
 # verbs that consume stdin or take over the terminal - never run them inside
 # the serve loop (they would eat the request stream)
 _SERVE_BLOCKED = frozenset(("serve", "send", "save-draft", "pull"))
-_COMMANDS = frozenset(("floyd", "list", "counts", "services", "folders", "vacation", "show", "raw", "parts", "save", "delete",
+_COMMANDS = frozenset(("floyd", "list", "counts", "services", "folders", "news-groups", "news-subscribe",
+                       "news-unsubscribe", "news-catchup", "vacation", "show", "raw", "parts", "save", "delete",
                        "mark", "purge", "empty-trash", "compose-template", "send",
                        "save-draft", "aliases", "pull", "ping", "mode", "chat",
                        "host", "serve"))
@@ -2801,8 +3173,7 @@ def _dispatch(parser, argv):
         sys.stdout = cap
         try:
             ns = _parse_cli(parser, argv)
-            _check_service(ns)
-            return (ns.fn(ns) or 0), cap.buffer.getvalue()
+            return (_run_verb(ns) or 0), cap.buffer.getvalue()
         except SystemExit as e:
             code = e.code
             if isinstance(code, str):           # sys.exit("message") -> error
@@ -2880,9 +3251,14 @@ def build_parser():
                     help="which service the verb is about (default: mail); see the 'services' verb")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    p = sub.add_parser("list");  p.add_argument("mbox", nargs="?"); p.set_defaults(fn=cmd_list)
+    p = sub.add_parser("list");  p.add_argument("mbox", nargs="?"); p.add_argument("--limit", type=int, default=0); p.set_defaults(fn=cmd_list)
     p = sub.add_parser("counts"); p.add_argument("mboxes", nargs="*"); p.set_defaults(fn=cmd_counts)
     p = sub.add_parser("services"); p.set_defaults(fn=cmd_services)
+    p = sub.add_parser("news-groups"); p.add_argument("pattern", nargs="?"); p.add_argument("--all", action="store_true")
+    p.set_defaults(fn=cmd_news_groups)
+    p = sub.add_parser("news-subscribe"); p.add_argument("group"); p.set_defaults(fn=cmd_news_subscribe)
+    p = sub.add_parser("news-unsubscribe"); p.add_argument("group"); p.set_defaults(fn=cmd_news_unsubscribe)
+    p = sub.add_parser("news-catchup"); p.add_argument("group"); p.set_defaults(fn=cmd_news_catchup)
     p = sub.add_parser("folders"); p.set_defaults(fn=cmd_folders)
     p = sub.add_parser("show");  p.add_argument("idx", type=int); p.add_argument("mbox", nargs="?"); p.add_argument("--mark-read", action="store_true", dest="mark_read"); p.set_defaults(fn=cmd_show)
     p = sub.add_parser("raw");   p.add_argument("idx", type=int); p.add_argument("mbox", nargs="?"); p.set_defaults(fn=cmd_raw)
@@ -2969,7 +3345,6 @@ def _parse_cli(parser, argv):
 
 def main():
     a = _parse_cli(build_parser(), _normalize_cli(sys.argv[1:]))
-    _check_service(a)
     if a.debug:
         logging.basicConfig(filename=a.debug, level=logging.DEBUG,
                             format="%(asctime)s %(levelname)s %(message)s")
@@ -2977,7 +3352,7 @@ def main():
 
     def run():
         try:
-            sys.exit(a.fn(a))
+            sys.exit(_run_verb(a))
         except BrokenPipeError:
             sys.exit(0)
         except KeyboardInterrupt:

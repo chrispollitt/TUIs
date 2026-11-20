@@ -68,7 +68,19 @@ spam   = Junk
 # one, or from View > Services pane.  Only "mail" exists so far (listserv and usenet are planned:
 # SERVICES-DESIGN.md); a name nobody implements yet is left out.  Optional.
 #[services]
-#order = mail
+#order = mail, news
+
+# Usenet: a news server on the LAN (news-setup in chrispollitt/POSIX sets one up).  "news" is listed in the
+# Services pane once host is set.  What you have read is kept in ~/.local/share/tvmail/newsrc-HOST.
+#   port       119 (563 with tls = yes)
+#   window     how many of a group's newest articles the list shows (Message > Usenet > Load older adds more)
+#   subscribed the groups to start with, before you subscribe from the menu
+#   user       AUTHINFO login, if the server wants one (password from ~/.mu-tickets / ~/.netrc as for IMAP)
+#[news]
+#host = cpbee
+#port = 119
+#window = 500
+#subscribed = lan.misc, comp.os.linux
 
 # Spam filing is ON by default.  F3 (and, on the master, every pull) moves
 # INBOX messages whose Subject contains this tag into the spam folder.

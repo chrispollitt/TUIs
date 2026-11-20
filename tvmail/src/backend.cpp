@@ -10,9 +10,22 @@ CoProcess &mailBackend()
     return b;
 }
 
+// The verbs that are about the selected service; the others (send, save-draft, pull, vacation, ...) are about the
+// account and mean the same whichever service is shown.
+static std::string serviceFlagFor(const std::string &args)
+{
+    static const char *const verbs[] = {"list", "counts", "folders", "show", "raw", "mark", "compose-template",
+                                        "parts", "save", "delete", "purge", "empty-trash"};
+    std::string v = args.substr(0, args.find(' '));
+    for (const char *w : verbs)
+        if (v == w)
+            return serviceFlag();
+    return std::string();
+}
+
 std::string backendCommand(const std::string &args)
 {
-    return "tvmail-backend" + backendFlags() + " " + serviceFlag() + args;
+    return "tvmail-backend" + backendFlags() + " " + serviceFlagFor(args) + args;
 }
 
 // Every backendRun() call blocks the single TV event loop for the round
@@ -54,7 +67,7 @@ std::string backendRun(const std::string &args)
     BusyGuard busy;
     std::string body;
     int st = 0;
-    std::string full = serviceFlag() + args; // the global --service option goes before the verb
+    std::string full = serviceFlagFor(args) + args; // the global --service option goes before the verb
     if (mailBackend().call(full, body, st))
         return body;
     return shCapture("tvmail-backend" + backendFlags() + " " + full + " 2>&1");

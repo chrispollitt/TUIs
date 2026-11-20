@@ -87,6 +87,13 @@ TMenuBar *TVMailApp::initMenuBar(TRect r)
                                                      *new TMenuItem("C~a~lendar", cmToCal, kbNoKey, hcNoContext) +
                                                      *new TMenuItem("~T~o-do", cmToTodo, kbNoKey, hcNoContext) +
                                                      *new TMenuItem("Contact~s~ (add the sender)", cmSaveSender, kbNoKey, hcNoContext))) +
+                            *new TMenuItem("~U~senet", kbNoKey,
+                                           new TMenu(*new TMenuItem("~S~ubscribe to group...", cmNewsSubscribe, kbNoKey, hcNoContext) +
+                                                     *new TMenuItem("~U~nsubscribe from this group", cmNewsUnsub, kbNoKey, hcNoContext) +
+                                                     *new TMenuItem("~A~ll groups...", cmNewsGroups, kbNoKey, hcNoContext) +
+                                                     newLine() +
+                                                     *new TMenuItem("~C~atch up (mark the group read)", cmNewsCatchUp, kbNoKey, hcNoContext) +
+                                                     *new TMenuItem("~L~oad older articles", cmNewsOlder, kbNoKey, hcNoContext))) +
                             newLine() +
                             *new TMenuItem("~C~ompose", kbNoKey,
                                            new TMenu(*new TMenuItem("~E~dit draft", cmEditDraft, kbNoKey, hcNoContext, "Enter") +
@@ -115,6 +122,7 @@ TMenuBar *TVMailApp::initMenuBar(TRect r)
                             *new TMenuItem("~W~rap long lines", cmToggleWrap, kbNoKey, hcNoContext) +
                             *new TMenuItem("Show ~D~elta Chat mail", cmShowChat, kbNoKey, hcNoContext) +
                             *new TMenuItem("Services ~p~ane", cmToggleServices, kbNoKey, hcNoContext) +
+                            *new TMenuItem("~T~hreads (Usenet)", cmToggleThreads, kbNoKey, hcNoContext) +
                             *new TMenuItem("~C~lear filter", cmClearFilter, kbNoKey, hcNoContext, "Esc") +
                             tvWindowMenu() +
                             tvHelpMenu());
@@ -160,8 +168,30 @@ void TVMailApp::viewParts(int row)
     deskTop->insert(newPartsWindow(r, b, gMbox, title.c_str()));
 }
 
+// Message > Usenet is for Usenet only; the commands are off in the other services.
+void serviceCommandsChanged()
+{
+    bool usenet = serviceKind() == "usenet";
+    for (ushort c : {cmNewsSubscribe, cmNewsUnsub, cmNewsCatchUp, cmNewsGroups, cmNewsOlder, cmToggleThreads})
+    {
+        if (usenet)
+            TView::enableCommand(c);
+        else
+            TView::disableCommand(c);
+    }
+}
+
 void TVMailApp::replyOrCompose(int row, bool all)
 {
+    if (serviceKind() == "usenet")
+    {
+        // a followup to the article (Newsgroups, References, the quote), or a new article in this group
+        if (gFolderIdx < 0 || gFolderIdx >= (int)gFolders.size())
+            return;
+        std::string cmd = "compose-template " + (row >= 0 ? "--in-reply-to " + std::to_string(gRows[row].idx) + " " : std::string()) + gMbox;
+        openCompose(backendRun(cmd), "", -1, /*addSig=*/true);
+        return;
+    }
     if (row >= 0)
     {
         std::string cmd = "compose-template --in-reply-to " + std::to_string(gRows[row].idx) + " " + gMbox;
@@ -177,7 +207,7 @@ void TVMailApp::replyOrCompose(int row, bool all)
 
 void TVMailApp::forwardMsg(int row)
 {
-    if (row < 0)
+    if (row < 0 || notForUsenet("Forwarding"))
         return;
     std::string t = backendRun("compose-template --forward " + std::to_string(gRows[row].idx) + " " + gMbox);
     openCompose(t, "", -1, /*addSig=*/true);
@@ -205,7 +235,7 @@ void TVMailApp::resumeDeadLetter()
 
 void TVMailApp::deleteMsg(int row)
 {
-    if (row < 0)
+    if (row < 0 || notForUsenet("Deleting"))
         return;
     int b = gRows[row].idx;
     // name the message by its subject (the backend index means nothing to
@@ -809,7 +839,7 @@ void TVMailApp::outOfOffice()
 
 void TVMailApp::moveMsg(int row)
 {
-    if (row < 0)
+    if (row < 0 || notForUsenet("Moving to a folder"))
         return;
     int b = gRows[row].idx;
 
@@ -850,6 +880,8 @@ void TVMailApp::moveMsg(int row)
 
 void TVMailApp::purgeDialog()
 {
+    if (notForUsenet("Purging"))
+        return;
     TDialog *d = new TDialog(TRect(0, 0, 56, 21), "Purge");
     d->options |= ofCentered;
 
@@ -973,6 +1005,8 @@ void TVMailApp::purgeDialog()
 
 void TVMailApp::emptyTrash()
 {
+    if (notForUsenet("The trash"))
+        return;
     std::string cmd = backendCommand("empty-trash");
     std::string preview = shCapture(cmd + " -n 2>&1");
 
@@ -1266,6 +1300,14 @@ void TVMailApp::handleEvent(TEvent &e)
     }
     case cmToggleServices:
         mailToggleServices();
+        break;
+    case cmNewsSubscribe:
+    case cmNewsUnsub:
+    case cmNewsCatchUp:
+    case cmNewsGroups:
+    case cmNewsOlder:
+    case cmToggleThreads:
+        mailNews(e.message.command);
         break;
     case cmClearFilter:
         gFilter.clear();

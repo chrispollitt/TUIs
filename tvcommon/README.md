@@ -82,6 +82,14 @@ sockets, no UI. Each backend finds it by path - beside itself, in `../../tvcommo
 tree, or in `../share/<app>` once installed (each app's CMake installs its own copy) - and falls
 back to levels without tools if it is missing. Tests: `tests/test_tvfloyd.py`.
 
+## NNTP: `py/tvnntp.py`
+
+A stdlib-only NNTP client (GROUP, OVER with XOVER as the fallback, ARTICLE, POST, LIST ACTIVE / NEWSGROUPS,
+AUTHINFO, TLS) and a `.newsrc` store (`Newsrc`: subscribed groups, read ranges, an unread estimate), written for
+tvmail's Usenet service because `nntplib` is deprecated in Python 3.11 and gone in 3.13. tvmail-backend finds it
+beside itself like `tvfloyd.py` (`$TVNNTP_PY` first). Tests: `tests/test_tvnntp.py`, which also holds `FakeNNTP`,
+the fake server tvmail's tests use.
+
 ## Over ssh from Windows Terminal
 
 Running tvmail or tvchat over ssh from inside Windows Terminal used to garble

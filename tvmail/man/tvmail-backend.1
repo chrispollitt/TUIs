@@ -194,6 +194,38 @@ is what the other verbs take.
 The counts are those of
 .BR counts .
 .TP
+.BR "news-groups " [PATTERN]
+Every group on the news server (\fB[news] host\fP) matching the wildmat
+.IR PATTERN :
+.IR name ,
+.IR first ,
+.IR last ,
+.IR status ,
+.I subscribed
+(\fB*\fP), description (TAB-separated).
+.TP
+.BI "news-subscribe " GROUP
+Subscribe to a group (the server must have it).
+.BR news-unsubscribe " and " news-catchup
+(mark every article read) take a group the same way.
+.PP
+With
+.B --service news
+the verbs
+.BR list ", " show ", " raw ", " mark ", " counts ", " folders ", " compose-template " and " send
+are about Usenet: the MBOX argument is a group name and an index is an article number.
+.B list
+takes
+.BI "--limit " N
+(the newest N article numbers; default
+.B [news] window
+of 500) and prints, after the subject, the Message-ID and References.
+What you have read is kept in
+.IR ~/.local/share/tvmail/newsrc-HOST .
+.B send
+posts the article on standard input (it needs a Newsgroups header); delete, purge and
+empty-trash are mail only.
+.TP
 .BI "show " "IDX " [MBOX]
 Decoded headers followed by the best available text of message
 .IR IDX .

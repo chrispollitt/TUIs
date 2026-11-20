@@ -16,6 +16,8 @@ class TComposeWindow : public TWindow
     TFieldLine *toLine = nullptr, *ccLine = nullptr, *bccLine = nullptr, *subjLine = nullptr;
     TBodyEditor *editor = nullptr;
     Boolean sent = False;
+    bool news = false;     // an article for Usenet: the fields are Newsgroups / Followup-To / Distribution
+    std::string refs;      // news: the References of the article this answers
     std::string draftMbox; // set when editing an existing draft
     int draftIdx = -1;
     std::string draftRaw; // the draft as opened: finds it again if indices shift
@@ -65,11 +67,24 @@ public:
         // loud and proud: name the tool + version.  tvmail-backend adds the
         // origin user/host (X-Origin-User/-Host) and never overwrites this.
         std::string msg = "X-Mailer: tvmail " TVMAIL_VERSION "\n";
-        msg += "To: " + to + "\n";
-        if (!strip(cc).empty())
-            msg += "Cc: " + cc + "\n";
-        if (!strip(bcc).empty())
-            msg += "Bcc: " + bcc + "\n";
+        if (news) // the first field is the Newsgroups, the second Followup-To, the third Distribution
+        {
+            msg += "Newsgroups: " + to + "\n";
+            if (!strip(cc).empty())
+                msg += "Followup-To: " + cc + "\n";
+            if (!strip(bcc).empty())
+                msg += "Distribution: " + bcc + "\n";
+            if (!strip(refs).empty())
+                msg += "References: " + strip(refs) + "\n";
+        }
+        else
+        {
+            msg += "To: " + to + "\n";
+            if (!strip(cc).empty())
+                msg += "Cc: " + cc + "\n";
+            if (!strip(bcc).empty())
+                msg += "Bcc: " + bcc + "\n";
+        }
         msg += "Subject: " + subj + "\n\n" + bodyText();
         if (msg.empty() || msg.back() != '\n')
             msg += '\n';
@@ -128,9 +143,11 @@ public:
     TComposeWindow(const TRect &bounds,
                    const std::string &to, const std::string &cc,
                    const std::string &subj, const std::string &body,
-                   const std::string &bcc = std::string())
+                   const std::string &bcc = std::string(), bool newsMode = false,
+                   const std::string &refsIn = std::string())
         : TWindowInit(&TComposeWindow::initFrame),
-          TWindow(bounds, "Compose", wnNoNumber)
+          TWindow(bounds, newsMode ? "Post to Usenet" : "Compose", wnNoNumber),
+          news(newsMode), refs(refsIn)
     {
         palette = wpCyanWindow;
         options |= ofTileable;
@@ -138,11 +155,12 @@ public:
         gComposes.push_back(this);
         const int W = size.x;
 
+        const int fx = news ? 14 : 11; // where the fields start: the news labels are longer
         auto addField = [&](int y, const char *label, const std::string &val)
         {
-            auto *il = new TFieldLine(TRect(11, y, W - 2, y + 1), 900);
+            auto *il = new TFieldLine(TRect(fx, y, W - 2, y + 1), 900);
             // linked, so the label's Alt-letter (and a click on it) jumps here
-            insert(new TLabel(TRect(2, y, 11, y + 1), label, il));
+            insert(new TLabel(TRect(2, y, fx, y + 1), label, il));
             il->growMode = gfGrowHiX;
             if (!val.empty())
             {
@@ -152,9 +170,9 @@ public:
             insert(il);
             return il;
         };
-        toLine = addField(1, "~T~o", to);
-        ccLine = addField(2, "~C~c", cc);
-        bccLine = addField(3, "~B~cc", bcc);
+        toLine = addField(1, news ? "~N~ewsgroups" : "~T~o", to);
+        ccLine = addField(2, news ? "~F~ollowup-To" : "~C~c", cc);
+        bccLine = addField(3, news ? "~D~istribution" : "~B~cc", bcc);
         subjLine = addField(4, "~S~ubject", subj);
         initTo = toLine->data;
         initCc = ccLine->data;
@@ -220,11 +238,13 @@ public:
     {
         if (strip(toLine->data ? toLine->data : "").empty())
         {
-            notify("Enter at least one To: address.", noteError);
+            notify(news ? "Enter at least one newsgroup." : "Enter at least one To: address.", noteError);
             return;
         }
         std::string path = writeTemp(buildMessage(), ".eml");
-        std::string out = shCapture(backendCommand("send") + " < '" + path + "' 2>&1; rm -f '" + path + "'");
+        // an article goes to the news server whichever service is selected by now
+        std::string send = news ? "tvmail-backend" + backendFlags() + " --service news send" : backendCommand("send");
+        std::string out = shCapture(send + " < '" + path + "' 2>&1; rm -f '" + path + "'");
         while (!out.empty() && (out.back() == '\n' || out.back() == ' '))
             out.pop_back();
 
@@ -232,7 +252,7 @@ public:
         {
             sent = True;
             dropSourceDraft(); // if this was a saved draft
-            notify("Message sent.", noteInfo);
+            notify(news ? "Article posted." : "Message sent.", noteInfo);
             TEvent ev; // close after this event unwinds
             ev.what = evCommand;
             ev.message.command = cmClose;
@@ -314,7 +334,8 @@ public:
 };
 
 static void parseTemplate(const std::string &t, std::string &to, std::string &cc,
-                          std::string &subj, std::string &body, std::string &bcc)
+                          std::string &subj, std::string &body, std::string &bcc,
+                          bool *news = nullptr, std::string *refs = nullptr)
 {
     std::istringstream is(t);
     std::string line, b;
@@ -345,7 +366,18 @@ static void parseTemplate(const std::string &t, std::string &to, std::string &cc
                 std::string k = line.substr(0, p), v = line.substr(p + 1);
                 while (!v.empty() && (v[0] == ' ' || v[0] == '\t'))
                     v.erase(0, 1);
-                if (ieq(k, "To"))
+                if (news && ieq(k, "Newsgroups")) // an article: its fields stand in for To / Cc / Bcc
+                {
+                    *news = true;
+                    to = v;
+                }
+                else if (news && ieq(k, "Followup-To"))
+                    cc = v;
+                else if (news && ieq(k, "Distribution"))
+                    bcc = v;
+                else if (refs && ieq(k, "References"))
+                    *refs = v;
+                else if (ieq(k, "To"))
                     to = v;
                 else if (ieq(k, "Cc"))
                     cc = v;
@@ -367,9 +399,10 @@ static void parseTemplate(const std::string &t, std::string &to, std::string &cc
 void openCompose(const std::string &raw, const std::string &linkMbox,
                  int linkIdx, bool addSig)
 {
-    std::string to, cc, subj, body, bcc;
+    std::string to, cc, subj, body, bcc, refs;
+    bool news = false;
     if (!raw.empty())
-        parseTemplate(raw, to, cc, subj, body, bcc);
+        parseTemplate(raw, to, cc, subj, body, bcc, &news, &refs);
     if (addSig)
     {
         std::string sig = readSigFile();
@@ -378,7 +411,7 @@ void openCompose(const std::string &raw, const std::string &linkMbox,
     }
     TRect r = TProgram::deskTop->getExtent();
     r.grow(-5, -2);
-    auto *w = new TComposeWindow(r, to, cc, subj, body, bcc);
+    auto *w = new TComposeWindow(r, to, cc, subj, body, bcc, news, refs);
     if (!linkMbox.empty())
         w->linkDraft(linkMbox, linkIdx, raw);
     TProgram::deskTop->insert(w);

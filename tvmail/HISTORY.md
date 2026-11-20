@@ -5,6 +5,17 @@ Releases are tagged `tvmail-vX.Y.Z`; `git log` has the rest.
 
 ## Unreleased
 
+- **Usenet in tvmail** (step 2 of [SERVICES-DESIGN.md](SERVICES-DESIGN.md)).  A `[news] host` in tvmail.conf adds
+  a Usenet service to the Services pane: the groups you subscribe to are its folders, an article's number is its
+  index, and the list is threaded by References (View > Threads for flat).  The list holds the newest `window`
+  articles (500); Message > Usenet > Load older adds more.  What you have read is a `.newsrc`-style file
+  (`~/.local/share/tvmail/newsrc-HOST`).  Ctrl-R is a followup, Ctrl-N a new article, F2 posts (a Newsgroups /
+  Followup-To / Distribution compose window); Message > Usenet subscribes, unsubscribes, lists every group and
+  catches up.  The NNTP client is tvcommon's `tvnntp.py` (Python's nntplib is gone in 3.13); tvmail-backend
+  gains `news-groups`, `news-subscribe`, `news-unsubscribe`, `news-catchup` and the `--service news` forms of
+  list, show, raw, mark, counts, folders, compose-template and send.  Tested against a fake NNTP server.
+  Not yet: replying to an author by mail, the unread count is an upper bound where a group's numbers have gaps.
+
 - **A fourth pane, Services** (step 1 of [SERVICES-DESIGN.md](SERVICES-DESIGN.md): mail, listserv and usenet in one window).
   Services sit above Folders; choosing one fills Folders with its folders.  Only Mail exists so far, so the
   pane is hidden unless `[services] order` names more than one or you pick View > Services pane, and the window is

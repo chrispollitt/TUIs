@@ -52,6 +52,12 @@ if(TVMAIL_PYTHON)
     add_test(NAME backend_unit
              COMMAND ${TVMAIL_PYTHON} -m unittest discover
                      -s "${CMAKE_CURRENT_SOURCE_DIR}/tests" -p "test_backend.py")
+    # the Usenet service: tvcommon's NNTP client, then the backend's use of it, both against a fake NNTP server
+    add_test(NAME nntp_unit
+             COMMAND ${TVMAIL_PYTHON} "${TVCOMMON_DIR}/tests/test_tvnntp.py")
+    add_test(NAME backend_news
+             COMMAND ${TVMAIL_PYTHON} -m unittest discover
+                     -s "${CMAKE_CURRENT_SOURCE_DIR}/tests" -p "test_news.py")
 endif()
 
 # TVMAIL_MODE=local pins it to the on-disk mbox path regardless of any
@@ -94,7 +100,8 @@ include(GNUInstallDirs)
 install(TARGETS tvmail RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(PROGRAMS backend/tvmail-backend DESTINATION ${CMAKE_INSTALL_BINDIR})
 # Floyd's levels and tools, shared with tvchat (the backend looks in ../share/tvmail)
-install(FILES ${TVCOMMON_DIR}/py/tvfloyd.py ${TVCOMMON_DIR}/py/tvcontacts.py DESTINATION ${CMAKE_INSTALL_DATADIR}/tvmail)
+install(FILES ${TVCOMMON_DIR}/py/tvfloyd.py ${TVCOMMON_DIR}/py/tvcontacts.py ${TVCOMMON_DIR}/py/tvnntp.py
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/tvmail)
 install(PROGRAMS ${TVCOMMON_DIR}/py/tvcontacts.py DESTINATION ${CMAKE_INSTALL_BINDIR} RENAME tvcontacts)
 install(FILES man/tvmail.1 man/tvmail-backend.1
         DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
