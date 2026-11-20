@@ -165,15 +165,19 @@ step above puts it on `PATH`. Otherwise:
 real account. [tests/README.md](tests/README.md) says what each layer covers
 and how to run one.
 
-## The three panes
+## The panes
 
 | pane | what |
 |---|---|
-| **Folders** (left) | the five mailboxes below |
+| **Services** (top left) | the places to read from: Mail so far (listserv and Usenet are planned, see [SERVICES-DESIGN.md](SERVICES-DESIGN.md)); shown when there is more than one, or from **View ▸ Services pane** |
+| **Folders** (left) | the selected service's folders: for Mail, the mailboxes below |
 | **Messages** (top right) | the selected folder's messages |
 | **Message body** (bottom right) | decoded headers + text of the highlighted message |
 
-`Tab` / `Shift-Tab` move between panes, in the order Folders → Messages →
+Which services there are is `[services] order = mail` in `tvmail.conf` (the default; a name nobody
+implements yet is left out). With only one, the Services pane is hidden and the window is three panes.
+
+`Tab` / `Shift-Tab` move between panes, in the order Services → Folders → Messages →
 Message body; the active pane's heading is shown `[ bracketed ]` and
 highlighted. Arrows / `PgUp` / `PgDn` / `Home` / `End` / `Space` move within
 whichever pane is active — including scrolling the body. Moving the highlight
@@ -373,6 +377,9 @@ which *is* Dovecot's INBOX — so incoming mail lands in the one place everyone 
 ```
 tvmail-backend list  [MBOX]              idx <TAB> flags <TAB> date <TAB> from <TAB> subject
 tvmail-backend counts [MBOX...]          name <TAB> total <TAB> unseen (default: every folder)
+tvmail-backend services                  name <TAB> kind <TAB> label (the Services pane)
+tvmail-backend folders                   label <TAB> MBOX <TAB> total <TAB> unseen (the Folders pane)
+tvmail-backend --service NAME VERB ...   the service a verb is about (default mail)
 tvmail-backend show  IDX [MBOX]          decoded headers + text/plain body
 tvmail-backend raw   IDX [MBOX]          the raw RFC822 message
 tvmail-backend parts IDX [MBOX]          list MIME parts

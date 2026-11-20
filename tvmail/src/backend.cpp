@@ -12,7 +12,7 @@ CoProcess &mailBackend()
 
 std::string backendCommand(const std::string &args)
 {
-    return "tvmail-backend" + backendFlags() + " " + args;
+    return "tvmail-backend" + backendFlags() + " " + serviceFlag() + args;
 }
 
 // Every backendRun() call blocks the single TV event loop for the round
@@ -54,9 +54,10 @@ std::string backendRun(const std::string &args)
     BusyGuard busy;
     std::string body;
     int st = 0;
-    if (mailBackend().call(args, body, st))
+    std::string full = serviceFlag() + args; // the global --service option goes before the verb
+    if (mailBackend().call(full, body, st))
         return body;
-    return shCapture("tvmail-backend" + backendFlags() + " " + args + " 2>&1");
+    return shCapture("tvmail-backend" + backendFlags() + " " + full + " 2>&1");
 }
 
 // The lines of a tab-separated listing (list, aliases, parts) that are not rows: a backend error comes back as plain text

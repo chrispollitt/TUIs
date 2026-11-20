@@ -179,7 +179,7 @@ def esc_closes_windows(opts):
     c = Case(tv)
     started(tv, c)
     for name, keys, title in (
-            ("Help", ["F1"], "THE THREE PANES"),
+            ("Help", ["F1"], "THE PANES"),
             ("View source", [alt("m"), "i", "v"], "Source of msg"),
             ("Parts", [alt("m"), "i", "p"], "Parts of msg"),
             ("Address book", ["F4"], "Address book")):
@@ -528,7 +528,7 @@ def find_copy_paste(opts):
     tv.send("CtrlIns", settle=0.6)
     c.check(tv.has("Copied the whole text"), "#29 no copy in View source")
     tv.send("\x1b", "F1")
-    c.check(tv.wait("THE THREE PANES", 4), "Help did not open")
+    c.check(tv.wait("THE PANES", 4), "Help did not open")
     tv.send("CtrlIns", settle=0.6)
     c.check(tv.has("Copied the whole text"), "#29 no copy in Help")
     return tv
@@ -540,7 +540,7 @@ def help_has_no_lr_column(opts):
     c = Case(tv)
     started(tv, c)
     tv.send("F1")
-    c.check(tv.wait("THE THREE PANES", 4), "Help did not open")
+    c.check(tv.wait("THE PANES", 4), "Help did not open")
     seen, last = [], None
     for _ in range(60):                           # page to the end
         rows = tv.lines()[2:30]
@@ -1162,6 +1162,45 @@ def redraw_clears_scribbles(opts):
         t.tty_mode = 0o620
     tv = Tv(opts, setup=setup)
     redraw_and_mesg(tv, Case(tv), started)
+    return tv
+
+
+@case()
+def services_pane_is_the_fourth_pane(opts):
+    # SERVICES-DESIGN.md step 1: with one service the window is the three panes it always was; View >
+    # Services pane adds the fourth (Services over Folders, Mail with the inbox's new count) and takes
+    # it away again.  Tab goes Services -> Folders -> Messages -> Message.
+    tv = Tv(opts)
+    c = Case(tv)
+    started(tv, c)
+    c.check(not tv.has("Services"), "a single service showed the Services pane")
+    tv.send(alt("v"))
+    tv.send("p", settle=0.8)
+    c.check(tv.wait(lambda: tv.has("Services"), 5), "View > Services pane did not show it")
+    ys = {name: next((y for y, l in enumerate(tv.lines()) if name in l), -1)
+          for name in ("Services", "Folders")}
+    c.check(0 < ys["Services"] < ys["Folders"], "Services is not above Folders: %r" % ys)
+    mail = next((l for l in tv.lines()[ys["Services"] + 1:ys["Folders"]] if "Mail" in l), "")
+    c.check(re.search(r"Mail[\s│]+3\b", mail) is not None,
+            "the Mail row has no unread count (the fixture's inbox has three new messages): %r" % mail)
+    # the Folders table under it is whole: its heading, then the inbox first
+    head = next((l for l in tv.lines()[ys["Folders"] + 1:ys["Folders"] + 3] if "Total" in l), "")
+    c.check("Folder" in head and "New" in head, "the Folders heading row is missing or stale: %r" % head)
+    c.check(sum(l.lstrip("║ ").startswith("inbox") for l in tv.lines()) == 1, "the inbox row is not there once")
+    c.check(tv.has("[ Folders ]"), "the Folders pane lost the focus")
+    seen = []
+    for _ in range(4):
+        tv.send("Tab", settle=0.5)
+        seen.append(next((n for n in ("Services", "Folders", "Messages", "Message")
+                          if tv.has("[ %s ]" % n)), "?"))
+    c.check(seen == ["Messages", "Message", "Services", "Folders"],
+            "Tab went %r, not Messages, Message, Services, Folders" % seen)
+    tv.send("Tab", "Tab", "Tab", settle=0.5)        # on Services
+    c.check(tv.has("[ Services ]"), "could not tab to the Services pane")
+    tv.send(alt("v"))
+    tv.send("p", settle=0.8)
+    c.check(tv.wait(lambda: not tv.has("Services"), 5), "View > Services pane did not hide it")
+    c.check(tv.has("[ Folders ]"), "hiding Services while it had the focus left the focus nowhere")
     return tv
 
 

@@ -114,6 +114,7 @@ TMenuBar *TVMailApp::initMenuBar(TRect r)
                             newLine() +
                             *new TMenuItem("~W~rap long lines", cmToggleWrap, kbNoKey, hcNoContext) +
                             *new TMenuItem("Show ~D~elta Chat mail", cmShowChat, kbNoKey, hcNoContext) +
+                            *new TMenuItem("Services ~p~ane", cmToggleServices, kbNoKey, hcNoContext) +
                             *new TMenuItem("~C~lear filter", cmClearFilter, kbNoKey, hcNoContext, "Esc") +
                             tvWindowMenu() +
                             tvHelpMenu());
@@ -813,15 +814,15 @@ void TVMailApp::moveMsg(int row)
     int b = gRows[row].idx;
 
     std::vector<int> dest;
-    for (int i = 0; i < gFolderCount; ++i)
-        if (i != gFolderIdx && std::strcmp(gFolders[i].mbox, "dead") != 0)
+    for (int i = 0; i < (int)gFolders.size(); ++i)
+        if (i != gFolderIdx && gFolders[i].mbox != "dead")
             dest.push_back(i);
     if (dest.empty())
         return;
 
     TSItem *items = nullptr;
     for (auto it = dest.rbegin(); it != dest.rend(); ++it)
-        items = new TSItem(gFolders[*it].name, items);
+        items = new TSItem(gFolders[*it].name.c_str(), items);
 
     int n = (int)dest.size();
     TDialog *d = new TDialog(TRect(0, 0, 30, 5 + n), "Move to folder");
@@ -840,7 +841,7 @@ void TVMailApp::moveMsg(int row)
     if (r == cmCancel || sel >= dest.size())
         return;
 
-    std::string cmd = backendCommand("delete " + std::to_string(b) + mboxOpt() + " --trash " + shq(gFolders[dest[sel]].mbox));
+    std::string cmd = backendCommand("delete " + std::to_string(b) + mboxOpt() + " --trash " + shq(gFolders[dest[sel]].mbox.c_str()));
     std::string out = shCapture(cmd + " 2>&1");
     reload();
     if (!out.empty() && out.rfind("deleted", 0) != 0)
@@ -1263,6 +1264,9 @@ void TVMailApp::handleEvent(TEvent &e)
         mailReload();
         break;
     }
+    case cmToggleServices:
+        mailToggleServices();
+        break;
     case cmClearFilter:
         gFilter.clear();
         mailViewChanged(true);

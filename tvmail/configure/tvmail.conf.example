@@ -64,6 +64,12 @@ drafts = Drafts
 sent   = Sent
 spam   = Junk
 
+# The Services pane (above Folders) lists these, in this order; it shows when there is more than
+# one, or from View > Services pane.  Only "mail" exists so far (listserv and usenet are planned:
+# SERVICES-DESIGN.md); a name nobody implements yet is left out.  Optional.
+#[services]
+#order = mail
+
 # Spam filing is ON by default.  F3 (and, on the master, every pull) moves
 # INBOX messages whose Subject contains this tag into the spam folder.
 # Default is SpamAssassin's ***SPAM*** prefix; change it if your server differs.

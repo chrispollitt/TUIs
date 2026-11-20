@@ -61,6 +61,8 @@ const ushort cmToTodo = 2056;      // Message > Add as to-do
 const ushort cmShareChat = 2054;    // Message > Share in chat (asks tvchat to say sender and subject in its channel, on your yes there)
 const ushort cmOutOfOffice = 2042;  // File > Out of office... (Sieve vacation reply)
 const ushort cmFloyd = 2053;        // File > Floyd... (the assistant)
+const ushort cmServicePicked = 2059;   // broadcast: the Services pane's highlight moved
+const ushort cmToggleServices = 2060;  // View > Services pane: show or hide it
 
 // ------------------------------------------------------ tvmail-backend ---
 // backend.cpp
@@ -91,23 +93,37 @@ enum SortKey
     sortSubj,
     sortUnread // unread before read
 };
+// A folder of the selected service, as the backend's `folders` verb lists it: the name shown, the MBOX
+// shorthand every other verb takes, and the counts (-1 = not known).
 struct Folder
 {
-    const char *name;
-    const char *mbox;
+    std::string name;
+    std::string mbox;
+    int total = -1;
+    int unread = -1;
+};
+// A service (SERVICES-DESIGN.md): a kind of place to read from, with its own folders.  Only "mail" so far.
+struct Service
+{
+    std::string name; // what --service takes
+    std::string kind; // mail (later: listserv, usenet)
+    std::string label;
+    int unread = -1;  // the badge
 };
 extern std::vector<MsgRow> gAll;  // everything the backend listed
 extern std::vector<MsgRow> gRows; // what the pane shows: gAll, filtered and sorted
 extern SortKey gSortKey;
 extern bool gSortRev;
 extern std::string gFilter; // type-to-filter text (From / Subject, any case)
-extern const Folder gFolders[];
-extern const int gFolderCount;
+extern std::vector<Service> gServices; // from the backend's `services` verb; never empty once the window is made
+extern int gServiceIdx;                // the selected service
+extern std::vector<Folder> gFolders;   // the selected service's folders
 extern int gFolderIdx;      // current folder (drives gMbox)
 extern std::string gMbox;
 extern bool gRemote;        // backend "mode" == remote (IMAP)
 extern std::string gHost;   // backend "host": the box we're talking to
 extern bool gWrap;          // the body pane's wrap setting
+std::string serviceFlag();  // "--service NAME " for a service other than mail, else ""; backendRun/backendCommand add it
 std::string mboxArg();
 std::string mboxOpt();
 
@@ -123,6 +139,7 @@ void editorOwnsCtrlKeys(bool owns);                         // app.cpp
 int mailFocusedRow();             // the highlighted row of gRows, or -1
 void mailMarkFocused(bool read);
 void mailReload();                // F5: counts + the folder, same message
+void mailToggleServices();        // View > Services pane: show or hide it
 int mailInboxUnread();            // unread in the inbox as of the last counts, -1 if not known
 void mailViewChanged(bool resetSel);
 void mailSetWrap(bool wrap);

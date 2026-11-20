@@ -96,12 +96,21 @@ and
 A relay that trusts your network
 .RB ( "[smtp] auth = false" )
 needs none.
-.SH THE THREE PANES
+.SH THE PANES
 The window is divided into a folder list on the left, a message list at the
 top right, and the body of the highlighted message below it.
+A fourth pane, Services, goes above the folder list.
+It lists the services configured with
+.B [services] order
+in
+.IR tvmail.conf
+(only Mail exists so far) and is shown when there is more than one;
+.B View > Services pane
+shows or hides it.
+Choosing a service fills the folder list with that service's folders.
 .TP
 .B Tab ", " Shift\-Tab
-Move focus between the three panes.
+Move focus between the panes (Services, Folders, Messages, Message).
 .TP
 .BR "Up" "/" "Down" ", " "PgUp" "/" "PgDn"
 Move within the focused pane.

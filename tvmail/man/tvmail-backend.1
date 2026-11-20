@@ -65,6 +65,14 @@ and write its statistics to
 If omitted, use
 .IR trace.tvmail.backend.log .
 .TP
+.BI "--service " NAME
+Which service the verb is about; before the verb.
+Default
+.BR mail ;
+the others are listed by
+.BR services .
+An unknown name is an error.
+.TP
 .B --help
 Show command-line help and exit.
 .TP
@@ -159,6 +167,32 @@ Default is every folder except
 .BR dead .
 Over IMAP this is a STATUS request, so it does not disturb the open folder;
 a folder that does not exist counts as 0 0.
+.TP
+.B services
+One line per service in the Services pane:
+.IR name ,
+.IR kind ,
+.I label
+(TAB-separated), in the order of
+.B [services] order
+in
+.IR tvmail.conf .
+Only
+.B mail
+exists so far; a name nobody implements yet is left out, and with none left it is
+.BR mail .
+.TP
+.B folders
+One line per folder of the service (\fB--service\fP, default mail):
+.IR label ,
+.IR MBOX ,
+.IR total ,
+.I unseen
+(TAB-separated).
+.I MBOX
+is what the other verbs take.
+The counts are those of
+.BR counts .
 .TP
 .BI "show " "IDX " [MBOX]
 Decoded headers followed by the best available text of message

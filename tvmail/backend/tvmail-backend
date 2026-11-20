@@ -1161,30 +1161,83 @@ def _imap_status(folder):
     return (int(mt.group(1)) if mt else 0, int(mu.group(1)) if mu else 0)
 
 
+def _count_one(n):
+    """(total, unseen) of one mail folder shorthand: STATUS over IMAP, a header
+    scan locally.  A folder that cannot be read counts as (0, 0)."""
+    if n == "dead":
+        return (1 if _dead_msg() is not None else 0), 0   # one message, or no file
+    try:
+        if _is_remote():
+            return _imap_status(_imap_folder(n))
+        path = mbox_path(n)
+        total = unseen = 0
+        if os.path.exists(path):
+            for msg in open_box(path):
+                total += 1
+                status = (msg.get("Status", "") or "") + (msg.get("X-Status", "") or "")
+                if "R" not in status:
+                    unseen += 1
+        return total, unseen
+    except Exception:
+        return 0, 0
+
+
 def cmd_counts(a):
     """name TAB total TAB unseen, one line per mailbox - the folder pane's
     "inbox (3)" numbers.  Cheap: STATUS over IMAP, a header scan locally."""
     names = a.mboxes or ["spool", "drafts", "sent", "mbox", "spam", "trash"]
     for n in names:
-        if n == "dead":
-            # only when named (not in the default list): one message, or no file
-            print("dead	%d	0" % (_dead_msg() is not None))
-            continue
-        try:
-            if _is_remote():
-                total, unseen = _imap_status(_imap_folder(n))
-            else:
-                path = mbox_path(n)
-                total = unseen = 0
-                if os.path.exists(path):
-                    for msg in open_box(path):
-                        total += 1
-                        status = (msg.get("Status", "") or "") + (msg.get("X-Status", "") or "")
-                        if "R" not in status:
-                            unseen += 1
-        except Exception:
-            total = unseen = 0
+        total, unseen = _count_one(n)   # dead: only when named (not in the default list)
         print("%s\t%d\t%d" % (n, total, unseen))
+    return 0
+
+
+# --------------------------------------------------------------------------
+# Services.  tvmail's window has a Services pane; each service is a kind of
+# place to read from, with its own folders.  Only "mail" exists so far; the
+# listserv and usenet kinds are added here as they are built (SERVICES-DESIGN.md).
+# [services] order = mail, ... in tvmail.conf names the ones to show (absent:
+# just mail); a name nobody implements yet is left out.
+# --------------------------------------------------------------------------
+_SERVICES = {"mail": ("mail", "Mail")}      # name -> (kind, label)
+
+# the Mail service's folders: the label shown, and the MBOX shorthand every verb takes
+_MAIL_FOLDERS = (("inbox", "spool"), ("drafts", "drafts"), ("sent", "sent"), ("saved", "mbox"),
+                 ("spam", "spam"), ("trash", "trash"), ("dead.letter", "dead"))
+
+
+def _service_names():
+    order = _conf().get("services", "order", fallback="mail")
+    names = []
+    for n in re.split(r"[,\s]+", order.strip().lower()):
+        if n in _SERVICES and n not in names:
+            names.append(n)
+    return names or ["mail"]
+
+
+def _check_service(a):
+    """The global --service NAME: only a service that exists may be named."""
+    name = getattr(a, "service", None)
+    if name and name not in _SERVICES:
+        sys.exit("tvmail-backend: unknown service '%s' (have: %s)" % (name, ", ".join(sorted(_SERVICES))))
+    return name or "mail"
+
+
+def cmd_services(a):
+    """name TAB kind TAB label, one line per configured service, in order."""
+    for n in _service_names():
+        kind, label = _SERVICES[n]
+        print("%s\t%s\t%s" % (n, kind, label))
+    return 0
+
+
+def cmd_folders(a):
+    """label TAB MBOX TAB total TAB unseen, one line per folder of the service
+    (--service, default mail): what the Folders pane shows."""
+    _check_service(a)
+    for label, mbox in _MAIL_FOLDERS:
+        total, unseen = _count_one(mbox)
+        print("%s\t%s\t%d\t%d" % (label, mbox, total, unseen))
     return 0
 
 
@@ -2715,7 +2768,7 @@ class _CapStream:
 # verbs that consume stdin or take over the terminal - never run them inside
 # the serve loop (they would eat the request stream)
 _SERVE_BLOCKED = frozenset(("serve", "send", "save-draft", "pull"))
-_COMMANDS = frozenset(("floyd", "list", "counts", "vacation", "show", "raw", "parts", "save", "delete",
+_COMMANDS = frozenset(("floyd", "list", "counts", "services", "folders", "vacation", "show", "raw", "parts", "save", "delete",
                        "mark", "purge", "empty-trash", "compose-template", "send",
                        "save-draft", "aliases", "pull", "ping", "mode", "chat",
                        "host", "serve"))
@@ -2737,9 +2790,10 @@ def _dispatch(parser, argv):
     before every command, let the command itself hit the dead connection,
     then drop it and retry exactly once."""
     global _IMAP
-    if argv and argv[0] in _SERVE_BLOCKED:
+    verb = argv[2:] if argv[:1] == ["--service"] else argv   # a leading --service NAME is not the verb
+    if verb and verb[0] in _SERVE_BLOCKED:
         return 2, ("tvmail-backend: '%s' is not available in serve mode\n"
-                   % argv[0]).encode("utf-8")
+                   % verb[0]).encode("utf-8")
     retry_stale = _IMAP is not None
     real = sys.stdout
     while True:
@@ -2747,6 +2801,7 @@ def _dispatch(parser, argv):
         sys.stdout = cap
         try:
             ns = _parse_cli(parser, argv)
+            _check_service(ns)
             return (ns.fn(ns) or 0), cap.buffer.getvalue()
         except SystemExit as e:
             code = e.code
@@ -2821,10 +2876,14 @@ def build_parser():
                     help="write cProfile data to FILE (default: trace.tvmail.backend.log)")
     ap.add_argument("--version", action="version",
                     version="tvmail-backend %s" % __version__)
+    ap.add_argument("--service", metavar="NAME", default=None,
+                    help="which service the verb is about (default: mail); see the 'services' verb")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("list");  p.add_argument("mbox", nargs="?"); p.set_defaults(fn=cmd_list)
     p = sub.add_parser("counts"); p.add_argument("mboxes", nargs="*"); p.set_defaults(fn=cmd_counts)
+    p = sub.add_parser("services"); p.set_defaults(fn=cmd_services)
+    p = sub.add_parser("folders"); p.set_defaults(fn=cmd_folders)
     p = sub.add_parser("show");  p.add_argument("idx", type=int); p.add_argument("mbox", nargs="?"); p.add_argument("--mark-read", action="store_true", dest="mark_read"); p.set_defaults(fn=cmd_show)
     p = sub.add_parser("raw");   p.add_argument("idx", type=int); p.add_argument("mbox", nargs="?"); p.set_defaults(fn=cmd_raw)
     p = sub.add_parser("parts"); p.add_argument("idx", type=int); p.add_argument("mbox", nargs="?"); p.set_defaults(fn=cmd_parts)
@@ -2910,6 +2969,7 @@ def _parse_cli(parser, argv):
 
 def main():
     a = _parse_cli(build_parser(), _normalize_cli(sys.argv[1:]))
+    _check_service(a)
     if a.debug:
         logging.basicConfig(filename=a.debug, level=logging.DEBUG,
                             format="%(asctime)s %(levelname)s %(message)s")

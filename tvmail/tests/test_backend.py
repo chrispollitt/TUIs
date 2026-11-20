@@ -541,6 +541,65 @@ class TestServe(Base):
         p.stdin.flush()
         self.assertEqual(p.wait(timeout=5), 0)
 
+    def test_service_option_is_not_the_verb(self):
+        # the global --service NAME comes before the verb; a blocked verb stays blocked behind it
+        p = self._serve()
+        self._frame(p.stdout)
+        st, body = self._req(p, "--service mail send x")
+        self.assertEqual(st, 2)
+        self.assertIn(b"serve mode", body)
+        st, body = self._req(p, "--service mail folders")
+        self.assertEqual(st, 0)
+        self.assertTrue(body.startswith(b"inbox\tspool\t2\t1\n"))
+        st, body = self._req(p, "--service nosuch folders")
+        self.assertEqual(st, 2)
+        self.assertIn(b"unknown service", body)
+
+
+class TestServices(Base):
+    """The Services pane's two verbs and the global --service option (SERVICES-DESIGN.md)."""
+
+    def test_services_is_just_mail_by_default(self):
+        p = self.be("services")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.decode(), "mail\tmail\tMail\n")
+
+    def test_services_order_leaves_out_what_nobody_implements_yet(self):
+        conf = self.tmp / "tvmail.conf"
+        conf.write_text("[services]\norder = lists, Mail, news, mail\n")
+        os.environ["TVMAIL_CONF"] = str(conf)
+        self.assertEqual(self.be("services").stdout.decode(), "mail\tmail\tMail\n")
+        conf.write_text("[services]\norder = lists, news\n")      # nothing known: mail anyway
+        self.assertEqual(self.be("services").stdout.decode(), "mail\tmail\tMail\n")
+
+    def test_folders_are_the_mail_folders_with_counts(self):
+        p = self.be("folders")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        rows = [l.split("\t") for l in p.stdout.decode().splitlines()]
+        self.assertEqual([r[:2] for r in rows],
+                         [["inbox", "spool"], ["drafts", "drafts"], ["sent", "sent"], ["saved", "mbox"],
+                          ["spam", "spam"], ["trash", "trash"], ["dead.letter", "dead"]])
+        self.assertEqual(rows[0][2:], ["2", "1"])         # the spool: two messages, one new
+        self.assertEqual(rows[1][2:], ["0", "0"])         # drafts: not created yet
+        self.assertEqual(rows[6][2:], ["0", "0"])         # dead.letter: no file
+
+    def test_folders_counts_agree_with_counts(self):
+        want = dict((l.split("\t")[0], l.split("\t")[1:]) for l in
+                    self.be("counts", "spool", "drafts", "sent", "mbox", "spam", "trash", "dead")
+                    .stdout.decode().splitlines())
+        for l in self.be("folders").stdout.decode().splitlines():
+            label, mbox, total, unseen = l.split("\t")
+            self.assertEqual([total, unseen], want[mbox], label)
+
+    def test_service_option_names_a_service_that_exists(self):
+        self.assertEqual(self.be("--service", "mail", "folders").returncode, 0)
+        p = self.be("--service", "news", "folders")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn(b"unknown service 'news'", p.stderr)
+        # every verb takes it, not only folders
+        self.assertEqual(self.be("--service", "mail", "ping").stdout, b"pong\n")
+        self.assertNotEqual(self.be("--service", "news", "ping").returncode, 0)
+
 
 # --------------------------------------------------------------------------
 # remote (IMAP/SMTP client) mode

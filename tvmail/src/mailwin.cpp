@@ -9,20 +9,28 @@ std::vector<MsgRow> gRows; // what the pane shows: gAll, filtered and sorted
 SortKey gSortKey = sortDate;
 bool gSortRev = false;
 std::string gFilter; // type-to-filter text (From / Subject, any case)
-const Folder gFolders[] = {
-    {"inbox", "spool"},
-    {"drafts", "drafts"},
-    {"sent", "sent"},
-    {"saved", "mbox"},
-    {"spam", "spam"},
-    {"trash", "trash"},
-    {"dead.letter", "dead"}, // always a local file, whatever the mode
-};
-const int gFolderCount = int(sizeof gFolders / sizeof gFolders[0]);
+std::vector<Service> gServices; // what the backend's `services` verb lists (loadServices)
+int gServiceIdx = 0;            // the selected service
+std::vector<Folder> gFolders;   // the selected service's folders (loadFolders)
 int gFolderIdx = 0; // current folder (drives gMbox)
-std::string gMbox = gFolders[0].mbox;
+std::string gMbox = "spool";
 bool gRemote = false; // backend "mode" == remote (IMAP)
 std::string gHost;    // backend "host": the box we're talking to
+
+// What the backend would say for Mail, for a backend that does not know the `services` / `folders` verbs yet
+// (an old install beside a new tvmail): the folders without counts.  dead.letter is always a local file.
+static std::vector<Folder> mailFolderDefaults()
+{
+    return {{"inbox", "spool"}, {"drafts", "drafts"}, {"sent", "sent"}, {"saved", "mbox"},
+            {"spam", "spam"}, {"trash", "trash"}, {"dead.letter", "dead"}};
+}
+
+std::string serviceFlag()
+{
+    if (gServiceIdx < 0 || gServiceIdx >= (int)gServices.size() || gServices[gServiceIdx].name == "mail")
+        return std::string(); // mail is the default: the commands are what they always were
+    return "--service " + shq(gServices[gServiceIdx].name) + " ";
+}
 
 std::string mboxArg() { return gMbox.empty() ? std::string() : " '" + gMbox + "'"; }
 std::string mboxOpt() { return gMbox.empty() ? std::string() : " --mbox '" + gMbox + "'"; }
@@ -86,35 +94,77 @@ static void setRowFlag(int idx, char flag)
             r.flag = flag;
 }
 
-// Per-folder message and unread counts, for the folder table.
-// -1 = not known (the backend had no line for it).
-static int gTotal[gFolderCount];
-static int gUnread[gFolderCount];
-
-static void loadCounts()
+static bool allDigits(const std::string &s)
 {
-    for (int i = 0; i < gFolderCount; ++i)
-        gTotal[i] = gUnread[i] = -1;
-    std::istringstream is(backendRun("counts spool drafts sent mbox spam trash dead") /* dead only when named */);
+    return !s.empty() && s.find_first_not_of("0123456789") == std::string::npos;
+}
+
+// The services, from the backend (name, kind, label); Mail alone when it does not answer.
+static void loadServices()
+{
+    gServices.clear();
+    std::istringstream is(backendRun("services"));
     std::string line;
     while (std::getline(is, line))
     {
+        while (!line.empty() && line.back() == '\r')
+            line.pop_back();
         std::istringstream ls(line);
-        std::string name, tot, uns;
-        std::getline(ls, name, '\t');
+        Service s;
+        std::getline(ls, s.name, '\t');
+        std::getline(ls, s.kind, '\t');
+        std::getline(ls, s.label);
+        if (!s.name.empty() && !s.kind.empty() && !s.label.empty()) // an error line has no tabs
+            gServices.push_back(s);
+    }
+    if (gServices.empty())
+        gServices.push_back({"mail", "mail", "Mail", -1});
+    if (gServiceIdx >= (int)gServices.size())
+        gServiceIdx = 0;
+}
+
+// The selected service's folders and their message / unread counts (-1 = not known), from the backend.
+// The highlight stays on the same folder when it is still there.
+static void loadFolders()
+{
+    std::string was = gFolderIdx >= 0 && gFolderIdx < (int)gFolders.size() ? gFolders[gFolderIdx].mbox : std::string();
+    std::vector<Folder> now;
+    std::string raw = backendRun("folders");
+    std::istringstream is(raw);
+    std::string line;
+    while (std::getline(is, line))
+    {
+        while (!line.empty() && line.back() == '\r')
+            line.pop_back();
+        std::istringstream ls(line);
+        Folder f;
+        std::string tot, uns;
+        std::getline(ls, f.name, '\t');
+        std::getline(ls, f.mbox, '\t');
         std::getline(ls, tot, '\t');
         std::getline(ls, uns);
-        if (tot.empty() || uns.empty() ||
-            tot.find_first_not_of("0123456789") != std::string::npos ||
-            uns.find_first_not_of("0123456789\r") != std::string::npos)
-            continue; // an error line, not a count
-        for (int i = 0; i < gFolderCount; ++i)
-            if (name == gFolders[i].mbox)
-            {
-                gTotal[i] = std::atoi(tot.c_str());
-                gUnread[i] = std::atoi(uns.c_str());
-            }
+        if (f.name.empty() || f.mbox.empty() || !allDigits(tot) || !allDigits(uns))
+            continue; // an error line, not a folder
+        f.total = std::atoi(tot.c_str());
+        f.unread = std::atoi(uns.c_str());
+        now.push_back(f);
     }
+    if (now.empty())
+    {
+        reportListError("Cannot list the folders", raw);
+        if (gServiceIdx >= 0 && gServiceIdx < (int)gServices.size() && gServices[gServiceIdx].kind == "mail")
+            now = mailFolderDefaults();
+    }
+    gFolders = now;
+    gFolderIdx = 0;
+    for (int i = 0; i < (int)gFolders.size(); ++i)
+        if (gFolders[i].mbox == was)
+            gFolderIdx = i;
+    if (!gFolders.empty())
+        gMbox = gFolders[gFolderIdx].mbox;
+    // the badge of the service shown: what is new in its first folder (Mail: the inbox)
+    if (gServiceIdx >= 0 && gServiceIdx < (int)gServices.size() && !gFolders.empty())
+        gServices[gServiceIdx].unread = gFolders[0].unread;
 }
 
 static void loadList()
@@ -146,36 +196,45 @@ static void loadList()
     applyView();
 }
 
-// ================================================= 3-pane mail window =======
-// One full-screen window: folders (left) | message list (top-right) /
-// message content (bottom-right).  Panes talk via evBroadcast: folder focus
-// reloads the list, message focus loads the content.
+// ============================================== 4-pane mail window =======
+// One full-screen window: services over folders (left) | message list over
+// message content (right).  Panes talk via evBroadcast: service focus loads
+// its folders, folder focus reloads the list, message focus loads the content.
 
 // Folder | Total | New (the table pieces are in views.h)
 const TableCols kFolderCols = {{"Folder", 0}, {"Total", 5, true}, {"New", 4, true}};
+// Service | New: no heading row, the pane's title says what it is
+const TableCols kServiceCols = {{"Service", 0}, {"New", 4, true}};
 
 class TFolderPane : public TListViewer
 {
 public:
     TFolderPane(const TRect &b) : TListViewer(b, 1, nullptr, nullptr)
     {
-        setRange(gFolderCount);
+        reloadRows();
+    }
+    // The folders changed (another service, or F5): new range, highlight on gFolderIdx, nothing announced.
+    void reloadRows()
+    {
+        setRange((short)gFolders.size());
         TListViewer::focusItem(gFolderIdx);
+        drawView();
     }
     void draw() override
     {
         drawTableList(*this, kFolderCols, [](short item) -> std::vector<std::string>
                       {
-            if (item < 0 || item >= gFolderCount)
+            if (item < 0 || item >= (short)gFolders.size())
                 return {};
             // how many there are, and how many of them are unread
-            return {gFolders[item].name,
-                    gTotal[item] >= 0 ? std::to_string(gTotal[item]) : std::string(),
-                    gUnread[item] >= 0 ? std::to_string(gUnread[item]) : std::string()}; });
+            const Folder &f = gFolders[item];
+            return {f.name,
+                    f.total >= 0 ? std::to_string(f.total) : std::string(),
+                    f.unread >= 0 ? std::to_string(f.unread) : std::string()}; });
     }
     void getText(char *dest, short item, short maxLen) override
     {
-        putText(dest, item >= 0 && item < gFolderCount ? gFolders[item].name : std::string(), maxLen);
+        putText(dest, item >= 0 && item < (short)gFolders.size() ? gFolders[item].name : std::string(), maxLen);
     }
     // TListViewer calls this for every click and arrow key, even when the
     // highlight lands where it already was (clicking the pane to focus it,
@@ -188,6 +247,62 @@ public:
         gFolderIdx = item;
         if (moved && owner)
             message(owner, evBroadcast, cmFolderPicked, this);
+    }
+    void selectItem(short item) override { focusItem(item); }
+    void setState(ushort aState, Boolean enable) override
+    {
+        TListViewer::setState(aState, enable);
+        if (enable && (aState & sfFocused) && owner)
+            message(owner, evBroadcast, cmPaneFocused, this);
+    }
+    TColorAttr mapColor(uchar i) override
+    {
+        switch (i)
+        {
+        case 1:
+        case 2:
+            return cNorm();
+        case 3:
+            return cFocus();
+        case 4:
+            return cCur();
+        case 5:
+            return cDiv();
+        }
+        return TView::mapColor(i);
+    }
+};
+
+// The services, top left: Mail, and later the listserv and usenet.  A count of what is new at the right.
+class TServicePane : public TListViewer
+{
+public:
+    TServicePane(const TRect &b) : TListViewer(b, 1, nullptr, nullptr)
+    {
+        setRange((short)gServices.size());
+        TListViewer::focusItem(gServiceIdx);
+    }
+    void draw() override
+    {
+        drawTableList(*this, kServiceCols, [](short item) -> std::vector<std::string>
+                      {
+            if (item < 0 || item >= (short)gServices.size())
+                return {};
+            const Service &s = gServices[item];
+            return {s.label, s.unread > 0 ? std::to_string(s.unread) : std::string()}; });
+    }
+    void getText(char *dest, short item, short maxLen) override
+    {
+        putText(dest, item >= 0 && item < (short)gServices.size() ? gServices[item].label : std::string(), maxLen);
+    }
+    // As in TFolderPane: only a real move announces itself.
+    void focusItem(short item) override
+    {
+        bool moved = item != focused;
+        TListViewer::focusItem(item);
+        gServiceIdx = item;
+        if (moved && owner)
+            message(owner, evBroadcast, cmServicePicked, this);
     }
     void selectItem(short item) override { focusItem(item); }
     void setState(ushort aState, Boolean enable) override
@@ -369,12 +484,18 @@ class TMailWindow : public TWindow
     TScrollBar *msgVsb = nullptr, *contentVsb = nullptr;
     TDivider *vdiv = nullptr;
     TTableHead *folderHead = nullptr;
-    TPaneTitle *folderTitle = nullptr, *msgTitle = nullptr, *contentTitle = nullptr;
-    int activePane = 0;
+    TPaneTitle *folderTitle = nullptr, *msgTitle = nullptr, *contentTitle = nullptr, *svcTitle = nullptr;
+    int activePane = 0; // 0 folders, 1 messages, 2 body, 3 services
+    // The Services pane takes the top of the left column.  With one service there is nothing to choose, so
+    // the window is then the three panes it always was; View > Services pane shows it anyway.
+    bool showServices = false;
+
+    // rows the Services pane takes: its title and its services (at most 5)
+    int svcRows() const { return showServices ? 1 + std::min<int>(5, (int)gServices.size()) : 0; }
 
     struct Rects
     {
-        TRect folderTitle, folderHead, folder, vbar, msgTitle, msg, msgVsb,
+        TRect svcTitle, svc, folderTitle, folderHead, folder, vbar, msgTitle, msg, msgVsb,
             contentTitle, content, contentVsb;
     };
     Rects paneRects() const
@@ -386,10 +507,15 @@ class TMailWindow : public TWindow
             sy = 6; // title + a few rows + body title
         if (sy > H - 5)
             sy = H - 5;
+        int t = 1 + svcRows(); // where the Folders title goes: below the Services pane, when there is one
+        if (t > H - 5)
+            t = std::max(1, H - 5); // a tiny terminal: the folders matter more
         Rects r;
-        r.folderTitle = TRect(1, 1, 1 + FW, 2);
-        r.folderHead = TRect(1, 2, 1 + FW, 3);
-        r.folder = TRect(1, 3, 1 + FW, H - 1);
+        r.svcTitle = TRect(1, 1, 1 + FW, 2);
+        r.svc = TRect(1, 2, 1 + FW, t);
+        r.folderTitle = TRect(1, t, 1 + FW, t + 1);
+        r.folderHead = TRect(1, t + 1, 1 + FW, t + 2);
+        r.folder = TRect(1, t + 2, 1 + FW, H - 1);
         r.vbar = TRect(1 + FW, 1, 2 + FW, H - 1);
         r.msgTitle = TRect(2 + FW, 1, W - 1, 2);
         r.msg = TRect(2 + FW, 2, W - 2, sy);
@@ -401,6 +527,7 @@ class TMailWindow : public TWindow
     }
 
 public:
+    TServicePane *svcPane = nullptr;
     TFolderPane *folderPane = nullptr;
     TMsgPane *msgPane = nullptr;
     TContentPane *contentPane = nullptr;
@@ -413,7 +540,12 @@ public:
         flags &= ~(wfClose | wfZoom | wfMove);
         growMode = gfGrowHiX | gfGrowHiY;
 
+        loadServices();
+        showServices = gServices.size() > 1;
+        loadFolders();
         Rects R = paneRects();
+        svcTitle = new TPaneTitle(R.svcTitle, "Services");
+        svcPane = new TServicePane(R.svc);
         folderTitle = new TPaneTitle(R.folderTitle, "Folders");
         msgTitle = new TPaneTitle(R.msgTitle, "Messages");
         contentTitle = new TPaneTitle(R.contentTitle, "Message");
@@ -426,28 +558,82 @@ public:
         contentPane = new TContentPane(R.content, nullptr, contentVsb);
 
         insert(vdiv);
+        insert(svcTitle);
         insert(folderTitle);
         insert(folderHead);
         insert(msgTitle);
         insert(contentTitle);
         insert(msgVsb);
         insert(contentVsb);
-        // insert order sets the Tab cycle: folders -> messages -> body
+        // insert order sets the Tab cycle: the last view inserted, then the first, second...
+        // so services -> folders -> messages -> body (a hidden pane is skipped)
+        insert(folderPane);
         insert(msgPane);
         insert(contentPane);
-        insert(folderPane);
+        insert(svcPane);
+        if (!showServices)
+        {
+            svcTitle->hide();
+            svcPane->hide();
+        }
 
         gMailWin = this;
-        loadCounts();
         loadFolder();
         ready = True;
         folderPane->select();
         setActivePane(0);
     }
 
+    // View > Services pane
+    void toggleServices()
+    {
+        showServices = !showServices;
+        int want = activePane; // showing or hiding a pane makes Turbo Vision pick the topmost one to focus
+        if (!showServices && want == 3)
+            want = 0;
+        // locked, so the panes are placed first and the window repaints once
+        lock();
+        layout();
+        if (showServices)
+        {
+            svcTitle->show();
+            svcPane->show();
+        }
+        else
+        {
+            svcTitle->hide();
+            svcPane->hide();
+        }
+        unlock(); // draws the window ...
+        // ... but not the heading row, which was moved while the Folders list still covered its new place
+        // (found by the e2e case: a stale row of the old list stayed there)
+        folderHead->drawView();
+        (want == 0 ? (TView *)folderPane : want == 1 ? (TView *)msgPane : want == 2 ? (TView *)contentPane : (TView *)svcPane)->select();
+    }
+
+    // Put every pane where paneRects() says (a resize, or the Services pane shown or hidden).
+    void layout()
+    {
+        Rects R = paneRects();
+        svcTitle->changeBounds(R.svcTitle);
+        svcPane->changeBounds(R.svc);
+        folderTitle->changeBounds(R.folderTitle);
+        folderHead->changeBounds(R.folderHead);
+        folderPane->changeBounds(R.folder);
+        vdiv->changeBounds(R.vbar);
+        msgTitle->changeBounds(R.msgTitle);
+        msgPane->changeBounds(R.msg);
+        msgVsb->changeBounds(R.msgVsb);
+        contentTitle->changeBounds(R.contentTitle);
+        contentPane->changeBounds(R.content);
+        contentVsb->changeBounds(R.contentVsb);
+    }
+
     void setActivePane(int p)
     {
         activePane = p;
+        if (svcTitle)
+            svcTitle->setActive(Boolean(p == 3));
         if (folderTitle)
             folderTitle->setActive(Boolean(p == 0));
         if (msgTitle)
@@ -485,15 +671,24 @@ public:
             keepPos = msgPane->focused;
             keepIdx = gRows[keepPos].idx;
         }
-        gMbox = gFolders[gFolderIdx].mbox;
-        loadList();
-        // the list we just read is the freshest word on this folder's counts
-        if (gMbox != "dead")
+        if (gFolderIdx < 0 || gFolderIdx >= (int)gFolders.size())
         {
-            gTotal[gFolderIdx] = (int)gAll.size();
-            gUnread[gFolderIdx] = (int)std::count_if(gAll.begin(), gAll.end(),
-                                                     [](const MsgRow &r)
-                                                     { return r.flag == 'N'; });
+            gAll.clear(); // a service with no folders
+            applyView();
+        }
+        else
+        {
+            gMbox = gFolders[gFolderIdx].mbox;
+            loadList();
+            // the list we just read is the freshest word on this folder's counts
+            if (gMbox != "dead")
+            {
+                gFolders[gFolderIdx].total = (int)gAll.size();
+                gFolders[gFolderIdx].unread = (int)std::count_if(gAll.begin(), gAll.end(),
+                                                                 [](const MsgRow &r)
+                                                                 { return r.flag == 'N'; });
+                syncBadge();
+            }
         }
         if (msgPane)
         {
@@ -513,6 +708,26 @@ public:
         if (folderPane)
             folderPane->drawView();
         loadContent();
+    }
+
+    // The badge of the service shown follows its first folder (Mail: the inbox).
+    void syncBadge()
+    {
+        if (gServiceIdx >= 0 && gServiceIdx < (int)gServices.size() && !gFolders.empty())
+            gServices[gServiceIdx].unread = gFolders[0].unread;
+        if (svcPane)
+            svcPane->drawView();
+    }
+
+    // Another service was picked: its folders, then its first folder.
+    void servicePicked()
+    {
+        gFilter.clear();
+        gFolders.clear();
+        gFolderIdx = 0;
+        loadFolders();
+        folderPane->reloadRows();
+        loadFolder();
     }
 
     // Folder-pane numbers and the Messages heading (filter, sort order).
@@ -593,8 +808,9 @@ public:
             return; // nothing to change
         backendRun("mark " + std::to_string(r.idx) + (read ? " read " : " unread ") + gMbox);
         setRowFlag(r.idx, read ? '.' : 'N');
-        if (gUnread[gFolderIdx] >= 0)
-            gUnread[gFolderIdx] = std::max(0, gUnread[gFolderIdx] + (read ? -1 : 1));
+        if (gFolderIdx >= 0 && gFolderIdx < (int)gFolders.size() && gFolders[gFolderIdx].unread >= 0)
+            gFolders[gFolderIdx].unread = std::max(0, gFolders[gFolderIdx].unread + (read ? -1 : 1));
+        syncBadge();
         msgPane->drawView();
         folderPane->drawView();
         if (gSortKey == sortUnread) // the order depends on the flag
@@ -603,7 +819,8 @@ public:
 
     void reloadFolder()
     {
-        loadCounts();
+        loadFolders(); // counts, and a folder list that may have changed
+        folderPane->reloadRows();
         loadFolder(true);
     }
 
@@ -621,6 +838,10 @@ public:
         {
             switch (e.message.command)
             {
+            case cmServicePicked:
+                servicePicked();
+                clearEvent(e);
+                break;
             case cmFolderPicked:
                 gFilter.clear(); // a filter belongs to the folder it was typed in
                 loadFolder();
@@ -638,6 +859,7 @@ public:
             {
                 void *v = e.message.infoPtr;
                 setActivePane(v == folderPane ? 0 : v == msgPane ? 1
+                                                : v == svcPane   ? 3
                                                                  : 2);
                 if (v == contentPane)
                     markFocused(true); // you are reading it now
@@ -660,17 +882,7 @@ public:
     void changeBounds(const TRect &bounds) override
     {
         TWindow::changeBounds(bounds);
-        Rects R = paneRects();
-        folderTitle->changeBounds(R.folderTitle);
-        folderHead->changeBounds(R.folderHead);
-        folderPane->changeBounds(R.folder);
-        vdiv->changeBounds(R.vbar);
-        msgTitle->changeBounds(R.msgTitle);
-        msgPane->changeBounds(R.msg);
-        msgVsb->changeBounds(R.msgVsb);
-        contentTitle->changeBounds(R.contentTitle);
-        contentPane->changeBounds(R.content);
-        contentVsb->changeBounds(R.contentVsb);
+        layout();
     }
 
     TColorAttr mapColor(uchar i) override
@@ -727,7 +939,16 @@ void mailReload()
 
 int mailInboxUnread()
 {
-    return gUnread[0]; // gFolders[0] is the inbox
+    for (const Folder &f : gFolders)
+        if (f.mbox == "spool")
+            return f.unread;
+    return -1; // the selected service has no inbox
+}
+
+void mailToggleServices()
+{
+    if (gMailWin)
+        gMailWin->toggleServices();
 }
 
 void mailViewChanged(bool resetSel)

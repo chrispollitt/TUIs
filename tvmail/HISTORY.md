@@ -5,6 +5,12 @@ Releases are tagged `tvmail-vX.Y.Z`; `git log` has the rest.
 
 ## Unreleased
 
+- **A fourth pane, Services** (step 1 of [SERVICES-DESIGN.md](SERVICES-DESIGN.md): mail, listserv and usenet in one window).
+  Services sit above Folders; choosing one fills Folders with its folders.  Only Mail exists so far, so the
+  pane is hidden unless `[services] order` names more than one or you pick View > Services pane, and the window is
+  the three panes it was.  The folders and their counts now come from the backend (`tvmail-backend folders`,
+  `services`, and a global `--service NAME`) instead of a table in the C++.
+
 - **Fixes for daily use (BUGS.md #6, #33; #15 turned out to be done already):** Ctrl-D, Ctrl-R and Ctrl-N are the
   editor's own keys in a compose or signature window (cursor right, page up) and no longer delete, reply or start a
   new message there; and a backend that answers too slowly is given up on after 8 s (not waited for to the end, then
