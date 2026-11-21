@@ -1,5 +1,5 @@
 .\" tvmail(1) man page.  man(7) macros, because we are old school.
-.TH TVMAIL 1 "September 2026" "tvmail 1.0" "User Commands"
+.TH TVMAIL 1 "November 2026" "tvmail 1.4.0" "User Commands"
 .SH NAME
 tvmail \- a Turbo Vision mail client for a local mailbox
 .SH SYNOPSIS
@@ -104,7 +104,7 @@ It lists the services configured with
 .B [services] order
 in
 .IR tvmail.conf
-(only Mail exists so far) and is shown when there is more than one;
+(mail, lists, news) and is shown when there is more than one;
 .B View > Services pane
 shows or hides it.
 Choosing a service fills the folder list with that service's folders.
@@ -179,6 +179,50 @@ or
 .B tvmail
 left behind after an aborted composition.
 Shown as a one\-message pseudo\-folder.
+.SH SERVICES
+Besides Mail, the Services pane can list two more places to read from; each appears when its section of
+.I tvmail.conf
+is filled in, and has a server you can run on your LAN (see
+.IR SERVICES\-DESIGN.md ).
+.TP
+.B Lists
+Mailing lists, LISTSERV style.
+Needs
+.B [lists] address = listserv@HOST
+and remote mode (list mail is read over IMAP, with the Mail login).
+The folders are the lists you are in (the IMAP folders
+.BR Lists/NAME ),
+read, searched and deleted like mail;
+.B Ctrl\-R
+and
+.B Ctrl\-N
+write to the list, not to the author.
+.B Message > Lists
+mails commands to listserv@: Available lists (the answer lists what there is; Enter subscribes), Subscribe to a list,
+Sign off from this list, Digest or every message.
+The answer mail comes back as a one\-line notice.
+.TP
+.B Usenet
+A news server on the LAN, from
+.BR "[news] host" .
+The folders are the groups you subscribe to, shown alphabetically
+.RB ( "[news] sort = newsrc" " keeps your order)."
+Articles are threaded by References
+.RB ( "View > Threads" " for a flat list);"
+.B Ctrl\-R
+is a followup and
+.B F2
+posts.
+What you have read is kept in
+.IR ~/.local/share/tvmail/newsrc\-HOST .
+.TP
+.B Search messages
+.RB ( "Edit > Search messages..." ", " Ctrl\-F
+in the mail window) shows only the messages of the folder that have every word given in From, To, Subject or the text
+.RB ( """quotes""" " keep a phrase together)."
+.B Esc
+shows the rest again.
+Over IMAP the server searches; in Usenet the headers are matched at once and the texts of the newest articles are fetched.
 .SH KEYS
 .TP
 .B F1

@@ -1,5 +1,5 @@
 .\" tvmail-backend(1) man page.
-.TH TVMAIL\-BACKEND 1 "September 2026" "tvmail 1.0" "User Commands"
+.TH TVMAIL\-BACKEND 1 "November 2026" "tvmail 1.4.0" "User Commands"
 .SH NAME
 tvmail\-backend \- the part of tvmail that does the actual work
 .SH SYNOPSIS
@@ -177,9 +177,11 @@ One line per service in the Services pane:
 .B [services] order
 in
 .IR tvmail.conf .
-Only
-.B mail
-exists so far; a name nobody implements yet is left out, and with none left it is
+The services are
+.BR mail ", " lists " and " news
+(Usenet); one whose configuration section is not filled in
+.RB ( "[lists] address" " and remote mode, " "[news] host" )
+is left out, and with none left it is
 .BR mail .
 .TP
 .B folders

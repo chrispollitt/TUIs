@@ -3,7 +3,35 @@
 What changed, release by release. (Why tvmail exists is in [WHY.md](WHY.md).)
 Releases are tagged `tvmail-vX.Y.Z`; `git log` has the rest.
 
-## Unreleased
+## 1.4.0 - November 2026
+
+The services release: tvmail's window gets a fourth pane, **Services**, and three things to read in it: Mail, mailing
+**Lists** and **Usenet**, each with a server you can run on your own LAN (`lists-setup` and `news-setup` in
+chrispollitt/POSIX; [SERVICES-DESIGN.md](SERVICES-DESIGN.md) has the whole design).  Also in this release: searching
+inside a folder, the contacts window, Floyd, and the fixes below.  tvchat takes the same version number.
+
+- **Lists in tvmail** (step 4 of [SERVICES-DESIGN.md](SERVICES-DESIGN.md)).  With `[lists] address = listserv@HOST` in
+  tvmail.conf, and remote mode (list mail is read over IMAP, with the Mail login), the Services pane lists **Lists**.  Its
+  folders are the lists you are in: the IMAP folders `Lists/NAME`, which the server files list mail into, so they read,
+  search, delete and move like any mailbox.  Ctrl-R and Ctrl-N write to the *list* (its `List-Post`, else `NAME@domain`),
+  not to the author.  Message > Lists asks the list server, which is a mail address: **Available lists...** mails `LIST` and
+  shows what is offered (Enter subscribes), **Subscribe to a list...**, **Sign off from this list** and **Digest or every
+  message...** mail `SUBSCRIBE`, `SIGNOFF` and `SET ... DIGEST`; the answer mail comes back as a one-line notice, never a
+  box.  tvmail-backend gains `lists-available`, `lists-subscribe`, `lists-signoff`, `lists-digest` and the `--service lists`
+  forms of the mail verbs.  The contract with the server (the answer is a mail to the sender, In-Reply-To the command, its
+  first line `OK` or `ERROR`) is written down in SERVICES-DESIGN.md.  Tested against a real IMAP server written for the
+  tests (`tests/fake_imap_server.py`) and a stand-in list server; also run against the real `listserv` and, live, against
+  mlmmj on the LAN's mail master.
+
+- **Search messages** (Edit menu, **Ctrl-F** in the mail window).  Every word you give must be in From, To, Subject or the
+  text (`"quotes"` for a phrase); the list then shows only the hits (`search: "foo"  (3 of 120, Esc clears)`) and Esc
+  brings the rest back.  Over IMAP the server searches (UTF-8 for non-ASCII words), in a local mailbox tvmail reads it, and
+  in Usenet the headers are matched at once and the texts of the newest 500 articles are fetched, for up to 30 s, saying how
+  far it got if that ran out.  The type-to-filter still only sees the From and Subject of the list.  Backend verb
+  `search MBOX "words"`.  (Ctrl-F lives in the mail window and not in the menu bar: the configuration editor's F8 and
+  compose's Alt-S would have lost their keys to a menu hot key.)
+
+- **Usenet groups in alphabetical order** by default; `[news] sort = newsrc` keeps the order you subscribed in.
 
 - **Usenet in tvmail** (step 2 of [SERVICES-DESIGN.md](SERVICES-DESIGN.md)).  A `[news] host` in tvmail.conf adds
   a Usenet service to the Services pane: the groups you subscribe to are its folders, an article's number is its

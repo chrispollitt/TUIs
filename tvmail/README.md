@@ -193,8 +193,8 @@ Messages pane shows the group's newest `window` articles (default 500) in thread
 a classic `.newsrc`. **Ctrl-R** is a followup (Newsgroups, References and the quote filled in), **Ctrl-N** a new article in
 the group, **F2** posts it. **Message ▸ Usenet** subscribes to a group by name or from the list of every group on the
 server, unsubscribes, and catches up (marks a group read). Delete, Move to, Purge and Forward are for mail only.
-The NNTP client is the stdlib-only `../tvcommon/py/tvnntp.py`. The server side is planned as `news-setup` in
-chrispollitt/POSIX (INN2); see [SERVICES-DESIGN.md](SERVICES-DESIGN.md).
+The NNTP client is the stdlib-only `../tvcommon/py/tvnntp.py`. The server side is `news-setup` in
+chrispollitt/POSIX (INN2, LAN-only, with `news-import` for old archives); see [SERVICES-DESIGN.md](SERVICES-DESIGN.md).
 
 ## Lists
 

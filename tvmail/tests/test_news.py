@@ -199,7 +199,7 @@ class TestNewsPosting(NewsBase):
     def test_send_posts_with_the_headers_a_news_server_wants(self):
         self.write_conf()
         self.conf.write_text(self.conf.read_text() + "[smtp]\nfrom = Chris <chris@cpbee.cmnet>\n")
-        msg = (b"X-Mailer: tvmail 1.3.0\nNewsgroups: lan.test\nFollowup-To: \nDistribution: lan\n"
+        msg = (b"X-Mailer: tvmail 1.4.0\nNewsgroups: lan.test\nFollowup-To: \nDistribution: lan\n"
                b"References: <a1@x>\nSubject: Re: Hello\n\nBody \xc3\xa9\n.dotted\n")
         p = self.news("send", stdin=msg)
         self.assertEqual(p.returncode, 0, p.stderr)
@@ -212,7 +212,7 @@ class TestNewsPosting(NewsBase):
         self.assertIsNone(got["Followup-To"])                                # an empty header is not sent
         self.assertTrue(got["Message-ID"].endswith("@cpbee.cmnet>"))
         self.assertTrue(got["Date"])
-        self.assertEqual(got["X-Mailer"], "tvmail 1.3.0")                    # the caller named itself first
+        self.assertEqual(got["X-Mailer"], "tvmail 1.4.0")                    # the caller named itself first
         self.assertEqual(got["References"], "<a1@x>")
         self.assertEqual(got["Content-Type"], "text/plain; charset=utf-8")
         self.assertIn(b"\n.dotted\n", self.fake.posted[0])                   # dot-stuffing did not leak

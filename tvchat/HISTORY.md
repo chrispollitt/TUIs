@@ -1,6 +1,9 @@
 # tvchat history
 
-## Unreleased
+## 1.4.0 - November 2026
+
+tvchat takes the shared version (`../VERSION`) with tvmail's services release (see [tvmail's HISTORY](../tvmail/HISTORY.md)):
+a Services pane with Lists and Usenet, searching in a folder.  What changed in tvchat itself is below.
 
 - **Live Helper Chat: a poll no longer grows with the number of old chats, and the delays are logged:** every chat he has
   answered stays open on the site, and each poll used to ask for the messages of every open chat, one after another, so

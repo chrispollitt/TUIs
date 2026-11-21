@@ -1,9 +1,42 @@
 # Handoff
 
 Where the work stands, for whoever picks it up next (Claude or Chris). Updated
-Nov 11, 2026 (tvcal section below; the rest is from Oct 27). Facts about the code live in the code and in the files listed
+Nov 21, 2026 (the Services section first; the tvcal section is from Nov 11, the rest from Oct 27). Facts about the code live in the code and in the files listed
 under "Where things are"; this file is what they do not say: the state, what
 is next, what was decided, and the live setup.
+
+## Services: Usenet and Lists (Nov 19-21, tvmail and tvchat 1.4.0)
+
+tvmail has a fourth pane, **Services**, with Mail, **Lists** and **Usenet**; the design and what came of it are in
+`tvmail/SERVICES-DESIGN.md`, the servers are `news-setup` and `lists-setup` in chrispollitt/POSIX. Added on the way:
+**Search messages** (Ctrl-F), Usenet groups alphabetical (`[news] sort`).
+
+- **State:** built, tested (tvmail: 42 e2e cases, 208 Python tests, the rest of ctest), released as **1.4.0** on `main`
+  once the `tvmail-release-1.4.0` branch is merged. A release is three tags at one commit (`v1.4.0`, `tvmail-v1.4.0`,
+  `tvchat-v1.4.0`): **not made yet**, they wait for Chris's yes. tvchat took the shared version; nothing in it changed for this.
+- **Live on cpbee:** INN2 (about 1,400 old articles, 138 read-only groups, TCP 119 open to the LAN only) and the list server
+  (mlmmj + `listserv@cpbee.cmnet`; lists sf-lovers, sf-lovers-digest, cypherpunks, lan-talk; no new port: list mail uses the
+  SMTP cpbee already accepts). Chris is on all four lists. Undo for either: the READMEs of `news-setup` / `lists-setup` and the
+  dated BAK/ folders beside the Postfix, Dovecot and INN files they changed.
+- **Installed:** the laptop has tvmail 1.4.0-to-be (built from `main` at the Lists commit, Usenet + Lists + search, working against
+  the real servers). **cmdesktop and cpbee still run the old tvmail** (`update-tv-apps-everywhere.sh` brings them along;
+  cmdesktop did not answer ssh on Nov 20). Their `tvmail.conf` needs `[news]` / `[lists]` for the services to show.
+- **How it was run:** the scripts that did it are in `~/src/Claude/TO_BE_RUN/DONE/` (`news-1..3`, `lists-1..3`); they copy
+  the POSIX working tree to `~/news-deploy` / `~/lists-deploy` on cpbee and use `sudo-mfa` for the root steps.
+- **Not verified:** whether mlmmj's own digest mails carry the `List-Id` header (the Sieve rule files by it; without it a digest
+  lands in the inbox); the usenetarchives.com Tampermonkey sampler (`news-setup/bin/usenetarchives-sample.user.js`) has never
+  run on the live site; the FidoNet echomail part of `~/Downloads/listserv-and-fidonet-sample.zip` (63 Usenet articles) is not on
+  the news server (the existing `news-import` reads it as is).
+- **Not done (by choice):** a followup to an archive group (read-only on the server) is refused, not redirected to `lan.*`;
+  replying to a Usenet author by mail; Usenet cancel and moderation; mlmmj's subscription-approval flow.
+- **Lessons that cost time:** a menu hot key takes the key from every window (F8 is the config editor's Save + apply, Alt-S is
+  compose's Subject), so Ctrl-F is handled by the mail window itself, before its list panes, which would read it as a WordStar
+  cursor key. Postfix's SMTP server checks a recipient in a *local* domain against `local_recipient_maps` before any virtual
+  alias, so the list tables are added there too. `sed`/heredoc quoting through `bash -lc` and unquoted `<...>` Message-IDs in a
+  remote `ssh` command each broke a script: pass such values with `printf %q`.
+- **Next, in the order I would take it:** merge the release branch and tag; `update-tv-apps-everywhere.sh` for cmdesktop and
+  cpbee when it answers; put the FidoNet articles on the news server; watch for the first mlmmj digest (it goes out daily once
+  a list has digest members and mail: `listctl add NAME ADDR --digest`) and check its headers; the backlog in `tvmail/TO-DO.txt`.
 
 ## State
 

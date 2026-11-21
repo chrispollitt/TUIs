@@ -1,13 +1,18 @@
-# tvmail services: mail, listserv, usenet (design, 2026-11-19)
+# tvmail services: mail, listserv, usenet (designed 2026-11-19, built and live 2026-11-21)
 
 tvmail gets a fourth pane and learns two more kinds of service besides mail: a **listserv**
 (mailing lists, LISTSERV-style) and **Usenet** (a LAN-only news server with an archive of
 the old days).  The servers are set up by two new directories beside `mail-setup` and
 `chat-setup` in chrispollitt/POSIX.
 
-Status: **steps 1-4 built** (the Services pane; the Usenet service against a fake NNTP server; the news server and importer in
-POSIX `news-setup`, live on cpbee; the Lists service in tvmail against a fake IMAP server); the list server (step 5,
-`lists-setup`) is design.  Where step 2 differs from the text below: the
+Status: **all six steps are built, released as tvmail 1.4.0, and live on the LAN's mail master (cpbee).**  The Services
+pane, the Usenet service (against a fake NNTP server), the news server and its importer (POSIX `news-setup`, INN2, about
+1,400 old articles in 138 read-only groups), the Lists service in tvmail (against a fake IMAP server) and the list server
+(POSIX `lists-setup`: mlmmj, `listserv@`, `listctl`, one Dovecot Sieve rule, and `list-import` for old list archives) all
+exist and have been run end to end on real mail: a command by mail, a subscription, a post filed into `Lists/NAME`, and
+the same from tvmail on the laptop.  Not yet verified: whether mlmmj's own *digest* mails carry the `List-Id` header (the
+one thing the Sieve rule files by); a digest without it would land in the inbox, not in `Lists/NAME`.
+Where step 2 differs from the text below: the
 Usenet commands are a **Message > Usenet** submenu (enabled only while Usenet is selected), not a top-level menu; the
 NNTP client lives in `tvcommon/py/tvnntp.py`; the group's unread count is an upper bound where its article numbers
 have gaps (exact otherwise); Followup to an *archive* group (the `lan.*` redirect) waits for the server step, since
@@ -161,13 +166,21 @@ news-setup/                           (Chris: INN2)
                                       Message-ID / Path / Date, strip Control:, --limit, --dry-run, resumable
   groups.d/                           curated lists of "key groups": net.*, comp.*, rec.*, alt.folklore.computers ...
   tests/
-lists-setup/                          (Chris: mlmmj + a listserv@ front-end)
-  scripts/configure-lists.sh          installs mlmmj, Postfix transport for the list domain, the global
-                                      `sieve_before` rule, the `listserv@` alias; checks mail-setup is there
+lists-setup/                          (Chris: mlmmj + a listserv@ front-end)  BUILT, live on cpbee
+  scripts/configure-lists.sh          installs mlmmj and its user; Postfix as mlmmj's README.postfix has it (two
+                                      tables in virtual_alias_maps / transport_maps, virtual also in
+                                      local_recipient_maps, two master.cf pipe services `mlmmj` and `listserv`);
+                                      ONE global Dovecot Sieve script filing List-Id mail into Lists/NAME (2.3 and
+                                      2.4 syntax); a cron entry for mlmmj-maintd; backups and rollbacks; no port
   bin/listserv                        stdlib Python command handler fed by Postfix:
-                                      SUBSCRIBE / SIGNOFF / SET ... DIGEST / LIST / REVIEW / INDEX / HELP;
-                                      replies by mail; drives mlmmj (mlmmj-sub, mlmmj-unsub, mlmmj-make-ml)
-  bin/listctl                         create / remove / configure a list (owner, moderated, digest, archive)
+                                      SUBSCRIBE / SIGNOFF / SET ... DIGEST|NODIGEST|NOMAIL|MAIL / LIST / INFO /
+                                      REVIEW / HELP; answers by mail in the contract above; drives mlmmj-sub and
+                                      mlmmj-unsub (mlmmj-make-ml is interactive, so listctl writes the layout)
+  bin/listctl                         create / remove / list / show / members / add / del / set / sync
+  bin/listlib.py                      what the two share (config, list layout, members, the Postfix tables)
+  bin/list-import                     old list archives (ARPANET-style, rmail, one long document) -> list mail,
+                                      delivered with dovecot-lda so the Sieve rule files it
+  scripts/configure-tvmail-lists.sh   a client's tvmail.conf
   tests/
 ```
 
@@ -203,13 +216,18 @@ POSIX and need nothing from the UI, so they can run in parallel with steps 1 and
    after the firewall decision.
 4. **TUIs, Lists.**  The Lists service over IMAP; Subscribe / Unsubscribe / Available.  *Built* (branch `tvmail-lists`),
    against a fake IMAP server and a stand-in listserv in the tests.
-5. **POSIX, lists-setup.**  mlmmj, the `listserv@` handler, the Sieve rule.
+5. **POSIX, lists-setup.**  mlmmj, the `listserv@` handler, the Sieve rule.  *Built and live* (POSIX main).
 6. **Docs and the release**: README rows in TUIs and POSIX, HANDOFF, a version bump (new feature: 1.4.0).
+   *Done*: tvmail and tvchat 1.4.0 (`version.sh`), HISTORY, the man pages, the READMEs.
 
-## Open points (for review)
+## Open points (how they came out)
 
-- Lists: per-user `Lists/<name>` folders via `sieve_before` (proposed) versus a public archive namespace first.
-- Hide the Services pane when only one service is configured (proposed), or always show it.
-- Usenet followups to archive groups go to `lan.*` (proposed); the alternative is no followup at all.
-- Cancel and moderation: only your own articles, only on `lan.*`.
+- Lists: per-user `Lists/<name>` folders via one global `sieve_before` rule (as proposed): **done and live**.  A public
+  archive namespace (Dovecot `#public/`, ACLs with `write-seen`) is still later, if wanted.
+- The Services pane is hidden when only one service is configured, shown with View > Services pane: **done**.
+- Usenet followups to archive groups go to `lan.*` (proposed): **not done**; a followup to an archive group is refused
+  by the server (the groups are read-only).  Replying to an author by mail is not done either.
+- Cancel and moderation (only your own articles, only on `lan.*`): **not done**.
 - tvcal and tvchat could use the same `Service` object later; not part of this work.
+- New from the build: mlmmj's own digest mails may lack the `List-Id` the Sieve rule keys on (unverified, see Status);
+  `listserv` does not run mlmmj's subscription-approval (`submod`) flow and says so.
