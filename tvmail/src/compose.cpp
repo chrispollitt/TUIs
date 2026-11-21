@@ -120,7 +120,7 @@ public:
         draftIdx = -1;
         if (victim < 0)
             return;
-        shCapture(backendCommand("delete " + std::to_string(victim) + " --mbox '" + draftMbox + "'") + " 2>&1");
+        backendCapture(backendCommand("delete " + std::to_string(victim) + " --mbox '" + draftMbox + "'") + " 2>&1");
         message(TProgram::application, evCommand, cmReload, nullptr);
     }
 
@@ -244,7 +244,7 @@ public:
         std::string path = writeTemp(buildMessage(), ".eml");
         // an article goes to the news server whichever service is selected by now
         std::string send = news ? "tvmail-backend" + backendFlags() + " --service news send" : backendCommand("send");
-        std::string out = shCapture(send + " < '" + path + "' 2>&1; rm -f '" + path + "'");
+        std::string out = backendCapture(send + " < '" + path + "' 2>&1; rm -f '" + path + "'");
         while (!out.empty() && (out.back() == '\n' || out.back() == ' '))
             out.pop_back();
 
@@ -308,7 +308,7 @@ public:
             if (r == cmYes)
             {
                 std::string path = writeTemp(buildMessage(), ".eml");
-                std::string out = shCapture(backendCommand("save-draft") + " < '" + path + "' 2>&1; rm -f '" + path + "'");
+                std::string out = backendCapture(backendCommand("save-draft") + " < '" + path + "' 2>&1; rm -f '" + path + "'");
                 while (!out.empty() && (out.back() == '\n' || out.back() == ' '))
                     out.pop_back();
                 if (out.size() < 11 || out.compare(out.size() - 11, 11, "draft saved") != 0)

@@ -73,10 +73,11 @@ class Tv(tvscreen.Tv):
                 "TVMAIL_SIEVE_PASS", "TVMAIL_MU_CONF", "TVMAIL_MU_TICKETS")
 
     def __init__(self, opts, fixture=FIXTURE, env=None, fail_save_draft=False,
-                 setup=None, slow=None):
+                 setup=None, slow=None, log_serve=False):
         self.fixture = fixture
         self.fail_save_draft = fail_save_draft
         self.slow = slow or {}      # {backend command: seconds it is held up}
+        self.log_serve = log_serve  # keep every request the serve co-process gets in ~/serve.log
         super().__init__(opts, env=env, setup=setup)
 
     def prepare(self):
@@ -90,21 +91,26 @@ class Tv(tvscreen.Tv):
             if (d / "tvfloyd.py").exists():
                 shutil.copy2(d / "tvfloyd.py", bindir / "tvfloyd.py")
                 break
-        if self.fail_save_draft or self.slow:
+        if self.fail_save_draft or self.slow or self.log_serve:
             # save-draft, delete and the like never go through the serve
             # co-process, so a shim can fail one on demand (save-draft, while
             # ~/fail-save-draft exists) or hold one up: a cold Python start is
             # slow and uneven, and a test must wait for its result, not a time
             real = real.rename(bindir / "tvmail-backend.real")
             shim = bindir / "tvmail-backend"
-            body = '#!/bin/sh\nfor a in "$@"; do\n'
+            body = '#!/bin/sh\nfor a in "$@"; do\n  :\n'
             if self.fail_save_draft:
                 body += ('  if [ "$a" = save-draft ] && [ -e "$HOME/fail-save-draft" ]; then\n'
                          '    cat >/dev/null; echo "tvmail-backend: disk full (test)"; exit 1\n'
                          '  fi\n')
             for cmd, secs in self.slow.items():
                 body += '  [ "$a" = %s ] && sleep %s\n' % (cmd, secs)
-            body += 'done\nexec "$HOME/bin/tvmail-backend.real" "$@"\n'
+            body += 'done\n'
+            if self.log_serve:
+                # the co-process reads its requests from stdin: tee them to a file for the test to count
+                body += ('for a in "$@"; do\n  [ "$a" = serve ] && { tee -a "$HOME/serve.log" | '
+                         '"$HOME/bin/tvmail-backend.real" "$@"; exit $?; }\ndone\n')
+            body += 'exec "$HOME/bin/tvmail-backend.real" "$@"\n'
             shim.write_text(body)
             shim.chmod(0o755)
         self.spool = self.tmp / "spool.mbox"
@@ -384,6 +390,59 @@ def delete_prompt_names_subject(opts):
     tv.send("n")
     c.check(tv.wait(lambda: not tv.has("Permanently"), 3)
             and tv.has("SUBJ2 plain"), "#22 No still deleted it")
+    return tv
+
+
+def served(tv, verb):
+    """How many `verb` requests the serve co-process has been sent (see Tv(log_serve=True))."""
+    try:
+        lines = (tv.home / "serve.log").read_text(errors="replace").splitlines()
+    except OSError:
+        return 0
+    return sum(1 for l in lines if re.search(r"(^|\s)%s(\s|$)" % re.escape(verb), l.split(" --")[0].strip()[:40]))
+
+
+@case(17)
+def keys_in_a_row_ask_the_backend_once(opts):
+    # BUGS.md #17 / issue #4: the highlight moves at once, but a run of arrow keys (or typed filter letters) in the
+    # folder or message pane costs one round trip for where it stops, not one for each row it passed
+    tv = Tv(opts, fixture=FIXTURE_TALL, log_serve=True)
+    c = Case(tv)
+    started(tv, c)
+    tv.send("Tab", settle=0.8)                       # the Messages pane, on the newest message
+    before = served(tv, "show")
+    c.check(before >= 1, "no 'show' request was logged for the first message (the test's own counting is off)")
+    tv.send("Up", "Up", "Up", "Up", "Up", settle=1.0)  # 80 ms apart: well inside the debounce
+    c.check(tv.wait("filler body 11", 5), "the body of the message the keys stopped on never showed")
+    n = served(tv, "show") - before
+    c.check(1 <= n <= 2, "five Ups in a row fetched %d message texts, not 1 (or 2 if the keys stalled)" % n)
+    # typing a filter: the text of the row it lands on, once
+    before = served(tv, "show")
+    tv.send("f", "i", "l", "l", "e", "r", settle=1.0)
+    c.check(tv.wait("filter: filler", 4), "the filter text did not show")
+    n = served(tv, "show") - before
+    c.check(n <= 2, "six filter letters fetched %d message texts" % n)
+    # the folder pane: three Downs, one list
+    tv.send("", "ShiftTab", settle=0.8)
+    before = served(tv, "list")
+    tv.send("Down", "Down", "Down", settle=1.0)
+    n = served(tv, "list") - before
+    c.check(1 <= n <= 2, "three Downs in the folder pane read %d folders, not 1 (or 2 if the keys stalled)" % n)
+    return tv
+
+
+@case(18)
+def one_shot_backend_calls_show_working(opts):
+    # BUGS.md #18 / issue #5: delete (a cold backend, held up 2 s here) says "Working..." while it runs
+    tv = Tv(opts, slow={"delete": 2})
+    c = Case(tv)
+    started(tv, c)
+    tv.send("Tab", "CtrlD")
+    c.check(tv.wait('Move "SUBJ2 plain" to the trash?', 4), "the delete prompt did not come")
+    tv.send("y", settle=0.1)
+    c.check(tv.wait("Working...", 3), "no 'Working...' while the delete ran")
+    c.check(tv.wait(lambda: not tv.has("Working..."), 6) and not tv.has("SUBJ2 plain"),
+            "the 'Working...' line stayed, or the delete did not happen")
     return tv
 
 

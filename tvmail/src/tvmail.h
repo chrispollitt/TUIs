@@ -80,6 +80,7 @@ const ushort cmSearchMsgs = 2067;      // Edit > Search messages... (Ctrl-F): th
 // backend.cpp
 std::string backendCommand(const std::string &args); // for shCapture / shInteractive
 std::string backendRun(const std::string &args);     // warm co-process, else the shell
+std::string backendCapture(const std::string &shellCmd); // shCapture of a one-shot backend command, showing "Working..."
 void reportListError(const std::string &what, const std::string &raw); // the non-row lines of a listing, as an error toast
 std::string readSigFile();
 std::string readDeadLetter();
@@ -171,6 +172,7 @@ void mailLists(ushort command);   // the Lists commands (cmLists*)
 int mailInboxUnread();            // unread in the inbox as of the last counts, -1 if not known
 void mailViewChanged(bool resetSel);
 void mailSearch();                // Edit > Search messages...: ask for words, ask the backend, show only the hits
+void mailFlushPending(bool force);   // the folder / message load held back for the debounce (TV_DEBOUNCE_MS)
 void mailSetWrap(bool wrap);
 
 // -------------------------------------------------------------- windows ---

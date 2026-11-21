@@ -65,7 +65,7 @@ public:
         std::string cmd = backendCommand("save " + std::to_string(msgIdx) + " " + rows[i].no + " " + shq(dest));
         if (!msgMbox.empty())
             cmd += " " + shq(msgMbox);
-        std::string out = shCapture(cmd + " 2>&1");
+        std::string out = backendCapture(cmd + " 2>&1");
         while (!out.empty() && (out.back() == '\n' || out.back() == ' '))
             out.pop_back();
         notify(out, out.rfind("wrote", 0) == 0 ? noteInfo : noteError);

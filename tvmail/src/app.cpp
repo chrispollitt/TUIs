@@ -269,7 +269,7 @@ void TVMailApp::deleteMsg(int row)
     std::string cmd = backendCommand("delete " + std::to_string(b) + mboxOpt());
     if (gMbox != "trash")
         cmd += " --trash trash"; // move to trash, don't destroy
-    std::string out = shCapture(cmd + " 2>&1");
+    std::string out = backendCapture(cmd + " 2>&1");
     reload();
     if (!out.empty() && out.rfind("deleted", 0) != 0)
         notify(out, noteInfo);
@@ -599,7 +599,7 @@ void TVMailApp::toCalendar(int row, bool todo)
         static int n = 0;
         std::string path = dir + "/" + std::to_string((long)time(nullptr)) + "-" + std::to_string((long)getpid()) +
                            "-" + std::to_string(++n) + ".eml";
-        std::string out = stripped(shCapture(backendCommand("raw " + std::to_string(m.idx) + " " + gMbox) + " > " +
+        std::string out = stripped(backendCapture(backendCommand("raw " + std::to_string(m.idx) + " " + gMbox) + " > " +
                                              shq(path) + " 2>&1"));
         if (!out.empty())
         {
@@ -625,7 +625,7 @@ void TVMailApp::saveMsg(int row)
     std::string dest = askSavePath("message-" + std::to_string(b) + ".eml", "Save message as");
     if (dest.empty())
         return;
-    std::string out = shCapture(backendCommand("raw " + std::to_string(b) + " " + gMbox) +
+    std::string out = backendCapture(backendCommand("raw " + std::to_string(b) + " " + gMbox) +
                                 " > " + shq(dest) + " 2>&1");
     while (!out.empty() && (out.back() == '\n' || out.back() == ' '))
         out.pop_back();
@@ -888,7 +888,7 @@ void TVMailApp::moveMsg(int row)
         return;
 
     std::string cmd = backendCommand("delete " + std::to_string(b) + mboxOpt() + " --trash " + shq(gFolders[dest[sel]].mbox.c_str()));
-    std::string out = shCapture(cmd + " 2>&1");
+    std::string out = backendCapture(cmd + " 2>&1");
     reload();
     if (!out.empty() && out.rfind("deleted", 0) != 0)
         notify(out, noteInfo);
@@ -983,7 +983,7 @@ void TVMailApp::purgeDialog()
         filt += " --expunge";
 
     std::string cmd = backendCommand("purge" + mboxArg() + filt);
-    std::string preview = shCapture(cmd + " -n 2>&1");
+    std::string preview = backendCapture(cmd + " -n 2>&1");
     TRect pr = deskTop->getExtent();
     pr.grow(-6, -3);
     TMailViewWindow *previewWin = new TMailViewWindow(pr, "Purge preview", splitLines(preview), /*wrap=*/true);
@@ -1013,7 +1013,7 @@ void TVMailApp::purgeDialog()
     closePreview();
     if (answer != cmYes)
         return;
-    std::string out = shCapture(cmd + " 2>&1");
+    std::string out = backendCapture(cmd + " 2>&1");
     reload();
     if (!out.empty() && out.rfind("purged", 0) != 0)
         notify(out, noteInfo);
@@ -1024,7 +1024,7 @@ void TVMailApp::emptyTrash()
     if (notForUsenet("The trash"))
         return;
     std::string cmd = backendCommand("empty-trash");
-    std::string preview = shCapture(cmd + " -n 2>&1");
+    std::string preview = backendCapture(cmd + " -n 2>&1");
 
     int n = -1;
     {
@@ -1050,7 +1050,7 @@ void TVMailApp::emptyTrash()
     if (messageBox(mfConfirmation | mfYesNoCancel,
                    "Permanently delete %d message(s) from the trash?\n\nThis cannot be undone.", n) != cmYes)
         return;
-    std::string out = shCapture(cmd + " 2>&1");
+    std::string out = backendCapture(cmd + " 2>&1");
     reload();
     if (!out.empty() && out.rfind("purged", 0) != 0)
         notify(out, noteInfo);
@@ -1071,9 +1071,8 @@ void TVMailApp::pullMail()
     {
         pullPid = p;
         pullLogPath = log;
-        TCommandSet cs;
-        cs.enableCmd(cmPull);
-        disableCommands(cs); // grey "F3 Pull" until it's done
+        // No greying of F3 Pull: tvision tracks only commands 0-255 and always shows higher ones enabled.  The
+        // pullPid test above is what keeps it to one pull at a time.
         return;
     }
     shInteractive(backendCommand("pull")); // fork failed: old way
@@ -1100,6 +1099,7 @@ void TVMailApp::idle()
     // once the dialog is gone.
     if (TopView() != this)
         return;
+    mailFlushPending(false); // the folder / message load held back while keys came, once they pause
     auto now = std::chrono::steady_clock::now();
     for (IdleTick &t : ticks)
     {
@@ -1124,10 +1124,6 @@ void TVMailApp::idle()
 
 void TVMailApp::pullFinished()
 {
-    TCommandSet cs;
-    cs.enableCmd(cmPull);
-    enableCommands(cs);
-
     std::string out = slurp(pullLogPath);
     if (!pullLogPath.empty())
         ::remove(pullLogPath.c_str());
@@ -1177,6 +1173,7 @@ void TVMailApp::handleEvent(TEvent &e)
         return;
     if (e.what != evCommand)
         return;
+    mailFlushPending(true); // a command acts on what is shown: show the folder / message the keys moved to first
     bool handled = true;
     switch (e.message.command)
     {

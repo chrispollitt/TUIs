@@ -3,6 +3,14 @@
 What changed, release by release. (Why tvmail exists is in [WHY.md](WHY.md).)
 Releases are tagged `tvmail-vX.Y.Z`; `git log` has the rest.
 
+## Unreleased
+
+- **Quicker keys:** a run of arrow keys in the folder or message pane, or of letters in the type-to-filter, asks the
+  backend once, for where it stops, instead of once per row (the highlight still moves at once; 150 ms, or
+  `TV_DEBOUNCE_MS`, 0 = off).  Send, delete, move, purge, empty trash and save part / message now show "Working..." as
+  the other backend calls do, and F3 Pull is no longer "greyed" (tvision cannot grey commands above 255).  BUGS.md #17,
+  #18 and issue 73.
+
 ## 1.4.0 - November 2026
 
 The services release: tvmail's window gets a fourth pane, **Services**, and three things to read in it: Mail, mailing
