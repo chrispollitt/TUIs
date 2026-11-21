@@ -294,6 +294,17 @@ in this order, and in each place only an entry for that login counts:
 .B $TVCHAT_PASS_\fIACCOUNT\fR
 (e.g.
 .BR $TVCHAT_PASS_LIBERA ),
+then the
+.B password_cmd
+(an option, off by default:
+.B [auth] password_cmd = auth get {scheme} {host} {user}
+in
+.IR tvchat.conf ,
+or the same key in an
+.B [account:NAME]
+section, or
+.BR $TVCHAT_PASSWORD_CMD ;
+it prints the password and exits non\-zero when it has none, which falls through to the files),
 then
 .I ~/.mu-tickets
 .RB ( irc://\fIlogin\fB:\fIpassword\fB@\fIhost\fR ,

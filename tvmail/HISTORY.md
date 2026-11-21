@@ -9,7 +9,7 @@ Releases are tagged `tvmail-vX.Y.Z`; `git log` has the rest.
   {host} {user}` in tvmail.conf makes tvmail-backend ask that command for the IMAP, SMTP, ManageSieve and NNTP passwords
   before it reads `~/.mu-tickets` and `~/.netrc` (which stay the fallback, so tvmail still runs alone; off by default).  A
   `password_cmd` in `[imap]`, `[smtp]`, `[sieve]` or `[news]` overrides it per service, `$TVMAIL_PASSWORD_CMD` for one
-  run.  Same shape as tvcontacts' (tvchat and tvcal are still to do).
+  run.  Same shape as tvcontacts', tvchat's and tvcal's.
 
 - **Quicker keys:** a run of arrow keys in the folder or message pane, or of letters in the type-to-filter, asks the
   backend once, for where it stops, instead of once per row (the highlight still moves at once; 150 ms, or

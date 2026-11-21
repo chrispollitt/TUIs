@@ -71,7 +71,7 @@ user = chris
 ca   = ~/.config/tvcal/cpbee-ca.pem      ; a self-signed server's certificate
 ```
 
-The password is `$TVCAL_PASS`, `~/.mu-tickets` (the file tvmail and tvchat share; `POSIX/net-utils/netrc-to-tickets` moves old `~/.netrc` logins there) or `~/.netrc` — never the configuration file. `configure/configure-radicale.sh`
+The password is `$TVCAL_PASS`, then a `password_cmd` if you set one (`[auth]` or `[server] password_cmd = auth get {scheme} {host} {user}`, or `$TVCAL_PASSWORD_CMD`: it prints the password and exits non-zero when it has none, in which case the files are used), then `~/.mu-tickets` (the file tvmail and tvchat share; `POSIX/net-utils/netrc-to-tickets` moves old `~/.netrc` logins there) or `~/.netrc` — never the configuration file. `configure/configure-radicale.sh`
 does both halves: `server` on cpbee (installs and configures Radicale, TLS, the user, the calendar), `client`
 on each machine (the `[server]` section, the CA, the password in `~/.mu-tickets`, a login check).
 

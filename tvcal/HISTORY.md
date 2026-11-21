@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **`password_cmd`: the calendar password from a vault** (TUIs #43 / POSIX#8).  `[server] password_cmd` or `[auth] password_cmd = auth get
+  {scheme} {host} {user}` in tvcal.conf (or `$TVCAL_PASSWORD_CMD`) is asked after `$TVCAL_PASS` and before `~/.mu-tickets` and
+  `~/.netrc`, which stay the fallback.  Off by default.  Same shape as tvmail's and tvcontacts'.
 - Step 5: Contacts is a service (File > Contacts goes there): the list and the card in the same panes as the other
   services.  The pane (`TContactsPane`) moved from tvcommon's contactswin.cpp to contactspane.h, shared with tvmail.
 - The three-pane window (tvcal/UI-REDESIGN.md, step 1): Services on the left (Calendar, To-do) with the month

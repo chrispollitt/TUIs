@@ -5,6 +5,9 @@
 #
 # NO PASSWORDS HERE.  They are looked up for the SASL login, first match wins:
 #   $TVCHAT_PASS_<ACCOUNT>   e.g. $TVCHAT_PASS_LIBERA for [account:libera]
+#   password_cmd             an option, off by default: [auth] password_cmd = auth get {scheme} {host} {user}
+#                            (or the same key under an [account:NAME], or $TVCHAT_PASSWORD_CMD).  It prints the
+#                            password and exits non-zero when it has none (vault locked): then the files below.
 #   ~/.mu-tickets            irc://yournick:PASS@irc.libera.chat
 #   ~/.netrc  (chmod 600)    machine irc.libera.chat login yournick password PASS
 # The values below are placeholders - pick your own nick, channel and address.
