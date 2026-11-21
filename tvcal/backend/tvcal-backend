@@ -595,12 +595,56 @@ class Remote:
         except OSError:
             pass
 
+    def password_cmd_text(self):
+        """The password_cmd: $TVCAL_PASSWORD_CMD, else [server]'s, else [auth]'s in tvcal.conf.  An option, off by default."""
+        c = config()
+        return (os.environ.get("TVCAL_PASSWORD_CMD", "").strip()
+                or c.get("server", "password_cmd", fallback="").strip()
+                or c.get("auth", "password_cmd", fallback="").strip())
+
+    @staticmethod
+    def run_password_cmd(cmd, scheme, host, user, timeout=15):
+        """The secret a password_cmd prints (its first line), or "" when none is set or it finds nothing (vault locked, no
+        record, too slow, not installed).  `auth get {scheme} {host} {user}` is the intended one (POSIX/net-utils' vault
+        client: exit 1 = none, 4 = locked); an empty {user} leaves its word out.  No shell runs it, and its error output is
+        dropped: it must never reach the screen or a log."""
+        if not cmd or not cmd.strip():
+            return ""
+        try:
+            words = shlex.split(cmd)
+        except ValueError:
+            return ""
+        argv = []
+        for w in words:
+            if w == "{user}" and not user:
+                continue
+            for k, v in (("{scheme}", scheme or ""), ("{host}", host or ""), ("{user}", user or "")):
+                w = w.replace(k, v)
+            argv.append(w)
+        if not argv:
+            return ""
+        try:
+            p = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                               timeout=timeout)
+        except (OSError, subprocess.SubprocessError):
+            return ""
+        if p.returncode != 0:
+            return ""
+        lines = p.stdout.decode("utf-8", "replace").splitlines()
+        return lines[0].strip("\r\n") if lines else ""
+
     def password(self):
         pw = os.environ.get("TVCAL_PASS")
         if pw:
             return pw
         import urllib.parse
         u = urllib.parse.urlparse(self.url)
+        # the password_cmd (once per run: a request is made for every call), then the files
+        pw = getattr(self, "_cmd_pw", None)
+        if pw is None:
+            pw = self._cmd_pw = self.run_password_cmd(self.password_cmd_text(), u.scheme, u.hostname, self.user)
+        if pw:
+            return pw
         # ~/.mu-tickets first - the file tvmail and tvchat share: https://USER:PASS@HOST[:PORT]  # allowlist secret
         # (scheme * matches any); only an entry for this very user counts
         try:
@@ -673,7 +717,7 @@ class Remote:
                 return r.status, r.read()
         except urllib.error.HTTPError as e:
             if e.code in (401, 403):
-                raise UserError("the calendar server refused the login for %s (password: $TVCAL_PASS, ~/.mu-tickets or ~/.netrc)"
+                raise UserError("the calendar server refused the login for %s (password: $TVCAL_PASS, a password_cmd, ~/.mu-tickets or ~/.netrc)"
                                 % (self.user or "(no user)"))
             if e.code == 404 and method == "GET":
                 return 404, b""

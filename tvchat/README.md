@@ -149,8 +149,11 @@ cp configure/tvchat.conf.example ~/.config/tvchat/tvchat.conf   # then edit
 tvchat
 ```
 
-Passwords never go in `tvchat.conf`: `$TVCHAT_PASS_<ACCOUNT>`,
-`~/.mu-tickets` or `~/.netrc`, for the SASL login. For your own IRC server on
+Passwords never go in `tvchat.conf`: `$TVCHAT_PASS_<ACCOUNT>`, then a `password_cmd` if you set
+one (`[auth] password_cmd = auth get {scheme} {host} {user}`, or one under `[account:NAME]`, or
+`$TVCHAT_PASSWORD_CMD`: it prints the password and exits non-zero when it has none, in which case the
+files below are used), then `~/.mu-tickets` or `~/.netrc`, for the SASL login (and a Delta Chat mailbox
+as `imaps`). For your own IRC server on
 the LAN, `chrispollitt/POSIX`'s `chat-setup` installs Ergo
 (`configure-ergo.sh`) and points tvchat at it (`configure-tvchat.sh`). See
 [INSTALL.md](INSTALL.md).

@@ -11,7 +11,8 @@ Configuration: ~/.config/tvchat/tvchat.conf ($TVCHAT_CONF overrides it for one
 run; see the shipped tvchat.conf.example; the ~/.config/tvmail/tvchat.conf of
 when chat was part of tvmail is read if the new one is missing).  One
 [account:NAME] section per account; NO PASSWORDS in that file - they come
-from the environment, ~/.mu-tickets or ~/.netrc, for the SASL login only.
+from the environment, a password_cmd (e.g. `auth get {scheme} {host} {user}`), ~/.mu-tickets or
+~/.netrc, for the SASL login only.
 
 Sub-commands (all reply bodies are TAB-separated lines; a TAB, newline,
 carriage return or backslash inside a field is escaped as \\t \\n \\r \\\\):
@@ -731,14 +732,65 @@ def _mu_ticket_for(scheme, host, login):
     return None
 
 
-def find_password_where(account_id, host, login, scheme):
-    """(password, where it came from) or (None, None).  Only an entry for
-    this login counts - in ~/.mu-tickets and ~/.netrc alike.  Never raises
-    for a missing or broken file."""
+def _password_cmd_text(account_id):
+    """The password_cmd for an account: $TVCHAT_PASSWORD_CMD, else its [account:NAME] section's, else [auth]'s in
+    tvchat.conf.  An option, off by default."""
+    cmd = os.environ.get("TVCHAT_PASSWORD_CMD", "").strip()
+    if cmd:
+        return cmd
+    c = configparser.ConfigParser(interpolation=None)
+    try:
+        c.read(_conf_path(), encoding="utf-8")
+    except configparser.Error:
+        return ""
+    return (c.get("account:" + account_id, "password_cmd", fallback="").strip()
+            or c.get("auth", "password_cmd", fallback="").strip())
+
+
+def _run_password_cmd(cmd, scheme, host, user, timeout=15):
+    """The secret a password_cmd prints (its first line), or "" when none is set or it finds nothing (vault locked, no
+    record, too slow, not installed).  `auth get {scheme} {host} {user}` is the intended one (POSIX/net-utils' vault client:
+    exit 1 = none, 4 = locked); an empty {user} leaves its word out.  No shell runs it, and its error output is dropped:
+    it must never reach the screen or a log."""
+    if not cmd or not cmd.strip():
+        return ""
+    try:
+        words = shlex.split(cmd)
+    except ValueError:
+        return ""
+    argv = []
+    for w in words:
+        if w == "{user}" and not user:
+            continue
+        for k, v in (("{scheme}", scheme or ""), ("{host}", host or ""), ("{user}", user or "")):
+            w = w.replace(k, v)
+        argv.append(w)
+    if not argv:
+        return ""
+    try:
+        p = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                           timeout=timeout)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if p.returncode != 0:
+        return ""
+    lines = p.stdout.decode("utf-8", "replace").splitlines()
+    return lines[0].strip("\r\n") if lines else ""
+
+
+def find_password_where(account_id, host, login, scheme, use_cmd=True):
+    """(password, where it came from) or (None, None).  Order: $TVCHAT_PASS_<ACCOUNT>, the password_cmd, ~/.mu-tickets,
+    ~/.netrc.  Only an entry for this login counts - in ~/.mu-tickets and ~/.netrc alike.  Never raises for a missing or
+    broken file."""
     name = _env_name(account_id)
     v = os.environ.get(name)
     if v:
         return v, "$" + name
+    # the vault's scheme for a mailbox is imaps (the tickets file's "imap" matches either)
+    pw = _run_password_cmd(_password_cmd_text(account_id), "imaps" if scheme == "imap" else scheme, host, login) \
+        if use_cmd else ""
+    if pw:
+        return pw, "password_cmd"
     try:
         pw = _mu_ticket_for(scheme, host, login)
     except Exception:
@@ -793,7 +845,7 @@ def _netrc_password(path, host, login):
     return None
 
 
-def find_delta_password(account_id, addr, host, login):
+def find_delta_password(account_id, addr, host, login, use_cmd=True):
     """(password, where) for a Delta Chat mailbox.  The login the server wants
     is often the bare user name, while a ~/.netrc entry is as likely to be
     written for the address, under the mail host or the address's domain: try
@@ -804,7 +856,7 @@ def find_delta_password(account_id, addr, host, login):
         if (h, l) in seen or not h or not l:
             continue
         seen.append((h, l))
-        pw, where = find_password_where(account_id, h, l, "imap")
+        pw, where = find_password_where(account_id, h, l, "imap", use_cmd)
         if pw:
             return pw, where
     return None, None
@@ -6974,7 +7026,7 @@ def check_config(path):
             if ca and not os.path.isfile(os.path.expanduser(ca)):
                 warnings.append("[account:%s] cafile %s is not a file on this machine" % (i, ca))
             sasl = (o.get("sasl") or "").strip()
-            if sasl and host and not find_password_where(i, host, sasl, "irc")[0]:
+            if sasl and host and not (find_password_where(i, host, sasl, "irc", False)[0] or _password_cmd_text(i)):   # a password_cmd is not run by Verify
                 warnings.append("[account:%s] no password found for %s on %s: $%s, ~/.mu-tickets or "
                                 "~/.netrc (machine %s login %s)" % (i, sasl, host, _env_name(i), host, sasl))
         elif a.protocol == "floyd":
@@ -7040,7 +7092,7 @@ def check_config(path):
             data = os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share"),
                                 "tvchat", "deltachat", i)
             if not os.path.exists(os.path.join(data, "accounts.toml")) and \
-                    not find_delta_password(i, addr, host, login)[0]:
+                    not (find_delta_password(i, addr, host, login, False)[0] or _password_cmd_text(i)):
                 warnings.append("[account:%s] the first connect needs a password for %s: $%s or ~/.netrc "
                                 "(machine %s login %s)" % (i, login, _env_name(i), host, login))
     ids = ", ".join("%s (%s)" % (a.id, a.protocol) for a in accounts) or "none"

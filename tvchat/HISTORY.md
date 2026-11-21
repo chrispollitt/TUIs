@@ -1,5 +1,12 @@
 # tvchat history
 
+## Unreleased
+
+- **`password_cmd`: passwords from a vault** (TUIs #43 / POSIX#8).  `[auth] password_cmd = auth get {scheme} {host} {user}` in
+  tvchat.conf (or the same key in an `[account:NAME]`, or `$TVCHAT_PASSWORD_CMD`) is asked for the IRC SASL and Delta Chat
+  mailbox passwords after `$TVCHAT_PASS_<ACCOUNT>` and before `~/.mu-tickets` and `~/.netrc`, which stay the fallback.  Off by
+  default; Verify does not run it.  Same shape as tvmail's.
+
 ## 1.4.0 - November 2026
 
 tvchat takes the shared version (`../VERSION`) with tvmail's services release (see [tvmail's HISTORY](../tvmail/HISTORY.md)):

@@ -655,6 +655,59 @@ class RemoteMode(Env):
         self.assertEqual(tb.Remote("https://cpbee:5232/me/cal/", "someone").password(), "")
         self.assertEqual(tb.Remote("https://cpbee.other:5232/me/cal/", "me").password(), "")
 
+    # -- password_cmd (TUIs#43 / POSIX#8): `auth get {scheme} {host} {user}` first, the files as the fallback --
+    def _stub(self, body):
+        p = os.path.join(self.tmp, "getpw")
+        with open(p, "w") as fh:
+            fh.write("#!/bin/sh\n" + body + "\n")
+        os.chmod(p, 0o755)
+        return p
+
+    def _use_cmd(self, cmd, section="auth"):
+        with open(self.env["TVCAL_CONF"], "w") as fh:
+            fh.write("[server]\nurl = %s\nuser = me\n" % self.dav.url)
+            if section == "server":
+                fh.write("password_cmd = %s\n" % cmd)
+            else:
+                fh.write("[%s]\npassword_cmd = %s\n" % (section, cmd))
+        self.env.pop("TVCAL_PASS", None)
+        self.env.pop("TVCAL_PASSWORD_CMD", None)
+        self.env["HOME"] = os.path.join(self.tmp, "nohome")
+        self.env["TVMAIL_MU_TICKETS"] = os.path.join(self.tmp, "no-tickets")
+
+    def test_password_cmd_logs_in_with_scheme_host_and_user_filled_in(self):
+        stub = self._stub('[ "$1 $2 $3 $4" = "get http 127.0.0.1 me" ] && echo secret || exit 1')
+        self._use_cmd(stub + " get {scheme} {host} {user}")
+        self.assertEqual(self.lines("todos"), [])                  # the fake server accepted "me:secret"
+
+    def test_password_cmd_in_the_server_section_and_the_env_form(self):
+        stub = self._stub("echo secret")
+        self._use_cmd(stub, "server")
+        self.assertEqual(self.lines("todos"), [])
+        self._use_cmd("/nonexistent/none")
+        self.env["TVCAL_PASSWORD_CMD"] = stub
+        self.assertEqual(self.lines("todos"), [])
+
+    def test_password_cmd_that_finds_nothing_falls_back_to_the_files(self):
+        port = self.dav.srv.server_address[1]
+        tix = os.path.join(self.tmp, "tickets3")
+        with open(tix, "w") as fh:
+            fh.write("https://me:secret@127.0.0.1:%d\n" % port)  # allowlist secret
+        for body in ("exit 4", "exit 1", "echo; exit 0"):         # locked, none, empty
+            self._use_cmd(self._stub(body))
+            self.env["TVMAIL_MU_TICKETS"] = tix
+            self.assertEqual(self.lines("todos"), [], body)
+        self._use_cmd("/nonexistent/auth get {scheme} {host}")    # not installed
+        self.env["TVMAIL_MU_TICKETS"] = tix
+        self.assertEqual(self.lines("todos"), [])
+
+    def test_password_cmd_too_slow_or_noisy(self):
+        self.assertEqual(tb.Remote.run_password_cmd(self._stub("sleep 5; echo late"), "https", "h", "u", timeout=0.3), "")
+        self.assertEqual(tb.Remote.run_password_cmd(self._stub("echo noise >&2; echo pw; echo second"), "https", "h", "u"),
+                         "pw")
+        self.assertEqual(tb.Remote.run_password_cmd(self._stub('echo "$#"') + " {scheme} {host} {user}", "https", "h", ""),
+                         "2")                                       # an empty {user} leaves its word out
+
     def test_settings_say_remote(self):
         rows = {r[0]: r[1] for r in self.lines("settings")}
         self.assertEqual(rows["mode"], "remote")

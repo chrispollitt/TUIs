@@ -74,11 +74,11 @@ class Base(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp(prefix="tvchat-t-"))
         self.home = self.tmp / "home"
         self.home.mkdir()
-        keys = ("HOME", "TVCHAT_CONF", "TVMAIL_MU_TICKETS", "TVCHAT_PASS_LIBERA")
+        keys = ("HOME", "TVCHAT_CONF", "TVMAIL_MU_TICKETS", "TVCHAT_PASS_LIBERA", "TVCHAT_PASSWORD_CMD")
         self._saved = {k: os.environ.get(k) for k in keys}
         os.environ["HOME"] = str(self.home)
         os.environ["TVMAIL_MU_TICKETS"] = str(self.tmp / "no-tickets")
-        for k in ("TVCHAT_CONF", "TVCHAT_PASS_LIBERA"):
+        for k in ("TVCHAT_CONF", "TVCHAT_PASS_LIBERA", "TVCHAT_PASSWORD_CMD"):
             os.environ.pop(k, None)
         cb._CHAT = None
 
@@ -726,6 +726,66 @@ class TestIrcSession(IrcBase):
         os.environ["TVCHAT_PASS_LIBERA"] = "fromenv"         # env wins
         self.assertEqual(cb.find_password("libera", "127.0.0.1", "chrisp", "irc"),
                          "fromenv")
+
+    # -- password_cmd (TUIs#43 / POSIX#8): `auth get {scheme} {host} {user}` first, the files as the fallback --
+    def _stub(self, body):
+        p = self.tmp / "getpw"
+        p.write_text("#!/bin/sh\n" + body + "\n")
+        p.chmod(0o755)
+        return str(p)
+
+    def test_password_cmd_gets_scheme_host_and_login_filled_in(self):
+        stub = self._stub('echo "$1 $2 $3 $4"; echo second-line')
+        self.conf("[auth]\npassword_cmd = %s get {scheme} {host} {user}\n" % stub)
+        self.assertEqual(cb.find_password_where("libera", "irc.libera.chat", "chrisp", "irc"),
+                         ("get irc irc.libera.chat chrisp", "password_cmd"))
+        # a mailbox's scheme in the vault is imaps
+        self.assertEqual(cb.find_password("libera", "cpbee", "chris", "imap"), "get imaps cpbee chris")
+
+    def test_password_cmd_account_section_beats_auth_and_env_beats_both(self):
+        a, b, c = self._stub("echo from-auth"), self.tmp / "b", self.tmp / "c"
+        b.write_text("#!/bin/sh\necho from-account\n")
+        c.write_text("#!/bin/sh\necho from-env\n")
+        b.chmod(0o755)
+        c.chmod(0o755)
+        self.conf("[auth]\npassword_cmd = %s\n[account:libera]\nprotocol = irc\npassword_cmd = %s\n" % (a, b))
+        self.assertEqual(cb.find_password("libera", "h", "u", "irc"), "from-account")
+        self.assertEqual(cb.find_password("other", "h", "u", "irc"), "from-auth")
+        os.environ["TVCHAT_PASSWORD_CMD"] = str(c)
+        self.assertEqual(cb.find_password("libera", "h", "u", "irc"), "from-env")
+        os.environ["TVCHAT_PASS_LIBERA"] = "typed"               # the password in the environment still wins
+        self.assertEqual(cb.find_password("libera", "h", "u", "irc"), "typed")
+
+    def test_password_cmd_that_finds_nothing_falls_back_to_the_files(self):
+        n = self.home / ".netrc"
+        n.write_text("machine h login u password fromnetrc\n")  # allowlist secret
+        n.chmod(0o600)
+        for body in ("exit 4", "exit 1", "echo; exit 0"):         # locked, none, empty
+            self.conf("[auth]\npassword_cmd = %s\n" % self._stub(body))
+            self.assertEqual(cb.find_password("libera", "h", "u", "irc"), "fromnetrc", body)
+        self.conf("[auth]\npassword_cmd = /nonexistent/auth get {scheme} {host}\n")      # not installed
+        self.assertEqual(cb.find_password("libera", "h", "u", "irc"), "fromnetrc")
+        self.assertEqual(cb._run_password_cmd(self._stub("sleep 5; echo late"), "irc", "h", "u", timeout=0.3), "")
+
+    def test_password_cmd_error_output_never_reaches_the_screen(self):
+        self.conf("[auth]\npassword_cmd = %s\n" % self._stub('echo "secret-looking noise" >&2; echo pw'))
+        err = io.StringIO()
+        old, sys.stderr = sys.stderr, err
+        try:
+            self.assertEqual(cb.find_password("libera", "h", "u", "irc"), "pw")
+        finally:
+            sys.stderr = old
+        self.assertEqual(err.getvalue(), "")
+
+    def test_verify_does_not_run_the_password_cmd_but_counts_it(self):
+        mark = self.tmp / "ran"
+        stub = self._stub('touch "%s"; echo pw' % mark)
+        base = "[account:libera]\nprotocol = irc\nhost = irc.example.org\nsasl = chrisp\n"
+        p = self.conf(base)
+        self.assertTrue(any("no password found" in w for w in cb.check_config(str(p))[1]))  # allowlist secret
+        p = self.conf(base + "password_cmd = %s\n" % stub)
+        self.assertFalse(any("no password found" in w for w in cb.check_config(str(p))[1]))  # allowlist secret
+        self.assertFalse(mark.exists(), "Verify ran the vault command")
 
     def test_sasl_password_only_for_its_login(self):
         # Bug #46: the mail ticket *://chris:...@cpbee was handed to SASL as

@@ -12,6 +12,9 @@
 #insecure = no
 # mode = local ignores the url for one machine
 #mode = remote
+# The password: $TVCAL_PASS, then this command if you set one (an option, off by default), then ~/.mu-tickets, ~/.netrc.
+# It prints the password and exits non-zero when it has none (vault locked): the files are then used.
+#password_cmd = auth get {scheme} {host} {user}
 
 [cal]
 # default reminder for a new event: minutes before, or off
