@@ -69,13 +69,13 @@ class Base(unittest.TestCase):
         self.spool.write_text(MBOX_1)
         keys = ("HOME", "XDG_DATA_HOME", "MAIL", "MAILRC", "DEAD",
                 "USER", "LOGNAME", "SENDMAIL", "TVMAIL_CONF", "TVMAIL_MODE",
-                "TVMAIL_IMAP_PASS", "TVMAIL_SMTP_PASS",
+                "TVMAIL_IMAP_PASS", "TVMAIL_SMTP_PASS", "TVMAIL_PASSWORD_CMD",
                 "TVMAIL_MU_CONF", "TVMAIL_MU_TICKETS", "TVMAIL_PULL")
         self._saved = {k: os.environ.get(k) for k in keys}
         os.environ.update(HOME=str(self.home), XDG_DATA_HOME=str(self.xdg),
                           MAIL=str(self.spool), USER="tester")
         for k in ("MAILRC", "DEAD", "SENDMAIL", "TVMAIL_CONF", "TVMAIL_MODE",
-                  "TVMAIL_IMAP_PASS", "TVMAIL_SMTP_PASS",
+                  "TVMAIL_IMAP_PASS", "TVMAIL_SMTP_PASS", "TVMAIL_PASSWORD_CMD",
                   "TVMAIL_MU_CONF", "TVMAIL_MU_TICKETS", "TVMAIL_PULL"):
             os.environ.pop(k, None)
 
@@ -716,6 +716,69 @@ class TestMode(Base):
         self.assertEqual(be._cred("h", "u", "TVMAIL_IMAP_PASS"), "fromnetrc")
         with self.assertRaises(SystemExit):
             be._cred("nope", "u", "TVMAIL_IMAP_PASS")
+
+    # -- password_cmd (issue 43 / POSIX#8): `auth get {scheme} {host} {user}` first, the files as the fallback --
+    def _stub(self, body):
+        p = self.tmp / "getpw"
+        p.write_text("#!/bin/sh\n" + body + "\n")
+        p.chmod(0o755)
+        return str(p)
+
+    def test_password_cmd_gets_scheme_host_and_user_filled_in(self):
+        stub = self._stub('echo "$1 $2 $3 $4"; echo second-line')
+        self._write_conf("[auth]\npassword_cmd = %s get {scheme} {host} {user}\n" % stub)
+        self.assertEqual(be._cred("cpbee", "chris", "TVMAIL_IMAP_PASS", "imaps"), "get imaps cpbee chris")
+        self.assertEqual(be._cred("cpbee", "chris", "TVMAIL_SMTP_PASS", "smtp", "smtp"), "get smtp cpbee chris")
+
+    def test_password_cmd_leaves_an_empty_user_word_out(self):
+        stub = self._stub('echo "$# $3"')
+        self._write_conf("[auth]\npassword_cmd = %s get {scheme} {host} {user}\n" % stub)
+        self.assertEqual(be._cred("cpbee", "", "TVMAIL_IMAP_PASS", "imaps"), "3 cpbee")
+
+    def test_password_cmd_a_section_overrides_auth_and_the_env_overrides_both(self):
+        a, b, c = self._stub('echo from-auth'), self.tmp / "b", self.tmp / "c"
+        b.write_text("#!/bin/sh\necho from-imap\n")
+        c.write_text("#!/bin/sh\necho from-env\n")
+        b.chmod(0o755)
+        c.chmod(0o755)
+        self._write_conf("[auth]\npassword_cmd = %s\n[imap]\npassword_cmd = %s\n" % (a, b))
+        self.assertEqual(be._cred("h", "u", "TVMAIL_IMAP_PASS", "imaps"), "from-imap")
+        self.assertEqual(be._cred("h", "u", "TVMAIL_SMTP_PASS", "smtp", "smtp"), "from-auth")
+        os.environ["TVMAIL_PASSWORD_CMD"] = str(c)
+        self.assertEqual(be._cred("h", "u", "TVMAIL_IMAP_PASS", "imaps"), "from-env")
+        os.environ["TVMAIL_IMAP_PASS"] = "typed"          # the password in the environment still wins
+        self.assertEqual(be._cred("h", "u", "TVMAIL_IMAP_PASS", "imaps"), "typed")
+
+    def test_password_cmd_that_finds_nothing_falls_back_to_the_files(self):
+        (self.home / ".netrc").write_text("machine h login u password fromnetrc\n")  # allowlist secret
+        os.chmod(self.home / ".netrc", 0o600)
+        for body in ("exit 4", "exit 1", "echo; exit 0", "sleep 5; echo late"):   # locked, none, empty, too slow
+            self._write_conf("[auth]\npassword_cmd = %s\n" % self._stub(body))
+            if "sleep" in body:
+                self.assertEqual(be._run_password_cmd(self._stub(body), "imaps", "h", "u", timeout=0.3), "")
+            else:
+                self.assertEqual(be._cred("h", "u", "TVMAIL_IMAP_PASS", "imaps"), "fromnetrc", body)
+        self._write_conf("[auth]\npassword_cmd = /nonexistent/auth get {scheme} {host}\n")      # not installed
+        self.assertEqual(be._cred("h", "u", "TVMAIL_IMAP_PASS", "imaps"), "fromnetrc")
+
+    def test_password_cmd_error_output_never_reaches_the_screen(self):
+        stub = self._stub('echo "secret-looking noise" >&2; echo pw')
+        self._write_conf("[auth]\npassword_cmd = %s\n" % stub)
+        err = io.StringIO()
+        old, sys.stderr = sys.stderr, err
+        try:
+            self.assertEqual(be._cred("h", "u", "TVMAIL_IMAP_PASS", "imaps"), "pw")
+        finally:
+            sys.stderr = old
+        self.assertEqual(err.getvalue(), "")
+
+    def test_check_config_counts_a_password_cmd_as_a_password(self):
+        p = self.tmp / "t.conf"
+        base = "[service]\nmode = remote\n[imap]\nhost = nohost.invalid\nuser = u\n"
+        p.write_text(base)
+        self.assertTrue(any("no password found" in w for w in be.check_config(str(p))[1]))  # allowlist secret
+        p.write_text(base + "[auth]\npassword_cmd = auth get {scheme} {host} {user}\n")
+        self.assertFalse(any("no password found" in w for w in be.check_config(str(p))[1]))  # allowlist secret
 
 
 # --------------------------------------------------------------------------

@@ -24,6 +24,13 @@
 #         explicitly.  Override per-run with $TVMAIL_MODE.
 mode   = remote
 
+# Passwords come from a vault command, if you set one, else ~/.mu-tickets, then ~/.netrc.  An option, off by default:
+# {scheme} {host} {user} are filled in per service (imaps, smtp, sieve, nntp); the command prints the password and exits
+# non-zero when it has none (vault locked, no record), which falls through to the files.  A password_cmd in [imap],
+# [smtp], [sieve] or [news] overrides this one for that service; $TVMAIL_PASSWORD_CMD for one run.
+[auth]
+#password_cmd = auth get {scheme} {host} {user}
+
 [imap]
 host = cpbee
 port = 993

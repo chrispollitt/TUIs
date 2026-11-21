@@ -37,13 +37,24 @@ garden — see *mail(1) interoperability* below.
 to **local**, so the master needs no config file — a client must set
 `mode = remote` explicitly. `$TVMAIL_MODE` overrides one run. Host/port/user
 left unset in `tvmail.conf` fall back to GNU Mailutils' own `~/.mail`, and
-passwords come from `~/.mu-tickets` or `~/.netrc` (`machine <host> login <u>
+passwords come from the `password_cmd` if you set one (below), else `~/.mu-tickets` or `~/.netrc` (`machine <host> login <u>
 password …`, mode 0600) — never `tvmail.conf`. In remote mode the folder shorthands map to
 IMAP folders (`spool→INBOX`, `mbox→Archive`, `trash→Trash`, `drafts→Drafts`,
 `sent→Sent`, `spam→Junk`, tunable in `[folders]`); `dead.letter` stays a local
 file. **F3** on a client doesn't pull (the master does that) — it files
 `***SPAM***`-tagged messages into the spam folder. The C++ UI is identical in
 both modes.
+
+**Passwords from a vault (`password_cmd`).** An option, off by default: with
+`[auth] password_cmd = auth get {scheme} {host} {user}` in `tvmail.conf`, tvmail-backend asks
+that command for the IMAP, SMTP, ManageSieve and NNTP passwords (`auth` is the vault client of
+`POSIX/net-utils`; it prints the secret and exits 1 for "none" or 4 for "locked"). `{scheme}`,
+`{host}` and `{user}` are filled in per service (`imaps`, `smtp`, `sieve`, `nntp`), and an empty
+`{user}` leaves its word out. A `password_cmd` under `[imap]`, `[smtp]`, `[sieve]` or `[news]`
+overrides `[auth]`'s for that service, and `$TVMAIL_PASSWORD_CMD` for one run. The command is
+split like a shell would but no shell runs it, its error output is dropped, and it is given 15 s.
+The order is `$TVMAIL_IMAP_PASS` (…), the command, `~/.mu-tickets`, `~/.netrc`: a command that
+finds nothing (vault locked, no record) falls through to the files, so tvmail still runs alone.
 
 ## Plumbing
 
