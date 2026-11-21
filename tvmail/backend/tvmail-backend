@@ -608,10 +608,55 @@ def _is_remote():
     return _mode() == "remote"
 
 
-def _cred(host, user, envvar, scheme=None):
-    """Password from $<envvar>, ~/.mu-tickets, or ~/.netrc; abort with
+def _password_cmd_text(section):
+    """The password_cmd for a [section] of tvmail.conf: $TVMAIL_PASSWORD_CMD, else that section's own, else [auth]'s.
+    An option, off by default: with none set, the files below are the only way."""
+    c = _conf()
+    return (os.environ.get("TVMAIL_PASSWORD_CMD", "").strip()
+            or c.get(section, "password_cmd", fallback="").strip()
+            or c.get("auth", "password_cmd", fallback="").strip())
+
+
+def _run_password_cmd(cmd, scheme, host, user, timeout=15):
+    """The secret a password_cmd prints (its first line), or "" when none is set or it finds nothing (vault locked, no
+    record, too slow, not installed).  `auth get {scheme} {host} {user}` is the intended one (POSIX/net-utils' vault client,
+    exit 1 = none, 4 = locked): the three {words} are filled in per service, and a {user} that is empty leaves its word out
+    (auth then asks `identity`).  The command is split like a shell would but no shell runs it, and its error output is
+    dropped: it must never reach the screen or a log."""
+    if not cmd or not cmd.strip():
+        return ""
+    import shlex
+    try:
+        words = shlex.split(cmd)
+    except ValueError:
+        return ""
+    argv = []
+    for w in words:
+        if w == "{user}" and not user:
+            continue
+        for k, v in (("{scheme}", scheme or ""), ("{host}", host or ""), ("{user}", user or "")):
+            w = w.replace(k, v)
+        argv.append(w)
+    if not argv:
+        return ""
+    try:
+        p = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                           timeout=timeout)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if p.returncode != 0:
+        return ""
+    lines = p.stdout.decode("utf-8", "replace").splitlines()
+    return lines[0].strip("\r\n") if lines else ""
+
+
+def _cred(host, user, envvar, scheme=None, section="imap"):
+    """Password from $<envvar>, the [section]'s password_cmd, ~/.mu-tickets, or ~/.netrc; abort with
     guidance if none of them have it."""
     v = os.environ.get(envvar)
+    if v:
+        return v
+    v = _run_password_cmd(_password_cmd_text(section), scheme, host, user)
     if v:
         return v
     pw = _mu_ticket_pass(scheme, host, user)
@@ -671,6 +716,10 @@ def check_config(path):
             where = "IMAP %s@%s" % (user, host)
             have = bool(os.environ.get("TVMAIL_IMAP_PASS")) or \
                 _mu_ticket_pass(mu_in.get("scheme") or "imaps", host, user) is not None
+            # a password_cmd is not run here (nothing is connected to, and a vault may be locked): it counts as
+            # having one; a command that finds nothing is a login error when it is used
+            have = have or bool(c.get("imap", "password_cmd", fallback="").strip()
+                                or c.get("auth", "password_cmd", fallback="").strip())
             if not have:
                 try:
                     import netrc
@@ -680,7 +729,7 @@ def check_config(path):
                     pass
             if not have:
                 warnings.append("no password found for %s: ~/.mu-tickets, ~/.netrc (machine %s login %s) "
-                                "or $TVMAIL_IMAP_PASS" % (host, host, user))
+                                "or $TVMAIL_IMAP_PASS, or set [auth] password_cmd" % (host, host, user))
         if not (c.get("smtp", "host", fallback="").strip() or mu_out.get("host")):
             warnings.append("no SMTP host ([smtp] host= or ~/.mail): sending will not work")
     pull = c.get("local", "pull", fallback="").strip()
@@ -1019,7 +1068,7 @@ def _smtp_send(msg, rcpts):
                 S.starttls(context=ctx)
                 S.ehlo()
             if do_auth:
-                pw = _cred(host, user, "TVMAIL_SMTP_PASS", scheme)
+                pw = _cred(host, user, "TVMAIL_SMTP_PASS", scheme, "smtp")
                 if pw:
                     S.login(user, pw)
             S.sendmail(frm, rcpts, msg.as_bytes())
@@ -2222,6 +2271,11 @@ def _sieve_open():
         ctx.check_hostname = False
         ctx.verify_mode = _ssl.CERT_NONE
     pw = os.environ.get("TVMAIL_SIEVE_PASS")
+    pcmd = _password_cmd_text("sieve")
+    for scheme in ("sieve", "imaps") if "{scheme}" in pcmd else ("sieve",):
+        if pw is not None:
+            break
+        pw = _run_password_cmd(pcmd, scheme, host, user) or None
     for scheme in ("sieve", "imaps", "imap"):
         if pw is not None:
             break
@@ -2896,7 +2950,7 @@ def _news_open():
     if _NNTP is None:
         cf = _news_conf()
         tvn = _load_nntp()
-        pw = _cred(cf["host"], cf["user"], "TVMAIL_NNTP_PASS", "nntp") if cf["user"] else None
+        pw = _cred(cf["host"], cf["user"], "TVMAIL_NNTP_PASS", "nntp", "news") if cf["user"] else None
         _NNTP = tvn.NNTP(cf["host"], cf["port"], tls=cf["tls"], cafile=cf["cafile"] or None,
                          user=cf["user"] or None, password=pw)
     return _NNTP

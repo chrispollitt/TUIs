@@ -630,6 +630,30 @@ blocks are a fallback for any of
 .BR host / port / user
 left unset.
 .TP
+.B password_cmd
+An option in
+.IR tvmail.conf ,
+off by default: under
+.B [auth]
+(or
+.BR [imap] ", " [smtp] ", " [sieve] ", " [news]
+for one service; or
+.B $TVMAIL_PASSWORD_CMD
+for one run), a command such as
+.B auth get {scheme} {host} {user}
+that prints the password (first line) and exits non\-zero when it has none. \" allowlist secret
+The three words are filled in per service
+.RB ( imaps ", " smtp ", " sieve ", " nntp );
+an empty
+.B {user}
+leaves its word out.
+No shell runs it, its error output is dropped and it is given 15 seconds.
+Asked after the
+.B $TVMAIL_*_PASS
+variable and before
+.IR ~/.mu-tickets ;
+a command that finds nothing falls through to the files.
+.TP
 .I ~/.mu-tickets
 GNU Mailutils' own credentials file, one
 .I scheme://user:pass@host
