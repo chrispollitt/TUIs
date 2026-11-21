@@ -73,6 +73,14 @@ std::string backendRun(const std::string &args)
     return shCapture("tvmail-backend" + backendFlags() + " " + full + " 2>&1");
 }
 
+// A one-shot backend command (send, delete, move, purge, save ...): a cold backend, so a felt pause over IMAP, with the
+// same "Working..." line as the warm co-process's calls.  `shellCmd` is the whole command line, redirections and all.
+std::string backendCapture(const std::string &shellCmd)
+{
+    BusyGuard busy;
+    return shCapture(shellCmd);
+}
+
 // The lines of a tab-separated listing (list, aliases, parts) that are not rows: a backend error comes back as plain text
 // (BUGS.md #25 / issue #10), and a window that skipped it looked like an empty folder.  Said once, as an error toast.
 void reportListError(const std::string &what, const std::string &raw)

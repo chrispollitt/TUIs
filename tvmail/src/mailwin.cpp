@@ -2,6 +2,7 @@
 // sort) and the 3-pane mail window that shows it.
 #include "tvmail.h"
 #include "views.h"
+#include <chrono>
 #include <map>
 
 std::vector<MsgRow> gAll;  // everything the backend listed
@@ -596,6 +597,49 @@ static TMailWindow *gMailWin = nullptr; // the one 3-pane window, once made
 class TMailWindow : public TWindow
 {
     Boolean ready = False;
+    // Debounce (BUGS.md #17 / issue #4): the highlight moves at once, but what it costs - the folder's list, the
+    // message's text, a round trip over IMAP - is asked for only when the keys pause (TV_DEBOUNCE_MS, 150).  A
+    // command, a pane change or any key that is not a way of moving or typing flushes it first.
+    bool pendFolder = false, pendContent = false;
+    std::chrono::steady_clock::time_point pendAt;
+    static int debounceMs()
+    {
+        static int ms = -1;
+        if (ms < 0)
+        {
+            const char *e = getenv("TV_DEBOUNCE_MS");
+            ms = e && *e ? std::max(0, atoi(e)) : 150;
+        }
+        return ms;
+    }
+    void deferLoad(bool folder)
+    {
+        if (debounceMs() == 0)
+        {
+            folder ? loadFolder() : loadContent();
+            return;
+        }
+        (folder ? pendFolder : pendContent) = true;
+        pendAt = std::chrono::steady_clock::now() + std::chrono::milliseconds(debounceMs());
+    }
+
+public:
+    // Do the load that is waiting, if the keys have paused for the debounce time (or `force`).
+    void flushPending(bool force)
+    {
+        if (!pendFolder && !pendContent)
+            return;
+        if (!force && std::chrono::steady_clock::now() < pendAt)
+            return;
+        bool f = pendFolder;
+        pendFolder = pendContent = false;
+        if (f)
+            loadFolder(); // loads the first message too
+        else
+            loadContent();
+    }
+
+private:
     TScrollBar *msgVsb = nullptr, *contentVsb = nullptr;
     TDivider *vdiv = nullptr;
     TTableHead *folderHead = nullptr;
@@ -1163,7 +1207,7 @@ public:
     // The view (filter / sort) changed but the folder didn't: rebuild the
     // list without asking the backend again, and stay on the same message
     // if it is still shown.
-    void viewChanged(bool resetSel)
+    void viewChanged(bool resetSel, bool debounce = false)
     {
         int keepIdx = -1;
         if (!resetSel && msgPane && msgPane->focused >= 0 && msgPane->focused < (int)gRows.size())
@@ -1176,7 +1220,10 @@ public:
         if (msgPane)
             msgPane->reload(sel);
         refreshTitles();
-        loadContent();
+        if (debounce && !pendFolder)
+            deferLoad(false); // typing a filter: the text of the row it lands on is asked for when you pause
+        else
+            loadContent();
     }
 
     // Showing a message does not read it: the body is only fetched.  It is
@@ -1242,6 +1289,16 @@ public:
             mailSearch();
             return;
         }
+        if (e.what == evKeyDown && (pendFolder || pendContent))
+        {
+            // Moving and typing may go on waiting; any other key acts on what is shown, so shows it first.
+            const KeyDownEvent &k = e.keyDown;
+            bool moves = k.keyCode == kbUp || k.keyCode == kbDown || k.keyCode == kbPgUp || k.keyCode == kbPgDn ||
+                         k.keyCode == kbHome || k.keyCode == kbEnd || k.keyCode == kbBack ||
+                         (k.textLength > 0 && (uchar)k.text[0] >= 0x20 && !(k.controlKeyState & (kbCtrlShift | kbAltShift)));
+            if (!moves)
+                flushPending(true);
+        }
         TWindow::handleEvent(e);
         if (ready && e.what == evBroadcast)
         {
@@ -1256,19 +1313,22 @@ public:
                 gFilter.clear(); // a filter belongs to the folder it was typed in
                 gSearch.clear(); // and so does a search
                 gSearchHits.clear();
-                loadFolder();
+                pendContent = false; // the folder's load brings its first message
+                deferLoad(true);
                 clearEvent(e);
                 break;
             case cmMsgPicked:
-                loadContent();
+                if (!pendFolder)
+                    deferLoad(false);
                 clearEvent(e);
                 break;
             case cmFilterChanged:
-                viewChanged(true);
+                viewChanged(true, true);
                 clearEvent(e);
                 break;
             case cmPaneFocused:
             {
+                flushPending(true); // the pane you reach shows what you moved to
                 void *v = e.message.infoPtr;
                 setActivePane(v == folderPane ? 0 : v == msgPane ? 1
                                                 : v == svcPane   ? 3
@@ -1383,6 +1443,13 @@ void mailViewChanged(bool resetSel)
 
 // Edit > Search messages...: the words go to the backend (IMAP SEARCH, the mailbox, or the articles of a newsgroup), which
 // answers with the numbers of the messages that have every word in From, To, Subject or text; the pane then shows only those.
+// The load the mail window held back while keys were still coming (see TMailWindow::flushPending).
+void mailFlushPending(bool force)
+{
+    if (gMailWin)
+        gMailWin->flushPending(force);
+}
+
 void mailSearch()
 {
     if (!gMailWin)
