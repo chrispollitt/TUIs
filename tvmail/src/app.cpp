@@ -94,6 +94,12 @@ TMenuBar *TVMailApp::initMenuBar(TRect r)
                                                      newLine() +
                                                      *new TMenuItem("~C~atch up (mark the group read)", cmNewsCatchUp, kbNoKey, hcNoContext) +
                                                      *new TMenuItem("~L~oad older articles", cmNewsOlder, kbNoKey, hcNoContext))) +
+                            *new TMenuItem("~L~ists", kbNoKey,
+                                           new TMenu(*new TMenuItem("~S~ubscribe to a list...", cmListsSubscribe, kbNoKey, hcNoContext) +
+                                                     *new TMenuItem("Sign ~o~ff from this list", cmListsSignoff, kbNoKey, hcNoContext) +
+                                                     *new TMenuItem("~D~igest or every message...", cmListsDigest, kbNoKey, hcNoContext) +
+                                                     newLine() +
+                                                     *new TMenuItem("~A~vailable lists...", cmListsAvailable, kbNoKey, hcNoContext))) +
                             newLine() +
                             *new TMenuItem("~C~ompose", kbNoKey,
                                            new TMenu(*new TMenuItem("~E~dit draft", cmEditDraft, kbNoKey, hcNoContext, "Enter") +
@@ -177,6 +183,14 @@ void serviceCommandsChanged()
     for (ushort c : {cmNewsSubscribe, cmNewsUnsub, cmNewsCatchUp, cmNewsGroups, cmNewsOlder, cmToggleThreads})
     {
         if (usenet)
+            TView::enableCommand(c);
+        else
+            TView::disableCommand(c);
+    }
+    bool lists = serviceKind() == "lists";
+    for (ushort c : {cmListsSubscribe, cmListsSignoff, cmListsDigest, cmListsAvailable})
+    {
+        if (lists)
             TView::enableCommand(c);
         else
             TView::disableCommand(c);
@@ -1310,6 +1324,12 @@ void TVMailApp::handleEvent(TEvent &e)
     case cmNewsOlder:
     case cmToggleThreads:
         mailNews(e.message.command);
+        break;
+    case cmListsSubscribe:
+    case cmListsSignoff:
+    case cmListsDigest:
+    case cmListsAvailable:
+        mailLists(e.message.command);
         break;
     case cmClearFilter:
         gFilter.clear();

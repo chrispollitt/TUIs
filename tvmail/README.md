@@ -169,7 +169,7 @@ and how to run one.
 
 | pane | what |
 |---|---|
-| **Services** (top left) | the places to read from: Mail so far (listserv and Usenet are planned, see [SERVICES-DESIGN.md](SERVICES-DESIGN.md)); shown when there is more than one, or from **View ▸ Services pane** |
+| **Services** (top left) | the places to read from: Mail, and with their `tvmail.conf` sections Lists and Usenet (see [SERVICES-DESIGN.md](SERVICES-DESIGN.md)); shown when there is more than one, or from **View ▸ Services pane** |
 | **Folders** (left) | the selected service's folders: for Mail, the mailboxes below |
 | **Messages** (top right) | the selected folder's messages |
 | **Message body** (bottom right) | decoded headers + text of the highlighted message |
@@ -195,6 +195,35 @@ the group, **F2** posts it. **Message ▸ Usenet** subscribes to a group by name
 server, unsubscribes, and catches up (marks a group read). Delete, Move to, Purge and Forward are for mail only.
 The NNTP client is the stdlib-only `../tvcommon/py/tvnntp.py`. The server side is planned as `news-setup` in
 chrispollitt/POSIX (INN2); see [SERVICES-DESIGN.md](SERVICES-DESIGN.md).
+
+## Lists
+
+Mailing lists, LISTSERV style. With `[lists] address = listserv@HOST` in `tvmail.conf` **and remote mode** (list mail is read
+over IMAP, with the same login as Mail) the Services pane lists **Lists**. The folders are the lists you are in: the IMAP
+folders `Lists/NAME`, which the server fills with each list's mail (one Sieve rule on `List-Id`, set up by `lists-setup` in
+chrispollitt/POSIX), so you get real read flags and Mail's own list, search, delete and move. **Ctrl-R** and **Ctrl-N**
+write *to the list* (its `List-Post`, else `NAME@domain`), not to the author.
+
+**Message ▸ Lists** talks to the list server, which is a mail address: each command is a mail to `listserv@`, and tvmail
+waits for the answer mail and shows its first line as a notice. **Available lists...** sends `LIST` and shows what is
+offered (yours starred); Enter subscribes. **Subscribe to a list...** (`SUBSCRIBE name First Last`), **Sign off from this
+list** (`SIGNOFF name`; the folder and its mail stay) and **Digest or every message...** (`SET name DIGEST` / `NODIGEST`).
+The commands are not kept in Sent; the answers are marked read and left in the inbox.
+
+What the list server answers: a mail to the person who asked, `In-Reply-To` the command's `Message-ID`; the first line
+of its text is `OK ...` or `ERROR ...`, and for `LIST` each following line is `name  description`.
+
+```ini
+[services]
+order = mail, lists
+[lists]
+address  = listserv@cpbee.cmnet     ; required; the host's IMAP/SMTP are the ones of [imap] / [smtp]
+prefix   = Lists                    ; the IMAP folder the lists are under
+domain   =                          ; list addresses are NAME@domain (default: the domain of address)
+from     =                          ; who the commands come from (default [smtp] from, else you@domain)
+realname = Chris P                  ; the First Last put in SUBSCRIBE (default your login name)
+wait     = 20                       ; seconds to wait for an answer
+```
 
 ## Folders
 
@@ -398,11 +427,16 @@ which *is* Dovecot's INBOX — so incoming mail lands in the one place everyone 
 ```
 tvmail-backend list  [MBOX]              idx <TAB> flags <TAB> date <TAB> from <TAB> subject
 tvmail-backend counts [MBOX...]          name <TAB> total <TAB> unseen (default: every folder)
-tvmail-backend search MBOX "words"        the list numbers of the messages with every word in From / To / Subject / text (Usenet:  last line if time ran out)
+tvmail-backend search MBOX "words"        the list numbers of the messages with every word in From / To / Subject / text (Usenet: a last `# ...` line says how far it got if time ran out)
 tvmail-backend services                  name <TAB> kind <TAB> label (the Services pane)
 tvmail-backend folders                   label <TAB> MBOX <TAB> total <TAB> unseen (the Folders pane)
 tvmail-backend --service NAME VERB ...   the service a verb is about (default mail; `news` = Usenet: list, show, raw, mark,
-                                         counts, folders, compose-template, send, with the group as MBOX)
+                                         counts, folders, compose-template, send, with the group as MBOX; `lists` = the
+                                         mail verbs on the IMAP folders Lists/NAME, which are the MBOX)
+tvmail-backend lists-available           ask listserv@ which lists there are (an OK/ERROR line, then "name  description" lines)
+tvmail-backend lists-subscribe NAME [--realname "First Last"]   SUBSCRIBE; on OK the folder Lists/NAME is made at once
+tvmail-backend lists-signoff NAME        SIGNOFF
+tvmail-backend lists-digest NAME on|off  SET NAME DIGEST / NODIGEST        (all: --wait SECONDS for the answer)
 tvmail-backend news-groups [PATTERN]     every group on the news server: name first last status subscribed(*) description
 tvmail-backend news-subscribe|news-unsubscribe|news-catchup GROUP
 tvmail-backend show  IDX [MBOX]          decoded headers + text/plain body

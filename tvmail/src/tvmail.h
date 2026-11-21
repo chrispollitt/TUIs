@@ -70,6 +70,10 @@ const ushort cmNewsCatchUp = 2063;     //                    Catch up (mark the 
 const ushort cmNewsGroups = 2064;      //                    All groups...
 const ushort cmNewsOlder = 2065;       //                    Load older articles
 const ushort cmToggleThreads = 2066;   // View > Threads
+const ushort cmListsSubscribe = 2068;  // Message > Lists > Subscribe to a list...
+const ushort cmListsSignoff = 2069;    //                    Sign off from this list
+const ushort cmListsDigest = 2070;     //                    Digest or every message...
+const ushort cmListsAvailable = 2071;  //                    Available lists...
 const ushort cmSearchMsgs = 2067;      // Edit > Search messages... (Ctrl-F): the folder's From / To / Subject / text, on the server
 
 // ------------------------------------------------------ tvmail-backend ---
@@ -141,7 +145,7 @@ extern std::string gHost;   // backend "host": the box we're talking to
 extern bool gWrap;          // the body pane's wrap setting
 std::string serviceFlag();  // "--service NAME " for a service other than mail, else ""; backendRun/backendCommand add it
                             // to the verbs that are about a service (list, show, mark, ...), not to the account's (send, pull, ...)
-std::string serviceKind();  // the selected service's kind: "mail" or "usenet"
+std::string serviceKind();  // the selected service's kind: "mail", "lists" or "usenet"
 bool notForUsenet(const char *what); // in the Usenet service: says "<what> is for mail" in a toast and returns true
 void serviceCommandsChanged();       // enable the Usenet commands in the Message menu only while Usenet is selected (app.cpp)
 extern bool gThreads;       // View > Threads: the Usenet list in thread order
@@ -163,6 +167,7 @@ void mailMarkFocused(bool read);
 void mailReload();                // F5: counts + the folder, same message
 void mailToggleServices();        // View > Services pane: show or hide it
 void mailNews(ushort command);    // the Usenet commands (cmNews*, cmToggleThreads)
+void mailLists(ushort command);   // the Lists commands (cmLists*)
 int mailInboxUnread();            // unread in the inbox as of the last counts, -1 if not known
 void mailViewChanged(bool resetSel);
 void mailSearch();                // Edit > Search messages...: ask for words, ask the backend, show only the hits

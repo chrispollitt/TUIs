@@ -65,10 +65,23 @@ sent   = Sent
 spam   = Junk
 
 # The Services pane (above Folders) lists these, in this order; it shows when there is more than
-# one, or from View > Services pane.  Only "mail" exists so far (listserv and usenet are planned:
-# SERVICES-DESIGN.md); a name nobody implements yet is left out.  Optional.
+# one, or from View > Services pane.  "mail", "lists" and "news" exist (SERVICES-DESIGN.md); one whose
+# section below is not filled in is left out.  Optional.
 #[services]
-#order = mail, news
+#order = mail, lists, news
+
+# Lists: mailing lists, LISTSERV style (lists-setup in chrispollitt/POSIX sets the server up).  Needs remote
+# mode ([service] mode = remote, [imap] and [smtp] as for Mail): list mail is read from your IMAP folders Lists/NAME,
+# and the commands (SUBSCRIBE, SIGNOFF, ...) are mails to the address below.
+#   address    the list server's mail address (required)
+#   prefix     the IMAP folder the lists are under (default Lists)
+#   domain     list addresses are NAME@domain (default: the domain of address)
+#   from       who the commands come from (default: [smtp] from, else you@domain)
+#   realname   the First Last put in SUBSCRIBE (default: your login name)
+#   wait       seconds to wait for the server's answer mail (default 20)
+#[lists]
+#address = listserv@cpbee.cmnet
+#realname = Chris P
 
 # Usenet: a news server on the LAN (news-setup in chrispollitt/POSIX sets one up).  "news" is listed in the
 # Services pane once host is set.  What you have read is kept in ~/.local/share/tvmail/newsrc-HOST.

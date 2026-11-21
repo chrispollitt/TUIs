@@ -1283,6 +1283,106 @@ def usenet_service_reads_threads_and_posts(opts):
 
 
 @case()
+def lists_service_reads_replies_subscribes_and_signs_off(opts):
+    # SERVICES-DESIGN.md step 4: with [lists] configured (and IMAP) the Services pane lists Lists; picking it shows the
+    # lists you are in (the folders Lists/<name>) with their mail; Ctrl-R answers to the list; Available lists asks
+    # listserv@ (a stand-in here answers every command by mail), Enter subscribes; Sign off and Digest are commands too
+    import email as _email
+    import threading
+    from test_backend import FakeIMAP, LIST_MAIL, _msg as imap_msg
+    from fake_imap_server import ImapServer
+    fake = FakeIMAP()
+    fake.add("INBOX", imap_msg("carol@example.org", "Hi from carol", "hello"))
+    fake.add("Lists/alpha", LIST_MAIL.encode(), flags=("\\Seen",))
+    fake.add("Lists/alpha", LIST_MAIL.replace("l1@", "l2@").replace("lunch?", "dinner?").encode())
+    fake.add("Lists/beta", imap_msg("dan@example.org", "[beta] news", "news body"))
+    srv = ImapServer(fake)
+    commands = []                       # what the stand-in listserv was asked, in order
+    stop = threading.Event()
+
+    def setup(t):
+        t.env.update(TVMAIL_MODE="remote", TVMAIL_IMAP_PASS="pw")                   # allowlist secret: test value
+        t.conf = t.tmp / "tvmail.conf"
+        t.conf.write_text("[service]\nmode = remote\n[services]\norder = mail, lists\n[imap]\nhost = 127.0.0.1\n"
+                          "port = %d\nssl = false\nuser = tester\n[lists]\naddress = listserv@cpbee.cmnet\nwait = 10\n"
+                          "[smtp]\nfrom = Tester <tester@cpbee.cmnet>\n" % srv.port)
+        t.env["TVMAIL_CONF"] = str(t.conf)
+        sent = t.tmp / "sent"
+        sent.mkdir()
+        sm = t.tmp / "fake-sendmail"
+        sm.write_text('#!/bin/sh\nf=$(mktemp "%s/mail.XXXXXX")\ncat > "$f"\n' % sent)
+        sm.chmod(0o755)
+        t.env["SENDMAIL"] = str(sm)
+
+        def answer():
+            seen = set()
+            while not stop.wait(0.2):
+                for p in sorted(sent.glob("mail.*")):
+                    raw = p.read_bytes()
+                    if p.name in seen or b"\n\n" not in raw or b"Message-ID" not in raw:
+                        continue                                                     # still being written
+                    seen.add(p.name)
+                    m = _email.message_from_bytes(raw)
+                    subj = m["Subject"]
+                    commands.append(subj)
+                    if subj == "LIST":
+                        body = "OK 2 lists\nalpha    the first list\ngamma    a list to join"
+                    elif subj.startswith("SUBSCRIBE"):
+                        body = "OK you are subscribed to " + subj.split()[1]
+                    elif subj.startswith("SIGNOFF"):
+                        body = "OK you are signed off from " + subj.split()[1]
+                    else:
+                        body = "OK done"
+                    reply = ("From: listserv@cpbee.cmnet\r\nTo: %s\r\nSubject: Re: %s\r\nIn-Reply-To: %s\r\n\r\n%s\r\n"
+                             % (m["From"], subj, m["Message-ID"], body))
+                    with srv.lock:
+                        fake.add("INBOX", reply.encode())
+        threading.Thread(target=answer, daemon=True).start()
+        t.cleanups.extend([stop.set, srv.stop])
+    tv = Tv(opts, setup=setup)
+    c = Case(tv)
+    c.check(tv.wait("Hi from carol", 20) and tv.has("Services") and tv.has("Lists"),
+            "Lists is not in the Services pane although [lists] is set (or the IMAP inbox did not load)")
+    tv.send("ShiftTab", settle=0.5)
+    tv.send("Down", settle=1.5)
+    c.check(tv.wait("alpha", 8) and tv.has("beta") and tv.wait("[alpha] lunch?", 8),
+            "picking Lists did not show the lists and the mail of the first one")
+    # the badge: unread over all the lists (alpha 1, beta 1)
+    c.check(re.search(r"Lists[\s│]+2\b", "\n".join(tv.lines())) is not None, "the Lists row has no unread count of 2")
+    # Reply (Ctrl-R) goes to the list, not to Bob
+    tv.send("Tab", "Tab", settle=0.8)
+    tv.send("CtrlR", settle=1.5)
+    c.check(tv.wait("Compose", 6) and field(tv, "To") == "alpha@cpbee.cmnet",
+            "Reply in a list did not address the list: To = %r" % field(tv, "To"))
+    tv.send("AltF3", settle=0.8)
+    if tv.has("Unsent"):
+        tv.send("d", settle=0.8)
+    # Available lists: the answer to LIST, Enter on one subscribes
+    tv.send(alt("m"), "l", "a", settle=1.5)
+    c.check(tv.wait("Available lists", 10) and tv.has("gamma") and tv.has("* alpha"),
+            "Available lists did not show what the server offers (with the ones you are in starred)")
+    tv.send("Down", "Enter", settle=0.3)
+    c.check(tv.wait("subscribed to gamma", 12), "subscribing to gamma did not say it worked")
+    c.check(tv.wait(lambda: tv.find("gamma") is not None and "gamma" in "\n".join(tv.lines()[3:12]), 6),
+            "the new list is not in the Lists pane")
+    # Sign off from it (the folder and its mail stay), then set a digest
+    tv.send(alt("m"), "l", "o", settle=1.0)
+    c.check(tv.wait("Sign off from gamma", 4), "Sign off did not ask")
+    tv.send("y", settle=0.3)
+    c.check(tv.wait("signed off from gamma", 12), "signing off did not say it worked")
+    tv.send(alt("m"), "l", "d", settle=1.0)
+    c.check(tv.wait("Mail from gamma", 4), "Digest did not offer the two choices")
+    tv.send("Down", "Enter", settle=1.5)
+    c.check(commands == ["LIST", "SUBSCRIBE gamma tester", "SIGNOFF gamma", "SET gamma DIGEST"],
+            "the listserv was asked the wrong things: %r" % commands)
+    # back to Mail: the folders; the Lists commands are off there
+    tv.send("ShiftTab", "ShiftTab", settle=0.6)
+    tv.send("Up", settle=1.5)
+    c.check(tv.wait("inbox", 6) and tv.has("Folders"), "picking Mail did not bring the folders back")
+    return tv
+
+
+@case()
 def services_pane_is_the_fourth_pane(opts):
     # SERVICES-DESIGN.md step 1: with one service the window is the three panes it always was; View >
     # Services pane adds the fourth (Services over Folders, Mail with the inbox's new count) and takes

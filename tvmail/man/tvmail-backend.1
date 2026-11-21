@@ -204,6 +204,37 @@ Usenet (\fB--service news\fP): the headers from the overview, the texts fetched 
 \fB--limit\fP articles (default \fB[news] window\fP) for at most \fB--budget\fP seconds (default 30), after which a last line
 \(lq# searched the newest N of M articles\(rq says how far it got.
 .TP
+.B lists-available
+Ask the list server (\fB[lists] address\fP) which lists there are: mails it
+.BR LIST ,
+waits for the answer mail (\fB--wait\fP seconds, default \fB[lists] wait\fP) and prints it: an
+.B OK
+or
+.B ERROR
+line, then
+.I name
+and description lines.
+.TP
+.BI "lists-subscribe " NAME " [--realname " "First Last" ]
+.BR SUBSCRIBE .
+When the answer is OK the folder \fBLists/\fP\fINAME\fP is made at once.
+.TP
+.BI "lists-signoff " NAME
+.BR SIGNOFF .
+The folder and its mail stay.
+.TP
+.BI "lists-digest " "NAME " "on" | off
+.B SET
+.I NAME
+.BR DIGEST " or " NODIGEST .
+.PP
+With
+.B --service lists
+the verbs
+.BR list ", " show ", " raw ", " mark ", " counts ", " search ", " delete ", " parts ", " save ", " folders " and " compose-template
+are the Mail ones on the IMAP folders under \fB[lists] prefix\fP (the \fIMBOX\fP is e.g. \fBLists/alpha\fP); a reply and a new
+message are addressed to the list (its \fBList-Post\fP, else \fINAME\fP@\fB[lists] domain\fP).  Lists needs remote mode.
+.TP
 .BR "news-groups " [PATTERN]
 Every group on the news server (\fB[news] host\fP) matching the wildmat
 .IR PATTERN :

@@ -885,6 +885,7 @@ class FakeIMAP:
         self.copied = []
         self.appended = []
         self.created = []
+        self.subscribed = []
         self.internaldate = "19-Oct-2026 18:25:29 -0700"   # when "filed"
 
     def add(self, folder, raw, flags=()):
@@ -926,6 +927,9 @@ class FakeIMAP:
                         want = terms[i + 1].strip('"').lower()
                         pl = m.get_payload(decode=True) if not m.is_multipart() else b""
                         return want in (pl or b"").decode("utf-8", "replace").lower(), i + 2
+                    if t == "HEADER":
+                        want = terms[i + 2].strip('"').lower()
+                        return want in str(m.get(terms[i + 1], "") or "").lower(), i + 3
                     if t == "OR":
                         a, j = key(i + 1)
                         b, k = key(j)
@@ -1011,6 +1015,18 @@ class FakeIMAP:
         rows = self.folders[name]
         unseen = sum(1 for r in rows if "\\Seen" not in r[1])
         return ("OK", [('"%s" (MESSAGES %d UNSEEN %d)' % (name, len(rows), unseen)).encode()])
+
+    def list(self, directory='""', pattern="*"):
+        import fnmatch
+        pat = pattern.strip('"')
+        if pat == "":
+            return ("OK", [b'(\\Noselect) "/" ""'])
+        rows = [('(\\HasNoChildren) "/" "%s"' % n).encode() for n in sorted(self.folders) if fnmatch.fnmatchcase(n, pat)]
+        return ("OK", rows or [None])
+
+    def subscribe(self, name):
+        self.subscribed.append(name.strip('"'))
+        return ("OK", [b"ok"])
 
     def create(self, name):
         name = name.strip('"')
@@ -2522,6 +2538,147 @@ class TestCheckConfig(unittest.TestCase):
         f.write_text("[service]\nmode = local\n")
         p = subprocess.run([sys.executable, str(BACKEND), "check-config", str(f)], capture_output=True, text=True)
         self.assertEqual((p.returncode, p.stdout), (0, "ok: mode local\n"))
+
+
+LIST_MAIL = ("From: Bob <bob@x.org>\r\nTo: alpha@cpbee.cmnet\r\nDate: Mon, 01 Sep 2026 10:00:00 -0700\r\n"
+             "Subject: [alpha] lunch?\r\nList-Id: <alpha.cpbee.cmnet>\r\nList-Post: <mailto:alpha@cpbee.cmnet>\r\n"
+             "Message-ID: <l1@x.org>\r\n\r\nWho is in?\r\n")
+
+
+class TestListsService(Base):
+    """The Lists service (SERVICES-DESIGN.md): list mail is mail in the IMAP folders Lists/<name>; the commands are
+    mails to listserv@ whose answer is found in the INBOX."""
+    def setUp(self):
+        super().setUp()
+        os.environ["TVMAIL_MODE"] = "remote"
+        self.conf = self.tmp / "tvmail.conf"
+        os.environ["TVMAIL_CONF"] = str(self.conf)
+        self.write_conf()
+        self.imap = FakeIMAP()
+        self.imap.add("INBOX", _msg("carol@x", "Hi", "hello"))
+        self.imap.add("Lists/alpha", LIST_MAIL.encode(), flags=("\\Seen",))
+        self.imap.add("Lists/alpha", LIST_MAIL.replace("l1@", "l2@").replace("lunch?", "dinner?").encode())
+        self.imap.add("Lists/beta", _msg("dan@x", "[beta] news", "news body"))
+        self._real_imap, self._real_deliver = be._imap, be._deliver
+        be._imap = lambda: self.imap
+        be._deliver = self.deliver
+        self.sent = []
+        self.answer = None              # what the fake listserv answers: text, or None for nothing
+
+    def tearDown(self):
+        be._imap, be._deliver = self._real_imap, self._real_deliver
+        be._IMAP = None
+        super().tearDown()
+
+    def write_conf(self, extra=""):
+        self.conf.write_text("[services]\norder = mail, lists\n[lists]\naddress = listserv@cpbee.cmnet\n"
+                             "realname = Chris P\n" + extra)
+
+    def deliver(self, msg, rcpts, save_sent=True):
+        self.sent.append((msg, rcpts, save_sent))
+        if self.answer is not None:
+            reply = ("From: listserv@cpbee.cmnet\r\nTo: %s\r\nSubject: Re: %s\r\nIn-Reply-To: %s\r\n\r\n%s\r\n"
+                     % (msg["From"], msg["Subject"], msg["Message-ID"], self.answer))
+            self.imap.add("INBOX", reply.encode())
+
+    def verb(self, cmd, *argv, **kw):
+        import argparse as _a
+        fn = {"lists-available": be.lists_available, "lists-subscribe": be.lists_subscribe,
+              "lists-signoff": be.lists_signoff, "lists-digest": be.lists_digest}.get(cmd)
+        ns = _a.Namespace(service="lists", cmd=cmd, mbox=None, wait=0, **kw)
+        if fn:
+            ns.fn = fn
+        else:
+            ns.fn = getattr(be, "cmd_" + cmd.replace("-", "_"))
+        cap = be._CapStream()
+        old = sys.stdout
+        sys.stdout = cap
+        try:
+            for k, v in zip(("mbox", "idx"), argv):
+                setattr(ns, k, v)
+            be._run_verb(ns)
+        finally:
+            sys.stdout = old
+        return cap.buffer.getvalue().decode()
+
+    def test_lists_is_a_service_only_with_an_address_and_remote_mode(self):
+        self.assertEqual(be._service_names(), ["mail", "lists"])
+        self.write_conf()
+        self.conf.write_text("[services]\norder = mail, lists\n")
+        self.assertEqual(be._service_names(), ["mail"])
+        self.write_conf()
+        os.environ["TVMAIL_MODE"] = "local"
+        self.assertEqual(be._service_names(), ["mail"])         # list mail is read over IMAP
+
+    def test_folders_are_the_lists_you_are_in(self):
+        out = self.verb("folders")
+        self.assertEqual(out.splitlines(), ["alpha\tLists/alpha\t2\t1", "beta\tLists/beta\t1\t1"])
+
+    def test_counts_for_the_lists(self):
+        self.assertEqual(self.verb("counts", mboxes=[]).splitlines(), ["Lists/alpha\t2\t1", "Lists/beta\t1\t1"])
+        self.assertEqual(self.verb("counts", mboxes=["Lists/beta"]), "Lists/beta\t1\t1\n")
+
+    def test_a_list_reads_like_a_mailbox(self):
+        rows = [r.split("\t") for r in self.verb("list", "Lists/alpha").splitlines()]
+        self.assertEqual([(r[1], r[4]) for r in rows], [(".", "[alpha] lunch?"), ("N", "[alpha] dinner?")])
+        self.assertIn("Who is in?", self.verb("show", "Lists/alpha", 0))
+
+    def test_reply_goes_to_the_list_and_a_new_message_too(self):
+        out = self.verb("compose-template", "Lists/alpha", in_reply_to=0, to=[], subject=None, getfrom="me@x",
+                        forward=None, reply_all=False)
+        self.assertIn("To: alpha@cpbee.cmnet\n", out)              # the list, not Bob
+        self.assertIn("Subject: Re: [alpha] lunch?", out)
+        self.assertNotIn("bob@x.org", out)
+        new = self.verb("compose-template", "Lists/beta", in_reply_to=None, to=[], subject=None, getfrom="me@x",
+                        forward=None, reply_all=False)
+        self.assertIn("To: beta@cpbee.cmnet\n", new)                # no List-Post to go by: <name>@domain
+
+    def test_available_lists_are_the_answer_to_LIST(self):
+        self.answer = "OK 2 lists\nalpha    the first list\nbeta     the second"
+        out = self.verb("lists-available")
+        self.assertEqual(out, "OK 2 lists\nalpha    the first list\nbeta     the second\n")
+        msg, rcpts, save = self.sent[0]
+        self.assertEqual((msg["Subject"], rcpts, save), ("LIST", ["listserv@cpbee.cmnet"], False))   # not kept in Sent
+        inbox = self.imap.folders["INBOX"]
+        self.assertIn("\\Seen", inbox[-1][1])                   # the answer is read, not left as new mail
+
+    def test_subscribe_makes_the_folder_when_the_server_says_ok(self):
+        self.answer = "OK you are subscribed to gamma"
+        self.assertEqual(self.verb("lists-subscribe", name="gamma", realname=None), "OK you are subscribed to gamma\n")
+        self.assertIn("SUBSCRIBE gamma Chris P", self.sent[0][0].get_content())
+        self.assertEqual(self.imap.created, ["Lists/gamma"])
+        self.assertEqual(self.imap.subscribed, ["Lists/gamma"])
+        self.assertEqual(self.verb("folders").splitlines()[-1], "gamma\tLists/gamma\t0\t0")
+
+    def test_subscribe_refused_or_unanswered_makes_no_folder(self):
+        self.answer = "ERROR no such list: gamma"
+        self.assertEqual(self.verb("lists-subscribe", name="gamma", realname="Ann Lee"), "ERROR no such list: gamma\n")
+        self.assertIn("SUBSCRIBE gamma Ann Lee", self.sent[0][0].get_content())
+        self.answer = None
+        out = self.verb("lists-subscribe", name="gamma", realname=None)
+        self.assertIn("no answer from the list server yet", out)
+        self.assertEqual(self.imap.created, [])
+
+    def test_signoff_and_digest_commands(self):
+        self.answer = "OK signed off"
+        self.assertEqual(self.verb("lists-signoff", name="alpha"), "OK signed off\n")
+        self.assertEqual(self.sent[-1][0]["Subject"], "SIGNOFF alpha")
+        self.answer = "OK digest on"
+        self.verb("lists-digest", name="alpha", state="on")
+        self.assertEqual(self.sent[-1][0]["Subject"], "SET alpha DIGEST")
+        self.verb("lists-digest", name="alpha", state="off")
+        self.assertEqual(self.sent[-1][0]["Subject"], "SET alpha NODIGEST")
+
+    def test_a_bad_list_name_is_refused_before_anything_is_sent(self):
+        for bad in ("a b", "x;y", "", "-lead"):
+            with self.assertRaises(SystemExit):
+                self.verb("lists-subscribe", name=bad, realname=None)
+        self.assertEqual(self.sent, [])
+
+    def test_available_with_no_answer_is_an_error(self):
+        with self.assertRaises(SystemExit) as cm:
+            self.verb("lists-available")
+        self.assertIn("no answer to LIST", str(cm.exception))
 
 
 if __name__ == "__main__":

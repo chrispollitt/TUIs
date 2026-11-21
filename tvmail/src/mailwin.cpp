@@ -220,7 +220,7 @@ static void setBadge()
     if (gServiceIdx < 0 || gServiceIdx >= (int)gServices.size() || gFolders.empty())
         return;
     int n = 0;
-    if (gServices[gServiceIdx].kind == "usenet")
+    if (gServices[gServiceIdx].kind == "usenet" || gServices[gServiceIdx].kind == "lists")
         for (const Folder &f : gFolders)
             n += std::max(0, f.unread);
     else
@@ -808,7 +808,7 @@ public:
             loadList();
             // the list we just read is the freshest word on this folder's counts (a Usenet list is only
             // the newest articles of the group: its counts are the server's)
-            if (gMbox != "dead" && serviceKind() == "mail")
+            if (gMbox != "dead" && serviceKind() != "usenet")
             {
                 gFolders[gFolderIdx].total = (int)gAll.size();
                 gFolders[gFolderIdx].unread = (int)std::count_if(gAll.begin(), gAll.end(),
@@ -870,7 +870,7 @@ public:
     {
         bool usenet = serviceKind() == "usenet";
         leftW = usenet ? 32 : 22;
-        folderTitle->setLabel(usenet ? "Groups" : "Folders");
+        folderTitle->setLabel(usenet ? "Groups" : serviceKind() == "lists" ? "Lists" : "Folders");
         contentTitle->setLabel(usenet ? "Article" : "Message");
     }
 
@@ -884,6 +884,10 @@ public:
         for (int i = 0; i < (int)gFolders.size(); ++i)
             if (gFolders[i].mbox == want)
                 gFolderIdx = i;
+        if (gFolders.empty() || gFolders[gFolderIdx].mbox != want)
+            for (int i = 0; i < (int)gFolders.size(); ++i) // Lists: the name you subscribed with is the label
+                if (gFolders[i].name == want)
+                    gFolderIdx = i;
         gNewsLimit = 0;
         folderPane->reloadRows();
         loadFolder();
@@ -1007,6 +1011,114 @@ public:
         case cmToggleThreads:
             gThreads = !gThreads;
             viewChanged(false);
+            break;
+        }
+    }
+
+    // ---- the Lists commands (Message > Lists) ----
+    // A command is a mail to listserv@; the backend waits for the answer mail and hands back its first line (OK ... or
+    // ERROR ...), which is shown as a toast, never a box you have to click away.
+    void listsSay(const std::string &out)
+    {
+        std::string l = firstLine(out);
+        bool bad = l.empty() || l.rfind("ERROR", 0) == 0 || l.rfind("tvmail-backend", 0) == 0;
+        notify(l.empty() ? std::string("No answer from tvmail-backend.") : l, bad ? noteError : noteInfo);
+    }
+
+    void listsSubscribe(const std::string &name)
+    {
+        std::string n = name;
+        if (n.empty())
+            n = askLine("Subscribe to a list", "~L~ist name (for example lan-talk)");
+        if (n.empty())
+            return;
+        listsSay(backendRun("lists-subscribe " + shq(n)));
+        newsRefresh(n); // the folders again: a list the server accepted is there at once, empty
+    }
+
+    void listsSignoff()
+    {
+        if (gFolderIdx < 0 || gFolderIdx >= (int)gFolders.size())
+            return;
+        std::string n = gFolders[gFolderIdx].name;
+        if (messageBox(mfConfirmation | mfYesButton | mfNoButton, "Sign off from %s?\n(The folder and its mail stay.)", n.c_str()) != cmYes)
+            return;
+        listsSay(backendRun("lists-signoff " + shq(n)));
+    }
+
+    void listsDigest()
+    {
+        if (gFolderIdx < 0 || gFolderIdx >= (int)gFolders.size())
+            return;
+        std::string n = gFolders[gFolderIdx].name;
+        int at = pickFromList(("Mail from " + n).c_str(), {"Every message as it comes", "One digest mail"});
+        if (at < 0)
+            return;
+        listsSay(backendRun("lists-digest " + shq(n) + (at == 1 ? " on" : " off")));
+    }
+
+    // What the server offers: its answer to LIST is a verdict line and then "name  description" lines.
+    void listsAvailable()
+    {
+        std::string raw = backendRun("lists-available");
+        std::istringstream is(raw);
+        std::string line, verdict;
+        std::vector<std::string> names, rows;
+        while (std::getline(is, line))
+        {
+            while (!line.empty() && (line.back() == '\r' || line.back() == ' '))
+                line.pop_back();
+            size_t b = line.find_first_not_of(" \t");
+            if (b == std::string::npos)
+                continue;
+            line = line.substr(b);
+            if (verdict.empty())
+            {
+                verdict = line;
+                continue;
+            }
+            size_t sp = line.find_first_of(" \t");
+            std::string nm = line.substr(0, sp);
+            std::string desc = sp == std::string::npos ? std::string() : line.substr(line.find_first_not_of(" \t", sp));
+            bool mine = std::any_of(gFolders.begin(), gFolders.end(), [&](const Folder &f)
+                                    { return f.name == nm; });
+            names.push_back(nm);
+            rows.push_back(std::string(mine ? "* " : "  ") + fitCols(nm, 24) + " " + desc);
+        }
+        if (verdict.rfind("OK", 0) != 0)
+        {
+            listsSay(verdict.empty() ? raw : verdict);
+            return;
+        }
+        if (names.empty())
+        {
+            notify("The list server has no lists.", noteInfo);
+            return;
+        }
+        int at = pickFromList("Available lists  (* = yours; Enter subscribes)", rows);
+        if (at < 0)
+            return;
+        if (rows[at][0] == '*')
+            newsRefresh(names[at]); // already yours: go there
+        else
+            listsSubscribe(names[at]);
+    }
+
+    void listsCommand(ushort command)
+    {
+        switch (command)
+        {
+        case cmListsSubscribe:
+            listsSubscribe(std::string());
+            break;
+        case cmListsSignoff:
+            listsSignoff();
+            break;
+        case cmListsDigest:
+            listsDigest();
+            break;
+        case cmListsAvailable:
+            listsAvailable();
             break;
         }
     }
@@ -1255,6 +1367,12 @@ void mailNews(ushort command)
 {
     if (gMailWin)
         gMailWin->newsCommand(command);
+}
+
+void mailLists(ushort command)
+{
+    if (gMailWin)
+        gMailWin->listsCommand(command);
 }
 
 void mailViewChanged(bool resetSel)

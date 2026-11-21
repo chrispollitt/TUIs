@@ -1250,7 +1250,7 @@ def cmd_counts(a):
 # [services] order = mail, ... in tvmail.conf names the ones to show (absent:
 # just mail); a name nobody implements yet is left out.
 # --------------------------------------------------------------------------
-_SERVICES = {"mail": ("mail", "Mail"), "news": ("usenet", "Usenet")}      # name -> (kind, label)
+_SERVICES = {"mail": ("mail", "Mail"), "lists": ("lists", "Lists"), "news": ("usenet", "Usenet")}      # name -> (kind, label)
 
 # the Mail service's folders: the label shown, and the MBOX shorthand every verb takes
 _MAIL_FOLDERS = (("inbox", "spool"), ("drafts", "drafts"), ("sent", "sent"), ("saved", "mbox"),
@@ -1258,9 +1258,12 @@ _MAIL_FOLDERS = (("inbox", "spool"), ("drafts", "drafts"), ("sent", "sent"), ("s
 
 
 def _service_ready(name):
-    """A service that needs setting up is listed only when it has been: Usenet wants [news] host."""
+    """A service that needs setting up is listed only when it has been: Usenet wants [news] host, Lists wants
+    [lists] address and remote mode (list mail is read over IMAP)."""
     if _SERVICES[name][0] == "usenet":
         return bool(_news_conf()["host"])
+    if _SERVICES[name][0] == "lists":
+        return bool(_lists_conf()["address"]) and _is_remote()
     return True
 
 
@@ -1279,7 +1282,8 @@ def _check_service(a):
     if name and name not in _SERVICES:
         sys.exit("tvmail-backend: unknown service '%s' (have: %s)" % (name, ", ".join(sorted(_SERVICES))))
     if name and not _service_ready(name):
-        sys.exit("tvmail-backend: service '%s' is not set up (see tvmail.conf.example: [news] host)" % name)
+        sys.exit("tvmail-backend: service '%s' is not set up (see tvmail.conf.example: [news] host, or [lists] address "
+                 "and remote mode)" % name)
     return name or "mail"
 
 
@@ -1812,6 +1816,14 @@ def cmd_send(a):
     if not rcpts:
         sys.exit("tvmail-backend send: no recipients (--to or a To: header)")
 
+    _deliver(msg, rcpts)
+    print("sent")
+    return 0
+
+
+def _deliver(msg, rcpts, save_sent=True):
+    """Hand msg to the mail system: [smtp] (remote mode), else the local sendmail; the copy goes to Sent unless
+    save_sent is off (the commands tvmail mails to listserv@ are not mail to keep)."""
     if _is_remote():
         sender = _smtp_send(msg, rcpts)
         if sender:
@@ -1820,9 +1832,9 @@ def cmd_send(a):
             # copy filed in Sent should still say who sent it.
             if "From" not in msg and isinstance(sender, str) and "@" in sender:
                 msg["From"] = sender
-            _save_sent(msg)
-            print("sent")
-            return 0
+            if save_sent:
+                _save_sent(msg)
+            return
 
     sm = _sendmail()
     if not (os.path.exists(sm) or shutil.which(sm)):
@@ -1831,9 +1843,8 @@ def cmd_send(a):
     p = subprocess.run([sm, "-oi"] + rcpts, input=msg.as_bytes())
     if p.returncode != 0:
         sys.exit("tvmail-backend: %s exited %d" % (os.path.basename(sm), p.returncode))
-    _save_sent(msg)
-    print("sent")
-    return 0
+    if save_sent:
+        _save_sent(msg)
 
 
 def cmd_save_draft(a):
@@ -3155,6 +3166,220 @@ _KIND_VERBS["usenet"] = {"folders": news_folders, "counts": news_counts, "list":
                          "send": news_send}
 
 
+# --------------------------------------------------------------------------
+# The Lists service (SERVICES-DESIGN.md): mailing lists, LISTSERV style.  You mail commands to listserv@HOST
+# (SUBSCRIBE name First Last, SIGNOFF name, SET name DIGEST, LIST); list mail then arrives in your own IMAP folder
+# Lists/<name>, filed by the server (lists-setup: one global Sieve rule on List-Id).  So reading is the Mail code over
+# IMAP with the folder name Lists/<name> as the MBOX, and the verbs below only add the commands.
+#
+# What the listserv answers (lists-setup/bin/listserv writes it): a mail to the person who asked, with In-Reply-To the
+# command mail's Message-ID; the first line of its text is the verdict, "OK ..." or "ERROR ...", and for LIST every
+# line after it is "name<2+ spaces>description".
+# --------------------------------------------------------------------------
+_LIST_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def _lists_conf():
+    c = _conf()
+
+    def get(k, d=""):
+        return (c.get("lists", k, fallback=d) or d).strip()
+    addr = get("address")
+    try:
+        wait = max(0.0, float(get("wait", "20")))
+    except ValueError:
+        wait = 20.0
+    return {"address": addr, "prefix": get("prefix", "Lists").strip("/. ") or "Lists",
+            "domain": get("domain") or addr.rpartition("@")[2], "from": get("from"),
+            "name": get("realname"), "wait": wait}
+
+
+def _list_address(mbox):
+    """The posting address of the list in folder Lists/<name>: <name>@domain."""
+    L = _lists_conf()
+    mbox = mbox or ""
+    name = mbox[len(L["prefix"]):].lstrip("./") if mbox.startswith(L["prefix"]) else mbox
+    return "%s@%s" % (name, L["domain"]) if name and L["domain"] else ""
+
+
+def _imap_delim(M):
+    typ, data = M.list('""', '""')
+    m = re.search(r'\) (NIL|"(.)") ', (data[0] or b"").decode("latin-1", "replace") + " ") if typ == "OK" and data and data[0] else None
+    return (m.group(2) if m and m.group(2) else "/")
+
+
+def _imap_names(M, pattern):
+    """[(name, flags)] of the folders matching PATTERN (a LIST pattern)."""
+    typ, data = M.list('""', _q_mbox(pattern))
+    out = []
+    for item in (data or []):
+        if not item:
+            continue
+        line = item.decode("utf-8", "replace") if isinstance(item, bytes) else str(item)
+        m = re.match(r'\(([^)]*)\) (?:NIL|"[^"]*") (.+)$', line)
+        if not m:
+            continue
+        name = m.group(2).strip()
+        if name.startswith('"') and name.endswith('"'):
+            name = name[1:-1].replace('\\"', '"').replace("\\\\", "\\")
+        out.append((name, m.group(1)))
+    return out
+
+
+def _lists_folder_names():
+    """[(label, IMAP name)] of the folders under the lists prefix, by label."""
+    L = _lists_conf()
+    M = _imap()
+    d = _imap_delim(M)
+    out = []
+    for name, flags in _imap_names(M, L["prefix"] + d + "*"):
+        if "\\noselect" in flags.lower():
+            continue
+        label = name[len(L["prefix"]) + len(d):]
+        if label:
+            out.append((label, name))
+    return sorted(out, key=lambda x: x[0].lower())
+
+
+def lists_folders(a):
+    """label TAB MBOX TAB total TAB unseen, one line per list you are a member of (a folder under [lists] prefix)."""
+    for label, name in _lists_folder_names():
+        total, unseen = _count_one(name)
+        print("%s\t%s\t%d\t%d" % (label, name, total, unseen))
+    return 0
+
+
+def lists_counts(a):
+    names = a.mboxes or [n for _, n in _lists_folder_names()]
+    for n in names:
+        total, unseen = _count_one(n)
+        print("%s\t%d\t%d" % (n, total, unseen))
+    return 0
+
+
+def lists_compose_template(a):
+    """compose-template, but a new message and a reply go to the list (its List-Post, else <name>@domain), not to
+    the author: that is what Reply means in a list."""
+    if getattr(a, "forward", None) is None and not a.to:
+        to = ""
+        if a.in_reply_to is not None:
+            _, src = _get_msg(argparse.Namespace(mbox=a.mbox, idx=a.in_reply_to))
+            m = re.search(r"mailto:([^>\s?]+)", _hdr(src, "List-Post") or "", re.I)
+            to = m.group(1) if m else ""
+        a.to = [to or _list_address(a.mbox)]
+    return cmd_compose_template(a)
+
+
+def _lists_sender(L):
+    c = _conf()
+    frm = L["from"] or c.get("smtp", "from", fallback="").strip()
+    return frm or "%s@%s" % (_me(), L["domain"] or os.uname().nodename)
+
+
+def _lists_command(text, wait=None):
+    """Mail one command to listserv@ and wait for its answer: (the answer's text or None, the command's Message-ID).
+    The answer is found by In-Reply-To in the INBOX, marked read, and left there."""
+    import time as _t
+    L = _lists_conf()
+    if not L["address"]:
+        sys.exit("tvmail-backend: [lists] address is not set (see tvmail.conf.example)")
+    if not _is_remote():
+        sys.exit("tvmail-backend: the Lists service needs remote mode (IMAP): list mail is read from your server")
+    msg = email.message.EmailMessage()
+    sender = _lists_sender(L)
+    msg["From"] = sender
+    msg["To"] = L["address"]
+    msg["Subject"] = text.split("\n")[0]
+    msg["Date"] = email.utils.formatdate(localtime=True)
+    msg["Message-ID"] = email.utils.make_msgid(domain=sender.rpartition("@")[2] or None)
+    msg.set_content(text + "\n")
+    _deliver(msg, [L["address"]], save_sent=False)
+    mid = msg["Message-ID"]
+    end = _t.monotonic() + (L["wait"] if wait is None else wait)
+    M = _imap()
+    while True:
+        M.noop()
+        _imap_select(M, "INBOX", False)
+        typ, data = M.uid("SEARCH", None, "HEADER", "In-Reply-To", '"%s"' % mid)
+        uids = (data[0] or b"").split() if typ == "OK" else []
+        if uids:
+            typ, d = M.uid("FETCH", uids[0], "(BODY.PEEK[])")
+            for item in (d or []):
+                if isinstance(item, tuple) and item[1]:
+                    M.uid("STORE", uids[0], "+FLAGS", r"(\Seen)")
+                    return _best_body(email.message_from_bytes(item[1])).replace("\r\n", "\n").strip(), mid
+        if _t.monotonic() >= end:
+            return None, mid
+        _t.sleep(0.5)
+
+
+def _lists_verdict(what, reply):
+    """The reply's first line is printed; ERROR ends the verb with a failure."""
+    if reply is None:
+        print("sent '%s'; no answer from the list server yet (it may be slow: F5 later)" % what)
+        return None
+    first = next((ln.strip() for ln in reply.splitlines() if ln.strip()), "")
+    print(first or "(empty answer)")
+    return first
+
+
+def _need_list_name(name):
+    if not _LIST_NAME.match(name or ""):
+        sys.exit("tvmail-backend: '%s' is not a list name" % name)
+
+
+def lists_available(a):
+    """The lists the server offers: asks listserv@ (LIST) and prints its answer - an OK/ERROR line, then
+    'name  description' lines."""
+    reply, _ = _lists_command("LIST", a.wait)
+    if reply is None:
+        sys.exit("tvmail-backend: no answer to LIST from %s within %g s" % (_lists_conf()["address"], a.wait if a.wait is not None else _lists_conf()["wait"]))
+    sys.stdout.write(reply + "\n")
+    return 0
+
+
+def lists_subscribe(a):
+    """SUBSCRIBE name First Last; when the server says OK, the folder Lists/<name> is made at once (it would only
+    appear with the first list mail otherwise)."""
+    _need_list_name(a.name)
+    L = _lists_conf()
+    who = a.realname or L["name"] or _me()
+    reply, _ = _lists_command("SUBSCRIBE %s %s" % (a.name, who), a.wait)
+    first = _lists_verdict("SUBSCRIBE " + a.name, reply)
+    if first is not None and not first.upper().startswith("ERROR"):
+        M = _imap()
+        d = _imap_delim(M)
+        folder = L["prefix"] + d + a.name
+        try:
+            M.create(_q_mbox(folder))
+            M.subscribe(_q_mbox(folder))
+        except Exception:
+            pass            # it exists already, or the first list mail will make it
+    return 0
+
+
+def lists_signoff(a):
+    """SIGNOFF name.  The folder and what is in it stay (delete it yourself when you want it gone)."""
+    _need_list_name(a.name)
+    reply, _ = _lists_command("SIGNOFF %s" % a.name, a.wait)
+    _lists_verdict("SIGNOFF " + a.name, reply)
+    return 0
+
+
+def lists_digest(a):
+    """SET name DIGEST (one mail a day) or NODIGEST (every message)."""
+    _need_list_name(a.name)
+    reply, _ = _lists_command("SET %s %s" % (a.name, "DIGEST" if a.state == "on" else "NODIGEST"), a.wait)
+    _lists_verdict("SET %s DIGEST" % a.name, reply)
+    return 0
+
+
+# the verbs of Lists that are the Mail code on the folder Lists/<name> (IMAP: always remote)
+_KIND_VERBS["lists"] = {"folders": lists_folders, "counts": lists_counts, "compose-template": lists_compose_template,
+                        "list": cmd_list, "search": cmd_search, "show": cmd_show, "raw": cmd_raw, "mark": cmd_mark,
+                        "parts": cmd_parts, "save": cmd_save, "delete": cmd_delete}
+
+
 def cmd_news_groups(a):
     """name TAB first TAB last TAB status TAB subscribed(*) TAB description, every group on the server matching PATTERN
     (a wildmat; default all)."""
@@ -3354,6 +3579,15 @@ def build_parser():
     p = sub.add_parser("services"); p.set_defaults(fn=cmd_services)
     p = sub.add_parser("news-groups"); p.add_argument("pattern", nargs="?"); p.add_argument("--all", action="store_true")
     p.set_defaults(fn=cmd_news_groups)
+    p = sub.add_parser("lists-available", help="ask listserv@ which lists there are"); p.add_argument("--wait", type=float)
+    p.set_defaults(fn=lists_available)
+    p = sub.add_parser("lists-subscribe", help="SUBSCRIBE to a list"); p.add_argument("name"); p.add_argument("--realname")
+    p.add_argument("--wait", type=float); p.set_defaults(fn=lists_subscribe)
+    p = sub.add_parser("lists-signoff", help="SIGNOFF from a list"); p.add_argument("name"); p.add_argument("--wait", type=float)
+    p.set_defaults(fn=lists_signoff)
+    p = sub.add_parser("lists-digest", help="a list as one digest mail (on) or every message (off)")
+    p.add_argument("name"); p.add_argument("state", choices=("on", "off")); p.add_argument("--wait", type=float)
+    p.set_defaults(fn=lists_digest)
     p = sub.add_parser("news-subscribe"); p.add_argument("group"); p.set_defaults(fn=cmd_news_subscribe)
     p = sub.add_parser("news-unsubscribe"); p.add_argument("group"); p.set_defaults(fn=cmd_news_unsubscribe)
     p = sub.add_parser("news-catchup"); p.add_argument("group"); p.set_defaults(fn=cmd_news_catchup)

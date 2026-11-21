@@ -5,8 +5,9 @@ tvmail gets a fourth pane and learns two more kinds of service besides mail: a *
 the old days).  The servers are set up by two new directories beside `mail-setup` and
 `chat-setup` in chrispollitt/POSIX.
 
-Status: **steps 1 and 2 built** (branches `tvmail-services-pane`: the Services pane; `tvmail-usenet`: the Usenet service
-in tvmail, against a fake NNTP server); the servers and Lists are design.  Where step 2 differs from the text below: the
+Status: **steps 1-4 built** (the Services pane; the Usenet service against a fake NNTP server; the news server and importer in
+POSIX `news-setup`, live on cpbee; the Lists service in tvmail against a fake IMAP server); the list server (step 5,
+`lists-setup`) is design.  Where step 2 differs from the text below: the
 Usenet commands are a **Message > Usenet** submenu (enabled only while Usenet is selected), not a top-level menu; the
 NNTP client lives in `tvcommon/py/tvnntp.py`; the group's unread count is an upper bound where its article numbers
 have gaps (exact otherwise); Followup to an *archive* group (the `lan.*` redirect) waits for the server step, since
@@ -66,6 +67,14 @@ reading side is mail, not a new protocol:
 - tvmail's Lists service = the folders under `Lists/`, plus **Available lists...**, which mails
   `LIST` to `listserv@` and shows the reply in a dialog; Subscribe / Unsubscribe / Digest are mails to
   the same address (a `listserv@` reply is a toast, never a blocking box).
+- **The contract between tvmail and `lists-setup/bin/listserv`** (step 4 is built to it; step 5 writes the other side).
+  A command is a mail to `listserv@`: Subject and first line `LIST`, `SUBSCRIBE name First Last`, `SIGNOFF name`,
+  `SET name DIGEST` or `SET name NODIGEST`.  It is answered by **a mail to the sender** with `In-Reply-To` the
+  command's `Message-ID` (tvmail finds it in the INBOX by that header, marks it read and leaves it); the first line of the
+  text is the verdict, `OK ...` or `ERROR ...`, and for `LIST` every line after it is `name<2+ spaces>description`.
+  On `OK` after SUBSCRIBE tvmail creates `Lists/<name>` itself, so the list shows before its first mail; the server's
+  Sieve rule files list mail there (`fileinto :create`).  A reply or new message in Lists goes to the list's `List-Post`
+  address, else `<name>@<domain>`.
 - Later: a read-only public archive namespace (a Dovecot `#public/` tree) so a list can be browsed
   without subscribing.  Per-user read state in a shared namespace needs Dovecot ACLs with
   `write-seen`; that is why it is not phase one.
@@ -105,7 +114,7 @@ has the folders hard-coded (`gFolders[]` in `mailwin.cpp`) and four globals, `gM
    `serve` framing do not change shape; plus a new `services` verb (names, kinds, badges) and
    `folders` (what `counts` hard-codes today: name, total, unseen, flags).
 3. **The verbs stay the same**: `list`, `show`, `raw`, `mark`, `counts`, `send`.  New ones are
-   service-specific: `lists-available`, `list-subscribe`, `list-signoff`, `list-digest`;
+   service-specific: `lists-available`, `lists-subscribe`, `lists-signoff`, `lists-digest`;
    `news-groups [--all]`, `news-subscribe`, `news-catchup`, `post`, `cancel`.
 4. The NNTP client is a sibling module of the backend loaded the way `tvfloyd.py` is (copy in
    `share/tvmail/`, found beside the backend or in `../share/tvmail`), so the single-file install
@@ -117,9 +126,12 @@ Configuration, in the existing `tvmail.conf`:
 [services]
 order  = mail, lists, news      ; absent = just mail
 [lists]
-host    = cpbee                 ; falls back to [imap]
-address = listserv@cpbee.cmnet
-prefix  = Lists
+address = listserv@cpbee.cmnet  ; required; IMAP and SMTP are those of [imap] / [smtp] (no [lists] host)
+prefix  = Lists                 ; the IMAP folder the lists are under
+domain  =                       ; list addresses are NAME@domain (default: the domain of address)
+from    =                       ; who the commands come from (default [smtp] from)
+realname = Chris P              ; the First Last in SUBSCRIBE
+wait    = 20                    ; seconds to wait for the answer mail
 [news]
 host    = cpbee
 port    = 119
@@ -189,7 +201,8 @@ POSIX and need nothing from the UI, so they can run in parallel with steps 1 and
    fakes POP3/SMTP/IMAP in POSIX), read, thread view, load older, newsrc, post and followup.
 3. **POSIX, news-setup.**  INN2 and the importer, tested against `--print` and a fake `rnews`; live on cpbee
    after the firewall decision.
-4. **TUIs, Lists.**  The Lists service over IMAP; Subscribe / Unsubscribe / Available.
+4. **TUIs, Lists.**  The Lists service over IMAP; Subscribe / Unsubscribe / Available.  *Built* (branch `tvmail-lists`),
+   against a fake IMAP server and a stand-in listserv in the tests.
 5. **POSIX, lists-setup.**  mlmmj, the `listserv@` handler, the Sieve rule.
 6. **Docs and the release**: README rows in TUIs and POSIX, HANDOFF, a version bump (new feature: 1.4.0).
 
