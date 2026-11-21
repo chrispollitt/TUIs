@@ -96,6 +96,26 @@ class Base(unittest.TestCase):
         return [r for r in out.decode().splitlines() if r]
 
 
+class TestSearchLocal(Base):
+    def search(self, q):
+        p = self.be("search", "spool", q)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return p.stdout.decode().split()
+
+    def test_local_mailbox_search_by_header_text_and_phrase(self):
+        self.assertEqual(self.search("alice"), ["0"])
+        self.assertEqual(self.search("unread"), ["1"])                 # the text of the second message
+        self.assertEqual(self.search('"first body"'), ["0"])
+        self.assertEqual(self.search("HELLO there"), ["0"])            # any case, every word
+        self.assertEqual(self.search("¡Hola"), ["1"])              # a decoded Subject
+        self.assertEqual(self.search("zebra"), [])
+
+    def test_nothing_to_search_for_is_an_error(self):
+        p = self.be("search", "spool", "   ")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn(b"search for what", p.stderr)
+
+
 class TestHelpers(Base):
     def test_mbox_path_shorthands(self):
         self.assertEqual(be.mbox_path("spool"), str(self.spool))
@@ -888,44 +908,50 @@ class FakeIMAP:
     def uid(self, command, *args):
         c = command.upper()
         if c == "SEARCH":
-            terms = [a for a in args if a not in (None, "ALL")]
+            terms = [a.decode("utf-8") if isinstance(a, bytes) else a for a in args if a not in (None, "ALL")]
+            if terms[:2] == ["CHARSET", "UTF-8"]:
+                terms = terms[2:]
 
             def keep(row):
                 _uid, flags, raw = row
                 m = email.message_from_bytes(raw)
-                i = 0
-                while i < len(terms):
+
+                def key(i):
+                    """(does the message match the key at terms[i]?, the index after it)"""
                     t = terms[i].upper()
                     if t in ("FROM", "SUBJECT", "TO"):
                         want = terms[i + 1].strip('"').lower()
-                        if want not in (m.get(t.capitalize(), "") or "").lower():
-                            return False
-                        i += 2
-                    elif t == "SEEN":
-                        if "\\Seen" not in flags:
-                            return False
-                        i += 1
-                    elif t == "UNSEEN":
-                        if "\\Seen" in flags:
-                            return False
-                        i += 1
-                    elif t == "NOT":
+                        return want in str(m.get(t.capitalize(), "") or "").lower(), i + 2
+                    if t == "BODY":
+                        want = terms[i + 1].strip('"').lower()
+                        pl = m.get_payload(decode=True) if not m.is_multipart() else b""
+                        return want in (pl or b"").decode("utf-8", "replace").lower(), i + 2
+                    if t == "OR":
+                        a, j = key(i + 1)
+                        b, k = key(j)
+                        return a or b, k
+                    if t == "SEEN":
+                        return "\\Seen" in flags, i + 1
+                    if t == "UNSEEN":
+                        return "\\Seen" not in flags, i + 1
+                    if t == "NOT":
                         # NOT OR HEADER Chat-Version "" (HEADER Content-Type multipart/encrypted HEADER To hidden-recipients)
                         chat = (m.get("Chat-Version") is not None or (
                             "multipart/encrypted" in (m.get("Content-Type", "") or "")
                             and "hidden-recipients" in (m.get("To", "") or "")))
-                        if chat:
-                            return False
-                        i += 6
-                    elif t == "BEFORE":
+                        return not chat, i + 6
+                    if t == "BEFORE":
                         import time as _t
                         cut = _t.strptime(terms[i + 1], "%d-%b-%Y")
                         dt = email.utils.parsedate_to_datetime(m.get("Date", ""))
-                        if not dt or dt.timetuple() >= cut:
-                            return False
-                        i += 2
-                    else:
-                        i += 1
+                        return bool(dt) and dt.timetuple() < cut, i + 2
+                    return True, i + 1
+
+                i = 0
+                while i < len(terms):
+                    ok, i = key(i)
+                    if not ok:
+                        return False
                 return True
 
             uids = " ".join(str(r[0]) for r in self._rows() if keep(r))
@@ -1055,6 +1081,17 @@ class TestRemoteIMAP(Base):
         self.assertEqual(rows[0].split("\t")[1], ".")   # \Seen
         self.assertEqual(rows[1].split("\t")[1], "N")
         self.assertIn("Second", rows[1])
+
+    def test_search_over_imap_finds_headers_and_text_and_numbers_like_list(self):
+        def found(q):
+            return self._run(be.cmd_search, self.ns(query=q)).decode().split()
+        self.assertEqual(found("second"), ["1"])                # in the text (and the Subject)
+        self.assertEqual(found("alice"), ["0"])                 # in From
+        self.assertEqual(found("body"), ["0", "1", "2"])
+        self.assertEqual(found("body third"), ["2"])            # every word has to be there
+        self.assertEqual(found("nothing here"), [])
+        self.imap.add("INBOX", _msg("débora@x", "Café", "crème brûlée"))
+        self.assertEqual(found("crème"), ["3"])            # non-ASCII goes as UTF-8
 
     def test_list_after_another_connection_expunged(self):
         # Regression: Ctrl-D runs `delete` as a one-shot backend - its own

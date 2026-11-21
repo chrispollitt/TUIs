@@ -75,7 +75,8 @@ spam   = Junk
 #   port       119 (563 with tls = yes)
 #   window     how many of a group's newest articles the list shows (Message > Usenet > Load older adds more)
 #   subscribed the groups to start with, before you subscribe from the menu
-#   user       AUTHINFO login, if the server wants one (password from ~/.mu-tickets / ~/.netrc as for IMAP)
+#   sort       alpha (default): the group list is alphabetical;  newsrc: the order you subscribed in
+#   user      AUTHINFO login, if the server wants one (password from ~/.mu-tickets / ~/.netrc as for IMAP)
 #[news]
 #host = cpbee
 #port = 119

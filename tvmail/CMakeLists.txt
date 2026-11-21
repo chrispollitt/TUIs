@@ -79,7 +79,7 @@ if(TVMAIL_PYTHON)
                      "${CMAKE_CURRENT_SOURCE_DIR}/tests/e2e_regress.py"
                      --bin $<TARGET_FILE:tvmail>
                      --backend-dir "${CMAKE_CURRENT_SOURCE_DIR}/backend")
-    set_tests_properties(e2e_regress PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 400)
+    set_tests_properties(e2e_regress PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 900)
 endif()
 # backend_timeout : a backend that answers too slowly is given up on, not waited for (BUGS.md #33)
 add_test(NAME backend_timeout

@@ -194,6 +194,16 @@ is what the other verbs take.
 The counts are those of
 .BR counts .
 .TP
+.BI "search " "MBOX QUERY"
+[\fB--limit\fP N] [\fB--budget\fP SECONDS]
+The list numbers (as \fBlist\fP prints them), one per line, of the messages with every word of
+.I QUERY
+(quotes keep a phrase together) in From, To, Subject or the text, any case.  IMAP: the server\(aqs SEARCH;
+a local mailbox: read here;
+Usenet (\fB--service news\fP): the headers from the overview, the texts fetched for the newest
+\fB--limit\fP articles (default \fB[news] window\fP) for at most \fB--budget\fP seconds (default 30), after which a last line
+\(lq# searched the newest N of M articles\(rq says how far it got.
+.TP
 .BR "news-groups " [PATTERN]
 Every group on the news server (\fB[news] host\fP) matching the wildmat
 .IR PATTERN :

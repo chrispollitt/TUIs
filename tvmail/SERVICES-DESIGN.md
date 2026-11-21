@@ -124,6 +124,7 @@ prefix  = Lists
 host    = cpbee
 port    = 119
 window  = 500
+sort    = alpha                       # the group list: alpha (default) or newsrc (subscription order)
 subscribed = lan.misc, comp.os.linux
 ```
 
@@ -141,11 +142,11 @@ news-setup/                           (Chris: INN2)
                                       by LAN address (read for all, post to lan.* only), `n` on archive
                                       groups, expire.ctl never for the archive; opens TCP 119 for the LAN
                                       via ../net-utils/lan-port (the talkd / delta pattern)
-  scripts/fetch-archive.sh            optional download of the public archives (shows names and sizes first)
-  scripts/import-archive.sh           wraps bin/news-import
-  bin/news-import                     stdlib Python: mbox / maildir / tar of articles -> rnews batches;
-                                      groups from a list file, dedupe by Message-ID, repair missing
-                                      Message-ID, keep the original Date, --limit, --dry-run, resumable
+  scripts/create-groups.sh            archive groups from a list, read-only (flag n)
+  bin/fetch-archive                   optional download of an Internet Archive item (names, sizes, md5)
+  bin/news-import                     stdlib Python: mbox / maildir / tree / tar / zip / rnews -> IHAVE
+                                      to innd; groups from a list file, dedupe by Message-ID, repair
+                                      Message-ID / Path / Date, strip Control:, --limit, --dry-run, resumable
   groups.d/                           curated lists of "key groups": net.*, comp.*, rec.*, alt.folklore.computers ...
   tests/
 lists-setup/                          (Chris: mlmmj + a listserv@ front-end)
@@ -160,11 +161,16 @@ lists-setup/                          (Chris: mlmmj + a listserv@ front-end)
 
 - INN's `innd` has to accept articles with 1980s dates (`artcutoff: 0` in `inn.conf`) or the import is
   silently dropped; the importer's `--dry-run` reports what INN would reject.
-- Archive content (Chris: public historical archives): the Internet Archive's Usenet collections, e.g. the
-  1981 to 1991 archive built from Henry Spencer's collection, and any mbox dumps pointed at.  Exact
-  names, sizes and licensing of each source are to be confirmed when `fetch-archive.sh` is written; the
+- Archive content (Chris: public historical archives): the Internet Archive's Usenet collections and any
+  mbox dumps pointed at.  Checked when step 3 was built: the UTZOO archive of 1981-1991 (Henry Spencer's)
+  was **taken down from the Internet Archive in 2020** after legal demands (third-party mirrors exist); an
+  item `usenethistorical` holds mbox files per group as zip files.  Names, sizes and licensing were not
+  verified, so `bin/fetch-archive --list` shows what an item holds today and downloading asks first.  The
   server is LAN-only, which keeps it personal use.  The archive keeps the **original group names** (the
   pre-1987 `net.*` hierarchy included), local discussion lives in `lan.*`.
+- The importer feeds innd with IHAVE from 127.0.0.1 (a peer in `incoming.conf`), not POST: Path, Date and
+  Message-ID stay as they were.  It strips `Control:`, `Supersedes:`, `Xref:` and `Approved:`, so an old
+  `newgroup`, `rmgroup` or `cancel` cannot act on the server.
 - Opening 119 and any list SMTP port to the LAN is an exposure change: per the master-session rules that
   goes to Chris before it runs (the script ships with `--print`, and the firewall step is its own flag).
 - Client-side setup is a script too, not notes (the "every manual step is a script bug" rule):

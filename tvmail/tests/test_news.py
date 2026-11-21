@@ -57,9 +57,15 @@ class TestNewsService(NewsBase):
         self.assertNotEqual(p.returncode, 0)
         self.assertIn(b"not set up", p.stderr)
 
-    def test_folders_are_the_subscribed_groups_with_counts(self):
-        self.assertEqual(self.rows("folders"), [["lan.test", "lan.test", "3", "3"], ["lan.empty", "lan.empty", "0", "0"],
-                                                ["lan.dense", "lan.dense", "4", "4"]])
+    def test_folders_are_the_subscribed_groups_with_counts_in_alphabetical_order(self):
+        self.assertEqual(self.rows("folders"), [["lan.dense", "lan.dense", "4", "4"], ["lan.empty", "lan.empty", "0", "0"],
+                                                ["lan.test", "lan.test", "3", "3"]])
+
+    def test_sort_newsrc_keeps_the_order_you_subscribed_in(self):
+        self.write_conf("sort = newsrc\n")
+        self.assertEqual([r[0] for r in self.rows("folders")], ["lan.test", "lan.empty", "lan.dense"])
+        self.write_conf("sort = alpha\n")
+        self.assertEqual([r[0] for r in self.rows("folders")], ["lan.dense", "lan.empty", "lan.test"])
 
     def test_list_rows_are_the_overview(self):
         r = self.rows("list", "lan.test")
@@ -88,14 +94,14 @@ class TestNewsService(NewsBase):
         self.assertIn("Subject:    Re: Hello", text)
         self.assertIn("Newsgroups: lan.test", text)
         self.assertIn("second body", text)
-        self.assertEqual(self.rows("folders")[2][3], "4")                   # showing is not reading
+        self.assertEqual(self.rows("folders")[0][:4], ["lan.dense", "lan.dense", "4", "4"])   # showing is not reading
         self.assertEqual(self.out("mark", "2", "read", "lan.test"), "marked\n")
         self.assertEqual(self.newsrc.read_text(), "lan.test: 2\nlan.empty:\nlan.dense:\n")
         self.assertEqual([x[1] for x in self.rows("list", "lan.test")], ["N", ".", "N"])
         self.news("mark", "3", "read", "lan.dense")
-        self.assertEqual(self.rows("folders")[2][3], "3")                   # exact where the numbers have no gaps
+        self.assertEqual(self.rows("folders")[0][3], "3")                   # exact where the numbers have no gaps
         self.news("mark", "3", "unread", "lan.dense")
-        self.assertEqual(self.rows("folders")[2][3], "4")
+        self.assertEqual(self.rows("folders")[0][3], "4")
         self.news("mark", "2", "unread", "lan.test")
         self.assertEqual([x[1] for x in self.rows("list", "lan.test")], ["N", "N", "N"])
         self.out("show", "5", "lan.test", "--mark-read")
@@ -109,17 +115,31 @@ class TestNewsService(NewsBase):
         self.assertNotEqual(p.returncode, 0)
         self.assertIn(b"no such article", p.stderr)
 
+    def test_search_finds_headers_at_once_and_text_by_fetching(self):
+        def found(*q):
+            return self.out("search", "lan.test", *q).split()
+        self.assertEqual(found("alice"), ["1"])                 # From (the overview)
+        self.assertEqual(found("second"), ["2"])                # the text of article 2 only
+        self.assertEqual(found("body"), ["1", "2", "5"])        # numbers are the article numbers, as in list
+        self.assertEqual(found("second body"), ["2"])
+        self.assertEqual(found('"second body" bob'), ["2"])     # a quoted phrase, and a second word
+        self.assertEqual(found("zebra"), [])
+
+    def test_search_that_runs_out_of_time_says_how_far_it_got(self):
+        out = self.out("search", "lan.test", "zebra", "--budget", "0")
+        self.assertEqual(out, "# searched the newest 0 of 3 articles (time ran out; use more specific words)\n")
+
     def test_counts_for_named_groups(self):
         self.assertEqual(self.out("counts", "lan.test"), "lan.test\t3\t3\n")
 
     def test_subscribe_unsubscribe_catchup(self):
         self.fake.groups["lan.other"] = {1: tn.A1, 2: tn.A2}
         self.assertIn("subscribed lan.other", self.out_plain("news-subscribe", "lan.other"))
-        self.assertEqual([r[0] for r in self.rows("folders")], ["lan.test", "lan.empty", "lan.dense", "lan.other"])
+        self.assertEqual([r[0] for r in self.rows("folders")], ["lan.dense", "lan.empty", "lan.other", "lan.test"])
         self.assertIn("caught up", self.out_plain("news-catchup", "lan.other"))
-        self.assertEqual(self.rows("folders")[3][2:], ["2", "0"])
+        self.assertEqual(self.rows("folders")[2][2:], ["2", "0"])
         self.assertIn("unsubscribed", self.out_plain("news-unsubscribe", "lan.empty"))
-        self.assertEqual([r[0] for r in self.rows("folders")], ["lan.test", "lan.dense", "lan.other"])
+        self.assertEqual([r[0] for r in self.rows("folders")], ["lan.dense", "lan.other", "lan.test"])
         p = self.be("news-subscribe", "no.such.group")
         self.assertNotEqual(p.returncode, 0)
         self.assertIn(b"no such group", p.stderr)

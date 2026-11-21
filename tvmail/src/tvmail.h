@@ -6,6 +6,7 @@
 // reached through the factory functions declared here.
 #pragma once
 #include "tvcommon.h"
+#include <set>
 
 class CoProcess;
 CoProcess &mailBackend(); // tvmail-backend serve (backend.cpp)
@@ -69,6 +70,7 @@ const ushort cmNewsCatchUp = 2063;     //                    Catch up (mark the 
 const ushort cmNewsGroups = 2064;      //                    All groups...
 const ushort cmNewsOlder = 2065;       //                    Load older articles
 const ushort cmToggleThreads = 2066;   // View > Threads
+const ushort cmSearchMsgs = 2067;      // Edit > Search messages... (Ctrl-F): the folder's From / To / Subject / text, on the server
 
 // ------------------------------------------------------ tvmail-backend ---
 // backend.cpp
@@ -127,6 +129,8 @@ extern std::vector<MsgRow> gRows; // what the pane shows: gAll, filtered and sor
 extern SortKey gSortKey;
 extern bool gSortRev;
 extern std::string gFilter; // type-to-filter text (From / Subject, any case)
+extern std::string gSearch;        // "Search messages" words; empty = no search is showing
+extern std::set<int> gSearchHits;  // the MsgRow::idx of the messages the search found (the pane shows only those)
 extern std::vector<Service> gServices; // from the backend's `services` verb; never empty once the window is made
 extern int gServiceIdx;                // the selected service
 extern std::vector<Folder> gFolders;   // the selected service's folders
@@ -161,6 +165,7 @@ void mailToggleServices();        // View > Services pane: show or hide it
 void mailNews(ushort command);    // the Usenet commands (cmNews*, cmToggleThreads)
 int mailInboxUnread();            // unread in the inbox as of the last counts, -1 if not known
 void mailViewChanged(bool resetSel);
+void mailSearch();                // Edit > Search messages...: ask for words, ask the backend, show only the hits
 void mailSetWrap(bool wrap);
 
 // -------------------------------------------------------------- windows ---

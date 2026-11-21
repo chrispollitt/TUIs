@@ -14,7 +14,7 @@ CoProcess &mailBackend()
 // account and mean the same whichever service is shown.
 static std::string serviceFlagFor(const std::string &args)
 {
-    static const char *const verbs[] = {"list", "counts", "folders", "show", "raw", "mark", "compose-template",
+    static const char *const verbs[] = {"list", "search", "counts", "folders", "show", "raw", "mark", "compose-template",
                                         "parts", "save", "delete", "purge", "empty-trash"};
     std::string v = args.substr(0, args.find(' '));
     for (const char *w : verbs)

@@ -10,6 +10,8 @@ std::vector<MsgRow> gRows; // what the pane shows: gAll, filtered and sorted
 SortKey gSortKey = sortDate;
 bool gSortRev = false;
 std::string gFilter; // type-to-filter text (From / Subject, any case)
+std::string gSearch;       // "Search messages" words; empty = no search is showing
+std::set<int> gSearchHits; // MsgRow::idx of the messages it found
 std::vector<Service> gServices; // what the backend's `services` verb lists (loadServices)
 int gServiceIdx = 0;            // the selected service
 std::vector<Folder> gFolders;   // the selected service's folders (loadFolders)
@@ -134,9 +136,13 @@ static void applyView()
     gRows.clear();
     std::string f = lowered(gFilter);
     for (const MsgRow &r : gAll)
+    {
+        if (!gSearch.empty() && !gSearchHits.count(r.idx))
+            continue; // a search is showing: only what it found
         if (f.empty() || lowered(r.from).find(f) != std::string::npos ||
             lowered(r.subj).find(f) != std::string::npos)
             gRows.push_back(r);
+    }
     for (MsgRow &r : gRows)
         r.depth = 0;
     if (serviceKind() == "usenet" && gThreads && gSortKey == sortDate && !gSortRev)
@@ -497,9 +503,11 @@ public:
         std::string f = gFilter;
         if (k.keyCode == kbEsc)
         {
-            if (f.empty())
+            if (f.empty() && gSearch.empty())
                 return false;
             f.clear();
+            gSearch.clear(); // Esc also ends a search
+            gSearchHits.clear();
         }
         else if (k.keyCode == kbBack)
         {
@@ -841,6 +849,8 @@ public:
     void servicePicked()
     {
         gFilter.clear();
+        gSearch.clear();
+        gSearchHits.clear();
         gFolders.clear();
         gFolderIdx = 0;
         gNewsLimit = 0;
@@ -1011,7 +1021,10 @@ public:
         if (usenet && gFolderIdx >= 0 && gFolderIdx < (int)gFolders.size() && gFolders[gFolderIdx].total > (int)gAll.size())
             t += "  (newest " + std::to_string(gAll.size()) + " of " + std::to_string(gFolders[gFolderIdx].total) +
                  " - Message > Usenet > Load older)";
-        if (!gFilter.empty())
+        if (!gSearch.empty())
+            t += "  search: \"" + gSearch + "\"" + (gFilter.empty() ? "" : "  filter: " + gFilter + "_") + "  (" +
+                 std::to_string(gRows.size()) + " of " + std::to_string(gAll.size()) + ", Esc clears)";
+        else if (!gFilter.empty())
             t += "  filter: " + gFilter + "_  (" + std::to_string(gRows.size()) +
                  " of " + std::to_string(gAll.size()) + ")";
         const char *how = nullptr;
@@ -1108,6 +1121,15 @@ public:
 
     void handleEvent(TEvent &e) override
     {
+        // Ctrl-F is Search messages, but only here, in the mail window, and before the panes see it (a list viewer
+        // reads Ctrl-F as the WordStar cursor key).  Not a menu hot key: that would also take it from the editors,
+        // which use it as "cursor right"; Alt-S and F8 belong to compose and the configuration editor.
+        if (ready && e.what == evKeyDown && e.keyDown.keyCode == kbCtrlF)
+        {
+            clearEvent(e);
+            mailSearch();
+            return;
+        }
         TWindow::handleEvent(e);
         if (ready && e.what == evBroadcast)
         {
@@ -1120,6 +1142,8 @@ public:
             case cmFolderPicked:
                 gNewsLimit = 0;  // a Usenet group starts at its newest articles again
                 gFilter.clear(); // a filter belongs to the folder it was typed in
+                gSearch.clear(); // and so does a search
+                gSearchHits.clear();
                 loadFolder();
                 clearEvent(e);
                 break;
@@ -1237,6 +1261,65 @@ void mailViewChanged(bool resetSel)
 {
     if (gMailWin)
         gMailWin->viewChanged(resetSel);
+}
+
+// Edit > Search messages...: the words go to the backend (IMAP SEARCH, the mailbox, or the articles of a newsgroup), which
+// answers with the numbers of the messages that have every word in From, To, Subject or text; the pane then shows only those.
+void mailSearch()
+{
+    if (!gMailWin)
+        return;
+    showMailWindow(); // from a compose window too: the hits are in the mail window
+    std::string q = askLine("Search messages", "~W~ords (all must match; \"quotes\" for a phrase)", gSearch);
+    size_t a = q.find_first_not_of(" \t");
+    if (a == std::string::npos)
+        return;
+    q = q.substr(a, q.find_last_not_of(" \t") - a + 1);
+    std::string raw = backendRun("search " + shq(gMbox) + " " + shq(q));
+    std::set<int> hits;
+    std::string note, err;
+    std::istringstream is(raw);
+    std::string ln;
+    while (std::getline(is, ln))
+    {
+        while (!ln.empty() && (ln.back() == '\r' || ln.back() == ' '))
+            ln.pop_back();
+        if (ln.empty())
+            continue;
+        if (ln[0] == '#')
+            note = ln.substr(ln.find_first_not_of("# "));
+        else if (ln.find_first_not_of("0123456789") == std::string::npos)
+            hits.insert(atoi(ln.c_str()));
+        else
+            err += (err.empty() ? "" : " ") + ln;
+    }
+    if (!err.empty())
+    {
+        if (err.size() > 300)
+            err.resize(300);
+        notify("Search failed: " + err, noteError);
+        return;
+    }
+    // only what the list holds can be shown (a message that arrived after the list was loaded is not in it: F5 loads it)
+    std::set<int> loaded;
+    for (const MsgRow &r : gAll)
+        if (hits.count(r.idx))
+            loaded.insert(r.idx);
+    hits.swap(loaded);
+    if (hits.empty())
+    {
+        notify("Nothing found for \"" + q + "\"" + (note.empty() ? "" : " - " + note) + ".", noteInfo);
+        return;
+    }
+    gSearch = q;
+    gSearchHits = hits;
+    gFilter.clear();
+    mailViewChanged(true); // applies the view
+    if (gMailWin->msgPane)
+        gMailWin->msgPane->select(); // the hits are what you look at now, and Esc (end the search) is the list's key
+    notify(std::to_string(hits.size()) + (hits.size() == 1 ? " message" : " messages") + " found" +
+               (note.empty() ? "" : " - " + note) + ". Esc shows them all again.",
+           noteInfo);
 }
 
 void mailSetWrap(bool wrap)

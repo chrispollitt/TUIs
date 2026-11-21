@@ -227,6 +227,7 @@ save-a-copy-on-send.
 | `Ctrl-D` | delete (→ trash) |
 | `F3` | local: pull mail (`mail-pull`) · remote: file `***SPAM***` mail · `F5` reload |
 | `F4` | address book |
+| `Ctrl-F` | **Edit ▸ Search messages...** — find messages in the folder by words in From / To / Subject / text |
 | `F6` / `Shift-F6` | next / previous window · `Alt-0` window list · `F10` menu · `Alt-X` quit |
 | `Ctrl-L` | redraw the whole screen (**Window ▸ Redraw screen**) |
 | *(type)* | (Messages) filter the list by From / Subject · `Backspace` trims it · `Esc` clears it |
@@ -264,6 +265,14 @@ messages, set `mesg = y` under `[ui]` in `~/.config/tvmail/tvmail.conf`.
   to messages whose From or Subject contains the text (any case), and the
   heading shows `filter: foo_  (3 of 120)`. `Backspace` trims it, `Esc` (or
   **View ▸ Clear filter**) drops it. Switching folders clears it.
+- **Search messages** (`Ctrl-F`, **Edit ▸ Search messages...**). The type-to-filter only sees the
+  list's From and Subject; this looks *inside* the folder. Every word you give must be in
+  From, To, Subject or the text (a `"phrase in quotes"` stays together), any case. The list then shows
+  only the hits (heading: `search: "foo"  (3 of 120, Esc clears)`); `Esc` brings the rest back.
+  Over IMAP the server searches; in a local mailbox tvmail reads it; in Usenet the headers are
+  matched at once and the texts of the newest 500 articles are fetched (up to 30 s, then it says
+  how far it got). Backend: `tvmail-backend [--service S] search MBOX "words"` prints the list
+  numbers of the hits.
 - **Sorting.** **View ▸ Sort by date / from / subject / Unread first**; picking
   the same one again, or **View ▸ Reverse order**, flips it (date is mailbox
   order, oldest first; reversed it's newest first). The heading shows the
@@ -389,6 +398,7 @@ which *is* Dovecot's INBOX — so incoming mail lands in the one place everyone 
 ```
 tvmail-backend list  [MBOX]              idx <TAB> flags <TAB> date <TAB> from <TAB> subject
 tvmail-backend counts [MBOX...]          name <TAB> total <TAB> unseen (default: every folder)
+tvmail-backend search MBOX "words"        the list numbers of the messages with every word in From / To / Subject / text (Usenet:  last line if time ran out)
 tvmail-backend services                  name <TAB> kind <TAB> label (the Services pane)
 tvmail-backend folders                   label <TAB> MBOX <TAB> total <TAB> unseen (the Folders pane)
 tvmail-backend --service NAME VERB ...   the service a verb is about (default mail; `news` = Usenet: list, show, raw, mark,

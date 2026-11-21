@@ -112,6 +112,8 @@ TMenuBar *TVMailApp::initMenuBar(TRect r)
                             *new TMenuItem("~P~aste", cmPaste, kbShiftIns, hcNoContext, "Shift-Ins") +
                             newLine() +
                             tvFindItems(true) +
+                            newLine() +
+                            *new TMenuItem("Search ~m~essages...", cmSearchMsgs, kbNoKey, hcNoContext, "Ctrl-F") +
                             *new TSubMenu("~V~iew", kbAltV) +
                             *new TMenuItem("Sort by ~d~ate", cmSortDate, kbNoKey, hcNoContext) +
                             *new TMenuItem("Sort by ~f~rom", cmSortFrom, kbNoKey, hcNoContext) +
@@ -1311,7 +1313,12 @@ void TVMailApp::handleEvent(TEvent &e)
         break;
     case cmClearFilter:
         gFilter.clear();
+        gSearch.clear();
+        gSearchHits.clear();
         mailViewChanged(true);
+        break;
+    case cmSearchMsgs:
+        mailSearch();
         break;
     case cmMoveMsg:
         moveMsg(currentRow());

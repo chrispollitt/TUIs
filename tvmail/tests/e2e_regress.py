@@ -171,6 +171,28 @@ def opens_on_newest(opts):
     return tv
 
 
+@case()
+def search_messages_looks_inside_the_folder(opts):
+    # Edit > Search messages (Ctrl-F): a word that is only in a message's text narrows the list to that message
+    # (the type-to-filter sees only From / Subject); Esc brings the others back; no hit leaves the list alone
+    tv = Tv(opts)
+    c = Case(tv)
+    started(tv, c)
+    tv.send("", settle=1.0)
+    c.check(tv.wait("Search messages", 4), "Ctrl-F did not open the search dialog")
+    tv.send("FINDME", "Enter", settle=2.0)
+    c.check(tv.wait('search: "FINDME"', 6) and tv.find("SUBJ1") is not None
+            and tv.find("SUBJ2 plain") is None and tv.find("SUBJ3 wide sender") is None,
+            "the search did not narrow the list to the message whose text has the word")
+    tv.send("\x1b", settle=1.0)                                  # Esc: the list has the focus after a search
+    c.check(tv.wait("SUBJ2 plain", 5) and tv.find("SUBJ3 wide sender") is not None and not tv.has("search:"),
+            "Esc did not end the search")
+    tv.send("", settle=1.0)
+    tv.send("zebra", "Enter", settle=0.3)
+    c.check(tv.wait("Nothing found for", 6), "a search with no hit did not say so")
+    return tv
+
+
 @case(7)
 def esc_closes_windows(opts):
     def setup(t):
@@ -1228,6 +1250,16 @@ def usenet_service_reads_threads_and_posts(opts):
     if all(where.values()):
         c.check(sorted(where, key=lambda s: where[s][0]) == ["Hello", "Re: Hello", "Other thread", "Third level"],
                 "View > Threads did not flatten the list: %r" % where)
+    # Edit > Search messages (Ctrl-F): "deep" is only in the text of one article, so the hit proves the texts are searched
+    tv.send("", settle=1.0)
+    c.check(tv.wait("Search messages", 4), "Ctrl-F did not open the search dialog")
+    tv.send("deep", "Enter", settle=0.3)
+    # (the followup posted above quotes "deep" too, but is not in the loaded list: only the one shown is counted)
+    c.check(tv.wait("1 message found", 8), "the search did not say what it found")
+    c.check(tv.wait('search: "deep"', 8) and tv.has("Third level") and not tv.has("Other thread"),
+            "the search did not narrow the list to the article whose text has the word")
+    tv.send(alt("v"), "c", settle=1.0)                            # View > Clear filter ends the search too
+    c.check(tv.wait("Other thread", 6) and not tv.has('search: "deep"'), "clearing the filter did not end the search")
     # Catch up
     tv.send(alt("m"), "u", "c", settle=1.0)
     c.check(tv.wait("Mark every article in lan.test", 4), "Catch up did not ask")
@@ -1243,8 +1275,8 @@ def usenet_service_reads_threads_and_posts(opts):
     tv.send(alt("m"), "u", "s", settle=1.0)
     tv.send("no.such", "Enter", settle=2.0)
     c.check(tv.wait("411 no such", 6), "an unknown group was not refused")
-    # back to Mail: the folders, and Ctrl-R is a reply to mail again
-    tv.send("ShiftTab", "ShiftTab", "ShiftTab", settle=0.6)
+    # back to Mail: the folders, and Ctrl-R is a reply to mail again (the search left the focus on the list: two steps back)
+    tv.send("ShiftTab", "ShiftTab", settle=0.6)
     tv.send("Up", settle=1.5)
     c.check(tv.wait("inbox", 6) and tv.has("Folders") and not tv.has("Groups"), "picking Mail did not bring the folders back")
     return tv

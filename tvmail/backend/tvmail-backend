@@ -1141,6 +1141,57 @@ def cmd_list(a):
     return 0
 
 
+def _search_terms(q):
+    """The words of a search: whitespace-separated, "double quotes" keep a phrase together."""
+    import shlex
+    try:
+        return [t for t in shlex.split(q) if t]
+    except ValueError:                      # an unbalanced quote: plain words
+        return [t for t in q.split() if t]
+
+
+def _msg_has_all(msg, terms, body=True):
+    """Case-insensitive: every term is somewhere in From / To / Subject (and, with body, the text)."""
+    hay = "\n".join((_hdr(msg, "From"), _hdr(msg, "To"), _hdr(msg, "Subject")))
+    if body:
+        hay += "\n" + _best_body(msg)
+    hay = hay.lower()
+    return all(t.lower() in hay for t in terms)
+
+
+def cmd_search(a):
+    """Search a mail folder: the index (as `list` numbers them) of every message with ALL the words of QUERY in its
+    From, To, Subject or text, one per line.  IMAP: the server's SEARCH; a local mailbox: read here."""
+    terms = _search_terms(a.query)
+    if not terms:
+        sys.exit("tvmail-backend: search for what?")
+    if _is_remote():
+        folder = _imap_folder(a.mbox)
+        uids = _imap_uids(folder)
+        crit = list(_chat_crit(folder))
+        wide = any(ord(ch) > 127 for t in terms for ch in t)
+        for t in terms:
+            q = t.replace("\\", "\\\\").replace('"', '\\"')
+            val = ('"%s"' % q).encode("utf-8") if wide else '"%s"' % q
+            crit += ["OR", "SUBJECT", val, "OR", "FROM", val, "OR", "TO", val, "BODY", val]
+        M = _imap()
+        typ, data = M.uid("SEARCH", *((["CHARSET", "UTF-8"] if wide else []) + crit))
+        if typ != "OK":
+            sys.exit("tvmail-backend: IMAP SEARCH failed")
+        hit = set(int(x) for x in (data[0] or b"").split())
+        for i, u in enumerate(uids):
+            if u in hit:
+                print(i)
+        return 0
+    path = mbox_path(a.mbox)
+    if not os.path.exists(path):
+        return 0
+    for i, msg in enumerate(open_box(path)):
+        if _msg_has_all(msg, terms):
+            print(i)
+    return 0
+
+
 def _imap_status(folder):
     """(total, unseen) for an IMAP folder via STATUS - no SELECT, so it does
     not disturb the folder the UI has open.  (0, 0) for a missing folder."""
@@ -1235,7 +1286,7 @@ def _check_service(a):
 # What a verb does depends on the service when it is one of these; every other verb is about the account
 # (send, save-draft, pull, vacation, aliases, ...) and ignores --service.  A verb a service has no
 # answer for is an error, not a silent mail.
-_SERVICE_VERBS = frozenset(("list", "counts", "folders", "show", "raw", "mark", "compose-template",
+_SERVICE_VERBS = frozenset(("list", "search", "counts", "folders", "show", "raw", "mark", "compose-template",
                             "parts", "save", "delete", "purge", "empty-trash"))
 _KIND_VERBS = {}        # kind -> {verb: function}, filled in below by each kind
 
@@ -2822,6 +2873,7 @@ def _news_conf():
     return {"host": os.environ.get("TVMAIL_NEWS_HOST") or get("host"), "port": port,
             "tls": get("tls", "no").lower() in ("1", "yes", "true", "on", "y"),
             "window": window, "user": get("user"), "cafile": get("cafile"),
+            "sort": "newsrc" if get("sort", "alpha").lower() in ("newsrc", "subscribed", "none") else "alpha",
             "subscribed": [g for g in re.split(r"[,\s]+", get("subscribed")) if g]}
 
 
@@ -2889,6 +2941,8 @@ def _news_group_arg(a):
 def news_folders(a):
     rc = _newsrc()
     groups = rc.subscribed()
+    if _news_conf()["sort"] == "alpha":             # [news] sort = alpha (default) | newsrc (the order you subscribed in)
+        groups = sorted(groups, key=lambda g: (g.lower(), g))
 
     def go(c):
         out = []
@@ -2939,6 +2993,46 @@ def news_list(a):
                          _clean(_short_from(r["from"]), 28),
                          _clean(_news_dec(r["subject"]) or "(no subject)", 200),
                          _clean(r["message-id"]), _clean(r["references"]))))
+    return 0
+
+
+def news_search(a):
+    """The article numbers (newest --limit, default [news] window) with ALL the words of QUERY in From, Subject or the
+    text.  The overview answers for the headers at once; the text of the others is fetched, newest first, for at most
+    --budget seconds (default 30): a last line "# ..." says how far it got when that ran out."""
+    import time
+    terms = _search_terms(a.query)
+    if not terms:
+        sys.exit("tvmail-backend: search for what?")
+    g = _news_group_arg(a)
+    limit = a.limit if a.limit and a.limit > 0 else _news_conf()["window"]
+    t0 = time.time()
+
+    def go(c):
+        count, low, high = c.group(g)
+        rows = c.over(max(low, high - limit + 1), high) if high >= low and count else []
+        found, examined = [], 0
+        for r in sorted(rows, key=lambda r: -r["number"]):
+            head = " ".join((_short_from(r["from"]), _news_dec(r["from"]) or "", _news_dec(r["subject"]) or "")).lower()
+            if all(t.lower() in head for t in terms):
+                found.append(r["number"])
+                examined += 1
+                continue
+            if time.time() - t0 > a.budget:
+                break
+            examined += 1
+            try:
+                msg = email.message_from_bytes(c.article(r["number"]))
+            except _load_nntp().NNTPError:
+                continue
+            if _msg_has_all(msg, terms):
+                found.append(r["number"])
+        return len(rows), found, examined
+    total, found, examined = _news_call(go)
+    for n in sorted(found):
+        print(n)
+    if examined < total:
+        print("# searched the newest %d of %d articles (time ran out; use more specific words)" % (examined, total))
     return 0
 
 
@@ -3056,7 +3150,7 @@ def news_send(a):
     return 0
 
 
-_KIND_VERBS["usenet"] = {"folders": news_folders, "counts": news_counts, "list": news_list, "show": news_show,
+_KIND_VERBS["usenet"] = {"folders": news_folders, "counts": news_counts, "list": news_list, "search": news_search, "show": news_show,
                          "raw": news_raw, "mark": news_mark, "compose-template": news_compose_template,
                          "send": news_send}
 
@@ -3252,6 +3346,10 @@ def build_parser():
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("list");  p.add_argument("mbox", nargs="?"); p.add_argument("--limit", type=int, default=0); p.set_defaults(fn=cmd_list)
+    p = sub.add_parser("search", help="indexes of the messages with all the words (From, To, Subject, text)")
+    p.add_argument("mbox"); p.add_argument("query"); p.add_argument("--limit", type=int, default=0)
+    p.add_argument("--budget", type=float, default=30.0, help="Usenet: seconds to spend fetching article texts")
+    p.set_defaults(fn=cmd_search)
     p = sub.add_parser("counts"); p.add_argument("mboxes", nargs="*"); p.set_defaults(fn=cmd_counts)
     p = sub.add_parser("services"); p.set_defaults(fn=cmd_services)
     p = sub.add_parser("news-groups"); p.add_argument("pattern", nargs="?"); p.add_argument("--all", action="store_true")
