@@ -5,6 +5,11 @@ Releases are tagged `tvmail-vX.Y.Z`; `git log` has the rest.
 
 ## Unreleased
 
+- **LAN certificates from your own CA** (POSIX #7).  `cafile` in `[imap]`, `[smtp]` and `[sieve]` now takes a leading `~`, so
+  one CA file (`~/.config/tvmail/cpbee-ca.pem`) replaces `verify = false` once the servers' certificates come from your CA.
+  The deploy scripts for Radicale and the Delta Chat gateway use the LAN's Simple Inc certificate when it is there and hand
+  out the one CA file instead of the server's own certificate (tvcal and tvchat docs say the same).
+
 - **`password_cmd`: passwords from a vault** (TUIs #43 / POSIX#8, tvmail's part).  `[auth] password_cmd = auth get {scheme}
   {host} {user}` in tvmail.conf makes tvmail-backend ask that command for the IMAP, SMTP, ManageSieve and NNTP passwords
   before it reads `~/.mu-tickets` and `~/.netrc` (which stay the fallback, so tvmail still runs alone; off by default).  A

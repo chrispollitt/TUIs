@@ -24,6 +24,10 @@ set -euo pipefail
 
 HOST=cpbee
 LAN=192.168.10.1
+# The LAN's one CA file (Simple Inc root + signing CA), kept by TO_BE_RUN/cpbee-lan-certs.sh.  Clients and Floyd trust THAT,
+# so it, not the gateway's own certificate, is what gets handed out (a self-signed certificate is only the fallback).
+LANDIR=/etc/ssl/Simple_Inc/lan
+CAPEM=/etc/dcgw/cert.pem; [[ -r $LANDIR/lan-ca.pem ]] && CAPEM=$LANDIR/lan-ca.pem
 PORT=7078
 CLIENTS="cmdesktop"                  # other machines to run the wizard on (this machine is always done)
 repo=/home/chris/gh_cp/TUIs
@@ -61,7 +65,7 @@ if [[ ${RUN_ON_REMOTE:-0} != 1 && $(hostname -s) != "$HOST" ]]; then
   say "step 8/9: from here, over TLS ..."
   py=$(command -v python3 || command -v python) || die "no python on this machine"
   token=$(ssh "$HOST" 'cat ~/dcgw-chris.token') || die "cannot read ~/dcgw-chris.token on $HOST"
-  ssh "$HOST" 'cat /etc/dcgw/cert.pem' > "$HOME/.dcgw-cert.tmp"
+  ssh "$HOST" 'f=/etc/ssl/Simple_Inc/lan/lan-ca.pem; [ -r $f ] || f=/etc/dcgw/cert.pem; cat $f' > "$HOME/.dcgw-cert.tmp"
   DCGW_TOKEN=$token "$py" - "$HOME/.dcgw-cert.tmp" "$HOST" "$PORT" <<'PYEOF' || die "the gateway did not answer over TLS from here"
 import os, socket, ssl, sys
 ctx = ssl.create_default_context(cafile=sys.argv[1])
@@ -153,7 +157,14 @@ done
 
 say "step 2/9: the TLS certificate ..."
 sudo install -d -m 755 -o root -g dcgw /etc/dcgw          # the key (640) and the config (640) stay private; the certificate is public
+if [[ ! -f /etc/dcgw/cert.pem && -r $LANDIR/cpbee-fullchain.pem && -r $LANDIR/cpbee.key ]]; then
+  # the LAN's own PKI (Simple Inc): a certificate for cpbee / cpbee.cmnet signed by the Signing CA
+  sudo install -m 644 -o root -g dcgw "$LANDIR/cpbee-fullchain.pem" /etc/dcgw/cert.pem
+  sudo install -m 640 -o root -g dcgw "$LANDIR/cpbee.key" /etc/dcgw/key.pem
+  say "  using the Simple Inc certificate from $LANDIR"
+fi
 if [[ ! -f /etc/dcgw/cert.pem ]]; then
+  say "  WARNING: no Simple Inc certificate in $LANDIR (run TO_BE_RUN/cpbee-lan-certs.sh): making a SELF-SIGNED one"
   sudo openssl req -x509 -newkey rsa:3072 -nodes -days 3650 -subj "/CN=cpbee" \
        -addext "subjectAltName=DNS:cpbee,DNS:cpbee.cmnet,DNS:cpbee.lan,IP:$LAN" \
        -keyout /etc/dcgw/key.pem -out /etc/dcgw/cert.pem 2>/dev/null || die "openssl could not make the certificate"
@@ -207,7 +218,7 @@ ss -ltn | grep -q "$LAN:$PORT" || { sudo journalctl -u dcgw -n 25 --no-pager; di
 sudo journalctl -u dcgw -n 5 --no-pager | sed 's/^/  /'
 
 say "step 6/9: Floyd: the certificate, the setup wizard's manifest and the sentinel ..."
-sudo install -m 644 -o root -g floyd /etc/dcgw/cert.pem /etc/tvchat/floyd-ca-dcgw.pem
+sudo install -m 644 -o root -g floyd "$CAPEM" /etc/tvchat/floyd-ca-dcgw.pem
 if [[ -f /etc/tvchat/floyd-setup.json ]]; then
   sudo cp -p /etc/tvchat/floyd-setup.json "/etc/tvchat/floyd-setup.json.bak.$stamp"
   sudo python3 - <<'PYEOF'
@@ -237,7 +248,7 @@ systemctl is-active tvchat-floyd || { sudo journalctl -u tvchat-floyd -n 20 --no
 
 say "step 7/9: cpbee's own tvchat becomes a gateway client ..."
 install -d -m 700 "$HOME/.config/tvchat"
-install -m 644 /etc/dcgw/cert.pem "$HOME/.config/tvchat/dcgw-ca.pem" 2>/dev/null || sudo cat /etc/dcgw/cert.pem > "$HOME/.config/tvchat/dcgw-ca.pem"
+install -m 644 "$CAPEM" "$HOME/.config/tvchat/dcgw-ca.pem" 2>/dev/null || sudo cat "$CAPEM" > "$HOME/.config/tvchat/dcgw-ca.pem"
 DCGW_TOKEN=$token python3 - <<'PYEOF'
 import importlib.util, os
 s = importlib.util.spec_from_file_location("tvfloyd", "/usr/local/share/tvchat/tvfloyd.py")
@@ -254,9 +265,9 @@ else:
 PYEOF
 
 say "step 8/9 (on cpbee): the gateway answers over TLS ..."
-DCGW_TOKEN=$token python3 - <<'PYEOF' || die "the gateway does not answer over TLS on cpbee"
+DCGW_CA=$CAPEM DCGW_TOKEN=$token python3 - <<'PYEOF' || die "the gateway does not answer over TLS on cpbee"
 import os, socket, ssl
-ctx = ssl.create_default_context(cafile="/etc/dcgw/cert.pem")
+ctx = ssl.create_default_context(cafile=os.environ.get("DCGW_CA", "/etc/dcgw/cert.pem"))
 s = ctx.wrap_socket(socket.create_connection(("cpbee", 7078), 8), server_hostname="cpbee")
 s.sendall(("DCGW 1 %s\n" % os.environ["DCGW_TOKEN"]).encode())
 line = b""

@@ -21,6 +21,10 @@ set -euo pipefail
 
 HOST=cpbee
 PORT=7078
+# The LAN's one CA file (Simple Inc root + signing CA), kept by TO_BE_RUN/cpbee-lan-certs.sh.  Clients and Floyd trust THAT,
+# so it, not the gateway's own certificate, is what gets handed out (a self-signed certificate is only the fallback).
+LANDIR=/etc/ssl/Simple_Inc/lan
+CAPEM=/etc/dcgw/cert.pem; [[ -r $LANDIR/lan-ca.pem ]] && CAPEM=$LANDIR/lan-ca.pem
 NAME=${1:-michelle}
 [[ $NAME =~ ^[a-z][a-z0-9_-]{0,30}$ ]] || { echo "FAILED: '$NAME' is not a plausible user name" >&2; exit 1; }
 ADDR=$NAME@cpbee.cmnet
@@ -85,7 +89,7 @@ fi
 say "step 3/5: her files in $home ..."
 sudo install -m 600 -o "$NAME" -g "$(id -gn "$NAME")" /dev/null "$home/dcgw-$NAME.token"
 printf '%s\n' "$token" | sudo tee "$home/dcgw-$NAME.token" >/dev/null
-sudo install -m 644 -o "$NAME" -g "$(id -gn "$NAME")" /etc/dcgw/cert.pem "$home/dcgw-ca.pem"
+sudo install -m 644 -o "$NAME" -g "$(id -gn "$NAME")" "$CAPEM" "$home/dcgw-ca.pem"
 {
   printf '# Delta Chat through the gateway on cpbee.  Add this to tvchat.conf, and add delta_%s to autoconnect in [chat]:\n' "$NAME"
   printf '#   [chat]\n#   autoconnect = ..., delta_%s\n' "$NAME"
@@ -101,9 +105,9 @@ say "step 4/5: dcgw sees her account ..."
 sudo journalctl -u dcgw -n 8 --no-pager | grep -E "$NAME|listening" | sed 's/^/  /' || true
 
 say "step 5/5: as $NAME, over TLS ..."
-DCGW_TOKEN=$token DCGW_NAME=$NAME python3 - <<'PYEOF' || die "$NAME could not use the gateway"
+DCGW_CA=$CAPEM DCGW_TOKEN=$token DCGW_NAME=$NAME python3 - <<'PYEOF' || die "$NAME could not use the gateway"
 import json, os, socket, ssl
-ctx = ssl.create_default_context(cafile="/etc/dcgw/cert.pem")
+ctx = ssl.create_default_context(cafile=os.environ.get("DCGW_CA", "/etc/dcgw/cert.pem"))
 s = ctx.wrap_socket(socket.create_connection(("cpbee", 7078), 8), server_hostname="cpbee")
 s.settimeout(20)
 s.sendall(("DCGW 1 %s\n" % os.environ["DCGW_TOKEN"]).encode())
