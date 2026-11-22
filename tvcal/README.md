@@ -68,7 +68,7 @@ Other people's Floyd lists stay in Floyd's own files; only the owner's is the ca
 [server]
 url  = https://cpbee.cmnet:5232/chris/calendar/
 user = chris
-ca   = ~/.config/tvcal/cpbee-ca.pem      ; a self-signed server's certificate
+ca   = ~/.config/tvcal/cpbee-ca.pem      ; the CA file of a server whose certificate your own CA signed (or a self-signed server's certificate)
 ```
 
 The password is `$TVCAL_PASS`, then a `password_cmd` if you set one (`[auth]` or `[server] password_cmd = auth get {scheme} {host} {user}`, or `$TVCAL_PASSWORD_CMD`: it prints the password and exits non-zero when it has none, in which case the files are used), then `~/.mu-tickets` (the file tvmail and tvchat share; `POSIX/net-utils/netrc-to-tickets` moves old `~/.netrc` logins there) or `~/.netrc` — never the configuration file. `configure/configure-radicale.sh`

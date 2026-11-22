@@ -717,6 +717,28 @@ class TestMode(Base):
         with self.assertRaises(SystemExit):
             be._cred("nope", "u", "TVMAIL_IMAP_PASS")
 
+    def test_cafile_may_start_with_a_tilde(self):
+        # a LAN CA file instead of verify = false (POSIX #7): "~" is the user's home, as the other apps' cafile
+        import ssl
+        self._write_conf("[imap]\nhost = h\ncafile = ~/lan-ca.pem\n")
+        seen = {}
+        real = ssl.create_default_context
+
+        def fake(*a, **k):
+            seen.update(k)
+            raise RuntimeError("stop here")
+        ssl.create_default_context = fake
+        old_imap = be._IMAP
+        be._IMAP = None
+        try:
+            with self.assertRaises(RuntimeError):
+                be._imap()
+        finally:
+            ssl.create_default_context = real
+            be._IMAP = old_imap
+        self.assertEqual(seen.get("cafile"), os.path.expanduser("~/lan-ca.pem"))
+        self.assertNotIn("~", seen.get("cafile", "~"))
+
     # -- password_cmd (issue 43 / POSIX#8): `auth get {scheme} {host} {user}` first, the files as the fallback --
     def _stub(self, body):
         p = self.tmp / "getpw"

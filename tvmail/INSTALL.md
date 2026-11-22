@@ -395,7 +395,7 @@ still runs it. To remove the mail system itself, use your package manager
 
 | symptom | fix |
 |---|---|
-| `CERTIFICATE_VERIFY_FAILED` | self-signed LAN cert: `verify = false` under `[imap]` (and `[smtp]`), or `cafile = …` |
+| `CERTIFICATE_VERIFY_FAILED` | a LAN cert from your own CA: `cafile = …` (its CA file; `~` works) under `[imap]` and `[smtp]`; a self-signed one: `verify = false` there instead |
 | Cygwin: `curl: (60) ... unable to get local issuer certificate` | your antivirus is intercepting HTTPS; trust its root in Cygwin (section 5) |
 | F3: "no mail puller found" | on the master: run `configure.sh` (or a mail-setup puller script) so `mail-pull` exists and is on `$PATH` |
 | F3 on the master only files spam | you're in remote mode (as recommended); pulling is the timer's job: `crontab -l` or `systemctl --user list-timers mail-pull.timer` |

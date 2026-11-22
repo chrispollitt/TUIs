@@ -41,8 +41,9 @@
 #   --port N         TLS port (default: 5232)
 #   --bind ADDR      address to listen on (default: 0.0.0.0; 127.0.0.1 = this host only, which is
 #                    all the central Floyd on the same host needs)
-#   --cert FILE --key FILE   the certificate to serve (default: made here, self-signed, in
-#                    /etc/radicale/tls, valid 10 years, for the host's name)
+#   --cert FILE --key FILE   the certificate to serve (default: the Simple Inc one in /etc/ssl/Simple_Inc/lan
+#                    when TO_BE_RUN/cpbee-lan-certs.sh has put it there; else made here, self-signed, in
+#                    /etc/radicale/tls, valid 10 years, for the host's name - every client must then pin it)
 #   --name HOST      the name clients use (default: the host's short name)
 # Share options:
 #   --user OWNER     whose calendar          --with USER   who may work on it (a login of its own)
@@ -145,7 +146,13 @@ server() {
   install -d -m 0755 /etc/radicale /etc/radicale/tls
   if [ -z "$CERT" ]; then
     CERT=/etc/radicale/tls/cert.pem; KEY=/etc/radicale/tls/key.pem
+    LANDIR=/etc/ssl/Simple_Inc/lan   # the LAN's own PKI (TO_BE_RUN/cpbee-lan-certs.sh): Simple Inc Signing CA
+    if [ ! -s "$CERT" ] && [ -r "$LANDIR/cpbee-fullchain.pem" ] && [ -r "$LANDIR/cpbee.key" ]; then
+      log "using the Simple Inc certificate from $LANDIR"
+      install -m 0644 "$LANDIR/cpbee-fullchain.pem" "$CERT"; install -m 0640 "$LANDIR/cpbee.key" "$KEY"
+    fi
     if [ ! -s "$CERT" ]; then
+      warn "no Simple Inc certificate in $LANDIR (run TO_BE_RUN/cpbee-lan-certs.sh): making a SELF-SIGNED one, which every client must pin"
       log "making a self-signed certificate for $NAME (10 years)"
       ( umask 077
         openssl req -x509 -newkey rsa:3072 -nodes -days 3650 -subj "/CN=$NAME" \
@@ -310,7 +317,8 @@ client() {
   if [ -n "$CA" ] || [ "$HOST" != localhost ]; then
     cafile="$HOME/.config/tvcal/$HOST-ca.pem"
     if [ -n "$CA" ]; then cp "$CA" "$cafile"
-    else scp -q "$HOST:/etc/radicale/tls/cert.pem" "$cafile" 2>/dev/null \
+    else scp -q "$HOST:/etc/ssl/Simple_Inc/lan/lan-ca.pem" "$cafile" 2>/dev/null \
+           || scp -q "$HOST:/etc/radicale/tls/cert.pem" "$cafile" 2>/dev/null \
            || { warn "could not fetch the certificate from $HOST (a certificate from a real CA needs none: --ca /etc/ssl/certs/ca-certificates.crt)"; cafile=""; }
     fi
   fi

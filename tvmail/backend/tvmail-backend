@@ -767,7 +767,7 @@ def _imap():
             or (993 if use_ssl else 143))
     user = c.get("imap", "user", fallback=None) or mu.get("user") or _me()
     verify = c.getboolean("imap", "verify", fallback=True)
-    cafile = c.get("imap", "cafile", fallback="").strip() or None
+    cafile = os.path.expanduser(c.get("imap", "cafile", fallback="").strip()) or None   # ~ is your home
     ctx = _ssl.create_default_context(cafile=cafile)
     if not verify:                              # LAN box with a self-signed cert
         ctx.check_hostname = False
@@ -1042,7 +1042,7 @@ def _smtp_send(msg, rcpts):
     starttls = c.getboolean("smtp", "starttls", fallback=not use_ssl)
     do_auth = c.getboolean("smtp", "auth", fallback=True)  # false: mynetworks relay
     verify = c.getboolean("smtp", "verify", fallback=True)
-    cafile = c.get("smtp", "cafile", fallback="").strip() or None
+    cafile = os.path.expanduser(c.get("smtp", "cafile", fallback="").strip()) or None
     ctx = _ssl.create_default_context(cafile=cafile)
     if not verify:                              # LAN box with a self-signed cert
         ctx.check_hostname = False
@@ -2264,8 +2264,8 @@ def _sieve_open():
     tls = c.get("sieve", "tls", fallback="starttls").strip().lower() != "none"
     verify = c.getboolean("sieve", "verify",
                           fallback=c.getboolean("imap", "verify", fallback=True))
-    cafile = (c.get("sieve", "cafile", fallback="").strip()
-              or c.get("imap", "cafile", fallback="").strip() or None)
+    cafile = os.path.expanduser(c.get("sieve", "cafile", fallback="").strip()
+                                or c.get("imap", "cafile", fallback="").strip()) or None
     ctx = _ssl.create_default_context(cafile=cafile)
     if not verify:                              # LAN box with a self-signed cert
         ctx.check_hostname = False
