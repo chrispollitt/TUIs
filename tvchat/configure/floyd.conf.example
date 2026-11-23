@@ -222,7 +222,7 @@ claude_dir      = ~
 #[account:lhc]
 #protocol    = lhc
 #display     = Live Helper Chat
-#url         = https://chat.u-l.ca/index.php     (with index.php if the site has no URL rewriting)
+#url         = https://chat.example.org/index.php     (with index.php if the site has no URL rewriting)
 #user        = floyd
 #department  = 1
 #name        = Floyd

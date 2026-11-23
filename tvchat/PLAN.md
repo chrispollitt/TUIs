@@ -1,5 +1,8 @@
 # Plan: Floyd on chat.u-l.ca
 
+> **Retired 2026-11-22.** The chat.u-l.ca experiment is shut down; chat.universal-laughter.com (Joy, FAQ only) is the only
+> Live Helper Chat install. This file is kept as history.
+
 chat.u-l.ca is shared PHP hosting (Live Helper Chat is installed there). It can run PHP and serve
 static files; it cannot run a daemon or open an IRC port. Floyd stays on cpbee and reaches out.
 
