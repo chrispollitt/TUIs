@@ -2216,8 +2216,8 @@ def wizard_steps(app, m, manifest=None, cas=None):
                 return "tvcal: calendar %s (user %s), certificate %s" % (cal["url"], cal.get("user", "-"), p or "unchanged")
             steps.append(WizStep("todo", "tvcal's calendar server is not %s here" % cal["url"], fix))
         if cal.get("user") and not _has_secret(cal["url"].split("/")[2].split(":")[0], cal["user"]):
-            steps.append(WizStep("you", "no password for %s on %s in ~/.netrc or ~/.mu-tickets: add it with your auth vault "
-                                        "(I never handle passwords)" % (cal["user"], cal["url"].split("/")[2].split(":")[0])))
+            steps.append(WizStep("you", "no password for %s on %s in ~/.netrc or ~/.mu-tickets: run  auth render tickets  "
+                                        "(the vault writes it; I never handle passwords)" % (cal["user"], cal["url"].split("/")[2].split(":")[0])))
     tvchat_path = wiz_conf_path("tvchat")
     if any(a == "tvchat" for a, _ in apps):
         for acc in manifest.get("accounts") or []:

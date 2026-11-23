@@ -39,6 +39,17 @@ if [[ -f $conf && $INSECURE == 0 ]]; then
   v=$(sed -n '/^\[imap\]/,/^\[/{s/^[[:space:]]*verify[[:space:]]*=[[:space:]]*\([^ #]*\).*/\1/p}' "$conf" | head -1)
   case ${v,,} in false|no|0|off) INSECURE=1; echo "  (your tvmail.conf has [imap] verify = false: the mail server's certificate is not checked here either)" ;; esac
 fi
+# The LAN vault (POSIX net-utils `auth`) replaces this script: when it holds this login, `auth render tickets` writes
+# ~/.mu-tickets (imaps, smtp and Radicale, both host spellings) and nothing is typed here.  What follows is the stopgap
+# for a person whose login is not in the vault.
+if command -v auth >/dev/null 2>&1 && auth get imaps "$HOST" "$me" </dev/null >/dev/null 2>&1; then
+  if [[ ${DRY_RUN:-0} == 1 ]]; then
+    echo "DRY RUN as $me: the auth vault has $me@$HOST, so this would run: auth render tickets. Nothing was changed."
+    exit 0
+  fi
+  echo "  the auth vault has $me@$HOST: writing ~/.mu-tickets from it (auth render tickets)"
+  exec auth render tickets
+fi
 if [[ ${DRY_RUN:-0} == 1 ]]; then
   echo "DRY RUN as $me: would ask for your cpbee password (hidden), try IMAPS and Radicale on $HOST, and file tickets for the"  # allowlist secret: prose / format string, no secret
   echo "ones that accept it in ~/.mu-tickets (mode 600, the old file kept). Nothing was changed."
