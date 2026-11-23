@@ -1,5 +1,7 @@
 #!/bin/bash
 # RUN ON: whatwelove.org (the cPanel web host, user whatwelo; log in with ssh-wwl).  NOT on cpbee.  Your own ad hoc tool (for upgrades): TO_BE_RUN/REUSABLE/ has a stub, the real script is in the repo (tvchat/deploy).
+# RETIRED 2026-11-22: chat.u-l.ca is shut down and the pro site is the only Live Helper Chat install, so there is no
+#         source site to copy from; upgrade the pro site directly.  Kept for reference only (do not run).
 # WHY:    chat.u-l.ca (fun and testing) and chat.universal-laughter.com (pro only) are two SEPARATE Live Helper Chat installs:
 #         same code, own database, own operators, own API key, own settings, cache and uploads, so nothing can bleed across.
 #         This copies the code of the fun site into the pro site's folder, and does it again after an upgrade.
