@@ -24,8 +24,7 @@ tvmail has a fourth pane, **Services**, with Mail, **Lists** and **Usenet**; the
 - **How it was run:** the scripts that did it are in `~/src/Claude/TO_BE_RUN/DONE/` (`news-1..3`, `lists-1..3`); they copy
   the POSIX working tree to `~/news-deploy` / `~/lists-deploy` on cpbee and use `sudo-mfa` for the root steps.
 - **Not verified:** whether mlmmj's own digest mails carry the `List-Id` header (the Sieve rule files by it; without it a digest
-  lands in the inbox); the usenetarchives.com Tampermonkey sampler (`news-setup/bin/usenetarchives-sample.user.js`) has never
-  run on the live site; the FidoNet echomail part of `~/Downloads/listserv-and-fidonet-sample.zip` (63 Usenet articles) is not on
+  lands in the inbox); the FidoNet echomail part of `~/Downloads/listserv-and-fidonet-sample.zip` (63 Usenet articles) is not on
   the news server (the existing `news-import` reads it as is).
 - **Not done (by choice):** a followup to an archive group (read-only on the server) is refused, not redirected to `lan.*`;
   replying to a Usenet author by mail; Usenet cancel and moderation; mlmmj's subscription-approval flow.
