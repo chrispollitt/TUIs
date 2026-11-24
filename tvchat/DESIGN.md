@@ -523,7 +523,10 @@ names were checked against `--openrpc` and the `deltachat-rpc-client` source).
   people go by different names on different servers, so `name = account:handle, ...`
   says who is who (a bad account name or a handle given to two people is a config
   error, also for `check-config`; `reload-config` re-reads it; the `people` verb
-  prints it). `Chat.handle_of(conv)` is the other side of a direct chat as its account
+  prints it; `people-from-identity [--check] [--file CONF]` makes the table from `identity login PERSON SCHEME HOST`
+  (an account is listed under `irc`/`talk`/`deltachat` and its `host`, a Delta Chat account's `gateway`, `imap_server` or
+  address domain) and, with `--check`, reports DISAGREE / MISSING / UNKNOWN against the file; a person whose rows are all `bot` is
+  skipped; `email:` stays by hand). `Chat.handle_of(conv)` is the other side of a direct chat as its account
   knows them (an IRC nick, or the Delta Chat address they last wrote from); with
   the table `send_invite` looks up that person's handle on the target account
   and invites them *there* - an IRC `/invite` to their nick on that network, or
