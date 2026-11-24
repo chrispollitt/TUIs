@@ -24,8 +24,9 @@ tvmail has a fourth pane, **Services**, with Mail, **Lists** and **Usenet**; the
 - **How it was run:** the scripts that did it are in `~/src/Claude/TO_BE_RUN/DONE/` (`news-1..3`, `lists-1..3`); they copy
   the POSIX working tree to `~/news-deploy` / `~/lists-deploy` on cpbee and use `sudo-mfa` for the root steps.
 - **Not verified:** whether mlmmj's own digest mails carry the `List-Id` header (the Sieve rule files by it; without it a digest
-  lands in the inbox); the FidoNet echomail part of `~/Downloads/listserv-and-fidonet-sample.zip` (63 Usenet articles) is not on
-  the news server (the existing `news-import` reads it as is).
+  lands in the inbox). The news server holds all eight zips of `~/Downloads/!CURRENT/usenet arc` since 2026-11-23 (249 groups,
+  about 1,765 articles; `news-4-more-archives-on-cpbee.sh` added the ClariNet, Dave Barry, interests and FidoNet ones, POSIX#19); the
+  SF-LOVERS listserv digests in `listserv-and-fidonet-sample.zip` are not in any list yet.
 - **Not done (by choice):** a followup to an archive group (read-only on the server) is refused, not redirected to `lan.*`;
   replying to a Usenet author by mail; Usenet cancel and moderation; mlmmj's subscription-approval flow.
 - **Lessons that cost time:** a menu hot key takes the key from every window (F8 is the config editor's Save + apply, Alt-S is
@@ -34,7 +35,7 @@ tvmail has a fourth pane, **Services**, with Mail, **Lists** and **Usenet**; the
   alias, so the list tables are added there too. `sed`/heredoc quoting through `bash -lc` and unquoted `<...>` Message-IDs in a
   remote `ssh` command each broke a script: pass such values with `printf %q`.
 - **Next, in the order I would take it:** merge the release branch and tag; `update-tv-apps-everywhere.sh` for cmdesktop and
-  cpbee when it answers; put the FidoNet articles on the news server; watch for the first mlmmj digest (it goes out daily once
+  cpbee when it answers; watch for the first mlmmj digest (it goes out daily once
   a list has digest members and mail: `listctl add NAME ADDR --digest`) and check its headers; the backlog in `tvmail/TO-DO.txt`.
 
 ## State
