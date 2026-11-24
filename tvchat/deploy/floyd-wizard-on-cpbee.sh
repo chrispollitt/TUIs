@@ -1,5 +1,5 @@
 #!/bin/bash
-# RUN ON: the laptop (Cygwin).  Copies files to cpbee and runs the root part there with a terminal (sudo asks once).
+# RUN ON: the laptop (Cygwin).  Copies files to cpbee and runs the root part there through sudo-mfa (nothing is typed; needs the vault unlocked).
 # WHY:    Floyd as a setup wizard (`!setup` in any Floyd window): a new machine needs only the master's name and token, then
 #         Floyd compares it with what the master knows and fixes the difference.  And a second Delta Chat device is offered
 #         through the master (no code to copy).  The master needs the new code and a "manifest" of the setup.
@@ -13,7 +13,7 @@
 #         4. restarts tvchat-floyd (briefly away from IRC) and checks the `setup` answer on cpbee and from here;
 #         5. shows what `!setup` would say on THIS machine (a read-only look; it changes nothing).
 # CHANGES on cpbee: the programs, the three files above.  No config of Floyd itself changes.
-# UNDO:   sudo rm /etc/tvchat/floyd-setup.json /etc/tvchat/floyd-ca-*.pem; the .bak.<time> files restore the old programs.
+# UNDO:   rm /etc/tvchat/floyd-setup.json /etc/tvchat/floyd-ca-*.pem; the .bak.<time> files restore the old programs.
 # SAFE:   re-runnable (rebuilds the manifest each time).  Moves itself to DONE/ only on success.  DRY_RUN=1 shows the plan.
 set -euo pipefail
 
@@ -114,8 +114,10 @@ PYEOF
         "$HOST:/tmp/floyd-wizard/"
   rm -rf "$tmp"
   rc=0
-  ssh -t -o ServerAliveInterval=10 "$HOST" \
-    "RUN_ON_REMOTE=1 bash /tmp/floyd-wizard/$name; rc=\$?; rm -rf /tmp/floyd-wizard; exit \$rc" || rc=$?
+  command -v sudo-mfa >/dev/null 2>&1 || die "sudo-mfa is not on the PATH (and the vault must be unlocked: ssh -t cpbee auth unlock)"
+  # the root part is ONE sudo-mfa call (one one-time code); cpbee's hostname makes the script take its own cpbee branch
+  sudo-mfa "$HOST" "bash /tmp/floyd-wizard/$name" || rc=$?
+  ssh -o BatchMode=yes "$HOST" 'rm -rf /tmp/floyd-wizard' || true
   [[ $rc == 0 ]] || die "it did not finish on $HOST (exit $rc); paste the output above to Claude."
 
   say ""
@@ -146,19 +148,19 @@ fi
 D=/tmp/floyd-wizard
 stamp=$(date +%Y%m%d-%H%M%S)
 
-say "step 2/5: installing the programs (sudo password) ..."
+say "step 2/5: installing the programs ..."
 for f in tvchat-backend tvcal-backend tvmail-backend; do
   if [[ -f /usr/local/bin/$f ]] && ! cmp -s "$D/$f" "/usr/local/bin/$f"; then
-    sudo cp -a "/usr/local/bin/$f" "/usr/local/bin/$f.bak.$stamp"
+    cp -a "/usr/local/bin/$f" "/usr/local/bin/$f.bak.$stamp"
   fi
-  sudo install -m 755 "$D/$f" "/usr/local/bin/$f"
+  install -m 755 "$D/$f" "/usr/local/bin/$f"
 done
 for dir in /usr/local/share/tvchat /usr/local/share/tvcal /usr/local/share/tvmail; do
-  sudo install -d -m 755 "$dir"
+  install -d -m 755 "$dir"
   if [[ -f $dir/tvfloyd.py ]] && ! cmp -s "$D/tvfloyd.py" "$dir/tvfloyd.py"; then
-    sudo cp -a "$dir/tvfloyd.py" "$dir/tvfloyd.py.bak.$stamp"
+    cp -a "$dir/tvfloyd.py" "$dir/tvfloyd.py.bak.$stamp"
   fi
-  sudo install -m 644 "$D/tvfloyd.py" "$dir/tvfloyd.py"
+  install -m 644 "$D/tvfloyd.py" "$dir/tvfloyd.py"
 done
 python3 -c "
 import importlib.util, sys
@@ -173,17 +175,17 @@ done
 say "  programs ok"
 
 say "step 3/5: the manifest and the certificates ..."
-sudo install -d -m 755 /etc/tvchat
-for f in "$D"/floyd-setup.json; do sudo install -m 640 -o root -g floyd "$f" /etc/tvchat/floyd-setup.json; done
-for f in "$D"/floyd-ca-*.pem; do [[ -f $f ]] && sudo install -m 644 -o root -g floyd "$f" "/etc/tvchat/$(basename "$f")"; done
+install -d -m 755 /etc/tvchat
+for f in "$D"/floyd-setup.json; do install -m 640 -o root -g floyd "$f" /etc/tvchat/floyd-setup.json; done
+for f in "$D"/floyd-ca-*.pem; do [[ -f $f ]] && install -m 644 -o root -g floyd "$f" "/etc/tvchat/$(basename "$f")"; done
 ls -l /etc/tvchat/floyd-setup.json /etc/tvchat/floyd-ca-*.pem
 
 say "step 4/5: restarting tvchat-floyd ..."
-sudo systemctl restart tvchat-floyd
+systemctl restart tvchat-floyd
 sleep 8
-systemctl is-active tvchat-floyd || { sudo journalctl -u tvchat-floyd -n 25 --no-pager; die "tvchat-floyd is not running; the journal is above"; }
-ss -ltn | grep -q "$LAN:$PORT" || { sudo journalctl -u tvchat-floyd -n 25 --no-pager; die "nothing listens on $LAN:$PORT; the journal is above"; }
-python3 - "/usr/local/share/tvchat/tvfloyd.py" "$LAN:$PORT" "$(cat "$HOME/floyd-gate.token")" <<'PYEOF' || die "the setup answer does not work on cpbee itself"
+systemctl is-active tvchat-floyd || { journalctl -u tvchat-floyd -n 25 --no-pager; die "tvchat-floyd is not running; the journal is above"; }
+ss -ltn | grep -q "$LAN:$PORT" || { journalctl -u tvchat-floyd -n 25 --no-pager; die "nothing listens on $LAN:$PORT; the journal is above"; }
+python3 - "/usr/local/share/tvchat/tvfloyd.py" "$LAN:$PORT" "$(cat /home/chris/floyd-gate.token)" <<'PYEOF' || die "the setup answer does not work on cpbee itself"
 import importlib.util, sys
 s = importlib.util.spec_from_file_location("tvfloyd", sys.argv[1])
 m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
@@ -192,4 +194,4 @@ r = m.master_call(cfg, {"op": "setup"})
 assert r and r.get("ok"), "setup: %r" % (r,)
 print("  setup answers: %d accounts, certificates: %s" % (len(r["manifest"]["accounts"]), ", ".join(r.get("cas") or {}) or "none"))
 PYEOF
-sudo journalctl -u tvchat-floyd -n 3 --no-pager || true
+journalctl -u tvchat-floyd -n 3 --no-pager || true
