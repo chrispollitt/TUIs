@@ -168,8 +168,17 @@ have "setup wizard" powers.
 - **What it checks:** every tv* app's link to the master (and copies server/token/machine into the confs that lack them);
   tvcal's calendar URL, user and CA file; tvchat's accounts from the manifest (appended with the CA file placed beside the
   conf, `autoconnect` extended); the Delta Chat account (not on the owner machine; the step says to use Chat > Use account
-  from another device); the notification relay; and whether `~/.netrc` / `~/.mu-tickets` hold a password for each account
-  (only the fact is looked at, never the value; the wizard never handles a password).
+  from another device); tvmail's Services (below); the notification relay; and whether `~/.netrc` / `~/.mu-tickets` hold a
+  password for each account (only the fact is looked at, never the value; the wizard never handles a password).
+- **tvmail** (manifest key `tvmail`, built from `~/.config/tvmail/tvmail.conf` on the reference machine; absent when that file is):
+  - `news` {host, port, window, subscribed}: writes `[news]` and puts `news` in `[services] order` (appended after what is there,
+    `mail` first when the key is new).  `window` and `subscribed` are only a start: a value already in the file is kept.  No login
+    is ever copied; the news server needs none.
+  - `lists` {address}: writes `[lists] address` and `lists` in the order; a `you` step reminds that Lists needs `[service] mode = remote`
+    (Floyd does not switch the mode: that needs your mail login in `[imap]` / `[smtp]`).
+  - `ca` (a key in `cas`, the Simple Inc CA file): places it beside `tvmail.conf` and sets `cafile` and `verify = true` in `[imap]` and
+    `[smtp]` (only for a section whose `host` is set; a machine with no IMAP configured is left alone).  Replaces `verify = false`
+    on a new machine (POSIX#7).
 - **Safe:** conf edits keep comments, add a missing section, and copy the old file to `BAK/` first (once per run); a
   second `!setup all` finds nothing to change.
 - **The manifest** is built from Chris's working configs by `tvchat/deploy/floyd-wizard-on-cpbee.sh` (no passwords; refuses
