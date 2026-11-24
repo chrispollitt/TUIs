@@ -2218,6 +2218,8 @@ def wizard_steps(app, m, manifest=None, cas=None):
         if cal.get("user") and not _has_secret(cal["url"].split("/")[2].split(":")[0], cal["user"]):
             steps.append(WizStep("you", "no password for %s on %s in ~/.netrc or ~/.mu-tickets: run  auth render tickets  "
                                         "(the vault writes it; I never handle passwords)" % (cal["user"], cal["url"].split("/")[2].split(":")[0])))
+    if any(a == "tvmail" for a, _ in apps):
+        steps.extend(_wizard_tvmail_steps(manifest, cas, ca_path, put_ca))
     tvchat_path = wiz_conf_path("tvchat")
     if any(a == "tvchat" for a, _ in apps):
         for acc in manifest.get("accounts") or []:
@@ -2280,6 +2282,77 @@ def wizard_steps(app, m, manifest=None, cas=None):
         else:
             steps.append(WizStep("todo", "the notification relay is not running (toasts from the server and other machines)",
                                  lambda: "relay started" if ensure_relay(m) else "could not start the relay"))
+    return steps
+
+
+def _services_order(path):
+    return [x for x in re.split(r"[,\s]+", conf_get(path, "services", "order", "mail").strip().lower()) if x]
+
+
+def _services_add(path, name):
+    """Put NAME at the end of [services] order (after what is there; `mail` first when the key is new).  True when it changed."""
+    cur = _services_order(path)
+    if name in cur:
+        return False
+    return conf_set(path, "services", "order", ", ".join((cur or ["mail"]) + [name]))
+
+
+def _wizard_tvmail_steps(manifest, cas, ca_path, put_ca):
+    """tvmail's part of the setup: the Usenet and Lists services and the LAN CA for IMAP / SMTP.  The master's
+    manifest["tvmail"] has "news" {host, port, window, subscribed}, "lists" {address} and "ca" (a key in cas).
+    No password is ever written; the news server needs none."""
+    tm = manifest.get("tvmail") or {}
+    if not tm:
+        return []
+    path = wiz_conf_path("tvmail")
+    steps = []
+    news = tm.get("news")
+    if news and news.get("host"):
+        port = str(news.get("port") or "119")
+        ok = (conf_get(path, "news", "host") == news["host"] and conf_get(path, "news", "port", "119") == port
+              and "news" in _services_order(path))
+        if ok:
+            steps.append(WizStep("ok", "tvmail's Usenet service is %s:%s" % (news["host"], port)))
+        else:
+            def fix(path=path, news=news, port=port):
+                conf_set(path, "news", "host", news["host"])
+                conf_set(path, "news", "port", port)
+                if news.get("window") and not conf_get(path, "news", "window"):
+                    conf_set(path, "news", "window", str(news["window"]))
+                if news.get("subscribed") and not conf_get(path, "news", "subscribed"):   # a start only: yours is never replaced
+                    conf_set(path, "news", "subscribed", str(news["subscribed"]))
+                _services_add(path, "news")
+                return "tvmail: Usenet service %s:%s, and news in the Services pane" % (news["host"], port)
+            steps.append(WizStep("todo", "tvmail has no Usenet service for %s:%s here" % (news["host"], port), fix))
+    lists = tm.get("lists")
+    if lists and lists.get("address"):
+        ok = conf_get(path, "lists", "address") == lists["address"] and "lists" in _services_order(path)
+        if ok:
+            steps.append(WizStep("ok", "tvmail's Lists service is %s" % lists["address"]))
+        else:
+            def fix(path=path, lists=lists):
+                conf_set(path, "lists", "address", lists["address"])
+                _services_add(path, "lists")
+                return "tvmail: Lists service %s, and lists in the Services pane" % lists["address"]
+            steps.append(WizStep("todo", "tvmail has no Lists service for %s here" % lists["address"], fix))
+        if conf_get(path, "service", "mode", "local").strip().lower() != "remote":
+            steps.append(WizStep("you", "tvmail's Lists needs remote mode: set [service] mode = remote and fill in [imap] and "
+                                        "[smtp] (Floyd does not know your mail login)"))
+    key = tm.get("ca")
+    if key and (cas.get(key) or {}).get("pem") and conf_get(path, "imap", "host"):
+        want = ca_path("tvmail", key)
+        cur = [conf_get(path, s, "cafile") for s in ("imap", "smtp") if conf_get(path, s, "host")]
+        if cur and all(os.path.expanduser(c) == want for c in cur) and os.path.isfile(want):
+            steps.append(WizStep("ok", "tvmail trusts the LAN CA for its mail servers"))
+        else:
+            def fix(path=path, key=key, want=want):
+                put_ca("tvmail", key)
+                for s in ("imap", "smtp"):
+                    if conf_get(path, s, "host"):
+                        conf_set(path, s, "cafile", want)
+                        conf_set(path, s, "verify", "true")
+                return "tvmail: [imap] and [smtp] now verify the server against %s (verify = true)" % want
+            steps.append(WizStep("todo", "tvmail does not verify its mail servers against the LAN CA", fix))
     return steps
 
 

@@ -4,8 +4,9 @@
 #         Floyd compares it with what the master knows and fixes the difference.  And a second Delta Chat device is offered
 #         through the master (no code to copy).  The master needs the new code and a "manifest" of the setup.
 # WHAT:   1. builds the manifest here from your WORKING configs (the reference): tvcal's calendar URL and user, tvchat's
-#            LAN group chat and talk accounts, the Delta Chat account (chris@cpbee.cmnet), and the two public CA
-#            certificates; no passwords anywhere in it;
+#            LAN group chat and talk accounts, the Delta Chat account (chris@cpbee.cmnet), tvmail's Usenet and Lists
+#            services (from ~/.config/tvmail/tvmail.conf, when there is one) and the public CA certificates
+#            (calendar, chat, and the one tvmail's IMAP / SMTP use); no passwords anywhere in it;
 #         2. installs tvchat-backend, tvcal-backend, tvmail-backend, tvfloyd.py on cpbee (old ones kept as .bak.<time>);
 #         3. installs the manifest as /etc/tvchat/floyd-setup.json and the certificates as /etc/tvchat/floyd-ca-*.pem
 #            (root:floyd, 640 / 644);
@@ -74,13 +75,37 @@ for key, src in (("cal", ca_cal), ("chat", ca_chat)):
         shutil.copyfile(src, os.path.join(out, "floyd-ca-%s.pem" % key))
         cas[key] = {"file": "/etc/tvchat/floyd-ca-%s.pem" % key, "name": "cpbee-ca.pem"}
 manifest = {"version": 1, "calendar": {"url": url, "user": user}, "cas": cas, "delta_owner": "cpbee", "accounts": accounts}
+# tvmail: the Usenet and Lists services and the LAN CA for IMAP / SMTP, from tvmail.conf when there is one (no passwords:
+# a [news] user is left out, the news server needs none)
+mailc = os.path.expanduser("~/.config/tvmail/tvmail.conf")
+if os.path.isfile(mailc):
+    mc = configparser.ConfigParser(interpolation=None, strict=False)
+    mc.read(mailc, encoding="utf-8")
+    tm = {}
+    if mc.get("news", "host", fallback=""):
+        tm["news"] = {k: mc.get("news", k) for k in ("host", "port", "window", "subscribed") if mc.get("news", k, fallback="")}
+    if mc.get("lists", "address", fallback=""):
+        tm["lists"] = {"address": mc.get("lists", "address")}
+    mail_ca = ""
+    for sect in ("imap", "smtp"):
+        cf = os.path.expanduser(mc.get(sect, "cafile", fallback=""))
+        if cf and os.path.isfile(cf):
+            mail_ca = cf
+            break
+    if mail_ca:
+        shutil.copyfile(mail_ca, os.path.join(out, "floyd-ca-mail.pem"))
+        cas["mail"] = {"file": "/etc/tvchat/floyd-ca-mail.pem", "name": "cpbee-ca.pem"}
+        tm["ca"] = "mail"
+    if tm:
+        manifest["tvmail"] = tm
 with open(os.path.join(out, "floyd-setup.json"), "w", encoding="utf-8") as fh:
     json.dump(manifest, fh, indent=1)
 for a in accounts:                      # a manifest never carries a secret: refuse if any key looks like one  # allowlist secret: not a secret
     for k in a["opts"]:
         if "pass" in k.lower():
             sys.exit("a password-like key (%s) is in the manifest: refusing" % k)
-print("  calendar %s (user %s); accounts: %s; certificates: %s" % (url, user, ", ".join(a["id"] for a in accounts), ", ".join(cas) or "none"))
+print("  calendar %s (user %s); accounts: %s; certificates: %s; tvmail: %s" % (
+    url, user, ", ".join(a["id"] for a in accounts), ", ".join(cas) or "none", ", ".join(sorted(manifest.get("tvmail", {}))) or "nothing"))
 PYEOF
 
   ssh "$HOST" 'rm -rf /tmp/floyd-wizard && mkdir -m 700 /tmp/floyd-wizard'

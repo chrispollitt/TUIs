@@ -750,6 +750,72 @@ class TestWizard(unittest.TestCase):
         rep = self.say("!setup", master=m)
         self.assertNotIn("Delta Chat (chris)", rep)
 
+    def tvmail_manifest(self):
+        """Add the tvmail part (Usenet, Lists, the CA for IMAP / SMTP) to the master's manifest."""
+        import json
+        ca3 = os.path.join(self.tmp, "ca-mail.pem")
+        with open(ca3, "w") as fh:
+            fh.write("-----BEGIN CERTIFICATE-----\nTESTPEM-MAIL\n-----END CERTIFICATE-----\n")
+        self.manifest["cas"]["mail"] = {"file": ca3, "name": "cpbee-ca.pem"}
+        self.manifest["tvmail"] = {"news": {"host": "cpbee", "port": "119", "window": "500", "subscribed": "lan.misc"},
+                                   "lists": {"address": "listserv@cpbee.cmnet"}, "ca": "mail"}
+        with open(self.setup_file, "w") as fh:
+            json.dump(self.manifest, fh)
+
+    def test_tvmail_gets_usenet_lists_and_the_lan_ca_and_never_a_password(self):
+        self.tvmail_manifest()
+        self.write("tvmail", "[service]\nmode = remote\n\n[imap]\nhost = cpbee\nuser = chris\nverify = false\n\n"
+                             "[smtp]\nhost = cpbee\nuser = chris\nverify = false\n")
+        out, m = self.join()
+        rep = self.say("!setup", master=m)
+        self.assertIn("todo tvmail has no Usenet service for cpbee:119 here", rep)
+        self.assertIn("todo tvmail has no Lists service for listserv@cpbee.cmnet here", rep)
+        self.assertIn("todo tvmail does not verify its mail servers against the LAN CA", rep)
+        self.assertNotIn("Lists needs remote mode", rep)                         # it is remote already
+        done = self.say("!setup all", master=m)
+        self.assertIn("Done: tvmail: Usenet service cpbee:119", done)
+        self.assertIn("Done: tvmail: Lists service listserv@cpbee.cmnet", done)
+        p = self.path("tvmail")
+        self.assertEqual(tvf.conf_get(p, "news", "host"), "cpbee")
+        self.assertEqual(tvf.conf_get(p, "news", "window"), "500")
+        self.assertEqual(tvf.conf_get(p, "news", "subscribed"), "lan.misc")
+        self.assertEqual(tvf.conf_get(p, "lists", "address"), "listserv@cpbee.cmnet")
+        self.assertEqual(tvf.conf_get(p, "services", "order"), "mail, news, lists")
+        for s in ("imap", "smtp"):
+            self.assertEqual(tvf.conf_get(p, s, "verify"), "true")
+            self.assertIn("TESTPEM-MAIL", open(tvf.conf_get(p, s, "cafile")).read())
+        self.assertEqual(tvf.conf_get(p, "news", "user"), "")                    # the news server needs no login
+        self.assertEqual(tvf.conf_get(p, "news", "password"), "")
+        again = self.say("!setup", master=m)
+        self.assertNotIn("todo tvmail has no", again)
+        self.assertNotIn("todo tvmail does not", again)
+        for text in ("tvmail's Usenet service is cpbee:119", "tvmail's Lists service is listserv@cpbee.cmnet",
+                     "tvmail trusts the LAN CA"):
+            self.assertIn("ok   " + text, again)
+        self.assertNotIn(self.TOKEN, again)
+
+    def test_tvmail_keeps_your_groups_and_order_and_asks_for_remote_mode(self):
+        self.tvmail_manifest()
+        self.write("tvmail", "[service]\nmode = local\n\n[services]\norder = mail, lists\n\n[news]\nhost = other\n"
+                             "subscribed = comp.lang.c, my.group\n")
+        out, m = self.join()
+        rep = self.say("!setup", master=m)
+        self.assertIn("todo tvmail has no Usenet service for cpbee:119 here", rep)       # another host is not the master's
+        self.assertIn("you  tvmail's Lists needs remote mode", rep)
+        self.assertNotIn("does not verify its mail servers", rep)                         # no [imap] here: nothing to fix
+        self.say("!setup all", master=m)
+        p = self.path("tvmail")
+        self.assertEqual(tvf.conf_get(p, "news", "host"), "cpbee")
+        self.assertEqual(tvf.conf_get(p, "news", "subscribed"), "comp.lang.c, my.group")  # a start only, never replaced
+        self.assertEqual(tvf.conf_get(p, "services", "order"), "mail, lists, news")        # appended, not reordered
+        self.assertEqual(tvf.conf_get(p, "service", "mode"), "local")                      # Floyd does not switch the mode
+
+    def test_a_master_without_a_tvmail_part_adds_no_tvmail_steps(self):
+        out, m = self.join()
+        rep = self.say("!setup", master=m)
+        self.assertNotIn("Usenet", rep)
+        self.assertNotIn("Lists", rep)
+
     def test_an_older_master_without_a_setup_file_says_so(self):
         out, m = self.join()
         os.remove(self.setup_file)
