@@ -7859,6 +7859,111 @@ def cmd_people(a):
     return 0
 
 
+def _identity(args):
+    """stdout of `identity ARGS` (the POSIX net-utils list of who is who; $IDENTITY_CMD names another command), or None
+    when it has no answer (exit status not 0).  A UserError when there is no such command."""
+    argv = shlex.split(os.environ.get("IDENTITY_CMD") or "identity") + list(args)
+    try:
+        p = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, timeout=30)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise UserError("the identity list is not available (%s): install net-utils' `identity`, or set IDENTITY_CMD" % e)
+    return p.stdout.decode("utf-8", "replace") if p.returncode == 0 else None
+
+
+def _account_identity_key(acct):
+    """(scheme, host) an account is listed under in the identity list, or None for one the list cannot describe."""
+    o = acct.opts
+    if acct.protocol in ("irc", "talk"):
+        host = (o.get("host") or "").strip()
+        return (acct.protocol, host) if host else None
+    if acct.protocol == "deltachat":
+        host = ((o.get("gateway") or o.get("imap_server") or o.get("host") or "").strip()
+                or (o.get("addr") or "").rpartition("@")[2].strip())
+        return ("deltachat", host) if host else None
+    return None
+
+
+def people_from_identity(accounts, ask=None):
+    """{person: {account id: [login]}} from the identity list: for each person (one with a login that is not only a bot's),
+    each account whose protocol and host the list knows them under.  `ask(args)` is `identity ARGS` (a test hook)."""
+    ask = ask or _identity
+    listing = ask(["list"])
+    if listing is None:
+        raise UserError("`identity list` gave nothing: is there an identity list (~/.config/identities)?")
+    persons = {}
+    for ln in listing.splitlines():
+        parts = ln.split("#", 1)[0].split()
+        if len(parts) < 3 or parts[0].startswith("@"):
+            continue
+        persons.setdefault(parts[0], False)
+        if "bot" not in parts[3:]:
+            persons[parts[0]] = True
+    table = {}
+    for person in sorted(p for p, human in persons.items() if human):
+        for acct in accounts:
+            key = _account_identity_key(acct)
+            if not key:
+                continue
+            out = ask(["login", person, key[0], key[1]])
+            login = (out or "").strip().split("\n")[0].strip()
+            if login:
+                table.setdefault(person, {}).setdefault(acct.id, [])
+                if login not in table[person][acct.id]:
+                    table[person][acct.id].append(login)
+    return table
+
+
+def people_table_text(table):
+    out = ["[people]"]
+    for name in sorted(table, key=str.lower):
+        out.append("%s = %s" % (name, ", ".join("%s:%s" % (acct, h) for acct, hs in table[name].items() for h in hs)))
+    return "\n".join(out) + "\n"
+
+
+def people_check(table, existing):
+    """Findings (strings) where the [people] table EXISTING (a People) disagrees with TABLE (from the identity list):
+    DISAGREE (another login on an account), MISSING (a person or an account the list knows), UNKNOWN (a name it does not)."""
+    findings = []
+    have = {n.lower(): n for n in existing.table}
+    for name in sorted(table, key=str.lower):
+        mine = have.get(name.lower())
+        if mine is None:
+            findings.append("MISSING %s: in the identity list (%s) but not in [people]"
+                            % (name, ", ".join("%s:%s" % (a, h[0]) for a, h in table[name].items())))
+            continue
+        for acct, logins in table[name].items():
+            cur = existing.table[mine].get(acct, [])
+            if not cur:
+                findings.append("MISSING %s on %s: the identity list says %s" % (name, acct, ", ".join(logins)))
+            elif not any(c.lower() == l.lower() for c in cur for l in logins):
+                findings.append("DISAGREE %s on %s: [people] has %s, the identity list says %s"
+                                % (name, acct, ", ".join(cur), ", ".join(logins)))
+    known = set(n.lower() for n in table)
+    for name in sorted(existing.table, key=str.lower):
+        if name.lower() not in known:
+            findings.append("UNKNOWN %s: in [people] but not in the identity list (or without a login on these accounts)" % name)
+    return findings
+
+
+def cmd_people_from_identity(a):
+    """people-from-identity [--check] [--file CONF]: print a [people] block made from the identity list (each person's login
+    on each account whose protocol and host it knows); with --check, compare the table in CONF with it instead (status 3 on a
+    finding).  `email:` handles are not derived: keep them by hand."""
+    path = a.file or None
+    accounts, _auto = load_config(path)
+    table = people_from_identity(accounts)
+    if not a.check:
+        sys.stdout.write(people_table_text(table))
+        return 0
+    existing = load_people(accounts, path)
+    findings = people_check(table, existing)
+    for f in findings:
+        sys.stdout.write(f + "\n")
+    if not findings:
+        sys.stdout.write("ok: [people] agrees with the identity list (%d people)\n" % len(table))
+    return 3 if findings else 0
+
+
 def cmd_invite_send(a):
     """invite-send ACCOUNT CONV [#CHANNEL]: invite the person in chat CONV to
     ACCOUNT (and the channel) by a message; prints what was done."""
@@ -8634,6 +8739,8 @@ def build_parser():
     p = sub.add_parser("device-use"); p.add_argument("account"); p.add_argument("code", nargs="?", default="")
     p.add_argument("--replace", action="store_true"); p.set_defaults(fn=cmd_device_use)
     p = sub.add_parser("people"); p.set_defaults(fn=cmd_people)
+    p = sub.add_parser("people-from-identity"); p.add_argument("--check", action="store_true")
+    p.add_argument("--file", metavar="CONF"); p.set_defaults(fn=cmd_people_from_identity)
     p = sub.add_parser("roles"); p.set_defaults(fn=cmd_roles)
     p = sub.add_parser("shares"); p.set_defaults(fn=cmd_shares)
     p = sub.add_parser("share-send"); p.add_argument("id"); p.add_argument("text"); p.set_defaults(fn=cmd_share_send)

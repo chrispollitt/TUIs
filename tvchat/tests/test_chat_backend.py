@@ -1188,6 +1188,103 @@ class TestPeople(IrcBase):
         self.chat.close()
 
 
+class TestPeopleFromIdentity(Base):
+    """`tvchat-backend people-from-identity [--check]`: the [people] table made from (and compared with) the identity list."""
+    LIST = textwrap.dedent("""\
+        # PERSON SCHEME@HOST LOGIN [flags]
+        @host cpbee.cmnet 192.168.10.1
+        chris    imaps@cpbee.cmnet       chris
+        chris    irc@cpbee.cmnet         chris-pollitt   admin   # LAN IRC
+        chris    irc@irc.libera.chat     chris-pollitt   admin
+        chris    deltachat@cpbee.cmnet   chris@cpbee.cmnet
+        michelle https@cpbee.cmnet       michelle        nosecret
+        floyd    irc@cpbee.cmnet         Floyd           bot
+        """)
+    CONF = """\
+        [account:lan]
+        protocol = irc
+        host = cpbee
+        [account:libera]
+        protocol = irc
+        host = irc.libera.chat
+        [account:delta]
+        protocol = deltachat
+        gateway = cpbee
+        [account:talk]
+        protocol = talk
+        host = cpbee
+        """
+
+    def setUp(self):
+        Base.setUp(self)
+        self._ic = os.environ.get("IDENTITY_CMD")
+        fake = self.tmp / "identity"
+        (self.tmp / "list.txt").write_text(self.LIST)
+        fake.write_text(textwrap.dedent("""\
+            #!/bin/sh
+            case "$1" in
+              list) cat "%s" ;;
+              login) h=$4; case $h in *.*) ;; *) h=$h.cmnet;; esac
+                     awk -v p="$2" -v k="$3@$h" '$1 == p && $2 == k { print $3; found=1; exit } END { exit !found }' "%s" ;;
+              *) exit 2 ;;
+            esac
+            """ % (self.tmp / "list.txt", self.tmp / "list.txt")))
+        fake.chmod(0o755)
+        os.environ["IDENTITY_CMD"] = str(fake)
+
+    def tearDown(self):
+        if self._ic is None:
+            os.environ.pop("IDENTITY_CMD", None)
+        else:
+            os.environ["IDENTITY_CMD"] = self._ic
+        Base.tearDown(self)
+
+    def run_cmd(self, *args):
+        argv = [sys.executable, str(BACKEND), "people-from-identity"] + list(args)
+        p = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=dict(os.environ), timeout=60)
+        return p.returncode, p.stdout.decode(), p.stderr.decode()
+
+    def test_the_block_has_each_human_on_each_account_the_list_knows_and_no_bots(self):
+        self.conf(self.CONF)
+        rc, out, _ = self.run_cmd()
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "[people]\nchris = lan:chris-pollitt, libera:chris-pollitt, delta:chris@cpbee.cmnet\n")
+        self.assertNotIn("floyd", out)                                           # a bot is not an invitee
+        self.assertNotIn("michelle", out)                                        # no login on these accounts
+        self.assertNotIn("talk:", out)                                           # no talk row, so no guess
+
+    def test_the_block_loads_as_a_people_table(self):
+        self.conf(self.CONF)
+        accounts, _auto = cb.load_config()
+        text = cb.people_table_text(cb.people_from_identity(accounts))
+        items = [tuple(x.strip() for x in l.split("=", 1)) for l in text.splitlines()[1:]]
+        pe = cb.parse_people(items, set(a.id for a in accounts))
+        self.assertEqual(pe.name_of("libera", "Chris-Pollitt"), "chris")
+        self.assertEqual(pe.handles("chris", "delta"), ["chris@cpbee.cmnet"])
+
+    def test_check_reports_disagreement_missing_and_unknown(self):
+        self.conf(self.CONF + "[people]\nchris = lan:chris-pollitt, libera:somebody\nzed = lan:zed\n")
+        rc, out, _ = self.run_cmd("--check")
+        self.assertEqual(rc, 3)
+        self.assertIn("DISAGREE chris on libera: [people] has somebody, the identity list says chris-pollitt", out)
+        self.assertIn("MISSING chris on delta: the identity list says chris@cpbee.cmnet", out)
+        self.assertIn("UNKNOWN zed:", out)
+        self.assertNotIn("chris on lan", out)                                    # that one agrees
+
+    def test_check_is_clean_when_the_table_agrees_and_keeps_manual_extras(self):
+        self.conf(self.CONF + "[people]\nChris = lan:chris-pollitt, libera:Chris-Pollitt, delta:chris@cpbee.cmnet, "
+                              "email:chris@example.org\n")
+        rc, out, _ = self.run_cmd("--check")
+        self.assertEqual((rc, out), (0, "ok: [people] agrees with the identity list (1 people)\n"))
+
+    def test_no_identity_tool_is_a_plain_error(self):
+        self.conf(self.CONF)
+        os.environ["IDENTITY_CMD"] = str(self.tmp / "no-such-identity")
+        rc, out, err = self.run_cmd()
+        self.assertNotEqual(rc, 0)
+        self.assertIn("identity list is not available", out + err)
+
+
 class TestOutOfOffice(IrcBase):
     """[chat] ooo_away = yes: tvmail's out-of-office reply shows as the IRC away message."""
 

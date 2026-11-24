@@ -26,6 +26,7 @@ autoconnect = libera
 # per line, their handles as account:handle (the account is a section name
 # below).  Chat > Invite... uses it to find someone's nick on the server you
 # invite them to, and says "carol (cpollitt)" for an invitation from them.
+#   tvchat-backend people-from-identity   prints this block from the `identity` list; --check compares the table below with it
 #[people]
 #carol = libera:cpollitt, oftc:carol_, delta:carol@example.org, email:carol@example.com
 # (email: is not an account: it is where Chat > Send selection to > Mail... sends for them)

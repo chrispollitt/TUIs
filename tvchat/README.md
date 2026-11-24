@@ -112,6 +112,13 @@ beep or a window flash (default off).
 `tvchat.conf` in a window; F9 verifies it (nothing is connected), F8 verifies, saves and
 applies it to the running backend - accounts you did not touch keep their connections.
 
+**The `[people]` table** (who is who across accounts, used by Chat > Invite...) need not be kept by hand when the
+`identity` list (POSIX net-utils) knows the people: `tvchat-backend people-from-identity` prints a `[people]` block with each
+person's login on every IRC, talk and Delta Chat account whose protocol and host the list knows them under (bots are left
+out; `identity` is run, or `$IDENTITY_CMD`). `tvchat-backend people-from-identity --check` compares the table in your
+`tvchat.conf` (or `--file CONF`) with the list: `DISAGREE` (another login on an account), `MISSING` (a person or account
+the list knows), `UNKNOWN` (a name it does not); exit 3 on a finding. `email:` handles are not in the list: keep them by hand.
+
 A lost connection comes back by itself: tvchat pings a quiet server, and
 reconnects after 2 s, 4 s, 8 s ... up to 5 minutes, rejoining its channels.
 What you send is paced (a burst of 5 lines, then 2 a second), so a long
